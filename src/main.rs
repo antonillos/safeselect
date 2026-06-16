@@ -49,6 +49,7 @@ fn run(cli: Cli) -> Result<()> {
             project,
             environment,
         } => cmd_check(&loader, &project, &environment),
+        Command::Uninstall { force } => cmd_uninstall(force),
     }
 }
 
@@ -439,5 +440,120 @@ fn cmd_check(loader: &ConfigLoader, project: &str, environment: &str) -> Result<
 
     sidecar.shutdown()?;
 
+    Ok(())
+}
+
+fn cmd_uninstall(force: bool) -> Result<()> {
+    if !force {
+        println!("This will remove: safeselect binary, config, data, audit logs, and keychain entries.");
+        print!("Continue? [y/N] ");
+        use std::io::Write;
+        std::io::stdout().flush()?;
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        match input.trim().to_lowercase().as_str() {
+            "y" | "yes" => {}
+            _ => {
+                println!("Cancelled.");
+                return Ok(());
+            }
+        }
+    }
+
+    let mut removed_anything = false;
+
+    let bin = dirs::home_dir()
+        .map(|h| h.join(".local").join("bin").join("safeselect"));
+    if let Some(ref path) = bin {
+        if path.exists() {
+            std::fs::remove_file(path)?;
+            println!("  ✓ Removed {}", path.display());
+            removed_anything = true;
+        }
+    }
+
+    for config_dir in [
+        dirs::config_dir().map(|d| d.join("safeselect")),
+        Some(std::path::PathBuf::from("~/.config/safeselect")),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if config_dir.exists() {
+            std::fs::remove_dir_all(&config_dir)?;
+            println!("  ✓ Removed {}", config_dir.display());
+            removed_anything = true;
+        }
+    }
+
+    if let Some(data_dir) = dirs::data_dir().map(|d| d.join("safeselect")) {
+        if data_dir.exists() {
+            std::fs::remove_dir_all(&data_dir)?;
+            println!("  ✓ Removed {}", data_dir.display());
+            removed_anything = true;
+        }
+    }
+
+    let audit_dir = dirs::home_dir()
+        .map(|h| h.join(".local").join("state").join("safeselect"));
+    if let Some(ref path) = audit_dir {
+        if path.exists() {
+            std::fs::remove_dir_all(path)?;
+            println!("  ✓ Removed {}", path.display());
+            removed_anything = true;
+        }
+    }
+
+    let backup_patterns = [
+        format!(
+            "{}/Library/Application Support/opencode/opencode.json.safeselect.bak",
+            dirs::home_dir().unwrap().display()
+        ),
+        format!(
+            "{}/.config/opencode/opencode.json.safeselect.bak",
+            dirs::home_dir().unwrap().display()
+        ),
+    ];
+    for pattern in &backup_patterns {
+        let path = std::path::Path::new(pattern);
+        if path.exists() {
+            std::fs::remove_file(path)?;
+            println!("  ✓ Removed backup {}", path.display());
+        }
+    }
+
+    let keychain_result = std::process::Command::new("security")
+        .args(["delete-generic-password", "-s", "safeselect"])
+        .output();
+    if let Ok(output) = keychain_result {
+        if output.status.success() {
+            println!("  ✓ Removed macOS Keychain entries for 'safeselect'");
+            removed_anything = true;
+        }
+    }
+
+    let agent_configs = [
+        dirs::config_dir().map(|d| d.join("opencode").join("opencode.json")),
+        Some(std::path::PathBuf::from("~/.cursor/config.json")),
+        Some(std::path::PathBuf::from("~/.windsurf/config.json")),
+    ];
+    for config in agent_configs.into_iter().flatten() {
+        if config.exists() {
+            if let Ok(content) = std::fs::read_to_string(&config) {
+                if content.contains("safeselect") {
+                    println!(
+                        "  ⚠  Remove safeselect entries from {} manually",
+                        config.display()
+                    );
+                }
+            }
+        }
+    }
+
+    if !removed_anything {
+        println!("  Nothing to remove.");
+    }
+
+    println!("  Uninstall complete.");
     Ok(())
 }
