@@ -61,7 +61,7 @@ jobs:
         shell: bash
 
       - name: Upload release assets
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             target/${{ matrix.target }}/release/safeselect-${{ matrix.target }}.tar.gz
