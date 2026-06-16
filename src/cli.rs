@@ -45,6 +45,12 @@ pub enum Command {
         #[arg(long)]
         environment: String,
     },
+    /// Uninstall SafeSelect (binary, config, data, audit, keychain)
+    Uninstall {
+        /// Skip confirmation prompt
+        #[arg(long, default_value_t = false)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand)]
