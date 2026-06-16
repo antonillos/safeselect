@@ -15,11 +15,34 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  SAFESELECT_INTEGRATION_TEST: "1"
-  SAFESELECT_INT_TEST_PASSWORD: "testpass"
 
 jobs:
-  check:
+  unit:
+    name: Unit & Smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+      - name: Install Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Build sidecar
+        run: |
+          mvn -f sidecar/pom.xml package -DskipTests
+          cp sidecar/target/safeselect-sidecar-*.jar sidecar/target/safeselect-sidecar.jar
+      - name: Check compilation
+        run: cargo check
+      - name: Unit tests
+        run: cargo test --lib
+      - name: Smoke tests
+        run: cargo test --test smoke
+
+  integration:
+    name: Integration (PostgreSQL)
+    needs: unit
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -34,17 +57,10 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-
     steps:
       - uses: actions/checkout@v6
       - name: Install Rust
-        shell: bash
         run: rustup toolchain install stable --profile minimal
-      - name: Install audit & deny tools
-        shell: bash
-        run: |
-          command -v cargo-audit || cargo install cargo-audit --locked
-          command -v cargo-deny || cargo install cargo-deny --locked
       - name: Install Java
         uses: actions/setup-java@v5
         with:
@@ -54,21 +70,28 @@ jobs:
         run: |
           mvn -f sidecar/pom.xml package -DskipTests
           cp sidecar/target/safeselect-sidecar-*.jar sidecar/target/safeselect-sidecar.jar
-      - name: Check compilation
-        run: cargo check
-      - name: Install audit & deny tools
-        run: |
-          cargo install cargo-audit --locked
-          cargo install cargo-deny --locked
-      - name: Security audit
-        run: cargo audit
-      - name: License check
-        run: cargo deny check
-      - name: Run unit tests
-        run: cargo test --lib
       - name: Download PostgreSQL driver
         run: cargo run -- driver download --vendor postgresql
-      - name: Run smoke tests
-        run: cargo test --test smoke
-      - name: Run integration test
+      - name: Integration tests
         run: cargo test --test integration
+        env:
+          SAFESELECT_INTEGRATION_TEST: "1"
+          SAFESELECT_INT_TEST_PASSWORD: testpass
+
+  security:
+    name: Security & Licenses
+    needs: unit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+      - name: Install audit & deny tools
+        shell: bash
+        run: |
+          command -v cargo-audit || cargo install cargo-audit --locked -q
+          command -v cargo-deny || cargo install cargo-deny --locked -q
+      - name: Run cargo audit
+        run: cargo audit
+      - name: Run cargo deny
+        run: cargo deny check
