@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# asdf install: move the binary into place
+set -euo pipefail
+
+install_path="${ASDF_INSTALL_PATH}/bin"
+mkdir -p "$install_path"
+cp -f "${ASDF_DOWNLOAD_PATH}/safeselect" "$install_path/safeselect"
+chmod +x "$install_path/safeselect"

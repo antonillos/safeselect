@@ -1,6 +1,8 @@
 use crate::config::{LimitsConfig, SecurityPolicy};
 use crate::error::{Result, SafeselectError};
 
+const MAX_SQL_BYTES: usize = 102_400;
+
 pub struct SecurityEngine {
     policy: SecurityPolicy,
     limits: LimitsConfig,
@@ -16,6 +18,13 @@ impl SecurityEngine {
 
         if trimmed.is_empty() {
             return Err(SafeselectError::QueryRejected("Empty query".into()));
+        }
+
+        if trimmed.len() > MAX_SQL_BYTES {
+            return Err(SafeselectError::QueryRejected(format!(
+                "Query exceeds maximum size ({} bytes)",
+                MAX_SQL_BYTES
+            )));
         }
 
         if self.policy.require_single_statement {
@@ -136,6 +145,61 @@ impl SecurityEngine {
     }
 }
 
+fn has_schema_reference(sql_lower: &str, allowed_patterns: &[String]) -> bool {
+    let bytes = sql_lower.as_bytes();
+    for i in 0..bytes.len().saturating_sub(2) {
+        if bytes[i + 1] == b'.' && bytes[i].is_ascii_alphabetic() {
+            let start = i;
+            let mut end = i + 2;
+            while end < bytes.len() && bytes[end].is_ascii_alphabetic() {
+                end += 1;
+            }
+            let schema = &sql_lower[start..end];
+            let schemaname = schema.trim_end_matches('.');
+            if !schemaname.is_empty()
+                && schemaname.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                && !is_sql_keyword(schemaname)
+                && !allowed_patterns.iter().any(|p| p.starts_with(schemaname))
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn is_sql_keyword(word: &str) -> bool {
+    matches!(
+        word,
+        "select" | "from" | "where" | "and" | "or" | "not" | "in" | "on" | "as"
+            | "join" | "left" | "right" | "inner" | "outer" | "cross" | "full"
+            | "order" | "group" | "by" | "having" | "limit" | "offset"
+            | "insert" | "update" | "delete" | "into" | "values" | "set"
+            | "create" | "alter" | "drop" | "table" | "index" | "view"
+            | "distinct" | "count" | "sum" | "avg" | "min" | "max" | "exists"
+            | "true" | "false" | "null" | "is" | "like" | "between"
+            | "union" | "all" | "any" | "some" | "case" | "when" | "then" | "else" | "end"
+            | "cast" | "coalesce" | "nullif"
+            | "begin" | "commit" | "rollback"
+            | "grant" | "revoke"
+    )
+}
+
+fn strip_trailing_semicolons(sql: &str) -> &str {
+    let trimmed = sql.trim();
+    if trimmed.ends_with(';') {
+        let stripped = trimmed.trim_end_matches(';');
+        let stripped = stripped.trim();
+        if stripped.is_empty() {
+            trimmed
+        } else {
+            stripped
+        }
+    } else {
+        trimmed
+    }
+}
+
 fn count_statements(sql: &str) -> usize {
     let sql = sql.trim();
     if sql.is_empty() {
@@ -210,61 +274,6 @@ fn count_statements(sql: &str) -> usize {
     }
 
     count + 1
-}
-
-fn has_schema_reference(sql_lower: &str, allowed_patterns: &[String]) -> bool {
-    let bytes = sql_lower.as_bytes();
-    for i in 0..bytes.len().saturating_sub(2) {
-        if bytes[i + 1] == b'.' && bytes[i].is_ascii_alphabetic() {
-            let start = i;
-            let mut end = i + 2;
-            while end < bytes.len() && bytes[end].is_ascii_alphabetic() {
-                end += 1;
-            }
-            let schema = &sql_lower[start..end];
-            let schemaname = schema.trim_end_matches('.');
-            if !schemaname.is_empty()
-                && schemaname.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
-                && !is_sql_keyword(schemaname)
-                && !allowed_patterns.iter().any(|p| p.starts_with(schemaname))
-            {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-fn is_sql_keyword(word: &str) -> bool {
-    matches!(
-        word,
-        "select" | "from" | "where" | "and" | "or" | "not" | "in" | "on" | "as"
-            | "join" | "left" | "right" | "inner" | "outer" | "cross" | "full"
-            | "order" | "group" | "by" | "having" | "limit" | "offset"
-            | "insert" | "update" | "delete" | "into" | "values" | "set"
-            | "create" | "alter" | "drop" | "table" | "index" | "view"
-            | "distinct" | "count" | "sum" | "avg" | "min" | "max" | "exists"
-            | "true" | "false" | "null" | "is" | "like" | "between"
-            | "union" | "all" | "any" | "some" | "case" | "when" | "then" | "else" | "end"
-            | "cast" | "coalesce" | "nullif"
-            | "begin" | "commit" | "rollback"
-            | "grant" | "revoke"
-    )
-}
-
-fn strip_trailing_semicolons(sql: &str) -> &str {
-    let trimmed = sql.trim();
-    if trimmed.ends_with(';') {
-        let stripped = trimmed.trim_end_matches(';');
-        let stripped = stripped.trim();
-        if stripped.is_empty() {
-            trimmed
-        } else {
-            stripped
-        }
-    } else {
-        trimmed
-    }
 }
 
 #[cfg(test)]
@@ -342,5 +351,28 @@ mod tests {
     fn test_read_only_with_cte() {
         let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
         assert!(engine.check_read_only("WITH x AS (SELECT 1) SELECT * FROM x").is_ok());
+    }
+
+    #[test]
+    fn test_max_sql_bytes() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        let big_sql = "SELECT ".to_string() + &"a".repeat(MAX_SQL_BYTES);
+        assert!(engine.validate(&big_sql).is_err());
+    }
+
+    #[test]
+    fn test_allowed_schema_pass() {
+        let mut policy = SecurityPolicy::default();
+        policy.allowed_schemas = vec!["public".into()];
+        let engine = SecurityEngine::new(policy, LimitsConfig::default());
+        assert!(engine.validate("SELECT * FROM public.users").is_ok());
+    }
+
+    #[test]
+    fn test_denied_relation() {
+        let mut policy = SecurityPolicy::default();
+        policy.denied_relations = vec!["public.users_credentials".into()];
+        let engine = SecurityEngine::new(policy, LimitsConfig::default());
+        assert!(engine.validate("SELECT * FROM public.users_credentials").is_err());
     }
 }

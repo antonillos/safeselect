@@ -1,21 +1,35 @@
 name: Bug Report
-description: Report a security issue or bug in SafeSelect
+description: Report a bug in SafeSelect
 labels: ["bug"]
 body:
   - type: textarea
     id: description
     attributes:
-      label: Description
-      description: What happened? What did you expect?
+      label: What happened?
+      description: Describe the bug and what you expected instead
     validations:
       required: true
   - type: textarea
     id: reproduction
     attributes:
-      label: Reproduction
-      description: Steps to reproduce
+      label: Reproduction steps
+      description: How can we reproduce the issue?
+      placeholder: |
+        1. Run `safeselect serve --project ...`
+        2. Send query ...
+        3. See error ...
   - type: input
     id: version
     attributes:
       label: Version
-      description: "safeselect --version"
+      description: Output of `safeselect --version`
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or output
+      render: shell
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: OS, Java version, database type, etc.

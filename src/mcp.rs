@@ -2,7 +2,7 @@ use crate::audit::AuditLog;
 use crate::config::{EnvironmentConfig, ProjectConfig};
 use crate::error::Result;
 use crate::security::SecurityEngine;
-use crate::sidecar::{QueryResult, SidecarProcess};
+use crate::sidecar::SidecarProcess;
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
 
@@ -298,11 +298,15 @@ impl McpServer {
 
     fn handle_list_tables(&mut self, id: Option<serde_json::Value>, args: &serde_json::Value) -> Result<()> {
         let schema = args.get("schema").and_then(|v| v.as_str());
+
         let sql = match schema {
-            Some(s) => format!(
+            Some(s) if is_valid_identifier(s) => format!(
                 "SELECT table_schema, table_name, table_type FROM information_schema.tables WHERE table_schema = '{}' ORDER BY table_schema, table_name",
-                s.replace('\'', "''")
+                s
             ),
+            Some(_) => {
+                return self.send_error(id, -32602, "Invalid schema name: only alphanumeric and underscores allowed");
+            }
             None => {
                 "SELECT table_schema, table_name, table_type FROM information_schema.tables ORDER BY table_schema, table_name".into()
             }
@@ -414,4 +418,15 @@ impl McpServer {
         writer.flush()?;
         Ok(())
     }
+}
+
+fn is_valid_identifier(s: &str) -> bool {
+    if s.is_empty() {
+        return false;
+    }
+    let bytes = s.as_bytes();
+    if !bytes[0].is_ascii_alphabetic() && bytes[0] != b'_' {
+        return false;
+    }
+    bytes.iter().all(|b| b.is_ascii_alphanumeric() || *b == b'_')
 }

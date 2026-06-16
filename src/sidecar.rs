@@ -57,8 +57,7 @@ impl SidecarProcess {
                 jdbc_url,
                 "--user",
                 username,
-                "--password",
-                password,
+                "--password-stdin",
             ])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -80,8 +79,23 @@ impl SidecarProcess {
             next_id: 0,
         };
 
+        proc.send_password(password)?;
         proc.ping()?;
         Ok(proc)
+    }
+
+    fn send_password(&mut self, password: &str) -> Result<()> {
+        writeln!(self.writer, "{password}")?;
+        self.writer.flush()?;
+        let mut ack = String::new();
+        self.reader.read_line(&mut ack)?;
+        let ack = ack.trim();
+        if ack != "ready" {
+            return Err(SafeselectError::Sidecar(format!(
+                "sidecar password rejected: {ack}"
+            )));
+        }
+        Ok(())
     }
 
     fn ensure_sidecar_jar() -> Result<PathBuf> {

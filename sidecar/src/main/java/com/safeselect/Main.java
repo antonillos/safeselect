@@ -16,28 +16,37 @@ public class Main {
         String driverClass = null;
         String jdbcUrl = null;
         String user = null;
-        String password = null;
+        boolean passwordStdin = false;
 
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
                 case "--driver" -> driverClass = args[++i];
                 case "--url" -> jdbcUrl = args[++i];
                 case "--user" -> user = args[++i];
-                case "--password" -> password = args[++i];
+                case "--password-stdin" -> passwordStdin = true;
             }
         }
 
-        if (driverClass == null || jdbcUrl == null || user == null || password == null) {
-            System.err.println("Usage: --driver <class> --url <jdbc> --user <name> --password <pwd>");
+        if (driverClass == null || jdbcUrl == null || user == null || !passwordStdin) {
+            System.err.println("Usage: --driver <class> --url <jdbc> --user <name> --password-stdin");
             System.exit(1);
         }
+
+        BufferedReader reader = new BufferedReader(new InputStreamReader(System.in));
+        PrintWriter writer = new PrintWriter(new OutputStreamWriter(System.out));
+
+        String password = reader.readLine();
+        if (password == null || password.isBlank()) {
+            System.err.println("Password required on stdin");
+            System.exit(1);
+        }
+
+        writer.println("ready");
+        writer.flush();
 
         try {
             Class.forName(driverClass);
             connection = DriverManager.getConnection(jdbcUrl, user, password);
-
-            BufferedReader reader = new BufferedReader(new InputStreamReader(System.in));
-            PrintWriter writer = new PrintWriter(new OutputStreamWriter(System.out));
 
             while (RUNNING.get()) {
                 String line = reader.readLine();
@@ -112,7 +121,7 @@ public class Main {
                             Object val = rs.getObject(i);
                             row.add(val);
                             if (val != null) {
-                                byteCount += val.toString().getBytes().length;
+                                byteCount += val.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
                             }
                         }
                         rows.add(row);

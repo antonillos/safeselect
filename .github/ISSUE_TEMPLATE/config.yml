@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/antonillos/safeselect/security/policy
+    about: Please report security vulnerabilities to the repository owner
