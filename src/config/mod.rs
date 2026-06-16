@@ -171,7 +171,7 @@ impl ConfigLoader {
             use std::os::unix::fs::PermissionsExt;
             let metadata = path.metadata()?;
             let mode = metadata.permissions().mode();
-            if mode & 0o007 != 0 {
+            if mode & 0o002 != 0 {
                 return Err(SafeselectError::InsecurePermissions(path.to_path_buf()));
             }
         }
@@ -200,8 +200,8 @@ impl ConfigLoader {
 
         if let Some(ref secret) = environment.database.secret {
             let password = self.resolve_secret(secret)?;
-            self.apply_limits(&project, &mut environment);
-            Ok(ResolvedConfig {
+        self.apply_limits(&project, &mut environment);
+        Ok(ResolvedConfig {
                 project,
                 environment,
                 driver,
