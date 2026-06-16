@@ -35,10 +35,10 @@ jobs:
           cp sidecar/target/safeselect-sidecar-*.jar sidecar/target/safeselect-sidecar.jar
       - name: Check compilation
         run: cargo check
-      - name: Unit tests
-        run: cargo test --lib
-      - name: Smoke tests
-        run: cargo test --test smoke
+      - name: All tests (unit + smoke)
+        run: cargo test
+        env:
+          CARGO_TERM_COLOR: always
 
   integration:
     name: Integration (PostgreSQL)
