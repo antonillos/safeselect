@@ -6,10 +6,19 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PREFIX="${PREFIX:-$HOME/.local}"
 BIN_DIR="${BIN_DIR:-${PREFIX}/bin}"
 
+MODE="release"
+RUST_FLAGS="--release"
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --debug) RELEASE="" ;;
-    --release|--prod) RELEASE="--release" ;;
+    --debug)
+      MODE="debug"
+      RUST_FLAGS=""
+      ;;
+    --release|--prod)
+      MODE="release"
+      RUST_FLAGS="--release"
+      ;;
     --help|-h)
       printf 'Usage: ./install.sh [--release|--debug]\n'
       printf '  --release   Build and install release binary (default)\n'
@@ -21,23 +30,21 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-RELEASE="${RELEASE:---release}"
-
 cd "${SCRIPT_DIR}"
 
 printf 'Building Java sidecar...\n'
 mvn -f sidecar/pom.xml package -DskipTests -q
 cp sidecar/target/safeselect-sidecar-*.jar sidecar/target/safeselect-sidecar.jar
 
-printf 'Building Rust binary (%s)...\n' "${RELEASE}"
-cargo build ${RELEASE} -q
+printf 'Building Rust binary (%s)...\n' "${MODE}"
+RUSTFLAGS="-A warnings" cargo build ${RUST_FLAGS} -q
 
-TARGET_DIR="${SCRIPT_DIR}/target/${RELEASE#--}"
+TARGET_DIR="${SCRIPT_DIR}/target/${MODE}"
 printf 'Installing to %s...\n' "${BIN_DIR}"
 mkdir -p "${BIN_DIR}"
 cp "${TARGET_DIR}/safeselect" "${BIN_DIR}/safeselect"
 chmod +x "${BIN_DIR}/safeselect"
 
-printf '\n✓ safeselect installed at %s/safeselect\n' "${BIN_DIR}"
+printf '\n✓ safeselect installed at %s/safeselect (%s)\n' "${BIN_DIR}" "${MODE}"
 printf '  Make sure %s is in your PATH\n' "${BIN_DIR}"
 printf '  Run: safeselect --help\n'
