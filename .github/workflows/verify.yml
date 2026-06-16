@@ -51,6 +51,10 @@ jobs:
           cp sidecar/target/safeselect-sidecar-*.jar sidecar/target/safeselect-sidecar.jar
       - name: Check compilation
         run: cargo check
+      - name: Security audit
+        run: cargo audit
+      - name: License check
+        run: cargo deny check
       - name: Run unit tests
         run: cargo test --lib
       - name: Download PostgreSQL driver
@@ -58,4 +62,4 @@ jobs:
       - name: Run smoke tests
         run: cargo test --test smoke
       - name: Run integration test
-        run: cargo test --test smoke -- --ignored
+        run: cargo test --test integration
