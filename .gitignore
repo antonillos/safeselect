@@ -1,0 +1,8 @@
+/target/
+/sidecar/target/
+*.jar
+*.bak
+.makevn/
+*.swp
+*.swo
+.DS_Store
