@@ -26,9 +26,13 @@ pub struct ResolvedConfig {
 
 impl ConfigLoader {
     pub fn new() -> Self {
-        let base = dirs::config_dir()
-            .unwrap_or_else(|| PathBuf::from("~/.config"))
-            .join("safeselect");
+        let base = if let Ok(dir) = std::env::var("SAFESELECT_CONFIG_DIR") {
+            PathBuf::from(dir)
+        } else {
+            dirs::config_dir()
+                .unwrap_or_else(|| PathBuf::from("~/.config"))
+                .join("safeselect")
+        };
         Self {
             drivers_dir: base.join("drivers"),
             projects_dir: base.join("projects"),
