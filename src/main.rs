@@ -315,7 +315,8 @@ fn cmd_agent(action: AgentAction) -> Result<()> {
             environment,
             name,
         } => {
-            agents::install_entry(&client, &project, &environment, &name)
+            let loader = ConfigLoader::new();
+            agents::install_entry(&client, &project, &environment, &name, Some(loader.config_dir()))
         }
         AgentAction::Uninstall { client, name } => {
             agents::uninstall_entry(&client, &name)

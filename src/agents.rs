@@ -1,5 +1,5 @@
 use crate::error::{Result, SafeselectError};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub fn detect_clients() -> Result<Vec<ClientConfig>> {
     let mut clients = vec![];
@@ -32,7 +32,7 @@ pub struct ClientConfig {
     pub detected: bool,
 }
 
-pub fn install_entry(client: &str, project: &str, environment: &str, entry_name: &str) -> Result<()> {
+pub fn install_entry(client: &str, project: &str, environment: &str, entry_name: &str, config_dir: Option<&Path>) -> Result<()> {
     let config_path = get_client_config(client)?;
     let content = std::fs::read_to_string(&config_path)?;
 
@@ -46,11 +46,17 @@ pub fn install_entry(client: &str, project: &str, environment: &str, entry_name:
         "args": ["serve", "--project", project, "--environment", environment]
     });
 
-    let opencode_entry = serde_json::json!({
+    let mut opencode_entry = serde_json::json!({
         "type": "local",
         "command": ["safeselect", "serve", "--project", project, "--environment", environment],
         "enabled": true
     });
+
+    if let Some(dir) = config_dir {
+        opencode_entry["environment"] = serde_json::json!({
+            "SAFESELECT_CONFIG_DIR": dir.to_string_lossy().to_string()
+        });
+    }
 
     let new_content = match client {
         "opencode" => append_opencode_json(&content, &opencode_entry, entry_name)?,
