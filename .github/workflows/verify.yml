@@ -40,6 +40,14 @@ jobs:
       - name: Install Rust
         shell: bash
         run: rustup toolchain install stable --profile minimal
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
       - name: Install Java
         uses: actions/setup-java@v5
         with:
@@ -51,6 +59,10 @@ jobs:
           cp sidecar/target/safeselect-sidecar-*.jar sidecar/target/safeselect-sidecar.jar
       - name: Check compilation
         run: cargo check
+      - name: Install audit & deny tools
+        run: |
+          cargo install cargo-audit --locked
+          cargo install cargo-deny --locked
       - name: Security audit
         run: cargo audit
       - name: License check
