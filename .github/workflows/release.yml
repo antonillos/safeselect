@@ -2,15 +2,161 @@ name: Release
 
 on:
   push:
-    tags: ["v*"]
+    branches:
+      - main
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release tag (e.g. v0.1.0)
+        required: true
+      target_ref:
+        description: Branch or commit to release
+        required: true
+        default: main
+      prerelease:
+        description: Mark as prerelease
+        type: boolean
+        default: false
+      draft:
+        description: Create as draft
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
+env:
+  CARGO_TERM_COLOR: always
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
+  validate-version:
+    runs-on: ubuntu-latest
+    outputs:
+      semver: ${{ steps.parse.outputs.semver }}
+      version: ${{ steps.parse.outputs.version }}
+      target-ref: ${{ steps.parse.outputs.target-ref }}
+      prerelease: ${{ steps.parse.outputs.prerelease }}
+      draft: ${{ steps.parse.outputs.draft }}
+      exists: ${{ steps.release.outputs.exists }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.target_ref || github.sha }}
+      - name: Validate and parse version
+        id: parse
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest_version="$(sed -nE 's/^version = "([^"]+)"/\1/p' Cargo.toml | sed -n '1p')"
+          VERSION="${{ github.event_name == 'workflow_dispatch' && inputs.version || '' }}"
+          if [[ -z "$VERSION" ]]; then
+            VERSION="v${manifest_version}"
+          fi
+          case "$VERSION" in
+            v*) ;;
+            *) printf 'Error: version must start with v, got %s\n' "$VERSION" >&2; exit 1 ;;
+          esac
+          SEMVER="${VERSION#v}"
+          if ! [[ "$SEMVER" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+            printf 'Error: invalid semver: %s\n' "$SEMVER" >&2
+            exit 1
+          fi
+          if [[ "$manifest_version" != "$SEMVER" ]]; then
+            printf 'Error: Cargo.toml version %s does not match release %s\n' "$manifest_version" "$SEMVER" >&2
+            exit 1
+          fi
+          printf 'semver=%s\n' "$SEMVER" >> "$GITHUB_OUTPUT"
+          printf 'version=%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
+          printf 'target-ref=%s\n' "${{ github.event_name == 'workflow_dispatch' && inputs.target_ref || github.sha }}" >> "$GITHUB_OUTPUT"
+          printf 'prerelease=%s\n' "${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}" >> "$GITHUB_OUTPUT"
+          printf 'draft=%s\n' "${{ github.event_name == 'workflow_dispatch' && inputs.draft || false }}" >> "$GITHUB_OUTPUT"
+      - name: Skip existing release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.parse.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            printf 'Release %s already exists. Nothing to publish.\n' "$VERSION"
+            printf 'exists=true\n' >> "$GITHUB_OUTPUT"
+          else
+            printf 'exists=false\n' >> "$GITHUB_OUTPUT"
+          fi
+
+  create-release:
+    if: needs.validate-version.outputs.exists != 'true'
+    runs-on: ubuntu-latest
+    needs: validate-version
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.validate-version.outputs.target-ref }}
+      - name: Generate release notes
+        shell: bash
+        run: |
+          cat > release-notes.md <<RELEASE
+          # SafeSelect ${{ needs.validate-version.outputs.version }}
+
+          ## Install
+
+          Homebrew:
+
+          \`\`\`bash
+          brew install antonillos/tap/safeselect
+          \`\`\`
+
+          asdf:
+
+          \`\`\`bash
+          asdf plugin add safeselect https://github.com/antonillos/asdf-safeselect.git
+          asdf install safeselect latest
+          asdf set -u safeselect latest
+          \`\`\`
+
+          Fallback installer:
+
+          \`\`\`bash
+          curl -fsSL https://raw.githubusercontent.com/antonillos/safeselect/main/packaging/install/install-release.sh | sh
+          \`\`\`
+
+          ## Assets
+
+          - Runtime archives for Linux \`x86_64\`, macOS \`x86_64\`, and macOS \`arm64\`
+          - SHA-256 checksum files for each archive
+          RELEASE
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          args=(
+            "${{ needs.validate-version.outputs.version }}"
+            --target "${{ needs.validate-version.outputs.target-ref }}"
+            --title "${{ needs.validate-version.outputs.version }}"
+            --notes-file release-notes.md
+          )
+          if [[ "${{ needs.validate-version.outputs.prerelease }}" == "true" ]]; then
+            args+=(--prerelease)
+          fi
+          if [[ "${{ needs.validate-version.outputs.draft }}" == "true" ]]; then
+            args+=(--draft)
+          fi
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            gh release delete "${{ needs.validate-version.outputs.version }}" --yes || true
+          fi
+          gh release create "${args[@]}"
+
   build:
-    name: Build ${{ matrix.target }}
+    needs: [validate-version, create-release]
+    if: needs.validate-version.outputs.exists != 'true'
     strategy:
+      fail-fast: false
       matrix:
         include:
           - target: aarch64-apple-darwin
@@ -25,44 +171,173 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
-
-      - name: Setup Rust
-        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          target: ${{ matrix.target }}
-
-      - name: Setup Java
+          ref: ${{ needs.validate-version.outputs.target-ref }}
+      - name: Install Rust
+        shell: bash
+        run: rustup target add ${{ matrix.target }} && rustup toolchain install stable --profile minimal
+      - name: Install Java
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 17
-
       - name: Build sidecar
         run: mvn -f sidecar/pom.xml package -DskipTests
-        shell: bash
-
       - name: Copy sidecar JAR
         run: cp sidecar/target/safeselect-sidecar-*.jar sidecar/target/safeselect-sidecar.jar
-        shell: bash
-
       - name: Build Rust binary
         run: cargo build --release --target ${{ matrix.target }}
-        shell: bash
-
       - name: Run tests
         run: cargo test --target ${{ matrix.target }}
-        shell: bash
-
       - name: Package binary
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf safeselect-${{ matrix.target }}.tar.gz safeselect
-          sha256sum safeselect-${{ matrix.target }}.tar.gz > safeselect-${{ matrix.target }}.tar.gz.sha256
-        shell: bash
-
+          tar czf safeselect-${{ needs.validate-version.outputs.version }}-${{ matrix.target }}.tar.gz safeselect
+          sha256sum safeselect-${{ needs.validate-version.outputs.version }}-${{ matrix.target }}.tar.gz > safeselect-${{ needs.validate-version.outputs.version }}-${{ matrix.target }}.tar.gz.sha256
       - name: Upload release assets
-        uses: softprops/action-gh-release@v3
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh release upload "${{ needs.validate-version.outputs.version }}" \
+            target/${{ matrix.target }}/release/safeselect-${{ needs.validate-version.outputs.version }}-${{ matrix.target }}.tar.gz \
+            target/${{ matrix.target }}/release/safeselect-${{ needs.validate-version.outputs.version }}-${{ matrix.target }}.tar.gz.sha256 \
+            --clobber
+
+  publish-package-managers:
+    if: needs.validate-version.outputs.exists != 'true' && needs.validate-version.outputs.prerelease != 'true' && needs.validate-version.outputs.draft != 'true'
+    runs-on: ubuntu-latest
+    needs: [validate-version, build]
+    steps:
+      - uses: actions/checkout@v6
         with:
-          files: |
-            target/${{ matrix.target }}/release/safeselect-${{ matrix.target }}.tar.gz
-            target/${{ matrix.target }}/release/safeselect-${{ matrix.target }}.tar.gz.sha256
+          ref: ${{ needs.validate-version.outputs.target-ref }}
+      - name: Read release asset checksums
+        id: checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.validate-version.outputs.version }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/checksums
+          gh release download "${VERSION}" \
+            --repo "${REPOSITORY}" \
+            --pattern "safeselect-${VERSION}-aarch64-apple-darwin.tar.gz.sha256" \
+            --pattern "safeselect-${VERSION}-x86_64-apple-darwin.tar.gz.sha256" \
+            --dir dist/checksums 2>/dev/null || true
+          gh release download "${VERSION}" \
+            --repo "${REPOSITORY}" \
+            --pattern "safeselect-${VERSION}-aarch64-unknown-linux-gnu.tar.gz.sha256" \
+            --pattern "safeselect-${VERSION}-x86_64-unknown-linux-gnu.tar.gz.sha256" \
+            --dir dist/checksums 2>/dev/null || true
+
+          arm_mac_sha="$(awk '{print $1}' "dist/checksums/safeselect-${VERSION}-aarch64-apple-darwin.tar.gz.sha256" 2>/dev/null || echo "")"
+          intel_mac_sha="$(awk '{print $1}' "dist/checksums/safeselect-${VERSION}-x86_64-apple-darwin.tar.gz.sha256" 2>/dev/null || echo "")"
+          arm_linux_sha="$(awk '{print $1}' "dist/checksums/safeselect-${VERSION}-aarch64-unknown-linux-gnu.tar.gz.sha256" 2>/dev/null || echo "")"
+          intel_linux_sha="$(awk '{print $1}' "dist/checksums/safeselect-${VERSION}-x86_64-unknown-linux-gnu.tar.gz.sha256" 2>/dev/null || echo "")"
+
+          printf 'arm-mac-sha=%s\n' "${arm_mac_sha}" >> "${GITHUB_OUTPUT}"
+          printf 'intel-mac-sha=%s\n' "${intel_mac_sha}" >> "${GITHUB_OUTPUT}"
+          printf 'arm-linux-sha=%s\n' "${arm_linux_sha}" >> "${GITHUB_OUTPUT}"
+          printf 'intel-linux-sha=%s\n' "${intel_linux_sha}" >> "${GITHUB_OUTPUT}"
+      - name: Publish Homebrew tap
+        env:
+          RELEASE_TOKEN: ${{ secrets.SAFESELECT_RELEASE_TOKEN }}
+          VERSION: ${{ needs.validate-version.outputs.version }}
+          ARM_SHA: ${{ steps.checksums.outputs.arm-mac-sha }}
+          INTEL_SHA: ${{ steps.checksums.outputs.intel-mac-sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${RELEASE_TOKEN}" ]]; then
+            printf 'Skipping Homebrew tap update: SAFESELECT_RELEASE_TOKEN is not configured.\n' >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+
+          git clone "https://x-access-token:${RELEASE_TOKEN}@github.com/antonillos/homebrew-tap.git" homebrew-tap
+          cd homebrew-tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          mkdir -p Formula
+          cat > Formula/safeselect.rb <<FORMULA
+          class Safeselect < Formula
+            desc "MCP SQL Fail-Closed for AI Agents"
+            homepage "https://github.com/antonillos/safeselect"
+            license "MIT OR Apache-2.0"
+
+            if Hardware::CPU.arm?
+              url "https://github.com/antonillos/safeselect/releases/download/${VERSION}/safeselect-${VERSION}-aarch64-apple-darwin.tar.gz"
+              sha256 "${ARM_SHA}"
+            else
+              url "https://github.com/antonillos/safeselect/releases/download/${VERSION}/safeselect-${VERSION}-x86_64-apple-darwin.tar.gz"
+              sha256 "${INTEL_SHA}"
+            end
+
+            depends_on "openjdk@17"
+
+            def install
+              bin.install "safeselect"
+            end
+
+            def caveats
+              <<~EOS
+                SafeSelect has been installed. To get started:
+
+                  safeselect --help
+
+                A JDBC driver is required. Download the PostgreSQL driver:
+
+                  safeselect driver download --vendor postgresql
+
+                For MCP (Model Context Protocol) support, install the integration:
+
+                  safeselect agent install opencode --project <project> --environment <env> --name <name>
+              EOS
+            end
+
+            test do
+              assert_match "safeselect #{version}", shell_output("\#{bin}/safeselect --version")
+            end
+          end
+          FORMULA
+
+          if git diff --quiet; then
+            printf 'Homebrew tap already up to date for %s.\n' "${VERSION}" >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+          git add Formula/safeselect.rb
+          git commit -m "safeselect ${VERSION}"
+          git push origin HEAD:main
+          printf 'Updated Homebrew tap for %s.\n' "${VERSION}" >> "${GITHUB_STEP_SUMMARY}"
+      - name: Publish asdf plugin
+        env:
+          RELEASE_TOKEN: ${{ secrets.SAFESELECT_RELEASE_TOKEN }}
+          VERSION: ${{ needs.validate-version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${RELEASE_TOKEN}" ]]; then
+            printf 'Skipping asdf plugin update: SAFESELECT_RELEASE_TOKEN is not configured.\n' >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+
+          git clone "https://x-access-token:${RELEASE_TOKEN}@github.com/antonillos/asdf-safeselect.git" asdf-safeselect 2>/dev/null || {
+            printf 'asdf plugin repo not found. Create it first.\n' >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          }
+          cp -R packaging/asdf/. asdf-safeselect/
+          cd asdf-safeselect
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          chmod +x bin/download bin/install bin/list-all
+
+          if git diff --quiet; then
+            printf 'asdf plugin already up to date for %s.\n' "${VERSION}" >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+          git add .
+          git commit -m "Sync safeselect asdf plugin for ${VERSION}"
+          git push origin HEAD:main
+          printf 'Updated asdf plugin for %s.\n' "${VERSION}" >> "${GITHUB_STEP_SUMMARY}"
