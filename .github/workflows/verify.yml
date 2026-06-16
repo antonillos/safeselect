@@ -40,14 +40,11 @@ jobs:
       - name: Install Rust
         shell: bash
         run: rustup toolchain install stable --profile minimal
-      - name: Install cargo-audit
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-audit
-      - name: Install cargo-deny
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-deny
+      - name: Install audit & deny tools
+        shell: bash
+        run: |
+          command -v cargo-audit || cargo install cargo-audit --locked
+          command -v cargo-deny || cargo install cargo-deny --locked
       - name: Install Java
         uses: actions/setup-java@v5
         with:
