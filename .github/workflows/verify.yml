@@ -15,10 +15,26 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  SAFESELECT_INTEGRATION_TEST: "1"
+  SAFESELECT_INT_TEST_PASSWORD: "testpass"
 
 jobs:
   check:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: testpass
+          POSTGRES_DB: testdb
+        ports:
+          - 25432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - uses: actions/checkout@v6
       - name: Install Rust
@@ -35,5 +51,11 @@ jobs:
           cp sidecar/target/safeselect-sidecar-*.jar sidecar/target/safeselect-sidecar.jar
       - name: Check compilation
         run: cargo check
-      - name: Run tests
-        run: cargo test
+      - name: Run unit tests
+        run: cargo test --lib
+      - name: Download PostgreSQL driver
+        run: cargo run -- driver download --vendor postgresql
+      - name: Run smoke tests
+        run: cargo test --test smoke
+      - name: Run integration test
+        run: cargo test --test smoke -- --ignored
