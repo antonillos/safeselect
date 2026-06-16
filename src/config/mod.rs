@@ -177,7 +177,9 @@ impl ConfigLoader {
         }
         let mut file = std::fs::File::open(path)?;
         let mut hasher = Sha256::new();
-        std::io::copy(&mut file, &mut hasher)?;
+        let mut buf = Vec::new();
+        std::io::Read::read_to_end(&mut file, &mut buf)?;
+        hasher.update(&buf);
         let actual = hex::encode(hasher.finalize());
         if actual != config.sha256 {
             return Err(SafeselectError::DriverChecksumMismatch(config.vendor.clone()));

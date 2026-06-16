@@ -32,7 +32,7 @@ jobs:
           target: ${{ matrix.target }}
 
       - name: Setup Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 17
@@ -61,7 +61,7 @@ jobs:
         shell: bash
 
       - name: Upload release assets
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             target/${{ matrix.target }}/release/safeselect-${{ matrix.target }}.tar.gz

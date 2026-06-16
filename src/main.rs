@@ -202,7 +202,9 @@ fn cmd_driver(loader: &ConfigLoader, action: DriverAction) -> Result<()> {
                 None => {
                     let mut file = std::fs::File::open(driver_path)?;
                     let mut hasher = Sha256::new();
-                    std::io::copy(&mut file, &mut hasher)?;
+                    let mut buf = Vec::new();
+                    std::io::Read::read_to_end(&mut file, &mut buf)?;
+                    hasher.update(&buf);
                     hex::encode(hasher.finalize())
                 }
             };
