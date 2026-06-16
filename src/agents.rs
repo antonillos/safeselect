@@ -187,11 +187,6 @@ fn append_opencode_json(content: &str, entry: &serde_json::Value, name: &str) ->
 
     match servers {
         Some(map) => {
-            if map.contains_key(name) {
-                return Err(SafeselectError::Other(format!(
-                    "Entry '{name}' already exists in mcp servers"
-                )));
-            }
             map.insert(name.to_string(), entry.clone());
         }
         None => {
@@ -214,11 +209,6 @@ fn append_mcp_json(content: &str, entry: &serde_json::Value, name: &str) -> Resu
 
     match servers {
         Some(map) => {
-            if map.contains_key(name) {
-                return Err(SafeselectError::Other(format!(
-                    "Entry '{name}' already exists in mcpServers"
-                )));
-            }
             map.insert(name.to_string(), entry.clone());
         }
         None => {
