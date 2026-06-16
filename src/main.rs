@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 mod agents;
 mod audit;
 mod cli;
