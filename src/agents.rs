@@ -46,13 +46,16 @@ pub fn install_entry(client: &str, project: &str, environment: &str, entry_name:
         "args": ["serve", "--project", project, "--environment", environment]
     });
 
+    let opencode_entry = serde_json::json!({
+        "type": "local",
+        "command": ["safeselect", "serve", "--project", project, "--environment", environment],
+        "enabled": true
+    });
+
     let new_content = match client {
-        "opencode" | "cursor" | "windsurf" | "codex" | "claude-code" => {
-            append_mcp_json(&content, &entry, entry_name)?
-        }
-        "copilot" | "gemini-cli" => {
-            append_ini_entry(&content, entry_name)?
-        }
+        "opencode" => append_opencode_json(&content, &opencode_entry, entry_name)?,
+        "cursor" | "windsurf" | "codex" | "claude-code" => append_mcp_json(&content, &entry, entry_name)?,
+        "copilot" | "gemini-cli" => append_ini_entry(&content, entry_name)?,
         _ => return Err(SafeselectError::Other(format!("Unknown client: {client}"))),
     };
 
@@ -108,8 +111,11 @@ fn get_client_config(client: &str) -> Result<PathBuf> {
 }
 
 fn detect_opencode_config() -> Option<PathBuf> {
-    let config = dirs::config_dir()?.join("opencode").join("opencode.json");
-    if config.exists() { Some(config) } else { None }
+    let candidates = vec![
+        dirs::config_dir()?.join("opencode").join("opencode.json"),
+        dirs::home_dir()?.join(".config").join("opencode").join("opencode.json"),
+    ];
+    candidates.into_iter().find(|p| p.exists())
 }
 
 fn detect_copilot_config() -> Option<PathBuf> {
@@ -169,6 +175,33 @@ fn verify_permissions(path: &PathBuf) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn append_opencode_json(content: &str, entry: &serde_json::Value, name: &str) -> Result<String> {
+    let mut config: serde_json::Value = serde_json::from_str(content)
+        .map_err(|e| SafeselectError::Other(format!("Cannot parse JSON config: {e}")))?;
+
+    let servers = config
+        .get_mut("mcp")
+        .and_then(|v| v.as_object_mut());
+
+    match servers {
+        Some(map) => {
+            if map.contains_key(name) {
+                return Err(SafeselectError::Other(format!(
+                    "Entry '{name}' already exists in mcp servers"
+                )));
+            }
+            map.insert(name.to_string(), entry.clone());
+        }
+        None => {
+            let mut map = serde_json::Map::new();
+            map.insert(name.to_string(), entry.clone());
+            config["mcp"] = serde_json::Value::Object(map);
+        }
+    }
+
+    Ok(serde_json::to_string_pretty(&config)?)
 }
 
 fn append_mcp_json(content: &str, entry: &serde_json::Value, name: &str) -> Result<String> {
