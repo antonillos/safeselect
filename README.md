@@ -7,9 +7,10 @@
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-JDBC-336791?logo=postgresql&logoColor=white)]()
 [![macOS Keychain](https://img.shields.io/badge/Secrets-macOS%20Keychain-000000?logo=apple&logoColor=white)]()
 [![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
+<br>
+[![CI](https://github.com/antonillos/safeselect/actions/workflows/verify.yml/badge.svg)](https://github.com/antonillos/safeselect/actions/workflows/verify.yml)
 [![Security Audit](https://img.shields.io/badge/Security%20Audit-passing-success?logo=trustpilot&logoColor=white)]()
 [![License Check](https://img.shields.io/badge/License%20Check-passing-success?logo=open-source-initiative&logoColor=white)]()
-[![CI](https://github.com/antonillos/safeselect/actions/workflows/verify.yml/badge.svg)](https://github.com/antonillos/safeselect/actions/workflows/verify.yml)
 
 SafeSelect is a secure SQL proxy that sits between AI coding agents and your
 databases. It implements the **Model Context Protocol (MCP)** to expose
