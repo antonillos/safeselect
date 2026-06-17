@@ -1,10 +1,12 @@
 use crate::audit::AuditLog;
+use crate::compose;
 use crate::config::{EnvironmentConfig, ProjectConfig};
 use crate::error::Result;
 use crate::security::SecurityEngine;
 use crate::sidecar::SidecarProcess;
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
+use std::path::Path;
 
 #[derive(Deserialize)]
 struct JsonRpcMessage {
@@ -492,6 +494,282 @@ impl McpServer {
         writer.flush()?;
         Ok(())
     }
+}
+
+pub fn run_setup_server(repo_root: &Path) -> Result<()> {
+    let stdin = std::io::stdin();
+    let mut reader = BufReader::new(stdin.lock());
+    let mut line = String::new();
+
+    loop {
+        line.clear();
+        let n = reader.read_line(&mut line)?;
+        if n == 0 {
+            break;
+        }
+
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        let msg: JsonRpcMessage = match serde_json::from_str(line) {
+            Ok(m) => m,
+            Err(e) => {
+                let resp = JsonRpcResponse {
+                    jsonrpc: "2.0",
+                    id: None,
+                    result: None,
+                    error: Some(JsonRpcError {
+                        code: -32700,
+                        message: "Parse error".into(),
+                        data: Some(serde_json::json!({"detail": e.to_string()})),
+                    }),
+                };
+                write_setup_response(&resp)?;
+                continue;
+            }
+        };
+
+        let method = match msg.method.as_deref() {
+            Some(m) => m,
+            None => continue,
+        };
+
+        match method {
+            "initialize" => {
+                let proto_version = msg
+                    .params
+                    .as_ref()
+                    .and_then(|p| p.get("protocolVersion"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("2024-11-05");
+
+                let resp = JsonRpcResponse {
+                    jsonrpc: "2.0",
+                    id: msg.id.clone(),
+                    result: Some(serde_json::json!({
+                        "protocolVersion": proto_version,
+                        "capabilities": {
+                            "tools": {
+                                "list": {}
+                            }
+                        },
+                        "serverInfo": {
+                            "name": "safeselect-setup",
+                            "version": env!("CARGO_PKG_VERSION")
+                        }
+                    })),
+                    error: None,
+                };
+                write_setup_response(&resp)?;
+            }
+            "tools/list" => {
+                let tools = vec![ToolDefinition {
+                    name: "import_compose".into(),
+                    description:
+                        "Scan docker-compose files for PostgreSQL services and import them into .safeselect/ configuration. Creates project.toml and environment files automatically."
+                            .into(),
+                    input_schema: serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "scan_path": {
+                                "type": "string",
+                                "description": "Directory to scan for docker-compose files (default: project root)"
+                            }
+                        }
+                    }),
+                }];
+
+                let resp = JsonRpcResponse {
+                    jsonrpc: "2.0",
+                    id: msg.id,
+                    result: Some(serde_json::json!({ "tools": tools })),
+                    error: None,
+                };
+                write_setup_response(&resp)?;
+            }
+            "tools/call" => {
+                let params = match msg.params.as_ref() {
+                    Some(p) => p,
+                    None => {
+                        let resp = JsonRpcResponse {
+                            jsonrpc: "2.0",
+                            id: msg.id,
+                            result: None,
+                            error: Some(JsonRpcError {
+                                code: -32602,
+                                message: "Missing params".into(),
+                                data: None,
+                            }),
+                        };
+                        write_setup_response(&resp)?;
+                        continue;
+                    }
+                };
+
+                let tool_name = match params.get("name").and_then(|v| v.as_str()) {
+                    Some(n) => n,
+                    None => {
+                        let resp = JsonRpcResponse {
+                            jsonrpc: "2.0",
+                            id: msg.id,
+                            result: None,
+                            error: Some(JsonRpcError {
+                                code: -32602,
+                                message: "Missing tool name".into(),
+                                data: None,
+                            }),
+                        };
+                        write_setup_response(&resp)?;
+                        continue;
+                    }
+                };
+
+                match tool_name {
+                    "import_compose" => {
+                        let args = params
+                            .get("arguments")
+                            .cloned()
+                            .unwrap_or(serde_json::json!({}));
+
+                        let scan_path = args
+                            .get("scan_path")
+                            .and_then(|v| v.as_str())
+                            .map(Path::new)
+                            .unwrap_or(repo_root);
+
+                        match compose::scan_all(scan_path) {
+                            Ok(groups) => {
+                                let all_connections: Vec<compose::ComposeConnection> =
+                                    groups.into_iter().flat_map(|(_, cs)| cs).collect();
+
+                                if all_connections.is_empty() {
+                                    let resp = JsonRpcResponse {
+                                        jsonrpc: "2.0",
+                                        id: msg.id,
+                                        result: Some(serde_json::json!({
+                                            "content": [{
+                                                "type": "text",
+                                                "text": "No PostgreSQL services found in docker-compose files."
+                                            }]
+                                        })),
+                                        error: None,
+                                    };
+                                    write_setup_response(&resp)?;
+                                } else {
+                                    let project_name = scan_path
+                                        .file_name()
+                                        .and_then(|n| n.to_str())
+                                        .unwrap_or("project");
+                                    let created = compose::write_config_files(
+                                        scan_path,
+                                        &all_connections,
+                                        project_name,
+                                    );
+                                    match created {
+                                        Ok(count) => {
+                                            let names: Vec<&str> = all_connections
+                                                .iter()
+                                                .map(|c| c.env_name.as_str())
+                                                .collect();
+                                            let text = if count == 0 {
+                                                "All environments already exist. Nothing imported."
+                                                    .to_string()
+                                            } else {
+                                                format!(
+                                                    "Imported {} connection(s): {}\n\nRun the server with:\n  safeselect serve --environment <name>\n\nAvailable environments: {}",
+                                                    names.len(),
+                                                    names.join(", "),
+                                                    names.join(", ")
+                                                )
+                                            };
+                                            let resp = JsonRpcResponse {
+                                                jsonrpc: "2.0",
+                                                id: msg.id,
+                                                result: Some(serde_json::json!({
+                                                    "content": [{
+                                                        "type": "text",
+                                                        "text": text
+                                                    }]
+                                                })),
+                                                error: None,
+                                            };
+                                            write_setup_response(&resp)?;
+                                        }
+                                        Err(e) => {
+                                            let resp = JsonRpcResponse {
+                                                jsonrpc: "2.0",
+                                                id: msg.id,
+                                                result: None,
+                                                error: Some(JsonRpcError {
+                                                    code: -32000,
+                                                    message: format!("Import failed: {e}"),
+                                                    data: None,
+                                                }),
+                                            };
+                                            write_setup_response(&resp)?;
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                let resp = JsonRpcResponse {
+                                    jsonrpc: "2.0",
+                                    id: msg.id,
+                                    result: None,
+                                    error: Some(JsonRpcError {
+                                        code: -32000,
+                                        message: format!("Scan failed: {e}"),
+                                        data: None,
+                                    }),
+                                };
+                                write_setup_response(&resp)?;
+                            }
+                        }
+                    }
+                    _ => {
+                        let resp = JsonRpcResponse {
+                            jsonrpc: "2.0",
+                            id: msg.id,
+                            result: None,
+                            error: Some(JsonRpcError {
+                                code: -32602,
+                                message: format!("Unknown tool: {tool_name}"),
+                                data: None,
+                            }),
+                        };
+                        write_setup_response(&resp)?;
+                    }
+                }
+            }
+            "notifications/initialized" => {}
+            _ => {
+                let resp = JsonRpcResponse {
+                    jsonrpc: "2.0",
+                    id: msg.id,
+                    result: None,
+                    error: Some(JsonRpcError {
+                        code: -32601,
+                        message: format!("Method not found: {method}"),
+                        data: None,
+                    }),
+                };
+                write_setup_response(&resp)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn write_setup_response(resp: &JsonRpcResponse) -> Result<()> {
+    let stdout = std::io::stdout();
+    let mut writer = stdout.lock();
+    let line = serde_json::to_string(resp)?;
+    writeln!(writer, "{line}")?;
+    writer.flush()?;
+    Ok(())
 }
 
 fn is_valid_identifier(s: &str) -> bool {
