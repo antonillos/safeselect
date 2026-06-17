@@ -1,7 +1,7 @@
 use crate::audit::AuditLog;
 use crate::compose;
 use crate::config::{EnvironmentConfig, ProjectConfig};
-use crate::error::Result;
+use crate::error::{Result, SafeselectError};
 use crate::security::SecurityEngine;
 use crate::sidecar::SidecarProcess;
 use serde::{Deserialize, Serialize};
@@ -47,22 +47,32 @@ struct ToolDefinition {
 }
 
 pub struct McpServer {
-    sidecar: SidecarProcess,
+    sidecar: Option<SidecarProcess>,
     security: SecurityEngine,
     audit: AuditLog,
     project_name: String,
     env_name: String,
     client_name: String,
     idle_timeout_seconds: u64,
+    // Stored to lazily start the sidecar on first query
+    driver_path: String,
+    driver_class: String,
+    db_url: String,
+    db_username: String,
+    db_password: String,
 }
 
 impl McpServer {
     pub fn new(
-        sidecar: SidecarProcess,
         project_config: ProjectConfig,
         env_config: EnvironmentConfig,
         project_name: &str,
         env_name: &str,
+        driver_path: &str,
+        driver_class: &str,
+        db_url: &str,
+        db_username: &str,
+        db_password: &str,
     ) -> Result<Self> {
         let security = SecurityEngine::new(project_config.security.clone(), project_config.limits.clone());
 
@@ -76,14 +86,37 @@ impl McpServer {
         )?;
 
         Ok(Self {
-            sidecar,
+            sidecar: None,
             security,
             audit,
             project_name: project_name.to_string(),
             env_name: env_name.to_string(),
             client_name: "unknown".to_string(),
             idle_timeout_seconds,
+            driver_path: driver_path.to_string(),
+            driver_class: driver_class.to_string(),
+            db_url: db_url.to_string(),
+            db_username: db_username.to_string(),
+            db_password: db_password.to_string(),
         })
+    }
+
+    fn ensure_sidecar(&mut self) -> Result<&mut SidecarProcess> {
+        if self.sidecar.is_some() {
+            return Ok(self.sidecar.as_mut().unwrap());
+        }
+        tracing::info!("Lazy-starting sidecar");
+        let sidecar = SidecarProcess::start_with_timeout(
+            &self.driver_path,
+            &self.driver_class,
+            &self.db_url,
+            &self.db_username,
+            &self.db_password,
+            self.idle_timeout_seconds,
+        )?;
+        tracing::info!("Sidecar ready");
+        self.sidecar = Some(sidecar);
+        Ok(self.sidecar.as_mut().unwrap())
     }
 
     pub fn run(&mut self) -> Result<()> {
@@ -440,7 +473,11 @@ impl McpServer {
     }
 
     fn handle_disconnect(&mut self, id: Option<serde_json::Value>) -> Result<()> {
-        match self.sidecar.disconnect() {
+        let sidecar = match self.sidecar.as_mut() {
+            Some(s) => s,
+            None => return self.send_error(id, -32000, "Not connected"),
+        };
+        match sidecar.disconnect() {
             Ok(()) => {
                 self.audit.record("DISCONNECT", "allow", "manual disconnect")?;
                 let resp = JsonRpcResponse {
@@ -461,7 +498,11 @@ impl McpServer {
     }
 
     fn handle_connect(&mut self, id: Option<serde_json::Value>) -> Result<()> {
-        match self.sidecar.connect() {
+        let sidecar = match self.sidecar.as_mut() {
+            Some(s) => s,
+            None => return self.send_error(id, -32000, "Not connected"),
+        };
+        match sidecar.connect() {
             Ok(()) => {
                 self.audit.record("CONNECT", "allow", "manual reconnect")?;
                 let resp = JsonRpcResponse {
@@ -483,16 +524,17 @@ impl McpServer {
 
     /// Execute a query, reconnecting once if the connection is lost.
     fn execute_with_reconnect(&mut self, sql: &str) -> std::result::Result<crate::sidecar::QueryResult, crate::error::SafeselectError> {
-        match self.sidecar.execute(sql) {
-            Ok(result) => Ok(result),
-            Err(e) => {
-                if self.sidecar.connect().is_ok() {
-                    self.audit.record("AUTO_RECONNECT", "allow", "connection lost — reconnected")?;
-                    self.sidecar.execute(sql)
-                } else {
-                    Err(e)
-                }
-            }
+        self.ensure_sidecar()?;
+        let result = self.sidecar.as_mut().unwrap().execute(sql);
+        if result.is_ok() {
+            return result;
+        }
+        let reconnected = self.sidecar.as_mut().unwrap().connect().is_ok();
+        if reconnected {
+            let _ = self.audit.record("AUTO_RECONNECT", "allow", "connection lost — reconnected");
+            self.sidecar.as_mut().unwrap().execute(sql)
+        } else {
+            result
         }
     }
 
