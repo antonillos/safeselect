@@ -11,10 +11,12 @@ class Safeselect < Formula
     sha256 "PLACEHOLDER_X86_64"
   end
 
-  depends_on "openjdk@17"
+  depends_on "openjdk"
 
   def install
-    bin.install "safeselect"
+    libexec.install "safeselect"
+    (bin/"safeselect").write_env_script libexec/"safeselect",
+      JAVA_HOME: Formula["openjdk"].opt_prefix
   end
 
   def caveats
