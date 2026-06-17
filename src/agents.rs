@@ -121,11 +121,18 @@ fn get_client_config(client: &str) -> Result<PathBuf> {
 }
 
 fn detect_opencode_config() -> Option<PathBuf> {
-    let candidates = vec![
-        dirs::config_dir()?.join("opencode").join("opencode.json"),
-        dirs::home_dir()?.join(".config").join("opencode").join("opencode.json"),
-    ];
-    candidates.into_iter().find(|p| p.exists())
+    let config_dir = dirs::config_dir()?;
+    let home_config = dirs::home_dir()?.join(".config");
+    for base in [&*config_dir, &home_config] {
+        let dir = base.join("opencode");
+        for name in ["opencode.jsonc", "opencode.json"] {
+            let path = dir.join(name);
+            if path.exists() {
+                return Some(path);
+            }
+        }
+    }
+    None
 }
 
 fn detect_copilot_config() -> Option<PathBuf> {
@@ -187,8 +194,63 @@ fn verify_permissions(path: &PathBuf) -> Result<()> {
     Ok(())
 }
 
+/// Strip JSONC comments (// and /* */) from a string, preserving string contents.
+fn strip_jsonc_comments(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let bytes = input.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        // string literal — copy verbatim
+        if bytes[i] == b'"' {
+            out.push('"');
+            i += 1;
+            while i < bytes.len() {
+                let c = bytes[i] as char;
+                out.push(c);
+                if c == '\\' && i + 1 < bytes.len() {
+                    i += 1;
+                    out.push(bytes[i] as char);
+                } else if c == '"' {
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+        // single-line comment
+        if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+            i += 2;
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        // block comment
+        if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+            i += 2;
+            while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                i += 1;
+            }
+            i += 2; // skip */
+            continue;
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
+}
+
+/// Parse a JSON or JSONC string into a serde_json::Value.
+fn parse_json_or_jsonc(input: &str) -> std::result::Result<serde_json::Value, serde_json::Error> {
+    serde_json::from_str(input).or_else(|_| {
+        let cleaned = strip_jsonc_comments(input);
+        serde_json::from_str(&cleaned)
+    })
+}
+
 fn append_opencode_json(content: &str, entry: &serde_json::Value, name: &str) -> Result<String> {
-    let mut config: serde_json::Value = serde_json::from_str(content)
+    let mut config: serde_json::Value = parse_json_or_jsonc(content)
         .map_err(|e| SafeselectError::Other(format!("Cannot parse JSON config: {e}")))?;
 
     let servers = config
@@ -210,7 +272,7 @@ fn append_opencode_json(content: &str, entry: &serde_json::Value, name: &str) ->
 }
 
 fn append_mcp_json(content: &str, entry: &serde_json::Value, name: &str) -> Result<String> {
-    let mut config: serde_json::Value = serde_json::from_str(content)
+    let mut config: serde_json::Value = parse_json_or_jsonc(content)
         .map_err(|e| SafeselectError::Other(format!("Cannot parse JSON config: {e}")))?;
 
     let servers = config
