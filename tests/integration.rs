@@ -48,14 +48,17 @@ fn setup_test_config() -> PathBuf {
     let tmp = std::env::temp_dir().join(format!("safeselect-int-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);
 
-    let env_dir = tmp.join("projects").join("inttest").join("environments");
+    // Create .safeselect/ local project structure
+    let repo_root = tmp.join("inttest-repo");
+    let safeselect_dir = repo_root.join(".safeselect");
+    let env_dir = safeselect_dir.join("environments");
     let drivers_dir = tmp.join("drivers");
     std::fs::create_dir_all(&env_dir).unwrap();
     std::fs::create_dir_all(&drivers_dir).unwrap();
 
     // Create project.toml
     std::fs::write(
-        tmp.join("projects").join("inttest").join("project.toml"),
+        safeselect_dir.join("project.toml"),
         r#"
 version = 1
 display_name = "Integration Test"
@@ -78,10 +81,7 @@ enabled = false
 
     // Create environment
     std::fs::write(
-        tmp.join("projects")
-            .join("inttest")
-            .join("environments")
-            .join("testing.toml"),
+        env_dir.join("testing.toml"),
         r#"
 version = 1
 
@@ -109,7 +109,7 @@ variable = "SAFESELECT_INT_TEST_PASSWORD"
         String::from_utf8_lossy(&dl.stderr)
     );
 
-    tmp
+    repo_root
 }
 
 #[test]
@@ -119,9 +119,11 @@ fn test_integration_check() {
         return;
     }
 
-    let tmp = setup_test_config();
-    let (stdout, stderr, success) =
-        run_with_config(&["check", "--project", "inttest", "--environment", "testing"], tmp.to_str().unwrap());
+    let repo_root = setup_test_config();
+    let (stdout, stderr, success) = run_with_config(
+        &["check", "--project", repo_root.to_str().unwrap(), "--environment", "testing"],
+        repo_root.parent().unwrap().to_str().unwrap(),
+    );
 
     if !success {
         eprintln!("stdout: {stdout}");
@@ -134,5 +136,5 @@ fn test_integration_check() {
         "expected success message, got: {stdout}"
     );
 
-    let _ = std::fs::remove_dir_all(&tmp);
+    let _ = std::fs::remove_dir_all(repo_root.parent().unwrap());
 }

@@ -32,7 +32,7 @@ pub struct ClientConfig {
     pub detected: bool,
 }
 
-pub fn install_entry(client: &str, project: &str, environment: &str, entry_name: &str, config_dir: Option<&Path>) -> Result<()> {
+pub fn install_entry(client: &str, environment: &str, entry_name: &str, repo_root: Option<&Path>, config_dir: Option<&Path>) -> Result<()> {
     let config_path = get_client_config(client)?;
     let content = std::fs::read_to_string(&config_path)?;
 
@@ -43,14 +43,18 @@ pub fn install_entry(client: &str, project: &str, environment: &str, entry_name:
 
     let entry = serde_json::json!({
         "command": "safeselect",
-        "args": ["serve", "--project", project, "--environment", environment]
+        "args": ["serve", "--environment", environment]
     });
 
     let mut opencode_entry = serde_json::json!({
         "type": "local",
-        "command": ["safeselect", "serve", "--project", project, "--environment", environment],
+        "command": ["safeselect", "serve", "--environment", environment],
         "enabled": true
     });
+
+    if let Some(root) = repo_root {
+        opencode_entry["cwd"] = serde_json::json!(root.to_string_lossy().to_string());
+    }
 
     if let Some(dir) = config_dir {
         opencode_entry["environment"] = serde_json::json!({
@@ -61,7 +65,7 @@ pub fn install_entry(client: &str, project: &str, environment: &str, entry_name:
     let new_content = match client {
         "opencode" => append_opencode_json(&content, &opencode_entry, entry_name)?,
         "cursor" | "windsurf" | "codex" | "claude-code" => append_mcp_json(&content, &entry, entry_name)?,
-        "copilot" | "gemini-cli" => append_ini_entry(&content, entry_name)?,
+        "copilot" | "gemini-cli" => append_ini_entry(&content, entry_name, environment)?,
         _ => return Err(SafeselectError::Other(format!("Unknown client: {client}"))),
     };
 
@@ -227,11 +231,11 @@ fn append_mcp_json(content: &str, entry: &serde_json::Value, name: &str) -> Resu
     Ok(serde_json::to_string_pretty(&config)?)
 }
 
-fn append_ini_entry(content: &str, name: &str) -> Result<String> {
+fn append_ini_entry(content: &str, name: &str, environment: &str) -> Result<String> {
     Ok(format!(
-        "{}\n\n[mcpServers.{}]\ncommand = safeselect\nargs = [\"serve\", \"--project\", \"<project>\", \"--environment\", \"<env>\"]\n",
+        "{}\n\n[mcpServers.{}]\ncommand = safeselect\nargs = [\"serve\", \"--environment\", \"{environment}\"]\n",
         content.trim(),
-        name
+        name,
     ))
 }
 

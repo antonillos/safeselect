@@ -5,10 +5,10 @@ pub enum SafeselectError {
     #[error("Config error: {0}")]
     Config(String),
 
-    #[error("Project '{0}' not found in {1}")]
-    ProjectNotFound(String, PathBuf),
+    #[error(".safeselect/ not found near {0}")]
+    LocalProjectNotFound(PathBuf),
 
-    #[error("Environment '{0}' not found for project '{1}'")]
+    #[error("Environment '{0}' not found in {1}")]
     EnvironmentNotFound(String, String),
 
     #[error("Driver '{0}' not found")]
