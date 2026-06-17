@@ -509,7 +509,7 @@ fn reset_project_config(repo_root: &Path) -> Result<()> {
     }
 
     let ans = inquire::Confirm::new("This will remove all environments and their keychain entries. Continue?")
-        .with_default(false)
+        .with_default(true)
         .prompt()
         .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?;
 
@@ -807,7 +807,7 @@ fn check_version_and_maybe_reset(repo_root: &Path) -> Result<()> {
         }
     }
     let ans = inquire::Confirm::new("Reset environments and re-import?")
-        .with_default(false)
+        .with_default(true)
         .prompt()
         .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?;
     if ans {
@@ -1694,20 +1694,11 @@ fn kill_process_on_port(port: u16) -> bool {
             Ok(p) => p,
             Err(_) => continue,
         };
-        // Only kill SSH processes
-        let name = std::process::Command::new("ps")
-            .args(["-p", &pid.to_string(), "-o", "comm="])
-            .output()
-            .ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .map(|s| s.trim().to_string())
-            .unwrap_or_default();
-        if name.contains("ssh") || name.contains("sshpass") {
-            let _ = std::process::Command::new("kill")
-                .args([&pid.to_string()])
-                .output();
-            killed = true;
-        }
+        // Kill any process on this port (stale SSH tunnel, DBeaver JSch, etc.)
+        let _ = std::process::Command::new("kill")
+            .args([&pid.to_string()])
+            .output();
+        killed = true;
     }
     killed
 }
