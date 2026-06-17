@@ -569,19 +569,29 @@ fn cmd_agent(action: AgentAction) -> Result<()> {
             name,
         } => {
             let loader = ConfigLoader::new();
-            let repo_root = match project {
+            let (repo_root, project_dir) = match project {
                 Some(dir) => {
                     if !dir.join(".safeselect").is_dir() {
-                        return Err(SafeselectError::LocalProjectNotFound(dir));
+                        return Err(SafeselectError::LocalProjectNotFound(dir.clone()));
                     }
-                    Some(dir)
+                    (Some(dir.clone()), Some(dir))
                 }
                 None => {
                     let cwd = std::env::current_dir()?;
-                    loader.find_local_project(&cwd)
+                    let found = loader.find_local_project(&cwd);
+                    (found.clone(), found)
                 }
             };
-            agents::install_entry(&client, &environment, &name, repo_root.as_deref(), Some(loader.config_dir()))
+            let entry_name = match name {
+                Some(n) => n,
+                None => {
+                    let root = project_dir.ok_or_else(|| SafeselectError::Other(
+                        "no .safeselect/ found; use --project or --name to specify".into()
+                    ))?;
+                    format!("{}-{}", project_display_name(&root), environment)
+                }
+            };
+            agents::install_entry(&client, &environment, &entry_name, repo_root.as_deref(), Some(loader.config_dir()))
         }
         AgentAction::Uninstall { client, name } => {
             agents::uninstall_entry(&client, &name)
