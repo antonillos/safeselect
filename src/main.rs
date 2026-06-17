@@ -1477,50 +1477,12 @@ fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Result<()> {
             match spawn_sshpass(&pw) {
                 Ok(c) => c,
                 Err(_) => {
-                    println!("sshpass not installed");
-                    let install = inquire::Confirm::new("Install sshpass via Homebrew?")
-                        .with_default(true)
-                        .prompt()
-                        .unwrap_or(false);
-                    if install {
-                        print!("  Installing sshpass... ");
-                        std::io::stdout().flush().ok();
-                        let taps = [
-                            "esolitos/ipa/sshpass",
-                            "hudochenkov/sshpass/sshpass",
-                        ];
-                        let mut installed = false;
-                        for tap in &taps {
-                            if std::process::Command::new("brew")
-                                .args(["install", tap])
-                                .status()
-                                .map(|s| s.success())
-                                .unwrap_or(false)
-                            {
-                                installed = true;
-                                break;
-                            }
-                        }
-                        if installed {
-                            println!("OK");
-                            if let Ok(pw) = compose::read_password_from_keychain(&ssh_acct) {
-                                match spawn_sshpass(&pw) {
-                                    Ok(c) => c,
-                                    Err(_) => { println!("FAILED"); continue; }
-                                }
-                            } else { continue; }
-                        } else {
-                            println!("FAILED");
-                            println!("  Install manually:");
-                            println!("    brew install esolitos/ipa/sshpass");
-                            println!("  Or build from source: https://sourceforge.net/projects/sshpass/");
-                            continue;
-                        }
-                    } else {
-                        let cmd = build_ssh_command(ssh, &cfg.database.url).unwrap_or_default();
-                        println!("  Establish it manually:\n    {cmd}");
-                        continue;
-                    }
+                    println!("sshpass not installed.");
+                    println!("  Install it: brew install <tap>/sshpass");
+                    println!("  Then run:  safeselect check --environment {env_name}");
+                    let cmd = build_ssh_command(ssh, &cfg.database.url).unwrap_or_default();
+                    println!("  Or establish the tunnel manually:\n    {cmd}");
+                    continue;
                 }
             }
         } else {
