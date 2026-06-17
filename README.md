@@ -40,16 +40,17 @@ safeselect driver download --vendor postgresql
 safeselect import-dbeaver ~/Downloads/dbeaver-export.zip
 
 #    Or import from docker-compose:
-#    safeselect import-compose --path compose.yml
+#    safeselect import-compose
 
-#    Or configure manually (see Configuration below):
-#    security add-generic-password -a "<project>/<env>" -s "safeselect" -w "<password>"
+#    Or configure manually (see Configuration below)
+#    and set a password:
+#    safeselect config set-password --environment testing
 
 # 4. Test connectivity (auto-detects .safeselect/ from repo root)
 safeselect check --environment testing
 
-# 5. Install in OpenCode
-safeselect agent install opencode --environment testing --name myapp-testing
+# 5. Install in OpenCode (entry name defaults to <project>-testing)
+safeselect agent install opencode --environment testing
 ```
 
 ---
@@ -82,7 +83,7 @@ safeselect agent install opencode --environment testing --name myapp-testing
 | `driver download --vendor postgresql` | Download JDBC driver |
 | `driver add --vendor <v> --path <jar> --class <c>` | Register custom driver |
 | `driver list` | List registered drivers |
-| `agent install <client> --project <p> --environment <e> --name <n>` | Install MCP entry |
+| `agent install <client> --environment <e> [--project <p>] [--name <n>]` | Install MCP entry (name defaults to `<project>-<environment>`) |
 | `agent uninstall <client> --name <n>` | Remove MCP entry |
 | `agent detect` | Detect installed MCP clients |
 | `agent status` | Show installation status |
