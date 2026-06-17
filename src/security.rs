@@ -31,9 +31,7 @@ impl SecurityEngine {
             self.check_single_statement(trimmed)?;
         }
 
-        if self.policy.read_only {
-            self.check_read_only(trimmed)?;
-        }
+        self.check_read_only(trimmed)?;
 
         if !self.policy.allowed_schemas.is_empty() {
             self.check_allowed_schemas(trimmed)?;

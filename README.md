@@ -126,7 +126,6 @@ Use `--project <path>` to point to a specific repo root.
 ```toml
 version = 1
 [security]
-read_only = true
 allowed_schemas = ["public"]
 denied_relations = ["public.users_credentials"]
 [limits]

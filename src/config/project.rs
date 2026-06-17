@@ -26,8 +26,6 @@ impl Default for ProjectConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecurityPolicy {
-    #[serde(default = "default_true")]
-    pub read_only: bool,
     #[serde(default)]
     pub allowed_schemas: Vec<String>,
     #[serde(default)]
@@ -67,7 +65,6 @@ pub struct AuditConfig {
 impl Default for SecurityPolicy {
     fn default() -> Self {
         Self {
-            read_only: true,
             allowed_schemas: vec![],
             denied_relations: vec![],
             require_single_statement: true,
