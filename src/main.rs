@@ -1393,14 +1393,7 @@ fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Result<()> {
             None => continue,
         };
 
-        // Kill stale tunnel on the local port (macOS)
-        if kill_process_on_port(local.1) {
-            print!("  ◇ Killed stale tunnel on port {} ({env_name})", local.1);
-            std::io::stdout().flush()?;
-            std::thread::sleep(Duration::from_millis(500));
-        }
-
-        // Check if already active (might be a fresh user-established tunnel)
+        // Check if already active (user-established tunnel or DBeaver JSch)
         let addr = format!("{}:{}", local.0, local.1)
             .to_socket_addrs()
             .ok()
@@ -1414,6 +1407,10 @@ fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Result<()> {
             print!("  ◉ SSH tunnel active ({env_name})");
             std::io::stdout().flush()?;
             continue;
+        }
+        // If not active, ensure nothing blocks the port before we establish
+        if kill_process_on_port(local.1) {
+            std::thread::sleep(Duration::from_millis(500));
         }
 
         // Try to establish it
