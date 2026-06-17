@@ -1,15 +1,13 @@
 ## Summary
 
-- What does this change do?
-- Why is it needed?
+-
 
 ## Verification
 
-- [ ] I ran `cargo test` and all tests pass
-- [ ] I ran `cargo clippy` and there are no new warnings
+- [ ] I ran `cargo test` and `cargo clippy`
 - [ ] I updated documentation for user-facing changes
-- [ ] This change does not include secrets, generated artifacts, or unrelated cleanup
+- [ ] This change does not include secrets, local paths, or generated artifacts
 
 ## Notes
 
-- Any additional context or considerations
+-

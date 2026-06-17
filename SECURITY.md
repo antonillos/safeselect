@@ -29,15 +29,16 @@ best-effort basis.
 
 ## Security Features
 
-SafeSelect implements multiple layers of security:
+SafeSelect implements multiple layers of security (all enforced server-side, not configurable by the agent):
 
-- **Fail-closed**: any security incident terminates the MCP process
-- **Read-only enforcement**: only SELECT and EXPLAIN queries allowed
-- **Single statement**: multi-statement SQL is rejected
-- **AST validation**: SQL is parsed and validated before execution
-- **Allowed schemas / denied relations**: policy-based access control
+- **Fail-closed**: any security incident terminates the MCP process immediately
+- **Read-only always enforced**: only SELECT and EXPLAIN queries allowed, never configurable
+- **Single statement**: multi-statement SQL is rejected unless explicitly allowed
+- **SQL validation**: parsed and validated against policy before execution
+- **Allowed schemas / denied relations**: policy-based access control per project
 - **SHA-256 driver validation**: JDBC drivers are checksummed before each use
 - **macOS Keychain**: secrets stored securely, never in config files
 - **Password isolation**: passwords passed via stdin, never as CLI args
 - **Audit log**: all queries hashed (SHA-256), never stored in plain text
 - **Result limits**: row count and byte size limits enforced
+- **Auto-disconnect**: configurable idle timeout closes connection after inactivity

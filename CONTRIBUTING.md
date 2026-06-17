@@ -27,12 +27,13 @@ cargo clippy
 - Include verification steps.
 - Update documentation for user-facing changes.
 - Keep backward compatibility unless explicitly breaking.
+- After adding the `safe-to-merge` label, wait for the security check to pass before merging.
 
 ## Code Style
 
 - Rust: follow existing patterns and `cargo fmt`.
 - Java: keep the sidecar minimal — no frameworks beyond Jackson.
-- No secrets, credentials, or generated artifacts in commits.
+- No secrets, credentials, local paths, or generated artifacts in commits.
 
 ## Commit Messages
 
@@ -50,3 +51,8 @@ security: address a vulnerability
 - Unit tests go next to the module they test (`#[cfg(test)] mod tests`).
 - Integration tests go in `tests/`.
 - Security-related changes must include tests for both pass and reject cases.
+- Run `cargo test` and `cargo clippy` before opening a PR.
+
+## Security
+
+Do not report suspected vulnerabilities in public issues. Follow the instructions in [SECURITY.md](SECURITY.md).
