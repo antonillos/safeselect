@@ -9,6 +9,17 @@ SafeSelect is a secure SQL proxy between AI coding agents and your databases. It
 
 ---
 
+## Architecture
+
+<p align="center">
+  <img src="docs/safeselect-architecture.svg" alt="SafeSelect Architecture" width="800">
+</p>
+
+- All communication between Rust and Java is JSON-lines over stdin/stdout — no network, no sockets, no open ports
+- The Java sidecar is embedded in the Rust binary and extracted at runtime
+
+---
+
 ## Quick Start
 
 ```bash
@@ -31,17 +42,6 @@ safeselect check --project myapp --environment testing
 # 6. Install in OpenCode
 safeselect agent install opencode --project myapp --environment testing --name myapp-testing
 ```
-
----
-
-## Architecture
-
-<p align="center">
-  <img src="docs/safeselect-architecture.svg" alt="SafeSelect Architecture" width="750">
-</p>
-
-- All communication between Rust and Java is JSON-lines over stdin/stdout — no network, no sockets, no open ports
-- The Java sidecar is embedded in the Rust binary and extracted at runtime
 
 ---
 
