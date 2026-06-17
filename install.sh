@@ -39,8 +39,12 @@ if [[ -n "$sidecar_jar" ]]; then
   cp "$sidecar_jar" sidecar/target/safeselect-sidecar.jar
 fi
 
+base_version="$(sed -nE 's/^version = "([^"]+)"/\1/p' Cargo.toml | head -1)"
+build_stamp="$(date +"%Y.%m.%d.%H.%M")"
+build_version="${base_version} (${build_stamp})"
+
 printf 'Building Rust binary (%s)...\n' "${MODE}"
-RUSTFLAGS="-A warnings" cargo build ${RUST_FLAGS} -q
+SAFESELECT_BUILD_VERSION="${build_version}" RUSTFLAGS="-A warnings" cargo build ${RUST_FLAGS} -q
 
 TARGET_DIR="${SCRIPT_DIR}/target/${MODE}"
 printf 'Installing to %s...\n' "${BIN_DIR}"
