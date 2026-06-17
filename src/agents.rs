@@ -44,13 +44,13 @@ pub fn install_entry(client: &str, environment: &str, entry_name: &str, repo_roo
     let entry = serde_json::json!({
         "command": "safeselect",
         "args": ["serve", "--environment", environment],
-        "timeout": 300
+        "timeout": 30000
     });
 
     let mut opencode_entry = serde_json::json!({
         "type": "local",
         "command": ["safeselect", "serve", "--environment", environment],
-        "timeout": 300,
+        "timeout": 30000,
         "enabled": true
     });
 
