@@ -237,8 +237,10 @@ fn append_ini_entry(content: &str, name: &str) -> Result<String> {
 
 fn remove_mcp_entry(content: &str, name: &str) -> Result<String> {
     if let Ok(mut config) = serde_json::from_str::<serde_json::Value>(content) {
-        if let Some(servers) = config.get_mut("mcpServers").and_then(|v| v.as_object_mut()) {
-            servers.remove(name);
+        for key in &["mcp", "mcpServers"] {
+            if let Some(servers) = config.get_mut(*key).and_then(|v| v.as_object_mut()) {
+                servers.remove(name);
+            }
         }
         Ok(serde_json::to_string_pretty(&config)?)
     } else {
