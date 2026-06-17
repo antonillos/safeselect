@@ -795,8 +795,10 @@ fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
             host: Some(h.clone()),
             port: conn.ssh_port,
             username: conn.ssh_user.clone(),
-            identity_file: None,
+            identity_file: conn.ssh_key_file.clone(),
             known_hosts: None,
+            forward_host: Some(conn.host.clone()),
+            forward_port: Some(conn.port),
         });
 
         let url = if has_ssh {
@@ -1240,6 +1242,35 @@ fn extract_host_port(url: &str) -> Option<(String, u16)> {
     Some((host.to_string(), port))
 }
 
+/// Build an SSH command string to establish a tunnel for the given SSH config + DB URL.
+/// Returns None if there isn't enough information to build the command.
+fn build_ssh_command(ssh: &config::SshConfig, db_url: &str) -> Option<String> {
+    let bastion = ssh.host.as_deref()?;
+    let user = ssh.username.as_deref()?;
+    let forward_host = ssh.forward_host.as_deref()?;
+    let forward_port = ssh.forward_port?;
+
+    let local_port = extract_host_port(db_url)
+        .map(|(_, p)| p)
+        .or(ssh.port)?;
+
+    let mut cmd = format!(
+        "ssh -L {local_port}:{forward_host}:{forward_port} {user}@{bastion}"
+    );
+
+    if let Some(p) = ssh.port {
+        if p != 22 {
+            cmd.push_str(&format!(" -p {p}"));
+        }
+    }
+
+    if let Some(ref key) = ssh.identity_file {
+        cmd.push_str(&format!(" -i {key}"));
+    }
+
+    Some(cmd)
+}
+
 fn cmd_check(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &str) -> Result<()> {
     let name = project_display_name(repo_root);
     println!("Checking configuration for {name}/{environment}...");
@@ -1269,8 +1300,13 @@ fn cmd_check(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
                     Ok(_) => println!("  ✓ Tunnel reachable at {host}:{port}"),
                     Err(_) => {
                         println!("  ✗ Cannot reach {host}:{port}");
+                        let ssh_cmd = build_ssh_command(ssh, &resolved.environment.database.url);
+                        if let Some(cmd) = ssh_cmd {
+                            println!("  To establish the tunnel:");
+                            println!("    {cmd}");
+                        }
                         return Err(SafeselectError::Other(format!(
-                            "SSH tunnel not detected at {host}:{port}. Ensure the tunnel is active."
+                            "SSH tunnel not detected at {host}:{port}. Establish it with the command above."
                         )));
                     }
                 }
