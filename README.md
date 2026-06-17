@@ -32,24 +32,15 @@ SafeSelect is a secure SQL proxy between AI coding agents and your databases. It
 # 1. Install
 brew install antonillos/tap/safeselect
 
-# 2. Download a JDBC driver
-safeselect driver download --vendor postgresql
-
-# 3. Import from DBeaver — creates .safeselect/ with connection configs
-#    and stores passwords in macOS Keychain automatically.
+# 2. Import — auto-detects driver, passwords, everything
 safeselect import-dbeaver ~/Downloads/dbeaver-export.zip
-
-#    Or import from docker-compose:
+#    Or from docker-compose:
 #    safeselect import-compose
 
-#    Or configure manually (see Configuration below)
-#    and set a password:
-#    safeselect config set-password --environment testing
-
-# 4. Test connectivity (auto-detects .safeselect/ from repo root)
+# 3. Verify connectivity
 safeselect check --environment testing
 
-# 5. Install in OpenCode (entry name defaults to <project>-testing)
+# 4. Connect your AI agent (name auto-generates as <project>-testing)
 safeselect agent install opencode --environment testing
 ```
 
@@ -87,8 +78,8 @@ safeselect agent install opencode --environment testing
 | `agent uninstall <client> --name <n>` | Remove MCP entry |
 | `agent detect` | Detect installed MCP clients |
 | `agent status` | Show installation status |
-| `import-dbeaver <path-to-zip>` | Import from DBeaver export |
-| `import-compose [--path <yml>] [--non-interactive]` | Import from docker-compose |
+| `import-dbeaver <path-to-zip>` | Import from DBeaver export (stores passwords in Keychain) |
+| `import-compose [--path <yml>] [--non-interactive]` | Import from docker-compose (auto-downloads driver, prompts for passwords) |
 | `connect --project <p> --environment <e>` | Reconnect to database |
 | `disconnect --project <p> --environment <e>` | Disconnect from database |
 | `uninstall` | Remove SafeSelect entirely |
@@ -104,6 +95,11 @@ safeselect agent install opencode --environment testing
 | `explain` | Show execution plan | `sql` (required, not executed) |
 | `connect` | Reconnect to the database after connection loss | _(none)_ |
 | `disconnect` | Close the database connection | _(none)_ |
+
+Setup mode tools (available when no `.safeselect/` found — `safeselect serve --setup`):
+
+| Tool | Description | Arguments |
+|---|---|---|
 | `import_compose` | Scan docker-compose files and import PostgreSQL services | `scan_path` (optional) |
 | `delete_environment` | Delete an environment configuration | `name` (required) |
 | `rename_environment` | Rename an environment (migrates secret reference) | `old_name` (required), `new_name` (required) |
@@ -207,6 +203,13 @@ Then export the variable before running `safeselect`.
 - Rust 1.81+ (to build from source)
 - Java 17+
 - Maven 3.8+ (to rebuild the sidecar)
+
+To build from source:
+
+```bash
+./install.sh                    # builds sidecar + Rust binary, installs to ~/.local/bin
+safeselect --version            # shows e.g. "safeselect 0.2.0 (2026.06.17.21.30)"
+```
 
 ---
 
