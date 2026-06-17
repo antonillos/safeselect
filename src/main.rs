@@ -1062,12 +1062,23 @@ fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
             (None, false)
         };
 
+        // Prompt for missing database username
+        let db_username = if conn.username.is_empty() && !non_interactive {
+            inquire::Text::new("  Database username:")
+                .prompt()
+                .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?
+                .trim()
+                .to_string()
+        } else {
+            conn.username.clone()
+        };
+
         let env_config = config::EnvironmentConfig {
             version: 1,
             database: config::DatabaseConfig {
                 driver: conn.driver.clone(),
                 url,
-                username: conn.username.clone(),
+                username: db_username,
                 secret,
             },
             tls: None,
