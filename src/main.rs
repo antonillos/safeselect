@@ -50,6 +50,11 @@ fn run(cli: Cli) -> Result<()> {
             project,
             environment,
         } => cmd_check(&loader, &project, &environment),
+        Command::Query {
+            project,
+            environment,
+            sql,
+        } => cmd_query(&loader, &project, &environment, sql.as_deref()),
         Command::Uninstall { force } => cmd_uninstall(force),
     }
 }
@@ -441,6 +446,101 @@ fn cmd_check(loader: &ConfigLoader, project: &str, environment: &str) -> Result<
     println!("  ✓ All checks passed for {project}/{environment}");
 
     sidecar.shutdown()?;
+
+    Ok(())
+}
+
+fn cmd_query(loader: &ConfigLoader, project: &str, environment: &str, sql: Option<&str>) -> Result<()> {
+    let resolved = loader.resolve(project, environment)?;
+    let sql = match sql {
+        Some(s) => s.to_string(),
+        None => {
+            use std::io::Read;
+            let mut buf = String::new();
+            std::io::stdin().read_to_string(&mut buf)?;
+            let trimmed = buf.trim().to_string();
+            if trimmed.is_empty() {
+                return Err(SafeselectError::Other("No SQL provided. Use --sql or pipe a query.".into()));
+            }
+            trimmed
+        }
+    };
+
+    let mut sidecar = SidecarProcess::start(
+        &resolved.driver.path,
+        &resolved.driver.class,
+        &resolved.environment.database.url,
+        &resolved.environment.database.username,
+        &resolved.password,
+    )?;
+
+    let security = security::SecurityEngine::new(resolved.project.security.clone(), resolved.project.limits.clone());
+    security.validate(&sql)?;
+
+    let result = sidecar.execute(&sql)?;
+    security.check_result_size(result.row_count, result.byte_count)?;
+
+    sidecar.shutdown()?;
+
+    if result.columns.is_empty() {
+        println!("Query executed. {} rows affected.", result.row_count);
+        return Ok(());
+    }
+
+    let col_widths: Vec<usize> = result.columns.iter()
+        .enumerate()
+        .map(|(i, col)| {
+            let max_data = result.rows.iter()
+                .filter_map(|row| row.get(i))
+                .filter_map(|v| v.as_str())
+                .map(|s| s.len())
+                .max()
+                .unwrap_or(0);
+            col.len().max(max_data).min(80)
+        })
+        .collect();
+
+    let print_row = |cells: &[String]| {
+        let parts: Vec<String> = cells.iter().enumerate()
+            .map(|(i, cell)| {
+                let width = col_widths.get(i).copied().unwrap_or(20);
+                format!(" {:width$} ", cell, width = width)
+            })
+            .collect();
+        println!("|{}|", parts.join("|"));
+    };
+
+    let separator = || {
+        let parts: Vec<String> = col_widths.iter()
+            .map(|w| format!("-{:-<width$}-", "", width = w))
+            .collect();
+        println!("|{}|", parts.join("+"));
+    };
+
+    separator();
+    print_row(&result.columns);
+    separator();
+    for row in &result.rows {
+        let cells: Vec<String> = row.iter()
+            .enumerate()
+            .map(|(i, v)| {
+                let s = match v {
+                    serde_json::Value::String(s) => s.clone(),
+                    serde_json::Value::Null => "NULL".into(),
+                    other => other.to_string(),
+                };
+                let width = col_widths.get(i).copied().unwrap_or(20);
+                if s.len() > width {
+                    format!("{}…", &s[..width.saturating_sub(1)])
+                } else {
+                    s
+                }
+            })
+            .collect();
+        print_row(&cells);
+    }
+    separator();
+    println!("({} rows, {} bytes)", result.row_count, result.byte_count);
 
     Ok(())
 }
