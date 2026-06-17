@@ -1026,23 +1026,23 @@ fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
             None
         };
 
+        let requires_ssl = conn.host.contains(".azure.com") || conn.host.contains(".database.azure");
+        let ssl_param = if requires_ssl { "?sslmode=require" } else { "" };
+
         let url = if has_ssh {
             if let Some(lp) = conn.ssh_local_port {
-                let lh = conn.ssh_local_host.as_deref().unwrap_or("localhost");
-                format!("jdbc:postgresql://{lh}:{lp}/{}", conn.database)
+                format!("jdbc:postgresql://{lh}:{lp}/{db}{ssl_param}",
+                    lh = conn.ssh_local_host.as_deref().unwrap_or("localhost"),
+                    db = conn.database)
             } else {
-                format!(
-                    "jdbc:postgresql://{}:{}/{}",
-                    conn.ssh_host.as_deref().unwrap_or("localhost"),
-                    conn.ssh_port.unwrap_or(5432),
-                    conn.database
-                )
+                format!("jdbc:postgresql://{h}:{p}/{db}{ssl_param}",
+                    h = conn.ssh_host.as_deref().unwrap_or("localhost"),
+                    p = conn.ssh_port.unwrap_or(5432),
+                    db = conn.database)
             }
         } else {
-            format!(
-                "jdbc:postgresql://{}:{}/{}",
-                conn.host, conn.port, conn.database
-            )
+            format!("jdbc:postgresql://{}:{}/{}{ssl_param}",
+                conn.host, conn.port, conn.database)
         };
 
         let (secret, has_secret) = if let Some(ref pw) = conn.password {
@@ -1378,14 +1378,21 @@ fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Result<Vec<u32>>
             None => continue,
         };
 
-        // Check if already active
+        // Kill stale tunnel on the local port (macOS)
+        if kill_process_on_port(local.1) {
+            print!("  ◇ Killed stale tunnel on port {} ({env_name})", local.1);
+            std::io::stdout().flush()?;
+            std::thread::sleep(Duration::from_millis(500));
+        }
+
+        // Check if already active (might be a fresh user-established tunnel)
         let addr = format!("{}:{}", local.0, local.1)
             .to_socket_addrs()
             .ok()
             .and_then(|mut a| a.next());
 
         let active = addr.as_ref().is_some_and(|a| {
-            std::net::TcpStream::connect_timeout(a, Duration::from_secs(2)).is_ok()
+            std::net::TcpStream::connect_timeout(a, Duration::from_secs(1)).is_ok()
         });
 
         if active {
@@ -1665,6 +1672,44 @@ fn extract_host_port(url: &str) -> Option<(String, u16)> {
     let (host, port_str) = host_port.split_once(':')?;
     let port: u16 = port_str.parse().ok()?;
     Some((host.to_string(), port))
+}
+
+/// Kill any process listening on the given local port (macOS via lsof).
+/// Returns true if a process was killed.
+fn kill_process_on_port(port: u16) -> bool {
+    let output = match std::process::Command::new("lsof")
+        .args(["-ti", &format!(":{}", port)])
+        .output()
+    {
+        Ok(o) => o,
+        Err(_) => return false,
+    };
+    if !output.status.success() {
+        return false;
+    }
+    let pids = String::from_utf8_lossy(&output.stdout);
+    let mut killed = false;
+    for line in pids.lines() {
+        let pid = match line.trim().parse::<i32>() {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        // Only kill SSH processes
+        let name = std::process::Command::new("ps")
+            .args(["-p", &pid.to_string(), "-o", "comm="])
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+        if name.contains("ssh") || name.contains("sshpass") {
+            let _ = std::process::Command::new("kill")
+                .args([&pid.to_string()])
+                .output();
+            killed = true;
+        }
+    }
+    killed
 }
 
 /// Build an SSH command string to establish a tunnel for the given SSH config + DB URL.
