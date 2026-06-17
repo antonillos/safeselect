@@ -42,6 +42,9 @@ pub enum Command {
     ImportDbeaver {
         /// Path to DBeaver .zip export
         path: String,
+        /// Non-interactive mode — import all connections without prompting
+        #[arg(long, default_value_t = false)]
+        non_interactive: bool,
     },
     /// Discover PostgreSQL connections from docker-compose files
     ImportCompose {

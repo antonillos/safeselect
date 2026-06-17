@@ -63,7 +63,10 @@ fn run(cli: Cli) -> Result<()> {
         Command::Config { action } => cmd_config(&loader, action),
         Command::Driver { action } => cmd_driver(&loader, action),
         Command::Agent { action } => cmd_agent(action),
-        Command::ImportDbeaver { path } => cmd_import_dbeaver(&path),
+        Command::ImportDbeaver {
+            path,
+            non_interactive,
+        } => cmd_import_dbeaver(&path, non_interactive),
         Command::ImportCompose {
             path,
             non_interactive,
@@ -680,12 +683,10 @@ fn check_gitignore(repo_root: &std::path::Path) {
     }
 }
 
-fn cmd_import_dbeaver(path: &str) -> Result<()> {
-    let zip_path = std::path::Path::new(path);
+fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
+    let zip_path = Path::new(path);
     if !zip_path.exists() {
-        return Err(SafeselectError::Other(format!(
-            "File not found: {path}"
-        )));
+        return Err(SafeselectError::Other(format!("File not found: {path}")));
     }
 
     let connections = dbeaver::import_zip(zip_path)?;
@@ -695,65 +696,53 @@ fn cmd_import_dbeaver(path: &str) -> Result<()> {
         return Ok(());
     }
 
-    struct ConnLabel(usize, String);
-    impl std::fmt::Display for ConnLabel {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(f, "{}", self.1)
+    // Step 1: select connections
+    let selected_indices: Vec<usize> = if non_interactive {
+        (0..connections.len()).collect()
+    } else {
+        struct ConnLabel(usize, String);
+        impl std::fmt::Display for ConnLabel {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{}", self.1)
+            }
         }
-    }
 
-    let options: Vec<ConnLabel> = connections
-        .iter()
-        .enumerate()
-        .map(|(i, conn)| {
-            let ssh = conn.ssh_host.as_deref().unwrap_or("-");
-            ConnLabel(
-                i,
-                format!(
-                    "{:<30}  {}:{:<6}  db={:<20}  ssh={}",
-                    conn.name, conn.host, conn.port, conn.database, ssh,
-                ),
-            )
-        })
-        .collect();
+        let options: Vec<ConnLabel> = connections
+            .iter()
+            .enumerate()
+            .map(|(i, conn)| {
+                let ssh = conn.ssh_host.as_deref().unwrap_or("-");
+                ConnLabel(
+                    i,
+                    format!(
+                        "{:<30}  {}:{:<6}  db={:<20}  ssh={}",
+                        conn.name, conn.host, conn.port, conn.database, ssh,
+                    ),
+                )
+            })
+            .collect();
 
-    let selected = inquire::MultiSelect::new(
-        "Select connections to import (Space to toggle, Enter to confirm):",
-        options,
-    )
-    .with_page_size(20)
-    .prompt()
-    .map_err(|e| SafeselectError::Other(format!("Selection cancelled: {e}")))?;
+        let selected = inquire::MultiSelect::new(
+            "Select connections to import (Space to toggle, Enter to confirm):",
+            options,
+        )
+        .with_page_size(20)
+        .prompt()
+        .map_err(|e| SafeselectError::Other(format!("Selection cancelled: {e}")))?;
 
-    if selected.is_empty() {
-        println!("No connections selected. Nothing to import.");
-        return Ok(());
-    }
+        if selected.is_empty() {
+            println!("No connections selected. Nothing to import.");
+            return Ok(());
+        }
 
-    let cwd = std::env::current_dir()?;
-    let safeselect_dir = cwd.join(".safeselect");
-    let env_dir = safeselect_dir.join("environments");
-    std::fs::create_dir_all(&env_dir)?;
+        selected.iter().map(|l| l.0).collect()
+    };
 
-    let mut created_any = false;
-    let mut imported_envs: Vec<(String, bool)> = vec![]; // (env_name, has_secret)
-
-    let project_config = config::ProjectConfig::default();
-    let project_toml = toml::to_string_pretty(&project_config)
-        .map_err(|e| SafeselectError::TomlSer(e.to_string()))?;
-    let project_file = safeselect_dir.join("project.toml");
-    if !project_file.exists() {
-        std::fs::write(&project_file, project_toml)?;
-        println!("  ✔ Created {}", project_file.display());
-        created_any = true;
-    }
-
-    let project_name = project_display_name(&cwd);
-
-    for label in &selected {
-        let conn = &connections[label.0];
-
-        let env = conn
+    // Step 2: choose environment names
+    let mut to_import: Vec<(usize, String)> = Vec::with_capacity(selected_indices.len());
+    for &idx in &selected_indices {
+        let conn = &connections[idx];
+        let default_env = conn
             .name
             .split_once(" (")
             .and_then(|(_, rest)| rest.strip_suffix(')'))
@@ -761,6 +750,43 @@ fn cmd_import_dbeaver(path: &str) -> Result<()> {
             .to_lowercase()
             .replace(' ', "-")
             .replace("--", "-");
+        let env_name = if non_interactive {
+            default_env
+        } else {
+            let prompt = format!(
+                "Environment name for '{}' ({}:{}):",
+                conn.name, conn.host, conn.port
+            );
+            inquire::Text::new(&prompt)
+                .with_default(&default_env)
+                .prompt()
+                .map_err(|e| SafeselectError::Other(format!("Input cancelled: {e}")))?
+                .trim()
+                .to_lowercase()
+                .replace(' ', "-")
+        };
+        to_import.push((idx, env_name));
+    }
+
+    // Step 3: write config files silently
+    let cwd = std::env::current_dir()?;
+    let safeselect_dir = cwd.join(".safeselect");
+    let env_dir = safeselect_dir.join("environments");
+    std::fs::create_dir_all(&env_dir)?;
+
+    let project_config = config::ProjectConfig::default();
+    let project_toml = toml::to_string_pretty(&project_config)
+        .map_err(|e| SafeselectError::TomlSer(e.to_string()))?;
+    let project_file = safeselect_dir.join("project.toml");
+    if !project_file.exists() {
+        std::fs::write(&project_file, project_toml)?;
+    }
+
+    let project_name = project_display_name(&cwd);
+    let mut imported_envs: Vec<(String, bool)> = vec![];
+
+    for (idx, env_name) in &to_import {
+        let conn = &connections[*idx];
 
         let ssh = conn.ssh_host.as_ref().map(|h| config::SshConfig {
             enabled: true,
@@ -773,7 +799,7 @@ fn cmd_import_dbeaver(path: &str) -> Result<()> {
 
         let (secret, has_secret) = if let Some(ref pw) = conn.password {
             if !pw.is_empty() {
-                let account = format!("{project_name}/{env}");
+                let account = format!("{project_name}/{env_name}");
                 compose::store_password_in_keychain(&account, pw)?;
                 (Some(config::SecretConfig {
                     source: "macos-keychain".to_string(),
@@ -792,7 +818,10 @@ fn cmd_import_dbeaver(path: &str) -> Result<()> {
             version: 1,
             database: config::DatabaseConfig {
                 driver: conn.driver.clone(),
-                url: format!("jdbc:postgresql://{}:{}/{}", conn.host, conn.port, conn.database),
+                url: format!(
+                    "jdbc:postgresql://{}:{}/{}",
+                    conn.host, conn.port, conn.database
+                ),
                 username: conn.username.clone(),
                 secret,
             },
@@ -802,25 +831,25 @@ fn cmd_import_dbeaver(path: &str) -> Result<()> {
         };
         let env_toml = toml::to_string_pretty(&env_config)
             .map_err(|e| SafeselectError::TomlSer(e.to_string()))?;
-        let env_file = env_dir.join(format!("{env}.toml"));
+        let env_file = env_dir.join(format!("{env_name}.toml"));
         if !env_file.exists() {
             std::fs::write(&env_file, env_toml)?;
-            println!("  ✔ Created {} → {}", env_file.display(), conn.name);
-            created_any = true;
-            imported_envs.push((env, has_secret));
+            imported_envs.push((env_name.clone(), has_secret));
         }
     }
 
-    if created_any {
-        println!(
-            "\nImport complete. {} environment(s) added to .safeselect/.",
-            selected.len()
-        );
-
-        check_gitignore(&cwd);
+    // Step 4: print summary
+    if imported_envs.is_empty() {
+        println!("  ◉ All environments already exist.");
     } else {
-        println!("All environments already exist. Nothing to import.");
+        println!();
+        println!("── Import Complete ──────────────────────────────");
+        println!();
+        println!("  ✓ {} environment(s) added", imported_envs.len());
+        check_gitignore(&cwd);
     }
+
+    // Step 5: shared helpers (driver, passwords, verify)
     let env_names: Vec<String> = imported_envs.iter().map(|(n, _)| n.clone()).collect();
     setup_driver_if_missing()?;
     setup_passwords_for_missing(&cwd, &env_names)?;
@@ -1062,7 +1091,51 @@ fn setup_passwords_for_missing(repo_root: &std::path::Path, env_names: &[String]
 /// Run `safeselect check` for each environment and report results.
 fn run_checks(repo_root: &std::path::Path, env_names: &[String]) -> Result<()> {
     use std::io::Write;
-    println!();
+
+    // Pre-scan for SSH bastions
+    let ssh_envs: Vec<&String> = env_names
+        .iter()
+        .filter(|env| {
+            let env_file = repo_root
+                .join(".safeselect")
+                .join("environments")
+                .join(format!("{env}.toml"));
+            std::fs::read_to_string(&env_file)
+                .ok()
+                .and_then(|c| toml::from_str::<config::EnvironmentConfig>(&c).ok())
+                .and_then(|cfg| cfg.ssh)
+                .map(|s| s.enabled)
+                .unwrap_or(false)
+        })
+        .collect();
+
+    if !ssh_envs.is_empty() {
+        println!();
+        println!("── SSH Bastions ─────────────────────────────────");
+        println!();
+        for env_name in &ssh_envs {
+            let env_file = repo_root
+                .join(".safeselect")
+                .join("environments")
+                .join(format!("{env_name}.toml"));
+            if let Ok(content) = std::fs::read_to_string(&env_file) {
+                if let Ok(cfg) = toml::from_str::<config::EnvironmentConfig>(&content) {
+                    if let Some(ref ssh) = cfg.ssh {
+                        if ssh.enabled {
+                            let host = ssh.host.as_deref().unwrap_or("unknown");
+                            let port = ssh.port.unwrap_or(22);
+                            println!(
+                                "  ⚠  '{env_name}' requires SSH tunnel ({host}:{port})"
+                            );
+                            println!("     Connect it before verification.");
+                        }
+                    }
+                }
+            }
+        }
+        println!();
+    }
+
     println!("── Verification ──────────────────────────────────");
     println!();
     let mut all_ok = true;
