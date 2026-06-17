@@ -146,21 +146,32 @@ impl McpServer {
     }
 
     fn handle_initialize(&mut self, msg: &JsonRpcMessage) -> Result<()> {
-        if let Some(ref params) = msg.params {
-            if let Some(client_info) = params.get("clientInfo") {
-                if let Some(name) = client_info.get("name").and_then(|v| v.as_str()) {
-                    self.client_name = name.to_string();
-                }
+        let (client_name, proto_version) = match msg.params {
+            Some(ref params) => {
+                let name = params
+                    .get("clientInfo")
+                    .and_then(|v| v.get("name"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                let version = params
+                    .get("protocolVersion")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("2024-11-05");
+                (name.to_string(), version.to_string())
             }
-        }
+            None => ("unknown".into(), "2024-11-05".into()),
+        };
+        self.client_name = client_name;
 
         let resp = JsonRpcResponse {
             jsonrpc: "2.0",
             id: msg.id.clone(),
             result: Some(serde_json::json!({
-                "protocolVersion": "0.1.0",
+                "protocolVersion": proto_version,
                 "capabilities": {
-                    "tools": {}
+                    "tools": {
+                        "list": {}
+                    }
                 },
                 "serverInfo": {
                     "name": "safeselect",

@@ -65,14 +65,14 @@ fn test_config_validate_no_project() {
 
 #[test]
 fn test_config_validate_missing_project() {
-    let (stdout, _stderr, success) = &run(&[
+    let (_stdout, stderr, success) = &run(&[
         "config",
         "validate",
         "--project",
         "nonexistent-project",
     ]);
     assert!(!success);
-    assert!(stdout.contains("not found"));
+    assert!(stderr.contains("not found"));
 }
 
 #[test]
@@ -99,7 +99,7 @@ fn test_unknown_command() {
 
 #[test]
 fn test_serve_missing_project() {
-    let (stdout, _stderr, success) = &run(&[
+    let (_stdout, stderr, success) = &run(&[
         "serve",
         "--project",
         "nonexistent",
@@ -107,12 +107,12 @@ fn test_serve_missing_project() {
         "testing",
     ]);
     assert!(!success);
-    assert!(stdout.contains("not found"));
+    assert!(stderr.contains("not found"));
 }
 
 #[test]
 fn test_check_missing_project() {
-    let (stdout, _stderr, success) = &run(&[
+    let (_stdout, stderr, success) = &run(&[
         "check",
         "--project",
         "nonexistent",
@@ -120,5 +120,5 @@ fn test_check_missing_project() {
         "testing",
     ]);
     assert!(!success);
-    assert!(stdout.contains("not found"));
+    assert!(stderr.contains("not found"));
 }
