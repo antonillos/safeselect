@@ -34,7 +34,10 @@ cd "${SCRIPT_DIR}"
 
 printf 'Building Java sidecar...\n'
 mvn -f sidecar/pom.xml package -DskipTests -q
-cp sidecar/target/safeselect-sidecar-*.jar sidecar/target/safeselect-sidecar.jar
+sidecar_jar="$(ls sidecar/target/safeselect-sidecar-*.jar 2>/dev/null | sort -V | tail -1)"
+if [[ -n "$sidecar_jar" ]]; then
+  cp "$sidecar_jar" sidecar/target/safeselect-sidecar.jar
+fi
 
 printf 'Building Rust binary (%s)...\n' "${MODE}"
 RUSTFLAGS="-A warnings" cargo build ${RUST_FLAGS} -q
