@@ -192,30 +192,9 @@ impl ConfigLoader {
                 repo_root: repo_root.to_path_buf(),
             })
         } else {
-            let project_name = repo_root
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("project");
-            let hint = if cfg!(target_os = "macos") {
-                format!(
-                    "security add-generic-password -a \"{project_name}/{env_name}\" -s \"safeselect\" -w \"<password>\""
-                )
-            } else {
-                let var = format!(
-                    "SAFESELECT_PASSWORD_{}",
-                    env_name.to_uppercase().replace('-', "_")
-                );
-                format!(
-                    "export {var}=\"<password>\"\n  \
-                     then edit {name}.toml and add:\n  \
-                     [database.secret]\n  source = \"env\"\n  variable = \"{var}\"",
-                    name = env_file.file_stem().and_then(|s| s.to_str()).unwrap_or(env_name)
-                )
-            };
             Err(SafeselectError::Config(format!(
                 "no secret configured in {}\n\
-                 Hint: run:\n  safeselect config set-password --environment {env_name}\n\
-                 Or manually:\n  {hint}",
+                 Run:\n  safeselect config set-password --environment {env_name}",
                 env_file.display()
             )))
         }
