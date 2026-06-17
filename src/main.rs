@@ -938,7 +938,7 @@ fn cmd_import_compose(path: Option<PathBuf>, non_interactive: bool) -> Result<()
         check_gitignore(dest_dir);
     } else {
         println!("All environments already exist. Nothing to import.");
-        print_driver_hint_once();
+        print_missing_setup_hints(dest_dir, &to_import);
     }
 
     Ok(())
@@ -958,7 +958,7 @@ fn import_selected_connections(connections: &[compose::ComposeConnection]) -> Re
         check_gitignore(&cwd);
     } else {
         println!("All environments already exist. Nothing to import.");
-        print_driver_hint_once();
+        print_missing_setup_hints(&cwd, connections);
     }
 
     Ok(())
@@ -969,11 +969,37 @@ fn no_driver_exists() -> bool {
     loader.list_drivers().map(|d| d.is_empty()).unwrap_or(true)
 }
 
-fn print_driver_hint_once() {
+fn print_missing_setup_hints(repo_root: &std::path::Path, connections: &[compose::ComposeConnection]) {
+    let mut hints: Vec<String> = Vec::new();
+
     if no_driver_exists() {
+        hints.push("  safeselect driver download --vendor postgresql".to_string());
+    }
+
+    for conn in connections {
+        let env_file = repo_root
+            .join(".safeselect")
+            .join("environments")
+            .join(format!("{}.toml", conn.env_name));
+        if env_file.exists() {
+            if let Ok(content) = std::fs::read_to_string(&env_file) {
+                if let Ok(config) = toml::from_str::<config::EnvironmentConfig>(&content) {
+                    if config.database.secret.is_none() {
+                        hints.push(format!(
+                            "  safeselect config set-password --environment {}",
+                            conn.env_name
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    if !hints.is_empty() {
         println!();
-        println!("  No JDBC driver found. Install one:");
-        println!("    safeselect driver download --vendor postgresql");
+        for hint in &hints {
+            println!("{hint}");
+        }
     }
 }
 
