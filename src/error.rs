@@ -71,11 +71,20 @@ pub enum SafeselectError {
     #[error("HTTP error: {0}")]
     Http(#[from] reqwest::Error),
 
+    #[error("YAML parse error: {0}")]
+    Yaml(String),
+
     #[error("Zip error: {0}")]
     Zip(#[from] zip::result::ZipError),
 
     #[error("{0}")]
     Other(String),
+}
+
+impl From<serde_yaml::Error> for SafeselectError {
+    fn from(e: serde_yaml::Error) -> Self {
+        SafeselectError::Yaml(e.to_string())
+    }
 }
 
 pub type Result<T> = std::result::Result<T, SafeselectError>;

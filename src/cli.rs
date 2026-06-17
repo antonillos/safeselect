@@ -38,6 +38,15 @@ pub enum Command {
         /// Path to DBeaver .zip export
         path: String,
     },
+    /// Discover PostgreSQL connections from docker-compose files
+    ImportCompose {
+        /// Directory to scan for docker-compose files (default: CWD)
+        #[arg(long)]
+        path: Option<PathBuf>,
+        /// Non-interactive mode — import all without prompting
+        #[arg(long, default_value_t = false)]
+        non_interactive: bool,
+    },
     /// Test connectivity
     Check {
         /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)

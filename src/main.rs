@@ -3,6 +3,7 @@
 mod agents;
 mod audit;
 mod cli;
+mod compose;
 mod config;
 mod dbeaver;
 mod error;
@@ -15,7 +16,7 @@ use cli::{Cli, Command, ConfigAction, DriverAction, AgentAction};
 use config::ConfigLoader;
 use error::{Result, SafeselectError};
 use sidecar::SidecarProcess;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn main() {
     tracing_subscriber::fmt()
@@ -43,13 +44,30 @@ fn run(cli: Cli) -> Result<()> {
             project,
             environment,
         } => {
-            let dir = resolve_project_dir(&loader, project)?;
-            cmd_serve(&loader, &dir, &environment)
+            match resolve_project_dir(&loader, project.clone()) {
+                Ok(dir) => cmd_serve(&loader, &dir, &environment),
+                Err(_) => {
+                    let cwd = project
+                        .clone()
+                        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+                    if !cwd.exists() {
+                        return Err(SafeselectError::Other(format!(
+                            "path does not exist: {}",
+                            cwd.display()
+                        )));
+                    }
+                    cmd_serve_setup(&loader, &cwd)
+                }
+            }
         }
         Command::Config { action } => cmd_config(&loader, action),
         Command::Driver { action } => cmd_driver(&loader, action),
         Command::Agent { action } => cmd_agent(action),
         Command::ImportDbeaver { path } => cmd_import_dbeaver(&path),
+        Command::ImportCompose {
+            path,
+            non_interactive,
+        } => cmd_import_compose(path, non_interactive),
         Command::Check {
             project,
             environment,
@@ -589,6 +607,165 @@ fn cmd_import_dbeaver(path: &str) -> Result<()> {
         println!("All environments already exist. Nothing to import.");
     }
     Ok(())
+}
+
+fn cmd_import_compose(path: Option<PathBuf>, non_interactive: bool) -> Result<()> {
+    let scan_path = path.unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+    if !scan_path.exists() {
+        return Err(SafeselectError::Other(format!(
+            "scan path does not exist: {}",
+            scan_path.display()
+        )));
+    }
+
+    let groups = compose::scan_all(&scan_path)?;
+
+    let all_connections: Vec<(String, compose::ComposeConnection)> = groups
+        .into_iter()
+        .flat_map(|(label, conns)| {
+            conns.into_iter().map(move |c| (label.clone(), c))
+        })
+        .collect();
+
+    if all_connections.is_empty() {
+        println!("No PostgreSQL services found in docker-compose files.");
+        return Ok(());
+    }
+
+    let to_import: Vec<compose::ComposeConnection> = if non_interactive {
+        all_connections
+            .iter()
+            .map(|(_, c)| c)
+            .cloned()
+            .collect()
+    } else {
+        struct ConnLabel(usize, String);
+        impl std::fmt::Display for ConnLabel {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{}", self.1)
+            }
+        }
+
+        let options: Vec<ConnLabel> = all_connections
+            .iter()
+            .enumerate()
+            .map(|(i, (label, conn))| {
+                ConnLabel(
+                    i,
+                    format!(
+                        "{:<20}  {}  {}:{:<5}  db={:<15}  user={}",
+                        label, conn.service, conn.host, conn.port, conn.database, conn.username,
+                    ),
+                )
+            })
+            .collect();
+
+        let selected = inquire::MultiSelect::new(
+            "Select connections to import (Space to toggle, Enter to confirm):",
+            options,
+        )
+        .with_page_size(20)
+        .prompt()
+        .map_err(|e| SafeselectError::Other(format!("Selection cancelled: {e}")))?;
+
+        if selected.is_empty() {
+            println!("No connections selected. Nothing to import.");
+            return Ok(());
+        }
+
+        selected
+            .iter()
+            .map(|label| all_connections[label.0].1.clone())
+            .collect()
+    };
+
+    let dest_dir = &scan_path;
+    let project_name = project_display_name(dest_dir);
+    let created = compose::write_config_files(dest_dir, &to_import, &project_name)?;
+
+    if created > 0 {
+        println!(
+            "\nImport complete. {} environment(s) added to {}",
+            to_import.len(),
+            dest_dir.join(".safeselect").display()
+        );
+        println!("  Use: safeselect check --environment <name>");
+        println!("  Or:  safeselect serve --environment <name>");
+        check_gitignore(dest_dir);
+    } else {
+        println!("All environments already exist. Nothing to import.");
+    }
+
+    Ok(())
+}
+
+fn import_selected_connections(connections: &[compose::ComposeConnection]) -> Result<()> {
+    let cwd = std::env::current_dir()?;
+    let name = project_display_name(&cwd);
+    let created = compose::write_config_files(&cwd, connections, &name)?;
+
+    if created > 0 {
+        println!(
+            "\nImport complete. {} environment(s) added to .safeselect/.",
+            connections.len()
+        );
+        println!("  Use: safeselect check --environment <name>");
+        println!("  Or:  safeselect serve --environment <name>");
+        check_gitignore(&cwd);
+    } else {
+        println!("All environments already exist. Nothing to import.");
+    }
+
+    Ok(())
+}
+
+fn cmd_serve_setup(_loader: &ConfigLoader, repo_root: &Path) -> Result<()> {
+    tracing::info!("No .safeselect/ found — entering setup mode");
+
+    let dirs = compose::scan_all(repo_root)?;
+    let total: usize = dirs.iter().map(|(_, cs)| cs.len()).sum();
+
+    if total == 0 {
+        let msg = concat!(
+            "No .safeselect/ configuration found and no PostgreSQL docker-compose services detected.\n",
+            "\n",
+            "To get started:\n",
+            "  1. Create a docker-compose.yml with a PostgreSQL service, or\n",
+            "  2. Run: safeselect import-compose [--path <dir>]\n",
+            "  3. Run: safeselect serve --environment <name>\n",
+        );
+        tracing::info!("{}", msg);
+        eprintln!("{msg}");
+        return Ok(());
+    }
+
+    tracing::info!(
+        "Found {} PostgreSQL service(s) in docker-compose — starting setup MCP server",
+        total
+    );
+    eprintln!(
+        "INFO: {} PostgreSQL service(s) found in docker-compose — auto-importing",
+        total
+    );
+
+    let auto_import: Vec<compose::ComposeConnection> = dirs
+        .into_iter()
+        .flat_map(|(_, conns)| conns)
+        .collect();
+
+    let project_name = project_display_name(repo_root);
+    compose::write_config_files(repo_root, &auto_import, &project_name)?;
+
+    let env_names: Vec<&str> = auto_import.iter().map(|c| c.env_name.as_str()).collect();
+
+    tracing::info!("Setup complete — starting setup MCP server");
+    eprintln!(
+        "INFO: .safeselect/ created. Environments: {}",
+        env_names.join(", ")
+    );
+    eprintln!("INFO: Restart with: safeselect serve --environment <name>");
+
+    mcp::run_setup_server(repo_root)
 }
 
 fn cmd_check(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &str) -> Result<()> {
