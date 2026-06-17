@@ -935,6 +935,7 @@ fn cmd_import_compose(path: Option<PathBuf>, non_interactive: bool) -> Result<()
         check_gitignore(dest_dir);
     } else {
         println!("All environments already exist. Nothing to import.");
+        print_driver_hint_once();
     }
 
     Ok(())
@@ -954,6 +955,7 @@ fn import_selected_connections(connections: &[compose::ComposeConnection]) -> Re
         check_gitignore(&cwd);
     } else {
         println!("All environments already exist. Nothing to import.");
+        print_driver_hint_once();
     }
 
     Ok(())
@@ -962,6 +964,14 @@ fn import_selected_connections(connections: &[compose::ComposeConnection]) -> Re
 fn no_driver_exists() -> bool {
     let loader = config::ConfigLoader::new();
     loader.list_drivers().map(|d| d.is_empty()).unwrap_or(true)
+}
+
+fn print_driver_hint_once() {
+    if no_driver_exists() {
+        println!();
+        println!("  No JDBC driver found. Install one:");
+        println!("    safeselect driver download --vendor postgresql");
+    }
 }
 
 fn print_import_next_steps(_project_name: &str, result: &compose::ImportResult) {
