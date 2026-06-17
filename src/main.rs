@@ -927,6 +927,7 @@ fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
             known_hosts: None,
             forward_host: Some(conn.host.clone()),
             forward_port: Some(conn.port),
+            auth_type: conn.ssh_auth_type.clone(),
         });
 
         let url = if has_ssh {
@@ -1246,11 +1247,155 @@ fn setup_passwords_for_missing(repo_root: &std::path::Path, env_names: &[String]
     Ok(())
 }
 
+/// Try to establish SSH tunnels for environments that need one.
+/// Returns PIDs of tunnels started by this call.
+fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Result<Vec<u32>> {
+    use std::io::Write;
+    use std::net::ToSocketAddrs;
+    use std::time::Duration;
+
+    let mut started_pids: Vec<u32> = vec![];
+
+    for env_name in env_names {
+        let env_file = repo_root
+            .join(".safeselect")
+            .join("environments")
+            .join(format!("{env_name}.toml"));
+        if !env_file.exists() {
+            continue;
+        }
+        let content = match std::fs::read_to_string(&env_file) {
+            Ok(c) => c,
+            _ => continue,
+        };
+        let cfg: config::EnvironmentConfig = match toml::from_str(&content) {
+            Ok(c) => c,
+            _ => continue,
+        };
+        let ssh = match &cfg.ssh {
+            Some(s) if s.enabled => s,
+            _ => continue,
+        };
+
+        let local = match extract_host_port(&cfg.database.url) {
+            Some(h) => h,
+            None => continue,
+        };
+
+        // Check if already active
+        let addr = format!("{}:{}", local.0, local.1)
+            .to_socket_addrs()
+            .ok()
+            .and_then(|mut a| a.next());
+
+        let active = addr.as_ref().is_some_and(|a| {
+            std::net::TcpStream::connect_timeout(a, Duration::from_secs(2)).is_ok()
+        });
+
+        if active {
+            print!("  ◉ SSH tunnel active ({env_name})");
+            std::io::stdout().flush()?;
+            continue;
+        }
+
+        // Try to establish it
+        let bastion = ssh.host.as_deref().unwrap_or("");
+        let user = ssh.username.as_deref().unwrap_or("");
+        let fwd_host = ssh.forward_host.as_deref().unwrap_or("");
+        let fwd_port = ssh.forward_port.unwrap_or(0);
+
+        if bastion.is_empty() || user.is_empty() || fwd_host.is_empty() || fwd_port == 0 {
+            print!("  ⚠  Incomplete SSH config for '{env_name}'");
+            std::io::stdout().flush()?;
+            continue;
+        }
+
+        print!("  ● Establishing SSH tunnel ({env_name}) ... ");
+        std::io::stdout().flush()?;
+
+        let mut ssh_args: Vec<String> = vec![
+            "-o".into(),
+            "BatchMode=yes".into(),
+            "-o".into(),
+            "ConnectTimeout=5".into(),
+            "-N".into(),
+            "-f".into(),
+            "-L".into(),
+            format!("{}:{}:{}", local.1, fwd_host, fwd_port),
+            format!("{user}@{bastion}"),
+        ];
+        if let Some(p) = ssh.port {
+            if p != 22 {
+                ssh_args.push("-p".into());
+                ssh_args.push(p.to_string());
+            }
+        }
+        if let Some(ref k) = ssh.identity_file {
+            if Path::new(k).exists() {
+                ssh_args.push("-i".into());
+                ssh_args.push(k.clone());
+            }
+        }
+
+        let result = std::process::Command::new("ssh")
+            .args(&ssh_args)
+            .output();
+
+        match result {
+            Ok(out) if out.status.success() => {
+                std::thread::sleep(Duration::from_secs(2));
+                let ok = addr.as_ref().is_some_and(|a| {
+                    std::net::TcpStream::connect_timeout(a, Duration::from_secs(2)).is_ok()
+                });
+                if ok {
+                    println!("OK");
+                    // Try to get PID from ssh -f (it might still be starting)
+                    if let Ok(pid_str) = std::str::from_utf8(&out.stdout) {
+                        if let Some(pid_str) = pid_str.lines().next() {
+                            if let Ok(pid) = pid_str.trim().parse::<u32>() {
+                                started_pids.push(pid);
+                            }
+                        }
+                    }
+                } else {
+                    println!("FAILED");
+                    let cmd = build_ssh_command(ssh, &cfg.database.url)
+                        .unwrap_or_else(|| "ssh command unavailable".to_string());
+                    println!("  Establish it manually:");
+                    println!("    {cmd}");
+                }
+            }
+            Ok(out) => {
+                println!("FAILED");
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                let err_line = stderr.lines().next().unwrap_or("unknown error");
+                let cmd = build_ssh_command(ssh, &cfg.database.url)
+                    .unwrap_or_else(|| "ssh command unavailable".to_string());
+                println!("  {err_line}");
+                println!("  Establish it manually:");
+                println!("    {cmd}");
+            }
+            Err(e) => {
+                println!("FAILED");
+                println!("  {e}");
+                let cmd = build_ssh_command(ssh, &cfg.database.url)
+                    .unwrap_or_else(|| "ssh command unavailable".to_string());
+                println!("  Establish it manually:");
+                println!("    {cmd}");
+            }
+        }
+    }
+    Ok(started_pids)
+}
+
 /// Run `safeselect check` for each environment and report results.
 fn run_checks(repo_root: &std::path::Path, env_names: &[String]) -> Result<()> {
     use std::io::Write;
 
-    // Pre-scan for SSH bastions
+    // Try to auto-establish SSH tunnels
+    let _ssh_pids = setup_ssh_tunnels(repo_root, env_names)?;
+
+    // Pre-scan for SSH bastions (only warn if still not active)
     let ssh_envs: Vec<&String> = env_names
         .iter()
         .filter(|env| {
@@ -1268,30 +1413,54 @@ fn run_checks(repo_root: &std::path::Path, env_names: &[String]) -> Result<()> {
         .collect();
 
     if !ssh_envs.is_empty() {
-        println!();
-        println!("── SSH Bastions ─────────────────────────────────");
-        println!();
-        for env_name in &ssh_envs {
+        use std::net::ToSocketAddrs;
+        let mut still_down = vec![];
+        for env in &ssh_envs {
             let env_file = repo_root
                 .join(".safeselect")
                 .join("environments")
-                .join(format!("{env_name}.toml"));
-            if let Ok(content) = std::fs::read_to_string(&env_file) {
-                if let Ok(cfg) = toml::from_str::<config::EnvironmentConfig>(&content) {
-                    if let Some(ref ssh) = cfg.ssh {
-                        if ssh.enabled {
-                            let host = ssh.host.as_deref().unwrap_or("unknown");
-                            let port = ssh.port.unwrap_or(22);
-                            println!(
-                                "  ⚠  '{env_name}' requires SSH tunnel ({host}:{port})"
-                            );
-                            println!("     Connect it before verification.");
+                .join(format!("{env}.toml"));
+            let active = std::fs::read_to_string(&env_file).ok().and_then(|c| {
+                toml::from_str::<config::EnvironmentConfig>(&c).ok()
+            }).and_then(|cfg| {
+                extract_host_port(&cfg.database.url)
+            }).map(|(h, p)| {
+                format!("{h}:{p}").to_socket_addrs().ok()
+                    .and_then(|mut a| a.next())
+                    .map(|a| std::net::TcpStream::connect_timeout(&a, std::time::Duration::from_secs(2)).is_ok())
+                    .unwrap_or(false)
+            }).unwrap_or(false);
+            if !active {
+                still_down.push(env.as_str());
+            }
+        }
+
+        if !still_down.is_empty() {
+            println!();
+            println!("── SSH Bastions ─────────────────────────────────");
+            println!();
+            for env_name in &still_down {
+                let env_file = repo_root
+                    .join(".safeselect")
+                    .join("environments")
+                    .join(format!("{env_name}.toml"));
+                if let Ok(content) = std::fs::read_to_string(&env_file) {
+                    if let Ok(cfg) = toml::from_str::<config::EnvironmentConfig>(&content) {
+                        if let Some(ref ssh) = cfg.ssh {
+                            if ssh.enabled {
+                                let host = ssh.host.as_deref().unwrap_or("unknown");
+                                let port = ssh.port.unwrap_or(22);
+                                println!("  ⚠  '{env_name}' requires SSH tunnel ({host}:{port})");
+                                let cmd = build_ssh_command(ssh, &cfg.database.url)
+                                    .unwrap_or_else(|| "ssh command unavailable".to_string());
+                                println!("     {cmd}");
+                            }
                         }
                     }
                 }
             }
+            println!();
         }
-        println!();
     }
 
     println!("── Verification ──────────────────────────────────");
