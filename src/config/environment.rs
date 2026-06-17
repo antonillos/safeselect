@@ -45,6 +45,7 @@ pub struct SshConfig {
     pub known_hosts: Option<String>,
     pub forward_host: Option<String>,
     pub forward_port: Option<u16>,
+    pub auth_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
