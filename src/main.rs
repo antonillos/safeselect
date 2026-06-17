@@ -1013,7 +1013,7 @@ fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
     update_generated_by(&safeselect_dir)?;
 
     let project_name = project_display_name(&cwd);
-    let mut imported_envs: Vec<(String, bool)> = vec![];
+    let mut imported_envs: Vec<(String, bool, bool)> = vec![];
 
     for (idx, env_name) in &to_import {
         let conn = &connections[*idx];
@@ -1077,25 +1077,31 @@ fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
         let env_toml = toml::to_string_pretty(&env_config)
             .map_err(|e| SafeselectError::TomlSer(e.to_string()))?;
         let env_file = env_dir.join(format!("{env_name}.toml"));
-        if !env_file.exists() {
-            std::fs::write(&env_file, env_toml)?;
-            imported_envs.push((env_name.clone(), has_secret));
-        }
+        let is_new = !env_file.exists();
+        std::fs::write(&env_file, env_toml)?;
+        imported_envs.push((env_name.clone(), has_secret, is_new));
     }
 
     // Step 4: print summary
-    if imported_envs.is_empty() {
-        println!("  ◉ All environments already exist.");
-    } else {
+    let created = imported_envs.iter().filter(|(_, _, new)| *new).count();
+    let updated = imported_envs.len() - created;
+    if created > 0 || updated > 0 {
         println!();
         println!("── Import Complete ──────────────────────────────");
         println!();
-        println!("  ✓ {} environment(s) added", imported_envs.len());
+        if created > 0 {
+            println!("  ✓ {created} environment(s) added");
+        }
+        if updated > 0 {
+            println!("  ✓ {updated} environment(s) updated");
+        }
         check_gitignore(&cwd);
+    } else {
+        println!("  ◉ No environments to import.");
     }
 
     // Step 5: shared helpers (driver, passwords, verify)
-    let mut env_names: Vec<String> = imported_envs.iter().map(|(n, _)| n.clone()).collect();
+    let mut env_names: Vec<String> = imported_envs.iter().map(|(n, _, _)| n.clone()).collect();
     // Also include already-existing selected environments
     for (_, name) in &to_import {
         if !env_names.contains(name) {
@@ -1345,12 +1351,10 @@ fn setup_passwords_for_missing(repo_root: &std::path::Path, env_names: &[String]
 
 /// Try to establish SSH tunnels for environments that need one.
 /// Returns PIDs of tunnels started by this call.
-fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Result<Vec<u32>> {
+fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Result<()> {
     use std::io::Write;
     use std::net::ToSocketAddrs;
     use std::time::Duration;
-
-    let mut started_pids: Vec<u32> = vec![];
 
     for env_name in env_names {
         let env_file = repo_root
@@ -1421,8 +1425,37 @@ fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Result<Vec<u32>>
             _ => false,
         };
 
-        let result = if use_password {
-            // Password auth: try sshpass with password from Keychain
+        // Common tunnel args
+        let base_args: Vec<String> = vec![
+            "-o".into(),
+            "ConnectTimeout=5".into(),
+            "-o".into(),
+            "ExitOnForwardFailure=yes".into(),
+            "-o".into(),
+            "ServerAliveInterval=15".into(),
+            "-o".into(),
+            "ServerAliveCountMax=3".into(),
+            "-N".into(),
+            "-L".into(),
+            format!("{}:{}:{}", local.1, fwd_host, fwd_port),
+            format!("{user}@{bastion}"),
+        ];
+
+        let spawn_tunnel = |extra: Vec<String>| -> std::io::Result<std::process::Child> {
+            let mut args = base_args.clone();
+            args.extend(extra);
+            if let Some(p) = ssh.port {
+                if p != 22 {
+                    args.push("-p".into());
+                    args.push(p.to_string());
+                }
+            }
+            std::process::Command::new(if use_password { "sshpass" } else { "ssh" })
+                .args(&args)
+                .spawn()
+        };
+
+        let mut child = if use_password {
             let ssh_acct = format!("{}/{env_name}/ssh", project_display_name(repo_root));
             let pw = match compose::read_password_from_keychain(&ssh_acct) {
                 Ok(p) => p,
@@ -1430,41 +1463,13 @@ fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Result<Vec<u32>>
                     println!("NO PASSWORD");
                     let cmd = build_ssh_command(ssh, &cfg.database.url)
                         .unwrap_or_else(|| "ssh command unavailable".to_string());
-                    println!("  Establish it manually:");
-                    println!("    {cmd}");
+                    println!("  Establish it manually:\n    {cmd}");
                     continue;
                 }
             };
-
-            let mut pass_args = vec![
-                "-p".to_string(),
-                pw,
-                "ssh".to_string(),
-                "-o".to_string(),
-                "ConnectTimeout=5".to_string(),
-                "-N".to_string(),
-                "-f".to_string(),
-                "-L".to_string(),
-                format!("{}:{}:{}", local.1, fwd_host, fwd_port),
-                format!("{user}@{bastion}"),
-            ];
-            if let Some(p) = ssh.port {
-                if p != 22 {
-                    pass_args.push("-p".into());
-                    pass_args.push(p.to_string());
-                }
-            }
-
-            match std::process::Command::new("sshpass").args(&pass_args).output() {
-                Ok(out) if out.status.success() => Ok(out),
-                Ok(_) => {
-                    println!("FAILED (sshpass)");
-                    let cmd = build_ssh_command(ssh, &cfg.database.url)
-                        .unwrap_or_else(|| "ssh command unavailable".to_string());
-                    println!("  Establish it manually:");
-                    println!("    {cmd}");
-                    continue;
-                }
+            let extra = vec!["-p".into(), pw, "ssh".into()];
+            match spawn_tunnel(extra) {
+                Ok(c) => c,
                 Err(_) => {
                     println!("sshpass not installed");
                     let install = inquire::Confirm::new("Install sshpass via Homebrew?")
@@ -1474,127 +1479,65 @@ fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Result<Vec<u32>>
                     if install {
                         print!("  Installing sshpass... ");
                         std::io::stdout().flush().ok();
-                        match std::process::Command::new("brew")
+                        if std::process::Command::new("brew")
                             .args(["install", "hudochenkov/sshpass/sshpass"])
                             .status()
+                            .map(|s| s.success())
+                            .unwrap_or(false)
                         {
-                            Ok(status) if status.success() => {
-                                println!("OK");
-                                // Retry the whole env (continue to next iteration means we skip it)
-                                // Instead, re-run the sshpass command
-                                if let Ok(pw) = compose::read_password_from_keychain(&ssh_acct) {
-                                    let mut pass_args = vec!["-p".to_string(), pw];
-                                    pass_args.extend(vec![
-                                        "ssh".to_string(),
-                                        "-o".to_string(), "ConnectTimeout=5".to_string(),
-                                        "-N".to_string(), "-f".to_string(),
-                                        "-L".to_string(), format!("{}:{}:{}", local.1, fwd_host, fwd_port),
-                                        format!("{user}@{bastion}"),
-                                    ]);
-                                    if let Some(p) = ssh.port {
-                                        if p != 22 { pass_args.push("-p".into()); pass_args.push(p.to_string()); }
-                                    }
-                                    match std::process::Command::new("sshpass").args(&pass_args).output() {
-                                        Ok(out) if out.status.success() => Ok(out),
-                                        _ => {
-                                            let cmd = build_ssh_command(ssh, &cfg.database.url).unwrap_or_default();
-                                            println!("  Establish it manually:"); println!("    {cmd}");
-                                            continue;
-                                        }
-                                    }
-                                } else { continue; }
-                            }
-                            _ => {
-                                println!("FAILED");
-                                let cmd = build_ssh_command(ssh, &cfg.database.url)
-                                    .unwrap_or_else(|| "ssh command unavailable".to_string());
-                                println!("  Install manually: brew install hudochenkov/sshpass/sshpass");
-                                println!("  Then establish tunnel: {cmd}");
-                                continue;
-                            }
+                            println!("OK");
+                            if let Ok(pw) = compose::read_password_from_keychain(&ssh_acct) {
+                                let extra = vec!["-p".into(), pw, "ssh".into()];
+                                match spawn_tunnel(extra) {
+                                    Ok(c) => c,
+                                    Err(_) => { println!("FAILED"); continue; }
+                                }
+                            } else { continue; }
+                        } else {
+                            println!("FAILED\n  Install: brew install hudochenkov/sshpass/sshpass");
+                            continue;
                         }
                     } else {
-                        let cmd = build_ssh_command(ssh, &cfg.database.url)
-                            .unwrap_or_else(|| "ssh command unavailable".to_string());
-                        println!("  To establish the tunnel manually:");
-                        println!("    {cmd}");
+                        let cmd = build_ssh_command(ssh, &cfg.database.url).unwrap_or_default();
+                        println!("  Establish it manually:\n    {cmd}");
                         continue;
                     }
                 }
             }
         } else {
-            // Key file auth with BatchMode
-            let mut ssh_args: Vec<String> = vec![
-                "-o".into(),
-                "BatchMode=yes".into(),
-                "-o".into(),
-                "ConnectTimeout=5".into(),
-                "-N".into(),
-                "-f".into(),
-                "-L".into(),
-                format!("{}:{}:{}", local.1, fwd_host, fwd_port),
-                format!("{user}@{bastion}"),
-            ];
-            if let Some(p) = ssh.port {
-                if p != 22 {
-                    ssh_args.push("-p".into());
-                    ssh_args.push(p.to_string());
+            let extra = vec!["-o".into(), "BatchMode=yes".into()];
+            match spawn_tunnel(extra) {
+                Ok(c) => c,
+                Err(e) => {
+                    println!("FAILED: {e}");
+                    let cmd = build_ssh_command(ssh, &cfg.database.url).unwrap_or_default();
+                    println!("  Establish it manually:\n    {cmd}");
+                    continue;
                 }
             }
-            if let Some(ref k) = ssh.identity_file {
-                if Path::new(k).exists() {
-                    ssh_args.push("-i".into());
-                    ssh_args.push(k.clone());
-                }
-            }
-            std::process::Command::new("ssh").args(&ssh_args).output()
         };
 
-        match result {
-            Ok(out) if out.status.success() => {
-                std::thread::sleep(Duration::from_secs(2));
-                let ok = addr.as_ref().is_some_and(|a| {
-                    std::net::TcpStream::connect_timeout(a, Duration::from_secs(2)).is_ok()
-                });
-                if ok {
-                    println!("OK");
-                    // Try to get PID from ssh -f (it might still be starting)
-                    if let Ok(pid_str) = std::str::from_utf8(&out.stdout) {
-                        if let Some(pid_str) = pid_str.lines().next() {
-                            if let Ok(pid) = pid_str.trim().parse::<u32>() {
-                                started_pids.push(pid);
-                            }
-                        }
-                    }
-                } else {
-                    println!("FAILED");
-                    let cmd = build_ssh_command(ssh, &cfg.database.url)
-                        .unwrap_or_else(|| "ssh command unavailable".to_string());
-                    println!("  Establish it manually:");
-                    println!("    {cmd}");
-                }
-            }
-            Ok(out) => {
-                println!("FAILED");
-                let stderr = String::from_utf8_lossy(&out.stderr);
-                let err_line = stderr.lines().next().unwrap_or("unknown error");
-                let cmd = build_ssh_command(ssh, &cfg.database.url)
-                    .unwrap_or_else(|| "ssh command unavailable".to_string());
-                println!("  {err_line}");
-                println!("  Establish it manually:");
-                println!("    {cmd}");
-            }
-            Err(e) => {
-                println!("FAILED");
-                println!("  {e}");
-                let cmd = build_ssh_command(ssh, &cfg.database.url)
-                    .unwrap_or_else(|| "ssh command unavailable".to_string());
-                println!("  Establish it manually:");
-                println!("    {cmd}");
-            }
+        // Wait a moment for the tunnel to establish
+        std::thread::sleep(Duration::from_secs(2));
+        let ok = addr.as_ref().is_some_and(|a| {
+            std::net::TcpStream::connect_timeout(a, Duration::from_secs(2)).is_ok()
+        });
+        if ok {
+            println!("OK");
+            // Detach child so it survives after we exit
+            let _ = std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+        } else {
+            let _ = child.kill();
+            let _ = child.wait();
+            println!("FAILED");
+            let cmd = build_ssh_command(ssh, &cfg.database.url)
+                .unwrap_or_else(|| "ssh command unavailable".to_string());
+            println!("  Establish it manually:\n    {cmd}");
         }
     }
-    Ok(started_pids)
+    Ok(())
 }
 
 /// Run `safeselect check` for each environment and report results.
@@ -1602,7 +1545,7 @@ fn run_checks(repo_root: &std::path::Path, env_names: &[String]) -> Result<()> {
     use std::io::Write;
 
     // Try to auto-establish SSH tunnels
-    let _ssh_pids = setup_ssh_tunnels(repo_root, env_names)?;
+    setup_ssh_tunnels(repo_root, env_names)?;
 
     // Pre-scan for SSH bastions (only warn if still not active)
     let ssh_envs: Vec<&String> = env_names
