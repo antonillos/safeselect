@@ -296,6 +296,143 @@ fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
 
             Ok(())
         }
+        ConfigAction::RenameEnvironment {
+            old,
+            new,
+            project,
+        } => {
+            let dir = match project {
+                Some(d) => d,
+                None => {
+                    let cwd = std::env::current_dir()?;
+                    loader.find_local_project(&cwd).ok_or_else(|| {
+                        SafeselectError::LocalProjectNotFound(cwd)
+                    })?
+                }
+            };
+
+            let env_dir = dir.join(".safeselect").join("environments");
+            let old_file = env_dir.join(format!("{old}.toml"));
+            let new_file = env_dir.join(format!("{new}.toml"));
+
+            if !old_file.exists() {
+                return Err(SafeselectError::EnvironmentNotFound(
+                    old.clone(),
+                    env_dir.display().to_string(),
+                ));
+            }
+            if new_file.exists() {
+                return Err(SafeselectError::Other(format!(
+                    "Environment '{new}' already exists"
+                )));
+            }
+
+            let project_name = project_display_name(&dir);
+            let old_account = format!("{project_name}/{old}");
+            let new_account = format!("{project_name}/{new}");
+
+            // Read old config to check for secrets
+            let old_content = std::fs::read_to_string(&old_file)?;
+            let mut env_config: config::EnvironmentConfig = toml::from_str(&old_content)
+                .map_err(|e| SafeselectError::Config(format!("invalid {old}.toml: {e}")))?;
+
+            let mut needs_rewrite = false;
+
+            // Migrate keychain secret
+            if let Some(ref mut secret) = env_config.database.secret {
+                match secret.source.as_str() {
+                    "macos-keychain" if cfg!(target_os = "macos") => {
+                        if let Ok(password) = compose::read_password_from_keychain(&old_account) {
+                            compose::store_password_in_keychain(&new_account, &password)?;
+                            compose::delete_password_from_keychain(&old_account)?;
+                            secret.account = Some(new_account.clone());
+                            needs_rewrite = true;
+                        }
+                    }
+                    "env" => {
+                        let var = format!(
+                            "SAFESELECT_PASSWORD_{}",
+                            new.to_uppercase().replace('-', "_")
+                        );
+                        secret.variable = Some(var.clone());
+                        needs_rewrite = true;
+                    }
+                    _ => {}
+                }
+            }
+
+            // Rename file
+            std::fs::rename(&old_file, &new_file)?;
+
+            // Rewrite with updated secret account/variable if needed
+            if needs_rewrite {
+                let new_content = toml::to_string_pretty(&env_config)
+                    .map_err(|e| SafeselectError::TomlSer(e.to_string()))?;
+                std::fs::write(&new_file, new_content)?;
+            }
+
+            println!("Renamed '{old}' → '{new}'");
+            println!("  File: {} → {}", old_file.display(), new_file.display());
+
+            if needs_rewrite {
+                println!("  Secret migrated to new environment name.");
+            } else if env_config.database.secret.is_some() {
+                println!("  Secret NOT migrated — update it manually.");
+            }
+
+            Ok(())
+        }
+        ConfigAction::DeleteEnvironment { name, project } => {
+            let dir = match project {
+                Some(d) => d,
+                None => {
+                    let cwd = std::env::current_dir()?;
+                    loader.find_local_project(&cwd).ok_or_else(|| {
+                        SafeselectError::LocalProjectNotFound(cwd)
+                    })?
+                }
+            };
+
+            let env_dir = dir.join(".safeselect").join("environments");
+            let env_file = env_dir.join(format!("{name}.toml"));
+
+            if !env_file.exists() {
+                return Err(SafeselectError::EnvironmentNotFound(
+                    name.clone(),
+                    env_dir.display().to_string(),
+                ));
+            }
+
+            // Try to read the secret before deleting the file
+            let old_content = std::fs::read_to_string(&env_file).ok();
+            let secret_source = old_content.as_ref().and_then(|c| {
+                let env_config: config::EnvironmentConfig = toml::from_str(c).ok()?;
+                env_config.database.secret.map(|s| (s.source, s.account, s.variable))
+            });
+
+            std::fs::remove_file(&env_file)?;
+
+            let mut removed = format!("Deleted environment '{name}'");
+            removed.push_str(&format!("\n  File: {}", env_file.display()));
+
+            if let Some((source, account, _variable)) = secret_source {
+                match source.as_str() {
+                    "macos-keychain" if cfg!(target_os = "macos") => {
+                        if let Some(acct) = account {
+                            compose::delete_password_from_keychain(&acct)?;
+                            removed.push_str("\n  Keychain entry deleted.");
+                        }
+                    }
+                    "env" => {
+                        removed.push_str("\n  Environment variable was not removed — delete it manually if no longer needed.");
+                    }
+                    _ => {}
+                }
+            }
+
+            println!("{removed}");
+            Ok(())
+        }
     }
 }
 

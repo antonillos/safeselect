@@ -108,6 +108,27 @@ pub enum ConfigAction {
         #[arg(long)]
         environment: String,
     },
+    /// Rename an environment
+    RenameEnvironment {
+        /// Current environment name
+        #[arg(long)]
+        old: String,
+        /// New environment name
+        #[arg(long)]
+        new: String,
+        /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
+        #[arg(long)]
+        project: Option<PathBuf>,
+    },
+    /// Delete an environment configuration
+    DeleteEnvironment {
+        /// Environment name to delete
+        #[arg(long)]
+        name: String,
+        /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
+        #[arg(long)]
+        project: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
