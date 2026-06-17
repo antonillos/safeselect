@@ -850,7 +850,13 @@ fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
     }
 
     // Step 5: shared helpers (driver, passwords, verify)
-    let env_names: Vec<String> = imported_envs.iter().map(|(n, _)| n.clone()).collect();
+    let mut env_names: Vec<String> = imported_envs.iter().map(|(n, _)| n.clone()).collect();
+    // Also include already-existing selected environments
+    for (_, name) in &to_import {
+        if !env_names.contains(name) {
+            env_names.push(name.clone());
+        }
+    }
     setup_driver_if_missing()?;
     setup_passwords_for_missing(&cwd, &env_names)?;
     run_checks(&cwd, &env_names)?;
