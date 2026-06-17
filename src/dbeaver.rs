@@ -171,13 +171,13 @@ fn parse_data_sources(content: &str) -> Result<Vec<DBeaverConnection>> {
                 let enabled = tunnel.enabled.unwrap_or(false);
                 if enabled {
                     let props = tunnel.properties.as_ref();
-                    let sh = props.and_then(|p| p.get("host").or_else(|| p.get("#host"))).and_then(|v| v.as_str()).map(|s| s.to_string());
-                    let sp = props.and_then(|p| p.get("port").or_else(|| p.get("#port"))).and_then(|v| v.as_f64()).map(|n| n as u16);
-                    let su = props.and_then(|p| p.get("userName").or_else(|| p.get("#user"))).and_then(|v| v.as_str()).map(|s| s.to_string());
-                    let slh = props.and_then(|p| p.get("localHost").or_else(|| p.get("#localHost"))).and_then(|v| v.as_str()).map(|s| s.to_string());
-                    let slp = props.and_then(|p| p.get("localPort").or_else(|| p.get("#localPort"))).and_then(|v| v.as_f64()).map(|n| n as u16);
-                    let skf = props.and_then(|p| p.get("keyFile").or_else(|| p.get("#keyFile"))).and_then(|v| v.as_str()).map(|s| s.to_string());
-                    let sat = props.and_then(|p| p.get("authType").or_else(|| p.get("#authType"))).and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let sh = props.and_then(|p| p.get("#host").or_else(|| p.get("host"))).and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let sp = props.and_then(|p| p.get("#port").or_else(|| p.get("port"))).and_then(|v| v.as_f64()).map(|n| n as u16);
+                    let su = props.and_then(|p| p.get("#user").or_else(|| p.get("userName"))).and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let slh = props.and_then(|p| p.get("#localHost").or_else(|| p.get("localHost"))).and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let slp = props.and_then(|p| p.get("#localPort").or_else(|| p.get("localPort"))).and_then(|v| v.as_f64()).map(|n| n as u16);
+                    let skf = props.and_then(|p| p.get("#keyFile").or_else(|| p.get("keyFile"))).and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let sat = props.and_then(|p| p.get("#authType").or_else(|| p.get("authType"))).and_then(|v| v.as_str()).map(|s| s.to_string());
                     (sh, sp, su, slh, slp, skf, sat)
                 } else {
                     (None, None, None, None, None, None, None)
