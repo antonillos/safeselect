@@ -823,19 +823,14 @@ fn cmd_import_dbeaver(path: &str) -> Result<()> {
             selected.len()
         );
 
-        let mut no_password: Vec<(String, String)> = Vec::new();
-        let env_names: Vec<String> = imported_envs.iter().map(|(n, _)| n.clone()).collect();
-        for (env, has) in &imported_envs {
-            if !has {
-                no_password.push((env.clone(), format!("{project_name}/{env}")));
-            }
-        }
-        let result = compose::ImportResult { created: selected.len(), env_names, no_password };
-        print_import_next_steps(&project_name, &result);
         check_gitignore(&cwd);
     } else {
         println!("All environments already exist. Nothing to import.");
     }
+    let env_names: Vec<String> = imported_envs.iter().map(|(n, _)| n.clone()).collect();
+    setup_driver_if_missing()?;
+    setup_passwords_for_missing(&cwd, &env_names)?;
+    print_import_next_steps(&env_names);
     Ok(())
 }
 
@@ -934,12 +929,15 @@ fn cmd_import_compose(path: Option<PathBuf>, non_interactive: bool) -> Result<()
             to_import.len(),
             dest_dir.join(".safeselect").display()
         );
-        print_import_next_steps(&project_name, &result);
         check_gitignore(dest_dir);
     } else {
         println!("All environments already exist. Nothing to import.");
-        print_missing_setup_hints(dest_dir, &to_import);
     }
+
+    let env_names: Vec<String> = to_import.iter().map(|c| c.env_name.clone()).collect();
+    setup_driver_if_missing()?;
+    setup_passwords_for_missing(dest_dir, &env_names)?;
+    print_import_next_steps(&env_names);
 
     Ok(())
 }
@@ -954,82 +952,71 @@ fn import_selected_connections(connections: &[compose::ComposeConnection]) -> Re
             "\nImport complete. {} environment(s) added to .safeselect/.",
             connections.len()
         );
-        print_import_next_steps(&name, &result);
         check_gitignore(&cwd);
     } else {
         println!("All environments already exist. Nothing to import.");
-        print_missing_setup_hints(&cwd, connections);
     }
+
+    let env_names: Vec<String> = connections.iter().map(|c| c.env_name.clone()).collect();
+    setup_driver_if_missing()?;
+    setup_passwords_for_missing(&cwd, &env_names)?;
+    print_import_next_steps(&env_names);
 
     Ok(())
 }
 
-fn no_driver_exists() -> bool {
+fn setup_driver_if_missing() -> Result<()> {
     let loader = config::ConfigLoader::new();
-    loader.list_drivers().map(|d| d.is_empty()).unwrap_or(true)
+    if !loader.list_drivers().map(|d| d.is_empty()).unwrap_or(true) {
+        return Ok(());
+    }
+    println!();
+    println!("  No JDBC driver found. Downloading PostgreSQL driver...");
+    cmd_driver(&loader, DriverAction::Download { vendor: "postgresql".into() })?;
+    Ok(())
 }
 
-fn print_missing_setup_hints(repo_root: &std::path::Path, connections: &[compose::ComposeConnection]) {
-    let mut hints: Vec<String> = Vec::new();
-
-    if no_driver_exists() {
-        hints.push("  safeselect driver download --vendor postgresql".to_string());
-    }
-
-    for conn in connections {
+fn setup_passwords_for_missing(repo_root: &std::path::Path, env_names: &[String]) -> Result<()> {
+    for env_name in env_names {
         let env_file = repo_root
             .join(".safeselect")
             .join("environments")
-            .join(format!("{}.toml", conn.env_name));
-        if env_file.exists() {
-            if let Ok(content) = std::fs::read_to_string(&env_file) {
-                if let Ok(config) = toml::from_str::<config::EnvironmentConfig>(&content) {
-                    if config.database.secret.is_none() {
-                        hints.push(format!(
-                            "  safeselect config set-password --environment {}",
-                            conn.env_name
-                        ));
-                    }
-                }
-            }
-        }
-    }
+            .join(format!("{env_name}.toml"));
+        if !env_file.exists() { continue; }
+        let content = match std::fs::read_to_string(&env_file) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let config = match toml::from_str::<config::EnvironmentConfig>(&content) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        if config.database.secret.is_some() { continue; }
 
-    if !hints.is_empty() {
-        println!();
-        for hint in &hints {
-            println!("{hint}");
-        }
+        let repo_name = project_display_name(repo_root);
+        let account = format!("{repo_name}/{env_name}");
+        let pw = inquire::Password::new(&format!("  Password for '{repo_name}/{env_name}'"))
+            .without_confirmation()
+            .prompt()
+            .map_err(|e| SafeselectError::Other(format!("Failed to read password: {e}")))?;
+        compose::store_password_in_keychain(&account, &pw)?;
+        println!("  ✓ Password stored in Keychain");
+
+        let mut new_content = content;
+        if !new_content.ends_with('\n') { new_content.push('\n'); }
+        new_content.push_str(&format!(
+            "[database.secret]\nsource = \"macos-keychain\"\nservice = \"safeselect\"\naccount = \"{account}\"\n"
+        ));
+        std::fs::write(&env_file, &new_content)?;
+        println!("  ✓ Updated {env_name}.toml");
     }
+    Ok(())
 }
 
-fn print_import_next_steps(_project_name: &str, result: &compose::ImportResult) {
-    let needs_password = !result.no_password.is_empty();
-    let needs_driver = no_driver_exists();
-
+fn print_import_next_steps(env_names: &[String]) {
     println!();
-    for env_name in &result.env_names {
-        if needs_password && result.no_password.iter().any(|(n, _)| n == env_name) {
-            println!(
-                "  {env_name}:  safeselect config set-password --environment {env_name}"
-            );
-        } else if needs_password {
-            println!("  {env_name}:  safeselect check --environment {env_name}");
-        } else {
-            println!("  {env_name}:  safeselect check --environment {env_name}");
-        }
-    }
-
-    if needs_driver {
-        println!();
-        println!("  No JDBC driver found. Install one:");
-        println!("    safeselect driver download --vendor postgresql");
-    }
-
-    println!();
-    println!("Then start the MCP server:");
-    for env_name in &result.env_names {
-        println!("  safeselect serve --environment {env_name}");
+    for env_name in env_names {
+        println!("  safeselect check --environment {env_name}");
     }
 }
 
