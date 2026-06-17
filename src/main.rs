@@ -820,27 +820,15 @@ fn cmd_import_dbeaver(path: &str) -> Result<()> {
             selected.len()
         );
 
-        let no_secret: Vec<&str> = imported_envs
-            .iter()
-            .filter(|(_, has)| !has)
-            .map(|(name, _)| name.as_str())
-            .collect();
-
-        if !no_secret.is_empty() {
-            println!();
-            for env in &no_secret {
-                println!(
-                    "  No password set for '{env}':\n    {}",
-                    compose::secret_setup_hint(&project_name, env)
-                );
+        let mut no_password: Vec<(String, String)> = Vec::new();
+        let env_names: Vec<String> = imported_envs.iter().map(|(n, _)| n.clone()).collect();
+        for (env, has) in &imported_envs {
+            if !has {
+                no_password.push((env.clone(), format!("{project_name}/{env}")));
             }
         }
-
-        println!("\nNext steps:");
-        for (env, _) in &imported_envs {
-            println!("  safeselect check --environment {env}");
-            println!("  safeselect serve --environment {env}");
-        }
+        let result = compose::ImportResult { created: selected.len(), env_names, no_password };
+        print_import_next_steps(&project_name, &result);
         check_gitignore(&cwd);
     } else {
         println!("All environments already exist. Nothing to import.");
@@ -943,22 +931,7 @@ fn cmd_import_compose(path: Option<PathBuf>, non_interactive: bool) -> Result<()
             to_import.len(),
             dest_dir.join(".safeselect").display()
         );
-
-        if !result.no_password.is_empty() {
-            println!();
-            for (env_name, _) in &result.no_password {
-                println!(
-                    "  No password set for '{env_name}':\n    {}",
-                    compose::secret_setup_hint(&project_name, env_name)
-                );
-            }
-        }
-
-        println!("\nNext steps:");
-        for env_name in &result.env_names {
-            println!("  safeselect check --environment {env_name}");
-            println!("  safeselect serve --environment {env_name}");
-        }
+        print_import_next_steps(&project_name, &result);
         check_gitignore(dest_dir);
     } else {
         println!("All environments already exist. Nothing to import.");
@@ -977,28 +950,48 @@ fn import_selected_connections(connections: &[compose::ComposeConnection]) -> Re
             "\nImport complete. {} environment(s) added to .safeselect/.",
             connections.len()
         );
-
-        if !result.no_password.is_empty() {
-            println!();
-            for (env_name, _) in &result.no_password {
-                println!(
-                    "  No password set for '{env_name}':\n    {}",
-                    compose::secret_setup_hint(&name, env_name)
-                );
-            }
-        }
-
-        println!("\nNext steps:");
-        for env_name in &result.env_names {
-            println!("  safeselect check --environment {env_name}");
-            println!("  safeselect serve --environment {env_name}");
-        }
+        print_import_next_steps(&name, &result);
         check_gitignore(&cwd);
     } else {
         println!("All environments already exist. Nothing to import.");
     }
 
     Ok(())
+}
+
+fn no_driver_exists() -> bool {
+    let loader = config::ConfigLoader::new();
+    loader.list_drivers().map(|d| d.is_empty()).unwrap_or(true)
+}
+
+fn print_import_next_steps(_project_name: &str, result: &compose::ImportResult) {
+    let needs_password = !result.no_password.is_empty();
+    let needs_driver = no_driver_exists();
+
+    println!();
+    for env_name in &result.env_names {
+        if needs_password && result.no_password.iter().any(|(n, _)| n == env_name) {
+            println!(
+                "  {env_name}:  safeselect config set-password --environment {env_name}"
+            );
+        } else if needs_password {
+            println!("  {env_name}:  safeselect check --environment {env_name}");
+        } else {
+            println!("  {env_name}:  safeselect check --environment {env_name}");
+        }
+    }
+
+    if needs_driver {
+        println!();
+        println!("  No JDBC driver found. Install one:");
+        println!("    safeselect driver download --vendor postgresql");
+    }
+
+    println!();
+    println!("Then start the MCP server:");
+    for env_name in &result.env_names {
+        println!("  safeselect serve --environment {env_name}");
+    }
 }
 
 fn cmd_serve_setup(_loader: &ConfigLoader, repo_root: &Path) -> Result<()> {
