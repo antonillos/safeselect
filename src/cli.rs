@@ -171,8 +171,9 @@ pub enum AgentAction {
         project: Option<PathBuf>,
         #[arg(long)]
         environment: String,
+        /// Entry name (default: <project-dir>-<environment>)
         #[arg(long)]
-        name: String,
+        name: Option<String>,
     },
     /// Uninstall MCP entry
     Uninstall {
