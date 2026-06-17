@@ -154,13 +154,46 @@ version = 1
 driver = "postgresql"
 url = "jdbc:postgresql://localhost:5432/myapp"
 username = "reader"
+```
+
+The password is configured separately — run this once:
+
+```bash
+safeselect config set-password --environment testing
+```
+
+This stores the password in your macOS Keychain and adds the `[database.secret]` section to the toml automatically.
+
+### Advanced: Manual secret setup
+
+If you prefer to configure secrets by hand, add this to the environment toml:
+
+```toml
 [database.secret]
 source = "macos-keychain"
 service = "safeselect"
 account = "myapp/testing"
 ```
 
+Then store the password in the Keychain:
+
+```bash
+security add-generic-password -a "myapp/testing" -s "safeselect" -w "<password>"
+```
+
+For non-macOS systems, use an environment variable instead:
+
+```toml
+[database.secret]
+source = "env"
+variable = "SAFESELECT_PASSWORD_TESTING"
+```
+
+Then export the variable before running `safeselect`.
+
 ---
+
+
 
 ## Detected AI Agents
 
