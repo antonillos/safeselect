@@ -4,7 +4,7 @@ mod project;
 
 pub use driver::DriverConfig;
 pub use environment::{
-    DatabaseConfig, EnvironmentConfig, LimitsOverride, SecretConfig,
+    DatabaseConfig, EnvironmentConfig, LimitsOverride, SecretConfig, SshConfig,
 };
 pub use project::{AuditConfig, LimitsConfig, ProjectConfig, SecurityPolicy};
 

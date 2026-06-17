@@ -365,19 +365,36 @@ fn cmd_import_dbeaver(path: &str) -> Result<()> {
         return Ok(());
     }
 
-    println!("Found {} connection(s):", connections.len());
+    println!("Found {} connection(s):\n", connections.len());
+    for conn in &connections {
+        let ssh = conn.ssh_host.as_deref().unwrap_or("-");
+        println!("  {:<30}  {}:{}  ssh={}", conn.name, conn.host, conn.port, ssh);
+    }
 
+    println!();
     let loader = ConfigLoader::new();
+    let projects_dir = loader.projects_dir();
+    let mut created_any = false;
 
     for conn in &connections {
-        println!();
-        println!("  Name:     {}", conn.name);
-        println!("  Host:     {}:{}", conn.host, conn.port);
-        println!("  Database: {}", conn.database);
-        println!("  Driver:   {}", conn.driver);
-        println!("  Username: {}", conn.username);
+        // Derive project name: base name before " (" if present, else lowercased database name
+        let project = conn
+            .name
+            .split_once(" (")
+            .map(|(base, _)| base.trim().to_lowercase())
+            .unwrap_or_else(|| conn.database.to_lowercase());
 
-        let project_dir = loader.projects_dir().join(&conn.database);
+        // Derive environment name: parenthetical part, or "default"
+        let env = conn
+            .name
+            .split_once(" (")
+            .and_then(|(_, rest)| rest.strip_suffix(')'))
+            .unwrap_or("default")
+            .to_lowercase()
+            .replace(' ', "-")
+            .replace("--", "-");
+
+        let project_dir = projects_dir.join(&project);
         let env_dir = project_dir.join("environments");
         std::fs::create_dir_all(&env_dir)?;
 
@@ -387,8 +404,18 @@ fn cmd_import_dbeaver(path: &str) -> Result<()> {
         let project_file = project_dir.join("project.toml");
         if !project_file.exists() {
             std::fs::write(&project_file, project_toml)?;
-            println!("    → Created {}", project_file.display());
+            println!("  ✔ Created {}", project_file.display());
+            created_any = true;
         }
+
+        let ssh = conn.ssh_host.as_ref().map(|h| config::SshConfig {
+            enabled: true,
+            host: Some(h.clone()),
+            port: conn.ssh_port,
+            username: conn.ssh_user.clone(),
+            identity_file: None,
+            known_hosts: None,
+        });
 
         let env_config = config::EnvironmentConfig {
             version: 1,
@@ -399,19 +426,25 @@ fn cmd_import_dbeaver(path: &str) -> Result<()> {
                 secret: None,
             },
             tls: None,
-            ssh: None,
+            ssh,
             limits: config::LimitsOverride::default(),
         };
         let env_toml = toml::to_string_pretty(&env_config)
             .map_err(|e| SafeselectError::TomlSer(e.to_string()))?;
-        let env_file = env_dir.join(format!("{}.toml", conn.name.to_lowercase().replace(' ', "-")));
+        let env_file = env_dir.join(format!("{env}.toml"));
         if !env_file.exists() {
             std::fs::write(&env_file, env_toml)?;
-            println!("    → Created {}. Edit to add [database.secret]", env_file.display());
+            println!("  ✔ Created {}", env_file.display());
+            created_any = true;
         }
     }
 
-    println!("\nImport complete. Review the generated files and add secrets.");
+    if created_any {
+        println!("\nImport complete. Edit the new files and add secrets.");
+        println!("  Example: security add-generic-password -a \"<project>/<env>\" -s \"safeselect\" -w \"<password>\"");
+    } else {
+        println!("All projects/environments already exist. Nothing to import.");
+    }
     Ok(())
 }
 
