@@ -1425,34 +1425,35 @@ fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Result<()> {
             _ => false,
         };
 
-        // Common tunnel args
-        let base_args: Vec<String> = vec![
-            "-o".into(),
-            "ConnectTimeout=5".into(),
-            "-o".into(),
-            "ExitOnForwardFailure=yes".into(),
-            "-o".into(),
-            "ServerAliveInterval=15".into(),
-            "-o".into(),
-            "ServerAliveCountMax=3".into(),
+        // Build SSH args
+        let mut ssh_args: Vec<String> = vec![
+            "-o".into(), "ConnectTimeout=5".into(),
+            "-o".into(), "ExitOnForwardFailure=yes".into(),
+            "-o".into(), "ServerAliveInterval=15".into(),
+            "-o".into(), "ServerAliveCountMax=3".into(),
             "-N".into(),
-            "-L".into(),
-            format!("{}:{}:{}", local.1, fwd_host, fwd_port),
+            "-L".into(), format!("{}:{}:{}", local.1, fwd_host, fwd_port),
             format!("{user}@{bastion}"),
         ];
-
-        let spawn_tunnel = |extra: Vec<String>| -> std::io::Result<std::process::Child> {
-            let mut args = base_args.clone();
-            args.extend(extra);
-            if let Some(p) = ssh.port {
-                if p != 22 {
-                    args.push("-p".into());
-                    args.push(p.to_string());
-                }
+        if let Some(p) = ssh.port {
+            if p != 22 {
+                ssh_args.push("-p".into());
+                ssh_args.push(p.to_string());
             }
-            std::process::Command::new(if use_password { "sshpass" } else { "ssh" })
-                .args(&args)
-                .spawn()
+        }
+
+        // Helper: spawn sshpass -p <pw> ssh <ssh_args>
+        let spawn_sshpass = |password: &str| -> std::io::Result<std::process::Child> {
+            let mut full = vec!["-p".into(), password.to_string(), "ssh".into()];
+            full.extend(ssh_args.clone());
+            std::process::Command::new("sshpass").args(&full).spawn()
+        };
+
+        // Helper: spawn ssh <ssh_args> with optional extra flags
+        let spawn_ssh = |extra: Vec<String>| -> std::io::Result<std::process::Child> {
+            let mut full = extra;
+            full.extend(ssh_args.clone());
+            std::process::Command::new("ssh").args(&full).spawn()
         };
 
         let mut child = if use_password {
@@ -1467,8 +1468,7 @@ fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Result<()> {
                     continue;
                 }
             };
-            let extra = vec!["-p".into(), pw, "ssh".into()];
-            match spawn_tunnel(extra) {
+            match spawn_sshpass(&pw) {
                 Ok(c) => c,
                 Err(_) => {
                     println!("sshpass not installed");
@@ -1487,8 +1487,7 @@ fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Result<()> {
                         {
                             println!("OK");
                             if let Ok(pw) = compose::read_password_from_keychain(&ssh_acct) {
-                                let extra = vec!["-p".into(), pw, "ssh".into()];
-                                match spawn_tunnel(extra) {
+                                match spawn_sshpass(&pw) {
                                     Ok(c) => c,
                                     Err(_) => { println!("FAILED"); continue; }
                                 }
@@ -1506,7 +1505,7 @@ fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Result<()> {
             }
         } else {
             let extra = vec!["-o".into(), "BatchMode=yes".into()];
-            match spawn_tunnel(extra) {
+            match spawn_ssh(extra) {
                 Ok(c) => c,
                 Err(e) => {
                     println!("FAILED: {e}");
