@@ -33,7 +33,9 @@ class Safeselect < Formula
 
       For MCP (Model Context Protocol) support, install the integration:
 
-        safeselect agent install opencode --project <project> --environment <env> --name <name>
+        safeselect agent install opencode --environment <env> --name <name>
+
+      (Run from your project repo — .safeselect/ is auto-detected.)
     EOS
   end
 
