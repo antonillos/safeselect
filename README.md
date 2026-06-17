@@ -125,11 +125,7 @@ account = "myapp/testing"
 
 ## Architecture
 
-```
-AI Agent ──stdin/stdout──► safeselect (Rust) ──stdin/stdout──► sidecar (Java) ──JDBC──► DB
-          JSON-RPC (MCP)        │                          │
-                                └── security + audit ──────┘
-```
+<img src="docs/safeselect-architecture.svg" alt="SafeSelect Architecture" width="700">
 
 - All communication between Rust and Java is JSON-lines over stdin/stdout — no network, no sockets, no open ports
 - The Java sidecar is embedded in the Rust binary and extracted at runtime
