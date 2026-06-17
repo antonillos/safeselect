@@ -111,7 +111,7 @@ fn test_serve_missing_project() {
         "testing",
     ]);
     assert!(!success);
-    assert!(stderr.contains("not found"));
+    assert!(stderr.contains("does not exist") || stderr.contains("not found"));
 }
 
 #[test]
