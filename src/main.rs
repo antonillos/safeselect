@@ -1485,12 +1485,23 @@ fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Result<()> {
                     if install {
                         print!("  Installing sshpass... ");
                         std::io::stdout().flush().ok();
-                        if std::process::Command::new("brew")
-                            .args(["install", "hudochenkov/sshpass/sshpass"])
-                            .status()
-                            .map(|s| s.success())
-                            .unwrap_or(false)
-                        {
+                        let taps = [
+                            "esolitos/ipa/sshpass",
+                            "hudochenkov/sshpass/sshpass",
+                        ];
+                        let mut installed = false;
+                        for tap in &taps {
+                            if std::process::Command::new("brew")
+                                .args(["install", tap])
+                                .status()
+                                .map(|s| s.success())
+                                .unwrap_or(false)
+                            {
+                                installed = true;
+                                break;
+                            }
+                        }
+                        if installed {
                             println!("OK");
                             if let Ok(pw) = compose::read_password_from_keychain(&ssh_acct) {
                                 match spawn_sshpass(&pw) {
@@ -1499,7 +1510,10 @@ fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Result<()> {
                                 }
                             } else { continue; }
                         } else {
-                            println!("FAILED\n  Install: brew install hudochenkov/sshpass/sshpass");
+                            println!("FAILED");
+                            println!("  Install manually:");
+                            println!("    brew install esolitos/ipa/sshpass");
+                            println!("  Or build from source: https://sourceforge.net/projects/sshpass/");
                             continue;
                         }
                     } else {
