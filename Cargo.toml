@@ -24,6 +24,7 @@ zip = "8.6.0"
 similar = "3.1.1"
 indoc = "2"
 inquire = "0.9"
+rpassword = "7"
 
 
 [profile.release]
