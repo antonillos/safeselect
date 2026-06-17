@@ -484,7 +484,88 @@ fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
             println!("\nDone. Run: safeselect check --environment {environment}");
             Ok(())
         }
+        ConfigAction::Reset { project } => {
+            let dir = match project {
+                Some(d) => d,
+                None => {
+                    let cwd = std::env::current_dir()?;
+                    loader.find_local_project(&cwd).ok_or_else(|| {
+                        SafeselectError::LocalProjectNotFound(cwd)
+                    })?
+                }
+            };
+            reset_project_config(&dir)
+        }
     }
+}
+
+fn reset_project_config(repo_root: &Path) -> Result<()> {
+    let safeselect_dir = repo_root.join(".safeselect");
+    let env_dir = safeselect_dir.join("environments");
+
+    if !env_dir.is_dir() {
+        println!("  ◉ No environments to reset.");
+        return Ok(());
+    }
+
+    let ans = inquire::Confirm::new("This will remove all environments and their keychain entries. Continue?")
+        .with_default(false)
+        .prompt()
+        .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?;
+
+    if !ans {
+        println!("Cancelled.");
+        return Ok(());
+    }
+
+    let mut removed = 0u32;
+    if let Ok(entries) = std::fs::read_dir(&env_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().map_or(false, |ext| ext == "toml") {
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    if let Ok(env_cfg) = toml::from_str::<config::EnvironmentConfig>(&content) {
+                        if let Some(ref secret) = env_cfg.database.secret {
+                            if secret.source == "macos-keychain" {
+                                if let Some(ref acct) = secret.account {
+                                    let _ = compose::delete_password_from_keychain(acct);
+                                }
+                            }
+                        }
+                    }
+                }
+                let _ = std::fs::remove_file(&path);
+                removed += 1;
+            }
+        }
+    }
+
+    if removed > 0 {
+        println!("  ✓ Removed {removed} environment(s)");
+    }
+
+    // Reset generated_by in project.toml
+    let project_file = safeselect_dir.join("project.toml");
+    if project_file.exists() {
+        if let Ok(content) = std::fs::read_to_string(&project_file) {
+            if let Ok(mut proj) = toml::from_str::<config::ProjectConfig>(&content) {
+                proj.generated_by = Some(env!("CARGO_PKG_VERSION").to_string());
+                if let Ok(new_content) = toml::to_string_pretty(&proj) {
+                    let _ = std::fs::write(&project_file, new_content);
+                }
+            }
+        }
+    }
+
+    if removed > 0 {
+        println!("\nReset complete. Re-import with:");
+        println!("  safeselect import-dbeaver <export.zip>");
+        println!("  safeselect import-compose");
+    } else {
+        println!("  ◉ No environment files found.");
+    }
+
+    Ok(())
 }
 
 fn cmd_driver(loader: &ConfigLoader, action: DriverAction) -> Result<()> {
@@ -683,7 +764,62 @@ fn check_gitignore(repo_root: &std::path::Path) {
     }
 }
 
+fn write_project_toml(safeselect_dir: &Path) -> Result<()> {
+    let project_file = safeselect_dir.join("project.toml");
+    let config = config::ProjectConfig::default();
+    let toml_str = toml::to_string_pretty(&config)
+        .map_err(|e| SafeselectError::TomlSer(e.to_string()))?;
+    std::fs::write(&project_file, toml_str)?;
+    Ok(())
+}
+
+fn update_generated_by(safeselect_dir: &Path) -> Result<()> {
+    let project_file = safeselect_dir.join("project.toml");
+    if !project_file.exists() {
+        return write_project_toml(safeselect_dir);
+    }
+    let content = std::fs::read_to_string(&project_file)?;
+    let mut proj: config::ProjectConfig = toml::from_str(&content)
+        .map_err(|e| SafeselectError::Config(format!("invalid project.toml: {e}")))?;
+    proj.generated_by = Some(env!("CARGO_PKG_VERSION").to_string());
+    let new_content = toml::to_string_pretty(&proj)
+        .map_err(|e| SafeselectError::TomlSer(e.to_string()))?;
+    std::fs::write(&project_file, new_content)?;
+    Ok(())
+}
+
+fn check_version_and_maybe_reset(repo_root: &Path) -> Result<()> {
+    let project_file = repo_root.join(".safeselect").join("project.toml");
+    if !project_file.exists() {
+        return Ok(());
+    }
+    let content = std::fs::read_to_string(&project_file)?;
+    let proj: config::ProjectConfig = toml::from_str(&content)
+        .map_err(|e| SafeselectError::Config(format!("invalid project.toml: {e}")))?;
+    let current = env!("CARGO_PKG_VERSION");
+    match &proj.generated_by {
+        Some(ver) if ver == current => return Ok(()),
+        Some(old) => {
+            println!("⚠  Existing config was generated by v{old}, current version is v{current}.");
+        }
+        None => {
+            println!("⚠  Existing config was generated by an older version (no version field), current version is v{current}.");
+        }
+    }
+    let ans = inquire::Confirm::new("Reset environments and re-import?")
+        .with_default(false)
+        .prompt()
+        .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?;
+    if ans {
+        reset_project_config(repo_root)?;
+    }
+    Ok(())
+}
+
 fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
+    let cwd = std::env::current_dir()?;
+    check_version_and_maybe_reset(&cwd)?;
+
     let zip_path = Path::new(path);
     if !zip_path.exists() {
         return Err(SafeselectError::Other(format!("File not found: {path}")));
@@ -769,18 +905,10 @@ fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
     }
 
     // Step 3: write config files silently
-    let cwd = std::env::current_dir()?;
     let safeselect_dir = cwd.join(".safeselect");
     let env_dir = safeselect_dir.join("environments");
     std::fs::create_dir_all(&env_dir)?;
-
-    let project_config = config::ProjectConfig::default();
-    let project_toml = toml::to_string_pretty(&project_config)
-        .map_err(|e| SafeselectError::TomlSer(e.to_string()))?;
-    let project_file = safeselect_dir.join("project.toml");
-    if !project_file.exists() {
-        std::fs::write(&project_file, project_toml)?;
-    }
+    update_generated_by(&safeselect_dir)?;
 
     let project_name = project_display_name(&cwd);
     let mut imported_envs: Vec<(String, bool)> = vec![];
@@ -892,6 +1020,8 @@ fn cmd_import_compose(path: Option<PathBuf>, non_interactive: bool) -> Result<()
         )));
     }
 
+    check_version_and_maybe_reset(&scan_path)?;
+
     let groups = compose::scan_all(&scan_path)?;
 
     let all_connections: Vec<(String, compose::ComposeConnection)> = groups
@@ -971,6 +1101,7 @@ fn cmd_import_compose(path: Option<PathBuf>, non_interactive: bool) -> Result<()
     }
 
     let result = compose::write_config_files(dest_dir, &to_import, &project_name)?;
+    update_generated_by(&dest_dir.join(".safeselect"))?;
 
     if result.created > 0 {
         println!();
@@ -994,6 +1125,7 @@ fn import_selected_connections(connections: &[compose::ComposeConnection]) -> Re
     let cwd = std::env::current_dir()?;
     let name = project_display_name(&cwd);
     let result = compose::write_config_files(&cwd, connections, &name)?;
+    update_generated_by(&cwd.join(".safeselect"))?;
 
     if result.created > 0 {
         println!(
