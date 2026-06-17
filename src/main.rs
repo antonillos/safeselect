@@ -974,32 +974,44 @@ fn setup_driver_if_missing() -> Result<()> {
 }
 
 fn setup_passwords_for_missing(repo_root: &std::path::Path, env_names: &[String]) -> Result<()> {
+    use std::io::Write;
     for env_name in env_names {
         let env_file = repo_root
             .join(".safeselect")
             .join("environments")
             .join(format!("{env_name}.toml"));
-        if !env_file.exists() { continue; }
+        if !env_file.exists() {
+            eprintln!("  [{env_name}] file not found: {}", env_file.display());
+            continue;
+        }
         let content = match std::fs::read_to_string(&env_file) {
             Ok(c) => c,
-            Err(_) => continue,
+            Err(e) => { eprintln!("  [{env_name}] read error: {e}"); continue; }
         };
         let config = match toml::from_str::<config::EnvironmentConfig>(&content) {
             Ok(c) => c,
-            Err(_) => continue,
+            Err(e) => { eprintln!("  [{env_name}] parse error: {e}"); continue; }
         };
-        if config.database.secret.is_some() { continue; }
+        if config.database.secret.is_some() {
+            eprintln!("  [{env_name}] already has secret, skipping");
+            continue;
+        }
 
         let repo_name = project_display_name(repo_root);
         let account = format!("{repo_name}/{env_name}");
-        let pw = inquire::Password::new(&format!("  Password for '{repo_name}/{env_name}'"))
-            .without_confirmation()
-            .prompt()
-            .map_err(|e| SafeselectError::Other(format!("Failed to read password: {e}")))?;
+        print!("  Password for '{repo_name}/{env_name}': ");
+        std::io::stdout().flush()?;
+        let mut pw = String::new();
+        std::io::stdin().read_line(&mut pw)?;
+        let pw = pw.trim().to_string();
+        if pw.is_empty() {
+            eprintln!("  WARN: empty password, skipping");
+            continue;
+        }
         compose::store_password_in_keychain(&account, &pw)?;
         println!("  ✓ Password stored in Keychain");
 
-        let mut new_content = content;
+        let mut new_content = std::fs::read_to_string(&env_file)?;
         if !new_content.ends_with('\n') { new_content.push('\n'); }
         new_content.push_str(&format!(
             "[database.secret]\nsource = \"macos-keychain\"\nservice = \"safeselect\"\naccount = \"{account}\"\n"
