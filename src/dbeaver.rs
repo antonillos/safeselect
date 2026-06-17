@@ -15,6 +15,8 @@ pub struct DBeaverConnection {
     pub ssh_host: Option<String>,
     pub ssh_port: Option<u16>,
     pub ssh_user: Option<String>,
+    pub ssh_local_host: Option<String>,
+    pub ssh_local_port: Option<u16>,
 }
 
 pub fn import_zip(zip_path: &Path) -> Result<Vec<DBeaverConnection>> {
@@ -162,23 +164,25 @@ fn parse_data_sources(content: &str) -> Result<Vec<DBeaverConnection>> {
 
         let password = src.password.clone();
 
-        let (ssh_host, ssh_port, ssh_user) = if let Some(handlers) = cfg.and_then(|c| c.handlers.as_ref()) {
+        let (ssh_host, ssh_port, ssh_user, ssh_local_host, ssh_local_port) = if let Some(handlers) = cfg.and_then(|c| c.handlers.as_ref()) {
             if let Some(tunnel) = handlers.get("ssh_tunnel") {
                 let enabled = tunnel.enabled.unwrap_or(false);
                 if enabled {
                     let props = tunnel.properties.as_ref();
-                    let sh = props.and_then(|p| p.get("host")).and_then(|v| v.as_str()).map(|s| s.to_string());
-                    let sp = props.and_then(|p| p.get("port")).and_then(|v| v.as_f64()).map(|n| n as u16);
-                    let su = props.and_then(|p| p.get("userName")).and_then(|v| v.as_str()).map(|s| s.to_string());
-                    (sh, sp, su)
+                    let sh = props.and_then(|p| p.get("host").or_else(|| p.get("#host"))).and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let sp = props.and_then(|p| p.get("port").or_else(|| p.get("#port"))).and_then(|v| v.as_f64()).map(|n| n as u16);
+                    let su = props.and_then(|p| p.get("userName").or_else(|| p.get("#user"))).and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let slh = props.and_then(|p| p.get("localHost").or_else(|| p.get("#localHost"))).and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let slp = props.and_then(|p| p.get("localPort").or_else(|| p.get("#localPort"))).and_then(|v| v.as_f64()).map(|n| n as u16);
+                    (sh, sp, su, slh, slp)
                 } else {
-                    (None, None, None)
+                    (None, None, None, None, None)
                 }
             } else {
-                (None, None, None)
+                (None, None, None, None, None)
             }
         } else {
-            (None, None, None)
+            (None, None, None, None, None)
         };
 
         connections.push(DBeaverConnection {
@@ -192,6 +196,8 @@ fn parse_data_sources(content: &str) -> Result<Vec<DBeaverConnection>> {
             ssh_host,
             ssh_port,
             ssh_user,
+            ssh_local_host,
+            ssh_local_port,
         });
     }
 

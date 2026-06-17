@@ -788,6 +788,8 @@ fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
     for (idx, env_name) in &to_import {
         let conn = &connections[*idx];
 
+        let has_ssh = conn.ssh_host.is_some();
+
         let ssh = conn.ssh_host.as_ref().map(|h| config::SshConfig {
             enabled: true,
             host: Some(h.clone()),
@@ -796,6 +798,25 @@ fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
             identity_file: None,
             known_hosts: None,
         });
+
+        let url = if has_ssh {
+            if let Some(lp) = conn.ssh_local_port {
+                let lh = conn.ssh_local_host.as_deref().unwrap_or("localhost");
+                format!("jdbc:postgresql://{lh}:{lp}/{}", conn.database)
+            } else {
+                format!(
+                    "jdbc:postgresql://{}:{}/{}",
+                    conn.ssh_host.as_deref().unwrap_or("localhost"),
+                    conn.ssh_port.unwrap_or(5432),
+                    conn.database
+                )
+            }
+        } else {
+            format!(
+                "jdbc:postgresql://{}:{}/{}",
+                conn.host, conn.port, conn.database
+            )
+        };
 
         let (secret, has_secret) = if let Some(ref pw) = conn.password {
             if !pw.is_empty() {
@@ -818,10 +839,7 @@ fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
             version: 1,
             database: config::DatabaseConfig {
                 driver: conn.driver.clone(),
-                url: format!(
-                    "jdbc:postgresql://{}:{}/{}",
-                    conn.host, conn.port, conn.database
-                ),
+                url,
                 username: conn.username.clone(),
                 secret,
             },
