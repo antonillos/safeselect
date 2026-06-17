@@ -5,6 +5,10 @@ fn safeselect_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_safeselect"))
 }
 
+fn safeselect_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
 fn strip_ansi(s: &str) -> String {
     s.chars()
         .fold((String::new(), false), |(mut out, mut escape), c| {
@@ -53,7 +57,7 @@ fn test_help() {
 fn test_version() {
     let (stdout, _, success) = &run(&["--version"]);
     assert!(success);
-    assert!(stdout.contains("0.1.0"));
+    assert!(stdout.contains(safeselect_version()));
 }
 
 #[test]
