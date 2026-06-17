@@ -689,6 +689,8 @@ fn cmd_import_dbeaver(path: &str) -> Result<()> {
         created_any = true;
     }
 
+    let project_name = project_display_name(&cwd);
+
     for label in &selected {
         let conn = &connections[label.0];
 
@@ -710,13 +712,30 @@ fn cmd_import_dbeaver(path: &str) -> Result<()> {
             known_hosts: None,
         });
 
+        let (secret, has_secret) = if let Some(ref pw) = conn.password {
+            if !pw.is_empty() {
+                let account = format!("{project_name}/{env}");
+                compose::store_password_in_keychain(&account, pw)?;
+                (Some(config::SecretConfig {
+                    source: "macos-keychain".to_string(),
+                    service: Some("safeselect".to_string()),
+                    account: Some(account),
+                    variable: None,
+                }), true)
+            } else {
+                (None, false)
+            }
+        } else {
+            (None, false)
+        };
+
         let env_config = config::EnvironmentConfig {
             version: 1,
             database: config::DatabaseConfig {
                 driver: conn.driver.clone(),
                 url: format!("jdbc:postgresql://{}:{}/{}", conn.host, conn.port, conn.database),
                 username: conn.username.clone(),
-                secret: None,
+                secret,
             },
             tls: None,
             ssh,
@@ -729,6 +748,7 @@ fn cmd_import_dbeaver(path: &str) -> Result<()> {
             std::fs::write(&env_file, env_toml)?;
             println!("  ✔ Created {} → {}", env_file.display(), conn.name);
             created_any = true;
+            imported_envs.push((env, has_secret));
         }
     }
 
@@ -737,8 +757,28 @@ fn cmd_import_dbeaver(path: &str) -> Result<()> {
             "\nImport complete. {} environment(s) added to .safeselect/.",
             selected.len()
         );
-        println!("  Edit the .toml files and add secrets.");
-        println!("  Example: security add-generic-password -a \"<project>/<env>\" -s \"safeselect\" -w \"<password>\"");
+
+        let no_secret: Vec<&str> = imported_envs
+            .iter()
+            .filter(|(_, has)| !has)
+            .map(|(name, _)| name.as_str())
+            .collect();
+
+        if !no_secret.is_empty() {
+            println!();
+            for env in &no_secret {
+                println!(
+                    "  No password set for '{env}':\n    {}",
+                    compose::secret_setup_hint(&project_name, env)
+                );
+            }
+        }
+
+        println!("\nNext steps:");
+        for (env, _) in &imported_envs {
+            println!("  safeselect check --environment {env}");
+            println!("  safeselect serve --environment {env}");
+        }
         check_gitignore(&cwd);
     } else {
         println!("All environments already exist. Nothing to import.");
@@ -769,7 +809,7 @@ fn cmd_import_compose(path: Option<PathBuf>, non_interactive: bool) -> Result<()
         return Ok(());
     }
 
-    let to_import: Vec<compose::ComposeConnection> = if non_interactive {
+    let mut to_import: Vec<compose::ComposeConnection> = if non_interactive {
         all_connections
             .iter()
             .map(|(_, c)| c)
@@ -818,16 +858,45 @@ fn cmd_import_compose(path: Option<PathBuf>, non_interactive: bool) -> Result<()
 
     let dest_dir = &scan_path;
     let project_name = project_display_name(dest_dir);
-    let created = compose::write_config_files(dest_dir, &to_import, &project_name)?;
 
-    if created > 0 {
+    if !non_interactive {
+        for conn in &mut to_import {
+            let prompt = format!(
+                "Environment name for '{}' ({}:{}):",
+                conn.service, conn.host, conn.port
+            );
+            let new_name = inquire::Text::new(&prompt)
+                .with_default(&conn.env_name)
+                .prompt()
+                .map_err(|e| SafeselectError::Other(format!("Input cancelled: {e}")))?;
+            conn.env_name = new_name.trim().to_lowercase().replace(' ', "-");
+        }
+    }
+
+    let result = compose::write_config_files(dest_dir, &to_import, &project_name)?;
+
+    if result.created > 0 {
         println!(
             "\nImport complete. {} environment(s) added to {}",
             to_import.len(),
             dest_dir.join(".safeselect").display()
         );
-        println!("  Use: safeselect check --environment <name>");
-        println!("  Or:  safeselect serve --environment <name>");
+
+        if !result.no_password.is_empty() {
+            println!();
+            for (env_name, _) in &result.no_password {
+                println!(
+                    "  No password set for '{env_name}':\n    {}",
+                    compose::secret_setup_hint(&project_name, env_name)
+                );
+            }
+        }
+
+        println!("\nNext steps:");
+        for env_name in &result.env_names {
+            println!("  safeselect check --environment {env_name}");
+            println!("  safeselect serve --environment {env_name}");
+        }
         check_gitignore(dest_dir);
     } else {
         println!("All environments already exist. Nothing to import.");
@@ -839,15 +908,29 @@ fn cmd_import_compose(path: Option<PathBuf>, non_interactive: bool) -> Result<()
 fn import_selected_connections(connections: &[compose::ComposeConnection]) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let name = project_display_name(&cwd);
-    let created = compose::write_config_files(&cwd, connections, &name)?;
+    let result = compose::write_config_files(&cwd, connections, &name)?;
 
-    if created > 0 {
+    if result.created > 0 {
         println!(
             "\nImport complete. {} environment(s) added to .safeselect/.",
             connections.len()
         );
-        println!("  Use: safeselect check --environment <name>");
-        println!("  Or:  safeselect serve --environment <name>");
+
+        if !result.no_password.is_empty() {
+            println!();
+            for (env_name, _) in &result.no_password {
+                println!(
+                    "  No password set for '{env_name}':\n    {}",
+                    compose::secret_setup_hint(&name, env_name)
+                );
+            }
+        }
+
+        println!("\nNext steps:");
+        for env_name in &result.env_names {
+            println!("  safeselect check --environment {env_name}");
+            println!("  safeselect serve --environment {env_name}");
+        }
         check_gitignore(&cwd);
     } else {
         println!("All environments already exist. Nothing to import.");
@@ -891,7 +974,7 @@ fn cmd_serve_setup(_loader: &ConfigLoader, repo_root: &Path) -> Result<()> {
         .collect();
 
     let project_name = project_display_name(repo_root);
-    compose::write_config_files(repo_root, &auto_import, &project_name)?;
+    let _result = compose::write_config_files(repo_root, &auto_import, &project_name)?;
 
     let env_names: Vec<&str> = auto_import.iter().map(|c| c.env_name.as_str()).collect();
 
