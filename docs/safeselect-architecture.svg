@@ -1,0 +1,128 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 520" font-family="'SF Mono','Menlo','Monaco','Courier New',monospace">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#888"/>
+    </marker>
+    <marker id="arrow-bi" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#aaa"/>
+    </marker>
+    <marker id="arrow-dashed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#666"/>
+    </marker>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1a1a2e"/>
+      <stop offset="100%" stop-color="#16213e"/>
+    </linearGradient>
+    <linearGradient id="rust" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#dea584"/>
+      <stop offset="100%" stop-color="#c97a5a"/>
+    </linearGradient>
+    <linearGradient id="java" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#5382a1"/>
+      <stop offset="100%" stop-color="#326480"/>
+    </linearGradient>
+    <linearGradient id="agent" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#7b68ee"/>
+      <stop offset="100%" stop-color="#5a4bd1"/>
+    </linearGradient>
+    <linearGradient id="db" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#336791"/>
+      <stop offset="100%" stop-color="#1b4d6b"/>
+    </linearGradient>
+    <linearGradient id="security" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#e04848"/>
+      <stop offset="100%" stop-color="#b02020"/>
+    </linearGradient>
+    <filter id="shadow" x="-5%" y="-5%" width="115%" height="115%">
+      <feDropShadow dx="0" dy="2" stdDeviation="4" flood-color="#000" flood-opacity="0.4"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="900" height="520" rx="12" fill="url(#bg)"/>
+
+  <!-- Title -->
+  <text x="450" y="32" text-anchor="middle" font-size="16" font-weight="bold" fill="#e0e0e0">SafeSelect Architecture</text>
+
+  <!-- Layer 1: AI Agent -->
+  <rect x="60" y="60" width="180" height="80" rx="10" fill="url(#agent)" filter="url(#shadow)"/>
+  <text x="150" y="95" text-anchor="middle" font-size="13" font-weight="bold" fill="#fff">AI Agent</text>
+  <text x="150" y="115" text-anchor="middle" font-size="10" fill="#ddd">OpenCode / Copilot / Cursor</text>
+  <text x="150" y="130" text-anchor="middle" font-size="9" fill="#bbb">MCP Client</text>
+
+  <!-- Layer 2: Rust CLI -->
+  <rect x="340" y="50" width="240" height="250" rx="12" fill="#1e1e2f" stroke="#dea584" stroke-width="2" filter="url(#shadow)"/>
+  <rect x="340" y="50" width="240" height="32" rx="12" fill="url(#rust)"/>
+  <rect x="340" y="70" width="240" height="12" fill="url(#rust)"/>
+  <text x="460" y="70" text-anchor="middle" font-size="13" font-weight="bold" fill="#1a1a2e">safeselect (Rust)</text>
+
+  <!-- Security Engine -->
+  <rect x="360" y="95" width="200" height="36" rx="6" fill="#3d1a1a" stroke="#e04848" stroke-width="1.5"/>
+  <text x="460" y="113" text-anchor="middle" font-size="11" font-weight="bold" fill="#ff8a80">Security Engine</text>
+  <text x="460" y="125" text-anchor="middle" font-size="8" fill="#999">read-only · schema control · limits</text>
+
+  <!-- Audit Log -->
+  <rect x="360" y="140" width="200" height="36" rx="6" fill="#3d3500" stroke="#ffc107" stroke-width="1.5"/>
+  <text x="460" y="158" text-anchor="middle" font-size="11" font-weight="bold" fill="#ffd54f">Audit Log</text>
+  <text x="460" y="170" text-anchor="middle" font-size="8" fill="#999">SHA-256 hashed queries</text>
+
+  <!-- MCP Server -->
+  <rect x="360" y="185" width="200" height="36" rx="6" fill="#0d2137" stroke="#42a5f5" stroke-width="1.5"/>
+  <text x="460" y="203" text-anchor="middle" font-size="11" font-weight="bold" fill="#64b5f6">MCP Server</text>
+  <text x="460" y="215" text-anchor="middle" font-size="8" fill="#999">JSON-RPC 2.0 · stdin/stdout</text>
+
+  <!-- Config -->
+  <rect x="360" y="230" width="200" height="36" rx="6" fill="#2a1030" stroke="#ce93d8" stroke-width="1.5"/>
+  <text x="460" y="248" text-anchor="middle" font-size="11" font-weight="bold" fill="#ce93d8">Config Loader</text>
+  <text x="460" y="260" text-anchor="middle" font-size="8" fill="#999">TOML · Keychain · env vars</text>
+
+  <!-- Fail-closed -->
+  <rect x="360" y="275" width="200" height="18" rx="4" fill="#e04848"/>
+  <text x="460" y="288" text-anchor="middle" font-size="9" font-weight="bold" fill="#fff">FAIL CLOSED: std::process::exit(1)</text>
+
+  <!-- Layer 3: Java Sidecar -->
+  <rect x="340" y="340" width="240" height="80" rx="10" fill="url(#java)" filter="url(#shadow)"/>
+  <text x="460" y="372" text-anchor="middle" font-size="13" font-weight="bold" fill="#fff">Sidecar (Java)</text>
+  <text x="460" y="392" text-anchor="middle" font-size="10" fill="#cce5ff">JDBC Proxy</text>
+  <text x="460" y="408" text-anchor="middle" font-size="9" fill="#88aacc">JSON-lines stdin/stdout</text>
+
+  <!-- Layer 4: Database -->
+  <rect x="640" y="350" width="200" height="60" rx="30" fill="url(#db)" filter="url(#shadow)"/>
+  <text x="740" y="382" text-anchor="middle" font-size="13" font-weight="bold" fill="#fff">PostgreSQL</text>
+  <text x="740" y="398" text-anchor="middle" font-size="9" fill="#cce5ff">JDBC</text>
+
+  <!-- Arrows -->
+  <!-- Agent ↔ Rust (MCP) -->
+  <line x1="240" y1="100" x2="330" y2="120" stroke="#aaa" stroke-width="2" marker-end="url(#arrow-bi)"/>
+  <line x1="330" y1="105" x2="240" y2="95" stroke="#aaa" stroke-width="2" marker-end="url(#arrow-bi)"/>
+  <text x="275" y="90" text-anchor="middle" font-size="8" fill="#aaa" transform="rotate(-25, 275, 90)">JSON-RPC MCP</text>
+
+  <!-- Rust ↔ Java (stdin/stdout) -->
+  <line x1="460" y1="300" x2="460" y2="335" stroke="#888" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="445" y1="335" x2="445" y2="300" stroke="#888" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="478" y="322" font-size="8" fill="#888">stdin/stdout</text>
+  <text x="478" y="332" font-size="8" fill="#888">JSON-lines</text>
+
+  <!-- Java ↔ DB (JDBC) -->
+  <line x1="580" y1="380" x2="635" y2="380" stroke="#666" stroke-width="2" marker-end="url(#arrow-dashed)"/>
+  <text x="608" y="372" text-anchor="middle" font-size="8" fill="#666">JDBC</text>
+
+  <!-- Security note -->
+  <rect x="60" y="220" width="180" height="50" rx="8" fill="#1e1e2f" stroke="#e04848" stroke-width="1.5" stroke-dasharray="4,3"/>
+  <text x="150" y="240" text-anchor="middle" font-size="10" font-weight="bold" fill="#ff8a80">No open ports</text>
+  <text x="150" y="255" text-anchor="middle" font-size="9" fill="#999">Agent initiates connection</text>
+
+  <!-- Keychain -->
+  <rect x="60" y="290" width="180" height="36" rx="8" fill="#1e1e2f" stroke="#aaa" stroke-width="1.5" stroke-dasharray="4,3"/>
+  <text x="150" y="310" text-anchor="middle" font-size="10" font-weight="bold" fill="#e0e0e0">macOS Keychain</text>
+  <text x="150" y="322" text-anchor="middle" font-size="8" fill="#888">secrets on demand</text>
+
+  <!-- Keychain → Rust -->
+  <line x1="240" y1="308" x2="340" y2="250" stroke="#666" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrow-dashed)"/>
+
+  <!-- Legend -->
+  <text x="60" y="470" font-size="9" fill="#888">▲ bidirectional</text>
+  <text x="200" y="470" font-size="9" fill="#888">─ dashed: side channel</text>
+  <text x="60" y="485" font-size="9" fill="#888">■ Rust modules: security · audit · mcp · config</text>
+  <text x="60" y="500" font-size="9" fill="#888">Fail-closed on: security violation · limit exceeded · JDBC error</text>
+</svg>
