@@ -35,18 +35,21 @@ brew install antonillos/tap/safeselect
 # 2. Download a JDBC driver
 safeselect driver download --vendor postgresql
 
-# 3. Configure project + environment
-safeselect import dbeaver export.zip
-# Or create manually (see Configuration below)
+# 3. Import from DBeaver — creates .safeselect/ with connection configs
+#    and stores passwords in macOS Keychain automatically.
+safeselect import-dbeaver ~/Downloads/dbeaver-export.zip
 
-# 4. Store the password
-security add-generic-password -a "myapp/testing" -s "safeselect" -w "your-password"
+#    Or import from docker-compose:
+#    safeselect import-compose --path compose.yml
 
-# 5. Test it
-safeselect check --project myapp --environment testing
+#    Or configure manually (see Configuration below):
+#    security add-generic-password -a "<project>/<env>" -s "safeselect" -w "<password>"
 
-# 6. Install in OpenCode
-safeselect agent install opencode --project myapp --environment testing --name myapp-testing
+# 4. Test connectivity (auto-detects .safeselect/ from repo root)
+safeselect check --environment testing
+
+# 5. Install in OpenCode
+safeselect agent install opencode --environment testing --name myapp-testing
 ```
 
 ---
@@ -67,12 +70,14 @@ safeselect agent install opencode --project myapp --environment testing --name m
 ## CLI Reference
 
 | Command | Description |
-|---|---|
+|---|---|---|
 | `serve --project <p> --environment <e>` | Start the MCP server |
 | `query --project <p> --environment <e> --sql <q>` | Execute SQL directly |
 | `check --project <p> --environment <e>` | Test connectivity |
 | `config validate [--project <p>] [--environment <e>]` | Validate config |
 | `config show --project <p> --environment <e>` | Show resolved config |
+| `config rename-environment --old <o> --new <n>` | Rename environment |
+| `config delete-environment --name <n>` | Delete environment |
 | `driver download --vendor postgresql` | Download JDBC driver |
 | `driver add --vendor <v> --path <jar> --class <c>` | Register custom driver |
 | `driver list` | List registered drivers |
@@ -81,6 +86,9 @@ safeselect agent install opencode --project myapp --environment testing --name m
 | `agent detect` | Detect installed MCP clients |
 | `agent status` | Show installation status |
 | `import-dbeaver <path-to-zip>` | Import from DBeaver export |
+| `import-compose [--path <yml>] [--non-interactive]` | Import from docker-compose |
+| `connect --project <p> --environment <e>` | Reconnect to database |
+| `disconnect --project <p> --environment <e>` | Disconnect from database |
 | `uninstall` | Remove SafeSelect entirely |
 
 ---
@@ -88,10 +96,12 @@ safeselect agent install opencode --project myapp --environment testing --name m
 ## MCP Tools
 
 | Tool | Description | Arguments |
-|---|---|---|
+|---|---|---|---|
 | `select` | Execute a SELECT query | `sql` (required) |
 | `list_tables` | List database tables | `schema` (optional) |
 | `explain` | Show execution plan | `sql` (required, not executed) |
+| `connect` | Reconnect to the database after connection loss | _(none)_ |
+| `disconnect` | Close the database connection | _(none)_ |
 
 ---
 
