@@ -678,6 +678,7 @@ fn cmd_import_dbeaver(path: &str) -> Result<()> {
     std::fs::create_dir_all(&env_dir)?;
 
     let mut created_any = false;
+    let mut imported_envs: Vec<(String, bool)> = vec![]; // (env_name, has_secret)
 
     let project_config = config::ProjectConfig::default();
     let project_toml = toml::to_string_pretty(&project_config)
