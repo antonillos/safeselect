@@ -1467,11 +1467,59 @@ fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Result<Vec<u32>>
                 }
                 Err(_) => {
                     println!("sshpass not installed");
-                    let cmd = build_ssh_command(ssh, &cfg.database.url)
-                        .unwrap_or_else(|| "ssh command unavailable".to_string());
-                    println!("  To establish the tunnel manually:");
-                    println!("    {cmd}");
-                    continue;
+                    let install = inquire::Confirm::new("Install sshpass via Homebrew?")
+                        .with_default(true)
+                        .prompt()
+                        .unwrap_or(false);
+                    if install {
+                        print!("  Installing sshpass... ");
+                        std::io::stdout().flush().ok();
+                        match std::process::Command::new("brew")
+                            .args(["install", "hudochenkov/sshpass/sshpass"])
+                            .status()
+                        {
+                            Ok(status) if status.success() => {
+                                println!("OK");
+                                // Retry the whole env (continue to next iteration means we skip it)
+                                // Instead, re-run the sshpass command
+                                if let Ok(pw) = compose::read_password_from_keychain(&ssh_acct) {
+                                    let mut pass_args = vec!["-p".to_string(), pw];
+                                    pass_args.extend(vec![
+                                        "ssh".to_string(),
+                                        "-o".to_string(), "ConnectTimeout=5".to_string(),
+                                        "-N".to_string(), "-f".to_string(),
+                                        "-L".to_string(), format!("{}:{}:{}", local.1, fwd_host, fwd_port),
+                                        format!("{user}@{bastion}"),
+                                    ]);
+                                    if let Some(p) = ssh.port {
+                                        if p != 22 { pass_args.push("-p".into()); pass_args.push(p.to_string()); }
+                                    }
+                                    match std::process::Command::new("sshpass").args(&pass_args).output() {
+                                        Ok(out) if out.status.success() => Ok(out),
+                                        _ => {
+                                            let cmd = build_ssh_command(ssh, &cfg.database.url).unwrap_or_default();
+                                            println!("  Establish it manually:"); println!("    {cmd}");
+                                            continue;
+                                        }
+                                    }
+                                } else { continue; }
+                            }
+                            _ => {
+                                println!("FAILED");
+                                let cmd = build_ssh_command(ssh, &cfg.database.url)
+                                    .unwrap_or_else(|| "ssh command unavailable".to_string());
+                                println!("  Install manually: brew install hudochenkov/sshpass/sshpass");
+                                println!("  Then establish tunnel: {cmd}");
+                                continue;
+                            }
+                        }
+                    } else {
+                        let cmd = build_ssh_command(ssh, &cfg.database.url)
+                            .unwrap_or_else(|| "ssh command unavailable".to_string());
+                        println!("  To establish the tunnel manually:");
+                        println!("    {cmd}");
+                        continue;
+                    }
                 }
             }
         } else {
