@@ -433,6 +433,57 @@ fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
             println!("{removed}");
             Ok(())
         }
+        ConfigAction::SetPassword {
+            environment,
+            password,
+            project,
+        } => {
+            let dir = match project {
+                Some(d) => d,
+                None => {
+                    let cwd = std::env::current_dir()?;
+                    loader.find_local_project(&cwd).ok_or_else(|| {
+                        SafeselectError::LocalProjectNotFound(cwd)
+                    })?
+                }
+            };
+
+            let env_file = dir.join(".safeselect").join("environments").join(format!("{environment}.toml"));
+            if !env_file.exists() {
+                return Err(SafeselectError::EnvironmentNotFound(
+                    environment.clone(),
+                    env_file.display().to_string(),
+                ));
+            }
+
+            let project_name = project_display_name(&dir);
+            let account = format!("{project_name}/{environment}");
+
+            let pw = match password {
+                Some(p) => p,
+                None => {
+                    inquire::Password::new(&format!("Password for '{project_name}/{environment}'"))
+                        .without_confirmation()
+                        .prompt()
+                        .map_err(|e| SafeselectError::Other(format!("Failed to read password: {e}")))?
+                }
+            };
+
+            compose::store_password_in_keychain(&account, &pw)?;
+            println!("  ✓ Password stored in Keychain ({account})");
+
+            let mut content = std::fs::read_to_string(&env_file)?;
+            if content.trim().ends_with("]") {
+                content.push('\n');
+            }
+            content.push_str(&format!(
+                "\n[database.secret]\nsource = \"macos-keychain\"\nservice = \"safeselect\"\naccount = \"{account}\"\n"
+            ));
+            std::fs::write(&env_file, content)?;
+            println!("  ✓ Updated {}", env_file.display());
+            println!("\nDone. Run: safeselect check --environment {environment}");
+            Ok(())
+        }
     }
 }
 

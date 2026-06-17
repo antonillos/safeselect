@@ -214,7 +214,8 @@ impl ConfigLoader {
             };
             Err(SafeselectError::Config(format!(
                 "no secret configured in {}\n\
-                 Hint: configure a password:\n  {hint}",
+                 Hint: run:\n  safeselect config set-password --environment {env_name}\n\
+                 Or manually:\n  {hint}",
                 env_file.display()
             )))
         }

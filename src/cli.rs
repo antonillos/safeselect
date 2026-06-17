@@ -134,6 +134,17 @@ pub enum ConfigAction {
         #[arg(long)]
         project: Option<PathBuf>,
     },
+    /// Store a password in the Keychain and update the environment config
+    SetPassword {
+        #[arg(long)]
+        environment: String,
+        /// Password value (prompts securely if omitted)
+        #[arg(long)]
+        password: Option<String>,
+        /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
+        #[arg(long)]
+        project: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
