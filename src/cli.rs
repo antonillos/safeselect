@@ -45,6 +45,16 @@ pub enum Command {
         #[arg(long)]
         environment: String,
     },
+    /// Execute a SQL query and display results
+    Query {
+        #[arg(long)]
+        project: String,
+        #[arg(long)]
+        environment: String,
+        /// SQL query to execute (reads from stdin if omitted)
+        #[arg(long)]
+        sql: Option<String>,
+    },
     /// Uninstall SafeSelect (binary, config, data, audit, keychain)
     Uninstall {
         /// Skip confirmation prompt
