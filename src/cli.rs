@@ -1,8 +1,13 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
+const VERSION: &str = match option_env!("SAFESELECT_BUILD_VERSION") {
+    Some(v) => v,
+    None => env!("CARGO_PKG_VERSION"),
+};
+
 #[derive(Parser)]
-#[command(name = "safeselect", about = "MCP SQL Fail-Closed for AI Agents", version)]
+#[command(name = "safeselect", about = "MCP SQL Fail-Closed for AI Agents", version = VERSION)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
