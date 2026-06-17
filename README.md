@@ -78,6 +78,7 @@ safeselect agent install opencode --environment testing --name myapp-testing
 | `config show --project <p> --environment <e>` | Show resolved config |
 | `config rename-environment --old <o> --new <n>` | Rename environment |
 | `config delete-environment --name <n>` | Delete environment |
+| `config set-password --environment <e>` | Store password in Keychain and update config |
 | `driver download --vendor postgresql` | Download JDBC driver |
 | `driver add --vendor <v> --path <jar> --class <c>` | Register custom driver |
 | `driver list` | List registered drivers |
