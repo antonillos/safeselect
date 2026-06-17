@@ -11,9 +11,10 @@ pub use project::{AuditConfig, LimitsConfig, ProjectConfig, SecurityPolicy};
 use crate::error::{Result, SafeselectError};
 use std::path::{Path, PathBuf};
 
+/// Global config loader. Only manages drivers (shared JARs) and sidecar.
+/// Project config lives in .safeselect/ directories inside each repo.
 pub struct ConfigLoader {
     drivers_dir: PathBuf,
-    projects_dir: PathBuf,
     config_dir: PathBuf,
 }
 
@@ -22,6 +23,7 @@ pub struct ResolvedConfig {
     pub environment: EnvironmentConfig,
     pub driver: DriverConfig,
     pub password: String,
+    pub repo_root: PathBuf,
 }
 
 impl ConfigLoader {
@@ -34,7 +36,6 @@ impl ConfigLoader {
         };
         Self {
             drivers_dir: base.join("drivers"),
-            projects_dir: base.join("projects"),
             config_dir: base,
         }
     }
@@ -45,29 +46,6 @@ impl ConfigLoader {
 
     pub fn drivers_dir(&self) -> &Path {
         &self.drivers_dir
-    }
-
-    pub fn projects_dir(&self) -> &Path {
-        &self.projects_dir
-    }
-
-    pub fn list_projects(&self) -> Result<Vec<String>> {
-        let mut projects = vec![];
-        if !self.projects_dir.exists() {
-            return Ok(projects);
-        }
-        for entry in std::fs::read_dir(&self.projects_dir)? {
-            let entry = entry?;
-            if entry.path().is_dir() {
-                if let Some(name) = entry.file_name().to_str() {
-                    if !name.starts_with('.') {
-                        projects.push(name.to_string());
-                    }
-                }
-            }
-        }
-        projects.sort();
-        Ok(projects)
     }
 
     pub fn list_drivers(&self) -> Result<Vec<(String, DriverConfig)>> {
@@ -88,43 +66,6 @@ impl ConfigLoader {
         }
         drivers.sort_by(|a, b| a.0.cmp(&b.0));
         Ok(drivers)
-    }
-
-    pub fn load_project(&self, name: &str) -> Result<ProjectConfig> {
-        let project_dir = self.projects_dir.join(name);
-        if !project_dir.exists() {
-            return Err(SafeselectError::ProjectNotFound(
-                name.to_string(),
-                self.projects_dir.clone(),
-            ));
-        }
-        let project_file = project_dir.join("project.toml");
-        if !project_file.exists() {
-            return Err(SafeselectError::Config(format!(
-                "project.toml not found in {}",
-                project_dir.display()
-            )));
-        }
-        let content = std::fs::read_to_string(&project_file)?;
-        let config: ProjectConfig = toml::from_str(&content)?;
-        Ok(config)
-    }
-
-    pub fn load_environment(&self, project: &str, env: &str) -> Result<EnvironmentConfig> {
-        let env_file = self
-            .projects_dir
-            .join(project)
-            .join("environments")
-            .join(format!("{env}.toml"));
-        if !env_file.exists() {
-            return Err(SafeselectError::EnvironmentNotFound(
-                env.to_string(),
-                project.to_string(),
-            ));
-        }
-        let content = std::fs::read_to_string(&env_file)?;
-        let config: EnvironmentConfig = toml::from_str(&content)?;
-        Ok(config)
     }
 
     pub fn load_driver(&self, vendor: &str) -> Result<DriverConfig> {
@@ -190,29 +131,61 @@ impl ConfigLoader {
         Ok(())
     }
 
-    pub fn resolve(
-        &self,
-        project_name: &str,
-        env_name: &str,
-    ) -> Result<ResolvedConfig> {
-        let project = self.load_project(project_name)?;
-        let mut environment = self.load_environment(project_name, env_name)?;
+    /// Find a .safeselect/ directory by walking up from `cwd`.
+    /// Returns the repo root (parent of .safeselect/).
+    pub fn find_local_project(&self, cwd: &Path) -> Option<PathBuf> {
+        let mut current = Some(cwd);
+        while let Some(dir) = current {
+            if dir.join(".safeselect").is_dir() {
+                return Some(dir.to_path_buf());
+            }
+            current = dir.parent();
+        }
+        None
+    }
+
+    /// Resolve config for a local .safeselect/ project.
+    pub fn resolve_local(&self, repo_root: &Path, env_name: &str) -> Result<ResolvedConfig> {
+        let safeselect_dir = repo_root.join(".safeselect");
+        if !safeselect_dir.is_dir() {
+            return Err(SafeselectError::LocalProjectNotFound(repo_root.to_path_buf()));
+        }
+
+        let project_file = safeselect_dir.join("project.toml");
+        let project = if project_file.exists() {
+            let content = std::fs::read_to_string(&project_file)?;
+            toml::from_str(&content)?
+        } else {
+            ProjectConfig::default()
+        };
+
+        let env_file = safeselect_dir.join("environments").join(format!("{env_name}.toml"));
+        if !env_file.exists() {
+            return Err(SafeselectError::EnvironmentNotFound(
+                env_name.to_string(),
+                safeselect_dir.join("environments").display().to_string(),
+            ));
+        }
+        let content = std::fs::read_to_string(&env_file)?;
+        let mut environment: EnvironmentConfig = toml::from_str(&content)?;
 
         let driver = self.load_driver(&environment.database.driver)?;
         self.validate_driver_file(&driver)?;
 
         if let Some(ref secret) = environment.database.secret {
             let password = self.resolve_secret(secret)?;
-        self.apply_limits(&project, &mut environment);
-        Ok(ResolvedConfig {
+            self.apply_limits(&project, &mut environment);
+            Ok(ResolvedConfig {
                 project,
                 environment,
                 driver,
                 password,
+                repo_root: repo_root.to_path_buf(),
             })
         } else {
             Err(SafeselectError::Config(format!(
-                "no secret configured for {project_name}/{env_name}"
+                "no secret configured in {}",
+                env_file.display()
             )))
         }
     }

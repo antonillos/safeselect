@@ -15,6 +15,7 @@ use cli::{Cli, Command, ConfigAction, DriverAction, AgentAction};
 use config::ConfigLoader;
 use error::{Result, SafeselectError};
 use sidecar::SidecarProcess;
+use std::path::PathBuf;
 
 fn main() {
     tracing_subscriber::fmt()
@@ -41,7 +42,10 @@ fn run(cli: Cli) -> Result<()> {
         Command::Serve {
             project,
             environment,
-        } => cmd_serve(&loader, &project, &environment),
+        } => {
+            let dir = resolve_project_dir(&loader, project)?;
+            cmd_serve(&loader, &dir, &environment)
+        }
         Command::Config { action } => cmd_config(&loader, action),
         Command::Driver { action } => cmd_driver(&loader, action),
         Command::Agent { action } => cmd_agent(action),
@@ -49,20 +53,52 @@ fn run(cli: Cli) -> Result<()> {
         Command::Check {
             project,
             environment,
-        } => cmd_check(&loader, &project, &environment),
+        } => {
+            let dir = resolve_project_dir(&loader, project)?;
+            cmd_check(&loader, &dir, &environment)
+        }
         Command::Query {
             project,
             environment,
             sql,
-        } => cmd_query(&loader, &project, &environment, sql.as_deref()),
+        } => {
+            let dir = resolve_project_dir(&loader, project)?;
+            cmd_query(&loader, &dir, &environment, sql.as_deref())
+        }
         Command::Uninstall { force } => cmd_uninstall(force),
     }
 }
 
-fn cmd_serve(loader: &ConfigLoader, project: &str, environment: &str) -> Result<()> {
-    tracing::info!("Loading config for {project}/{environment}");
+fn resolve_project_dir(loader: &ConfigLoader, cli_project: Option<PathBuf>) -> Result<PathBuf> {
+    match cli_project {
+        Some(dir) => {
+            if dir.join(".safeselect").is_dir() {
+                Ok(dir)
+            } else {
+                Err(SafeselectError::LocalProjectNotFound(dir))
+            }
+        }
+        None => {
+            let cwd = std::env::current_dir()?;
+            loader
+                .find_local_project(&cwd)
+                .ok_or_else(|| SafeselectError::LocalProjectNotFound(cwd))
+        }
+    }
+}
 
-    let resolved = loader.resolve(project, environment)?;
+fn project_display_name(dir: &std::path::Path) -> String {
+    dir.file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+fn cmd_serve(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &str) -> Result<()> {
+    let name = project_display_name(repo_root);
+    tracing::info!("Loading config for {name}/{environment}");
+
+    let resolved = loader.resolve_local(repo_root, environment)?;
 
     if let Some(ref ssh) = resolved.environment.ssh {
         if ssh.enabled {
@@ -90,7 +126,7 @@ fn cmd_serve(loader: &ConfigLoader, project: &str, environment: &str) -> Result<
         sidecar,
         resolved.project,
         resolved.environment,
-        project,
+        &name,
         environment,
     )?;
 
@@ -105,34 +141,64 @@ fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
             project,
             environment,
         } => {
-            if let Some(ref proj) = project {
-                let projects = loader.list_projects()?;
-                if !projects.contains(proj) {
-                    return Err(SafeselectError::Config(format!(
-                        "Project '{proj}' not found. Available: {}",
-                        projects.join(", ")
-                    )));
-                }
-                let _ = loader.load_project(proj)?;
-                if let Some(ref env) = environment {
-                    let _ = loader.load_environment(proj, env)?;
-                    println!("Config valid: {proj}/{env}");
-                } else {
-                    println!("Config valid: {proj}");
-                }
-            } else {
-                let projects = loader.list_projects()?;
-                if projects.is_empty() {
-                    println!("No projects found in {}", loader.projects_dir().display());
-                    println!(
-                        "Create a project: {}<name>/project.toml",
-                        loader.projects_dir().display()
-                    );
-                } else {
-                    for p in &projects {
-                        println!("  {p}");
+            match project {
+                Some(dir) => {
+                    if !dir.join(".safeselect").is_dir() {
+                        return Err(SafeselectError::LocalProjectNotFound(dir));
                     }
-                    println!("\nUse --project <name> [--environment <env>] to validate");
+                    if let Some(ref env) = environment {
+                        let _ = loader.resolve_local(&dir, env)?;
+                        println!(
+                            "Config valid: {}/{}",
+                            project_display_name(&dir),
+                            env
+                        );
+                    } else {
+                        let safeselect_dir = dir.join(".safeselect");
+                        if safeselect_dir.join("project.toml").exists() || safeselect_dir.join("environments").is_dir() {
+                            println!(
+                                "Config valid: {}",
+                                project_display_name(&dir)
+                            );
+                        } else {
+                            return Err(SafeselectError::Config(format!(
+                                "incomplete .safeselect/ in {}",
+                                dir.display()
+                            )));
+                        }
+                    }
+                }
+                None => {
+                    let cwd = std::env::current_dir()?;
+                    match loader.find_local_project(&cwd) {
+                        Some(dir) => {
+                            println!(
+                                ".safeselect/ found at {} ({})",
+                                dir.display(),
+                                project_display_name(&dir)
+                            );
+                            println!("Use --environment <name> to validate a specific environment.");
+                            let envs_dir = dir.join(".safeselect").join("environments");
+                            if envs_dir.is_dir() {
+                                let mut entries: Vec<_> = std::fs::read_dir(&envs_dir)
+                                    .into_iter()
+                                    .flatten()
+                                    .flatten()
+                                    .filter(|e| e.path().extension().map_or(false, |ext| ext == "toml"))
+                                    .filter_map(|e| e.path().file_stem().and_then(|s| s.to_str().map(String::from)))
+                                    .collect();
+                                entries.sort();
+                                if !entries.is_empty() {
+                                    println!("  Environments: {}", entries.join(", "));
+                                }
+                            }
+                        }
+                        None => {
+                            println!("No .safeselect/ directory found. Create one with:");
+                            println!("  safeselect import-dbeaver <export.zip>");
+                            println!("  mkdir -p .safeselect/environments && touch .safeselect/project.toml");
+                        }
+                    }
                 }
             }
             Ok(())
@@ -141,8 +207,18 @@ fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
             project,
             environment,
         } => {
-            let resolved = loader.resolve(&project, &environment)?;
-            println!("Project: {project}");
+            let dir = match project {
+                Some(d) => d,
+                None => {
+                    let cwd = std::env::current_dir()?;
+                    loader.find_local_project(&cwd).ok_or_else(|| {
+                        SafeselectError::LocalProjectNotFound(cwd)
+                    })?
+                }
+            };
+            let resolved = loader.resolve_local(&dir, &environment)?;
+            let name = project_display_name(&dir);
+            println!("Project: {name}");
             println!("Environment: {environment}");
             println!("Driver: {} ({})", resolved.driver.vendor, resolved.driver.class);
             println!("JDBC URL: {}", resolved.environment.database.url);
@@ -322,7 +398,19 @@ fn cmd_agent(action: AgentAction) -> Result<()> {
             name,
         } => {
             let loader = ConfigLoader::new();
-            agents::install_entry(&client, &project, &environment, &name, Some(loader.config_dir()))
+            let repo_root = match project {
+                Some(dir) => {
+                    if !dir.join(".safeselect").is_dir() {
+                        return Err(SafeselectError::LocalProjectNotFound(dir));
+                    }
+                    Some(dir)
+                }
+                None => {
+                    let cwd = std::env::current_dir()?;
+                    loader.find_local_project(&cwd)
+                }
+            };
+            agents::install_entry(&client, &environment, &name, repo_root.as_deref(), Some(loader.config_dir()))
         }
         AgentAction::Uninstall { client, name } => {
             agents::uninstall_entry(&client, &name)
@@ -350,6 +438,19 @@ fn cmd_agent(action: AgentAction) -> Result<()> {
     }
 }
 
+fn check_gitignore(repo_root: &std::path::Path) {
+    let gitignore = repo_root.join(".gitignore");
+    if gitignore.exists() {
+        if let Ok(content) = std::fs::read_to_string(&gitignore) {
+            if !content.lines().any(|l| l.trim() == ".safeselect/" || l.trim() == ".safeselect") {
+                println!("  ⚠  .safeselect/ not found in .gitignore — consider adding it");
+            }
+        }
+    } else {
+        println!("  ⚠  No .gitignore found at {} — consider adding .safeselect/ to it", gitignore.display());
+    }
+}
+
 fn cmd_import_dbeaver(path: &str) -> Result<()> {
     let zip_path = std::path::Path::new(path);
     if !zip_path.exists() {
@@ -372,19 +473,14 @@ fn cmd_import_dbeaver(path: &str) -> Result<()> {
     }
 
     println!();
-    let loader = ConfigLoader::new();
-    let projects_dir = loader.projects_dir();
+    let cwd = std::env::current_dir()?;
+    let safeselect_dir = cwd.join(".safeselect");
+    let env_dir = safeselect_dir.join("environments");
+    std::fs::create_dir_all(&env_dir)?;
+
     let mut created_any = false;
 
     for conn in &connections {
-        // Derive project name: base name before " (" if present, else lowercased database name
-        let project = conn
-            .name
-            .split_once(" (")
-            .map(|(base, _)| base.trim().to_lowercase())
-            .unwrap_or_else(|| conn.database.to_lowercase());
-
-        // Derive environment name: parenthetical part, or "default"
         let env = conn
             .name
             .split_once(" (")
@@ -394,14 +490,11 @@ fn cmd_import_dbeaver(path: &str) -> Result<()> {
             .replace(' ', "-")
             .replace("--", "-");
 
-        let project_dir = projects_dir.join(&project);
-        let env_dir = project_dir.join("environments");
-        std::fs::create_dir_all(&env_dir)?;
-
+        // Write project.toml once
         let project_config = config::ProjectConfig::default();
         let project_toml = toml::to_string_pretty(&project_config)
             .map_err(|e| SafeselectError::TomlSer(e.to_string()))?;
-        let project_file = project_dir.join("project.toml");
+        let project_file = safeselect_dir.join("project.toml");
         if !project_file.exists() {
             std::fs::write(&project_file, project_toml)?;
             println!("  ✔ Created {}", project_file.display());
@@ -442,27 +535,29 @@ fn cmd_import_dbeaver(path: &str) -> Result<()> {
     if created_any {
         println!("\nImport complete. Edit the new files and add secrets.");
         println!("  Example: security add-generic-password -a \"<project>/<env>\" -s \"safeselect\" -w \"<password>\"");
+        check_gitignore(&cwd);
     } else {
-        println!("All projects/environments already exist. Nothing to import.");
+        println!("All environments already exist. Nothing to import.");
     }
     Ok(())
 }
 
-fn cmd_check(loader: &ConfigLoader, project: &str, environment: &str) -> Result<()> {
-    println!("Checking configuration for {project}/{environment}...");
+fn cmd_check(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &str) -> Result<()> {
+    let name = project_display_name(repo_root);
+    println!("Checking configuration for {name}/{environment}...");
 
-    let resolved = loader.resolve(project, environment)?;
+    let resolved = loader.resolve_local(repo_root, environment)?;
 
     println!("  ✓ Config valid");
     println!("  ✓ Driver '{}' found and checksum OK", resolved.driver.vendor);
     println!("  ✓ Secret resolved");
 
-        if let Some(ref ssh) = resolved.environment.ssh {
-            if ssh.enabled {
-                println!("  SSH bastion: {}:{}", ssh.host.as_deref().unwrap_or("unknown"), ssh.port.unwrap_or(22));
-                println!("  Ensure tunnel is active before connecting");
-            }
+    if let Some(ref ssh) = resolved.environment.ssh {
+        if ssh.enabled {
+            println!("  SSH bastion: {}:{}", ssh.host.as_deref().unwrap_or("unknown"), ssh.port.unwrap_or(22));
+            println!("  Ensure tunnel is active before connecting");
         }
+    }
 
     println!("  Attempting sidecar connection...");
 
@@ -476,15 +571,16 @@ fn cmd_check(loader: &ConfigLoader, project: &str, environment: &str) -> Result<
 
     sidecar.ping()?;
     println!("  ✓ Sidecar JDBC connection OK");
-    println!("  ✓ All checks passed for {project}/{environment}");
+    println!("  ✓ All checks passed for {name}/{environment}");
 
     sidecar.shutdown()?;
 
     Ok(())
 }
 
-fn cmd_query(loader: &ConfigLoader, project: &str, environment: &str, sql: Option<&str>) -> Result<()> {
-    let resolved = loader.resolve(project, environment)?;
+fn cmd_query(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &str, sql: Option<&str>) -> Result<()> {
+    let resolved = loader.resolve_local(repo_root, environment)?;
+
     let sql = match sql {
         Some(s) => s.to_string(),
         None => {
@@ -580,7 +676,8 @@ fn cmd_query(loader: &ConfigLoader, project: &str, environment: &str, sql: Optio
 
 fn cmd_uninstall(force: bool) -> Result<()> {
     if !force {
-        println!("This will remove: safeselect binary, config, data, audit logs, and keychain entries.");
+        println!("This will remove: safeselect binary, global config, data, audit logs, and keychain entries.");
+        println!("Local .safeselect/ directories in repos will NOT be removed.");
         print!("Continue? [y/N] ");
         use std::io::Write;
         std::io::stdout().flush()?;
@@ -607,18 +704,14 @@ fn cmd_uninstall(force: bool) -> Result<()> {
         }
     }
 
-    for config_dir in [
-        dirs::config_dir().map(|d| d.join("safeselect")),
-        Some(std::path::PathBuf::from("~/.config/safeselect")),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        if config_dir.exists() {
-            std::fs::remove_dir_all(&config_dir)?;
-            println!("  ✓ Removed {}", config_dir.display());
-            removed_anything = true;
-        }
+    let config_dir = {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+        std::path::PathBuf::from(home).join(".config/safeselect")
+    };
+    if config_dir.exists() {
+        std::fs::remove_dir_all(&config_dir)?;
+        println!("  ✓ Removed {}", config_dir.display());
+        removed_anything = true;
     }
 
     if let Some(data_dir) = dirs::data_dir().map(|d| d.join("safeselect")) {
@@ -639,20 +732,14 @@ fn cmd_uninstall(force: bool) -> Result<()> {
         }
     }
 
-    let backup_patterns = [
-        format!(
-            "{}/Library/Application Support/opencode/opencode.json.safeselect.bak",
-            dirs::home_dir().unwrap().display()
-        ),
-        format!(
-            "{}/.config/opencode/opencode.json.safeselect.bak",
-            dirs::home_dir().unwrap().display()
-        ),
+    let backup_paths = [
+        dirs::home_dir().map(|h| h.join("Library/Application Support/opencode/opencode.json.safeselect.bak")),
+        dirs::config_dir().map(|d| d.join("opencode/opencode.json.safeselect.bak")),
+        Some(std::path::PathBuf::from("~/.config/opencode/opencode.json.safeselect.bak")),
     ];
-    for pattern in &backup_patterns {
-        let path = std::path::Path::new(pattern);
+    for path in backup_paths.into_iter().flatten() {
         if path.exists() {
-            std::fs::remove_file(path)?;
+            std::fs::remove_file(&path)?;
             println!("  ✓ Removed backup {}", path.display());
         }
     }

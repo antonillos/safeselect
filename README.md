@@ -97,18 +97,29 @@ safeselect agent install opencode --project myapp --environment testing --name m
 
 ## Configuration
 
-Config is loaded from `$SAFESELECT_CONFIG_DIR` (default: `~/.config/safeselect/`).
+Global config lives in `$SAFESELECT_CONFIG_DIR` (default: `~/.config/safeselect/`),
+shared across all projects (drivers, sidecar).
 
 ```
-config/
+~/.config/safeselect/
 ├── drivers/
-│   └── postgresql.toml
-└── projects/
-    └── <name>/
-        ├── project.toml          # security policy + limits
-        └── environments/
-            └── testing.toml      # connection + secrets
+│   └── postgresql.toml           # registered JDBC drivers
+└── sidecar/
+    └── safeselect-sidecar.jar    # embedded Java sidecar
 ```
+
+Each project (git repo) carries its own `.safeselect/` directory:
+
+```
+<repo-root>/
+└── .safeselect/
+    ├── project.toml              # security policy + limits
+    └── environments/
+        └── <env>.toml            # connection + secrets
+```
+
+Commands auto-detect `.safeselect/` by walking up from the current directory.
+Use `--project <path>` to point to a specific repo root.
 
 **project.toml** sets the maximum policy that no environment can relax:
 

@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "safeselect", about = "MCP SQL Fail-Closed for AI Agents", version)]
@@ -11,10 +12,9 @@ pub struct Cli {
 pub enum Command {
     /// Start the MCP server for a project/environment
     Serve {
-        /// Project name (directory under ~/.config/safeselect/projects/)
+        /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
         #[arg(long)]
-        project: String,
-        /// Environment name (file under projects/<name>/environments/)
+        project: Option<PathBuf>,
         #[arg(long)]
         environment: String,
     },
@@ -33,29 +33,31 @@ pub enum Command {
         #[command(subcommand)]
         action: AgentAction,
     },
-    /// Import configuration from DBeaver export ZIP
+    /// Import configuration from DBeaver export ZIP into .safeselect/
     ImportDbeaver {
         /// Path to DBeaver .zip export
         path: String,
     },
     /// Test connectivity
     Check {
+        /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
         #[arg(long)]
-        project: String,
+        project: Option<PathBuf>,
         #[arg(long)]
         environment: String,
     },
     /// Execute a SQL query and display results
     Query {
+        /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
         #[arg(long)]
-        project: String,
+        project: Option<PathBuf>,
         #[arg(long)]
         environment: String,
         /// SQL query to execute (reads from stdin if omitted)
         #[arg(long)]
         sql: Option<String>,
     },
-    /// Uninstall SafeSelect (binary, config, data, audit, keychain)
+    /// Uninstall SafeSelect (binary, global config, data, audit, keychain)
     Uninstall {
         /// Skip confirmation prompt
         #[arg(long, default_value_t = false)]
@@ -65,17 +67,19 @@ pub enum Command {
 
 #[derive(Subcommand)]
 pub enum ConfigAction {
-    /// Validate all configuration files
+    /// Validate .safeselect/ configuration
     Validate {
+        /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
         #[arg(long)]
-        project: Option<String>,
+        project: Option<PathBuf>,
         #[arg(long)]
         environment: Option<String>,
     },
     /// Show resolved configuration (secrets redacted)
     Show {
+        /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
         #[arg(long)]
-        project: String,
+        project: Option<PathBuf>,
         #[arg(long)]
         environment: String,
     },
@@ -111,8 +115,9 @@ pub enum AgentAction {
     Install {
         /// Client name (opencode, copilot, cursor, etc.)
         client: String,
+        /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
         #[arg(long)]
-        project: String,
+        project: Option<PathBuf>,
         #[arg(long)]
         environment: String,
         #[arg(long)]

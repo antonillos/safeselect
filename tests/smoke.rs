@@ -60,7 +60,7 @@ fn test_version() {
 fn test_config_validate_no_project() {
     let (stdout, _stderr, success) = &run(&["config", "validate"]);
     assert!(success);
-    assert!(stdout.contains("e2e") || stdout.contains("projects"));
+    assert!(stdout.contains("No .safeselect/"));
 }
 
 #[test]
@@ -69,7 +69,7 @@ fn test_config_validate_missing_project() {
         "config",
         "validate",
         "--project",
-        "nonexistent-project",
+        "/nonexistent/safeselect/repo",
     ]);
     assert!(!success);
     assert!(stderr.contains("not found"));
@@ -102,7 +102,7 @@ fn test_serve_missing_project() {
     let (_stdout, stderr, success) = &run(&[
         "serve",
         "--project",
-        "nonexistent",
+        "/nonexistent/safeselect/repo",
         "--environment",
         "testing",
     ]);
@@ -115,7 +115,7 @@ fn test_check_missing_project() {
     let (_stdout, stderr, success) = &run(&[
         "check",
         "--project",
-        "nonexistent",
+        "/nonexistent/safeselect/repo",
         "--environment",
         "testing",
     ]);
