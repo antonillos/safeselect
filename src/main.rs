@@ -816,6 +816,108 @@ fn check_version_and_maybe_reset(repo_root: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Prompt user to verify/complete SSH configuration from a DBeaver connection.
+fn prompt_ssh_config(
+    conn: &dbeaver::DBeaverConnection,
+    project_name: &str,
+    env_name: &str,
+) -> Result<config::SshConfig> {
+    let default_host = conn.ssh_host.as_deref().unwrap_or("");
+    let default_user = conn.ssh_user.as_deref().unwrap_or("");
+    let default_key = conn.ssh_key_file.as_deref().unwrap_or("");
+    let default_auth = conn.ssh_auth_type.as_deref().unwrap_or("KEY");
+
+    println!();
+    println!("── SSH Configuration ({env_name}) ───────────────────");
+    println!();
+
+    let ans = inquire::Confirm::new("Configure SSH tunnel now?")
+        .with_default(true)
+        .prompt()
+        .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?;
+
+    if !ans {
+        // Store minimal SSH config with whatever DBeaver extracted
+        return Ok(config::SshConfig {
+            enabled: true,
+            host: conn.ssh_host.clone(),
+            port: conn.ssh_port,
+            username: conn.ssh_user.clone(),
+            identity_file: conn.ssh_key_file.clone(),
+            known_hosts: None,
+            forward_host: Some(conn.host.clone()),
+            forward_port: Some(conn.port),
+            auth_type: conn.ssh_auth_type.clone(),
+        });
+    }
+
+    let host = inquire::Text::new("  SSH bastion host:")
+        .with_default(default_host)
+        .prompt()
+        .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?
+        .trim()
+        .to_string();
+
+    let port = inquire::Text::new("  SSH port:")
+        .with_default(&conn.ssh_port.map_or("22".into(), |p| p.to_string()))
+        .prompt()
+        .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?
+        .trim()
+        .parse::<u16>()
+        .unwrap_or(22);
+
+    let user = inquire::Text::new("  SSH user:")
+        .with_default(default_user)
+        .prompt()
+        .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?
+        .trim()
+        .to_string();
+
+    let auth_method = inquire::Select::new(
+        "  Authentication method:",
+        vec!["Key file", "Password"],
+    )
+    .with_starting_cursor(if default_auth == "PASSWORD" { 1 } else { 0 })
+    .prompt()
+    .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?;
+
+    let (key_file, auth_type) = match auth_method {
+        "Key file" => {
+            let kf = inquire::Text::new("  SSH key file path:")
+                .with_default(default_key)
+                .prompt()
+                .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?
+                .trim()
+                .to_string();
+            (if kf.is_empty() { None } else { Some(kf) }, Some("KEY".into()))
+        }
+        _ => {
+            let ssh_acct = format!("{project_name}/{env_name}/ssh");
+            let pw = inquire::Password::new("  SSH password:")
+                .without_confirmation()
+                .prompt()
+                .map_err(|e| SafeselectError::Other(format!("Failed to read SSH password: {e}")))?;
+            if !pw.is_empty() {
+                compose::store_password_in_keychain(&ssh_acct, &pw)?;
+                println!("  ✓ SSH password stored in Keychain");
+            }
+            (None, Some("PASSWORD".into()))
+        }
+    };
+
+    Ok(config::SshConfig {
+        enabled: true,
+        host: Some(host),
+        port: Some(port),
+        username: Some(user),
+        identity_file: key_file,
+        known_hosts: None,
+        forward_host: Some(conn.host.clone()),
+        forward_port: Some(conn.port),
+        auth_type,
+    })
+}
+
 fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
     let cwd = std::env::current_dir()?;
     check_version_and_maybe_reset(&cwd)?;
@@ -918,17 +1020,11 @@ fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
 
         let has_ssh = conn.ssh_host.is_some();
 
-        let ssh = conn.ssh_host.as_ref().map(|h| config::SshConfig {
-            enabled: true,
-            host: Some(h.clone()),
-            port: conn.ssh_port,
-            username: conn.ssh_user.clone(),
-            identity_file: conn.ssh_key_file.clone(),
-            known_hosts: None,
-            forward_host: Some(conn.host.clone()),
-            forward_port: Some(conn.port),
-            auth_type: conn.ssh_auth_type.clone(),
-        });
+        let ssh = if has_ssh {
+            Some(prompt_ssh_config(conn, &project_name, env_name)?)
+        } else {
+            None
+        };
 
         let url = if has_ssh {
             if let Some(lp) = conn.ssh_local_port {
@@ -1330,16 +1426,44 @@ fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Result<Vec<u32>>
                 ssh_args.push(p.to_string());
             }
         }
-        if let Some(ref k) = ssh.identity_file {
-            if Path::new(k).exists() {
-                ssh_args.push("-i".into());
-                ssh_args.push(k.clone());
-            }
-        }
+        let use_sshpass = match &ssh.auth_type {
+            Some(at) if at == "PASSWORD" => true,
+            _ => false,
+        };
 
-        let result = std::process::Command::new("ssh")
-            .args(&ssh_args)
-            .output();
+        let result = if use_sshpass {
+            // Password auth: try sshpass, fall back to ssh
+            let ssh_acct = format!("{}/{env_name}/ssh", project_display_name(repo_root));
+            if let Ok(pw) = compose::read_password_from_keychain(&ssh_acct) {
+                let mut pass_args = vec!["-p".to_string(), pw];
+                pass_args.extend(ssh_args.iter().cloned());
+                let check = std::process::Command::new("sshpass")
+                    .args(&pass_args)
+                    .output();
+                match check {
+                    Ok(out) if out.status.success() => Ok(out),
+                    Ok(_) => {
+                        // sshpass failed — fall back to plain ssh
+                        std::process::Command::new("ssh").args(&ssh_args).output()
+                    }
+                    Err(_) => {
+                        // sshpass not installed — fall back to plain ssh
+                        std::process::Command::new("ssh").args(&ssh_args).output()
+                    }
+                }
+            } else {
+                std::process::Command::new("ssh").args(&ssh_args).output()
+            }
+        } else {
+            // Key file auth
+            if let Some(ref k) = ssh.identity_file {
+                if Path::new(k).exists() {
+                    ssh_args.push("-i".into());
+                    ssh_args.push(k.clone());
+                }
+            }
+            std::process::Command::new("ssh").args(&ssh_args).output()
+        };
 
         match result {
             Ok(out) if out.status.success() => {
