@@ -1391,18 +1391,16 @@ fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Result<()> {
             None => continue,
         };
 
-        // Check if already active (user-established tunnel or DBeaver JSch)
+        // Check if already active AND responds like PostgreSQL
         let addr = format!("{}:{}", local.0, local.1)
             .to_socket_addrs()
             .ok()
             .and_then(|mut a| a.next());
 
-        let active = addr.as_ref().is_some_and(|a| {
-            std::net::TcpStream::connect_timeout(a, Duration::from_secs(1)).is_ok()
-        });
+        let is_pg = addr.as_ref().is_some_and(check_postgres);
 
-        if active {
-            print!("  ◉ SSH tunnel active ({env_name})");
+        if is_pg {
+            print!("  ◉ PostgreSQL tunnel active ({env_name})");
             std::io::stdout().flush()?;
             continue;
         }
@@ -1560,7 +1558,7 @@ fn run_checks(repo_root: &std::path::Path, env_names: &[String]) -> Result<()> {
             }).map(|(h, p)| {
                 format!("{h}:{p}").to_socket_addrs().ok()
                     .and_then(|mut a| a.next())
-                    .map(|a| std::net::TcpStream::connect_timeout(&a, std::time::Duration::from_secs(2)).is_ok())
+                    .map(|a| check_postgres(&a))
                     .unwrap_or(false)
             }).unwrap_or(false);
             if !active {
@@ -1676,6 +1674,27 @@ fn extract_host_port(url: &str) -> Option<(String, u16)> {
     Some((host.to_string(), port))
 }
 
+/// Quick check if a TCP endpoint responds like a PostgreSQL server.
+fn check_postgres(addr: &std::net::SocketAddr) -> bool {
+    use std::io::{Read, Write};
+    use std::time::Duration;
+    let mut stream = match std::net::TcpStream::connect_timeout(addr, Duration::from_secs(3)) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
+    // PostgreSQL SSLRequest: int32(8) + int32(80877103)
+    let ssl_request: [u8; 8] = [0, 0, 0, 8, 4, 210, 22, 47];
+    if stream.write_all(&ssl_request).is_err() {
+        return false;
+    }
+    let mut resp = [0u8; 1];
+    match stream.read_exact(&mut resp) {
+        Ok(_) => resp[0] == b'S' || resp[0] == b'N',
+        Err(_) => false,
+    }
+}
+
 /// Kill any process listening on the given local port (macOS via lsof).
 /// Returns true if a process was killed.
 fn kill_process_on_port(port: u16) -> bool {
@@ -1756,22 +1775,26 @@ fn cmd_check(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
                     .ok_or_else(|| SafeselectError::Other(format!(
                         "Cannot resolve {host}:{port}"
                     )))?;
-                match std::net::TcpStream::connect_timeout(
-                    &addr,
-                    std::time::Duration::from_secs(5),
-                ) {
-                    Ok(_) => println!("  ✓ Tunnel reachable at {host}:{port}"),
-                    Err(_) => {
-                        println!("  ✗ Cannot reach {host}:{port}");
-                        let ssh_cmd = build_ssh_command(ssh, &resolved.environment.database.url);
-                        if let Some(cmd) = ssh_cmd {
-                            println!("  To establish the tunnel:");
-                            println!("    {cmd}");
-                        }
-                        return Err(SafeselectError::Other(format!(
-                            "SSH tunnel not detected at {host}:{port}. Establish it with the command above."
-                        )));
+                if check_postgres(&addr) {
+                    println!("  ✓ PostgreSQL reachable at {host}:{port}");
+                } else if std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(3)).is_ok() {
+                    println!("  ✗ Port {host}:{port} is open but not PostgreSQL");
+                    let ssh_cmd = build_ssh_command(ssh, &resolved.environment.database.url);
+                    if let Some(cmd) = ssh_cmd {
+                        println!("  To establish the tunnel: {cmd}");
                     }
+                    return Err(SafeselectError::Other(format!(
+                        "Port {host}:{port} is open but does not respond as PostgreSQL."
+                    )));
+                } else {
+                    println!("  ✗ Cannot reach {host}:{port}");
+                    let ssh_cmd = build_ssh_command(ssh, &resolved.environment.database.url);
+                    if let Some(cmd) = ssh_cmd {
+                        println!("  To establish the tunnel: {cmd}");
+                    }
+                    return Err(SafeselectError::Other(format!(
+                        "SSH tunnel not detected at {host}:{port}."
+                    )));
                 }
             }
         }
