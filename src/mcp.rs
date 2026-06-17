@@ -51,19 +51,20 @@ pub struct McpServer {
     project_name: String,
     env_name: String,
     client_name: String,
+    idle_timeout_seconds: u64,
 }
 
 impl McpServer {
     pub fn new(
         sidecar: SidecarProcess,
         project_config: ProjectConfig,
-        _env_config: EnvironmentConfig,
+        env_config: EnvironmentConfig,
         project_name: &str,
         env_name: &str,
     ) -> Result<Self> {
         let security = SecurityEngine::new(project_config.security.clone(), project_config.limits.clone());
 
-        let _limits = project_config.limits.clone();
+        let idle_timeout_seconds = env_config.limits.idle_timeout_seconds.unwrap_or(0);
 
         let audit = AuditLog::open(
             &project_config.audit,
@@ -79,6 +80,7 @@ impl McpServer {
             project_name: project_name.to_string(),
             env_name: env_name.to_string(),
             client_name: "unknown".to_string(),
+            idle_timeout_seconds,
         })
     }
 
@@ -227,6 +229,22 @@ impl McpServer {
                     "required": ["sql"]
                 }),
             },
+            ToolDefinition {
+                name: "disconnect".into(),
+                description: "Disconnect from the database (closes the JDBC connection)".into(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }),
+            },
+            ToolDefinition {
+                name: "connect".into(),
+                description: "Reconnect to the database (re-establishes the JDBC connection)".into(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }),
+            },
         ];
 
         let resp = JsonRpcResponse {
@@ -257,6 +275,8 @@ impl McpServer {
             "select" => self.handle_select(msg.id.clone(), &args),
             "list_tables" => self.handle_list_tables(msg.id.clone(), &args),
             "explain" => self.handle_explain(msg.id.clone(), &args),
+            "disconnect" => self.handle_disconnect(msg.id.clone()),
+            "connect" => self.handle_connect(msg.id.clone()),
             _ => self.send_error(msg.id.clone(), -32602, format!("Unknown tool: {tool_name}")),
         }
     }
@@ -395,6 +415,48 @@ impl McpServer {
                 self.audit.record("JDBC_ERROR", "error", sql)?;
                 self.send_error(id, -32000, format!("Explain failed: {e}"))
             }
+        }
+    }
+
+    fn handle_disconnect(&mut self, id: Option<serde_json::Value>) -> Result<()> {
+        match self.sidecar.disconnect() {
+            Ok(()) => {
+                self.audit.record("DISCONNECT", "allow", "manual disconnect")?;
+                let resp = JsonRpcResponse {
+                    jsonrpc: "2.0",
+                    id,
+                    result: Some(serde_json::json!({
+                        "content": [{
+                            "type": "text",
+                            "text": "Disconnected from database."
+                        }]
+                    })),
+                    error: None,
+                };
+                self.write_response(&resp)
+            }
+            Err(e) => self.send_error(id, -32000, format!("Disconnect failed: {e}")),
+        }
+    }
+
+    fn handle_connect(&mut self, id: Option<serde_json::Value>) -> Result<()> {
+        match self.sidecar.connect() {
+            Ok(()) => {
+                self.audit.record("CONNECT", "allow", "manual reconnect")?;
+                let resp = JsonRpcResponse {
+                    jsonrpc: "2.0",
+                    id,
+                    result: Some(serde_json::json!({
+                        "content": [{
+                            "type": "text",
+                            "text": "Reconnected to database."
+                        }]
+                    })),
+                    error: None,
+                };
+                self.write_response(&resp)
+            }
+            Err(e) => self.send_error(id, -32000, format!("Reconnect failed: {e}")),
         }
     }
 

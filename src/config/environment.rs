@@ -50,6 +50,7 @@ pub struct LimitsOverride {
     pub statement_timeout_ms: Option<u64>,
     pub max_rows: Option<u64>,
     pub max_result_bytes: Option<u64>,
+    pub idle_timeout_seconds: Option<u64>,
 }
 
 impl Default for LimitsOverride {
@@ -58,6 +59,7 @@ impl Default for LimitsOverride {
             statement_timeout_ms: None,
             max_rows: None,
             max_result_bytes: None,
+            idle_timeout_seconds: None,
         }
     }
 }

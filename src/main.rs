@@ -112,12 +112,14 @@ fn cmd_serve(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
         resolved.driver.vendor
     );
 
-    let sidecar = SidecarProcess::start(
+    let idle_timeout = resolved.environment.limits.idle_timeout_seconds.unwrap_or(0);
+    let sidecar = SidecarProcess::start_with_timeout(
         &resolved.driver.path,
         &resolved.driver.class,
         &resolved.environment.database.url,
         &resolved.environment.database.username,
         &resolved.password,
+        idle_timeout,
     )?;
 
     tracing::info!("Sidecar ready, starting MCP server");

@@ -6,16 +6,23 @@ import java.io.*;
 import java.sql.*;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class Main {
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final AtomicBoolean RUNNING = new AtomicBoolean(true);
     private static Connection connection;
+    private static String driverClass;
+    private static String jdbcUrl;
+    private static String user;
+    private static String password;
+    private static long idleTimeoutMs = 0;
+    private static final AtomicLong lastActivityMs = new AtomicLong(System.currentTimeMillis());
 
     public static void main(String[] args) throws Exception {
-        String driverClass = null;
-        String jdbcUrl = null;
-        String user = null;
+        driverClass = null;
+        jdbcUrl = null;
+        user = null;
         boolean passwordStdin = false;
 
         for (int i = 0; i < args.length; i++) {
@@ -24,21 +31,26 @@ public class Main {
                 case "--url" -> jdbcUrl = args[++i];
                 case "--user" -> user = args[++i];
                 case "--password-stdin" -> passwordStdin = true;
+                case "--idle-timeout-seconds" -> idleTimeoutMs = Long.parseLong(args[++i]) * 1000;
             }
         }
 
         if (driverClass == null || jdbcUrl == null || user == null || !passwordStdin) {
-            System.err.println("Usage: --driver <class> --url <jdbc> --user <name> --password-stdin");
+            System.err.println("Usage: --driver <class> --url <jdbc> --user <name> --password-stdin [--idle-timeout-seconds <sec>]");
             System.exit(1);
         }
 
         BufferedReader reader = new BufferedReader(new InputStreamReader(System.in));
         PrintWriter writer = new PrintWriter(new OutputStreamWriter(System.out));
 
-        String password = reader.readLine();
+        password = reader.readLine();
         if (password == null || password.isBlank()) {
             System.err.println("Password required on stdin");
             System.exit(1);
+        }
+
+        if (idleTimeoutMs > 0) {
+            startIdleTimer(writer);
         }
 
         writer.println("ready");
@@ -59,8 +71,22 @@ public class Main {
                     String method = (String) request.get("method");
 
                     switch (method) {
-                        case "ping" -> sendResponse(writer, id, "pong", null);
-                        case "execute" -> handleExecute(writer, id, request);
+                        case "ping" -> {
+                            touchActivity();
+                            sendResponse(writer, id, "pong", null);
+                        }
+                        case "execute" -> {
+                            touchActivity();
+                            handleExecute(writer, id, request);
+                        }
+                        case "disconnect" -> {
+                            touchActivity();
+                            handleDisconnect(writer, id);
+                        }
+                        case "connect" -> {
+                            touchActivity();
+                            handleConnect(writer, id);
+                        }
                         case "shutdown" -> {
                             sendResponse(writer, id, "bye", null);
                             RUNNING.set(false);
@@ -84,8 +110,71 @@ public class Main {
         }
     }
 
+    private static void touchActivity() {
+        lastActivityMs.set(System.currentTimeMillis());
+    }
+
+    private static void startIdleTimer(PrintWriter writer) {
+        Thread timer = new Thread(() -> {
+            while (RUNNING.get()) {
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+                long idle = System.currentTimeMillis() - lastActivityMs.get();
+                if (idle >= idleTimeoutMs) {
+                    try {
+                        if (connection != null && !connection.isClosed()) {
+                            connection.close();
+                            connection = null;
+                            Map<String, Object> notification = new LinkedHashMap<>();
+                            notification.put("type", "idle_disconnect");
+                            notification.put("idle_ms", idle);
+                            String json = MAPPER.writeValueAsString(notification);
+                            synchronized (writer) {
+                                writer.println(json);
+                                writer.flush();
+                            }
+                        }
+                    } catch (Exception e) {
+                        System.err.println("Idle disconnect error: " + e.getMessage());
+                    }
+                }
+            }
+        });
+        timer.setDaemon(true);
+        timer.start();
+    }
+
+    private static void handleDisconnect(PrintWriter writer, Object id) throws Exception {
+        if (connection == null || connection.isClosed()) {
+            sendResponse(writer, id, Map.of("status", "already_disconnected"), null);
+            return;
+        }
+        connection.close();
+        connection = null;
+        sendResponse(writer, id, Map.of("status", "disconnected"), null);
+    }
+
+    private static void handleConnect(PrintWriter writer, Object id) throws Exception {
+        if (connection != null && !connection.isClosed()) {
+            sendResponse(writer, id, Map.of("status", "already_connected"), null);
+            return;
+        }
+        connection = DriverManager.getConnection(jdbcUrl, user, password);
+        sendResponse(writer, id, Map.of("status", "connected"), null);
+    }
+
     @SuppressWarnings("unchecked")
     private static void handleExecute(PrintWriter writer, Object id, Map<String, Object> request) throws Exception {
+        if (connection == null || connection.isClosed()) {
+            sendResponse(writer, id, null,
+                    Map.of("code", "NOT_CONNECTED", "message", "Database not connected. Use 'connect' first."));
+            return;
+        }
+
         Map<String, Object> params = (Map<String, Object>) request.get("params");
         if (params == null) {
             sendResponse(writer, id, null, Map.of("code", "MISSING_PARAMS", "message", "No params"));
