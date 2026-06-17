@@ -299,7 +299,7 @@ impl McpServer {
             }
         }
 
-        let result = self.sidecar.execute(sql);
+        let result = self.execute_with_reconnect(sql);
 
         match result {
             Ok(query_result) => {
@@ -333,20 +333,39 @@ impl McpServer {
     fn handle_list_tables(&mut self, id: Option<serde_json::Value>, args: &serde_json::Value) -> Result<()> {
         let schema = args.get("schema").and_then(|v| v.as_str());
 
+        let allowed = self.security.allowed_schemas();
         let sql = match schema {
-            Some(s) if is_valid_identifier(s) => format!(
-                "SELECT table_schema, table_name, table_type FROM information_schema.tables WHERE table_schema = '{}' ORDER BY table_schema, table_name",
-                s
-            ),
+            Some(s) if is_valid_identifier(s) => {
+                if !allowed.is_empty() && !allowed.iter().any(|a| a == s) {
+                    return self.send_error(id, -32000, format!(
+                        "Schema '{s}' is not in the allowed schemas list ({})",
+                        allowed.join(", ")
+                    ));
+                }
+                format!(
+                    "SELECT table_schema, table_name, table_type FROM information_schema.tables WHERE table_schema = '{}' ORDER BY table_schema, table_name",
+                    s
+                )
+            }
             Some(_) => {
                 return self.send_error(id, -32602, "Invalid schema name: only alphanumeric and underscores allowed");
             }
             None => {
-                "SELECT table_schema, table_name, table_type FROM information_schema.tables ORDER BY table_schema, table_name".into()
+                if allowed.is_empty() {
+                    "SELECT table_schema, table_name, table_type FROM information_schema.tables ORDER BY table_schema, table_name".into()
+                } else {
+                    let schemas: Vec<String> = allowed.iter().map(|s| {
+                        format!("'{}'", s.replace('\'', "''"))
+                    }).collect();
+                    format!(
+                        "SELECT table_schema, table_name, table_type FROM information_schema.tables WHERE table_schema IN ({}) ORDER BY table_schema, table_name",
+                        schemas.join(", ")
+                    )
+                }
             }
         };
 
-        match self.security.validate(&sql) {
+        match self.security.validate_system(&sql) {
             Ok(()) => {}
             Err(e) => {
                 self.audit.record("REJECT", "reject", &sql)?;
@@ -356,7 +375,7 @@ impl McpServer {
             }
         }
 
-        match self.sidecar.execute(&sql) {
+        match self.execute_with_reconnect(&sql) {
             Ok(result) => {
                 self.audit.record("PASS", "allow", &sql)?;
                 let resp = JsonRpcResponse {
@@ -397,7 +416,7 @@ impl McpServer {
             }
         }
 
-        match self.sidecar.execute(&explain_sql) {
+        match self.execute_with_reconnect(&explain_sql) {
             Ok(result) => {
                 self.audit.record("PASS", "allow", sql)?;
                 let resp = JsonRpcResponse {
@@ -459,6 +478,21 @@ impl McpServer {
                 self.write_response(&resp)
             }
             Err(e) => self.send_error(id, -32000, format!("Reconnect failed: {e}")),
+        }
+    }
+
+    /// Execute a query, reconnecting once if the connection is lost.
+    fn execute_with_reconnect(&mut self, sql: &str) -> std::result::Result<crate::sidecar::QueryResult, crate::error::SafeselectError> {
+        match self.sidecar.execute(sql) {
+            Ok(result) => Ok(result),
+            Err(e) => {
+                if self.sidecar.connect().is_ok() {
+                    self.audit.record("AUTO_RECONNECT", "allow", "connection lost — reconnected")?;
+                    self.sidecar.execute(sql)
+                } else {
+                    Err(e)
+                }
+            }
         }
     }
 
@@ -565,21 +599,55 @@ pub fn run_setup_server(repo_root: &Path) -> Result<()> {
                 write_setup_response(&resp)?;
             }
             "tools/list" => {
-                let tools = vec![ToolDefinition {
-                    name: "import_compose".into(),
-                    description:
-                        "Scan docker-compose files for PostgreSQL services and import them into .safeselect/ configuration. Creates project.toml and environment files automatically."
-                            .into(),
-                    input_schema: serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "scan_path": {
-                                "type": "string",
-                                "description": "Directory to scan for docker-compose files (default: project root)"
+                let tools = vec![
+                    ToolDefinition {
+                        name: "import_compose".into(),
+                        description:
+                            "Scan docker-compose files for PostgreSQL services and import them into .safeselect/ configuration. Creates project.toml and environment files automatically."
+                                .into(),
+                        input_schema: serde_json::json!({
+                            "type": "object",
+                            "properties": {
+                                "scan_path": {
+                                    "type": "string",
+                                    "description": "Directory to scan for docker-compose files (default: project root)"
+                                }
                             }
-                        }
-                    }),
-                }];
+                        }),
+                    },
+                    ToolDefinition {
+                        name: "delete_environment".into(),
+                        description: "Delete an environment configuration from the project".into(),
+                        input_schema: serde_json::json!({
+                            "type": "object",
+                            "properties": {
+                                "name": {
+                                    "type": "string",
+                                    "description": "Environment name to delete"
+                                }
+                            },
+                            "required": ["name"]
+                        }),
+                    },
+                    ToolDefinition {
+                        name: "rename_environment".into(),
+                        description: "Rename an environment within the project".into(),
+                        input_schema: serde_json::json!({
+                            "type": "object",
+                            "properties": {
+                                "old_name": {
+                                    "type": "string",
+                                    "description": "Current environment name"
+                                },
+                                "new_name": {
+                                    "type": "string",
+                                    "description": "New environment name"
+                                }
+                            },
+                            "required": ["old_name", "new_name"]
+                        }),
+                    },
+                ];
 
                 let resp = JsonRpcResponse {
                     jsonrpc: "2.0",
@@ -662,27 +730,45 @@ pub fn run_setup_server(repo_root: &Path) -> Result<()> {
                                         .file_name()
                                         .and_then(|n| n.to_str())
                                         .unwrap_or("project");
-                                    let created = compose::write_config_files(
+                                    let result = compose::write_config_files(
                                         scan_path,
                                         &all_connections,
                                         project_name,
                                     );
-                                    match created {
-                                        Ok(count) => {
+                                    match result {
+                                        Ok(import) => {
                                             let names: Vec<&str> = all_connections
                                                 .iter()
                                                 .map(|c| c.env_name.as_str())
                                                 .collect();
-                                            let text = if count == 0 {
+                                            let text = if import.created == 0 {
                                                 "All environments already exist. Nothing imported."
                                                     .to_string()
                                             } else {
-                                                format!(
-                                                    "Imported {} connection(s): {}\n\nRun the server with:\n  safeselect serve --environment <name>\n\nAvailable environments: {}",
+                                                let mut parts = vec![format!(
+                                                    "Imported {} connection(s): {}",
                                                     names.len(),
-                                                    names.join(", "),
                                                     names.join(", ")
-                                                )
+                                                )];
+                                                if !import.no_password.is_empty() {
+                                                    parts.push(String::new());
+                                                    for (env, _) in &import.no_password {
+                                                        parts.push(format!(
+                                                            "No password set for '{env}':\n{}",
+                                                            crate::compose::secret_setup_hint(project_name, env)
+                                                        ));
+                                                    }
+                                                }
+                                                parts.push(String::new());
+                                                parts.push(
+                                                    "Run the server with:".to_string(),
+                                                );
+                                                for env_name in &import.env_names {
+                                                    parts.push(format!(
+                                                        "  safeselect serve --environment {env_name}"
+                                                    ));
+                                                }
+                                                parts.join("\n")
                                             };
                                             let resp = JsonRpcResponse {
                                                 jsonrpc: "2.0",
@@ -727,6 +813,195 @@ pub fn run_setup_server(repo_root: &Path) -> Result<()> {
                                 write_setup_response(&resp)?;
                             }
                         }
+                    }
+                    "delete_environment" => {
+                        let args = params
+                            .get("arguments")
+                            .cloned()
+                            .unwrap_or(serde_json::json!({}));
+
+                        let name = match args.get("name").and_then(|v| v.as_str()) {
+                            Some(n) => n,
+                            None => {
+                                let resp = JsonRpcResponse {
+                                    jsonrpc: "2.0",
+                                    id: msg.id,
+                                    result: None,
+                                    error: Some(JsonRpcError {
+                                        code: -32602,
+                                        message: "Missing 'name'".into(),
+                                        data: None,
+                                    }),
+                                };
+                                write_setup_response(&resp)?;
+                                continue;
+                            }
+                        };
+
+                        let env_dir = repo_root.join(".safeselect").join("environments");
+                        let env_file = env_dir.join(format!("{name}.toml"));
+
+                        let text = if !env_file.exists() {
+                            format!("Environment '{name}' not found")
+                        } else {
+                            // Try to clean up the Keychain entry before deleting
+                            let old_content = std::fs::read_to_string(&env_file).ok();
+                            if let Some(c) = old_content {
+                                if let Ok(env_config) =
+                                    toml::from_str::<crate::config::EnvironmentConfig>(&c)
+                                {
+                                    if let Some(secret) = env_config.database.secret {
+                                        if secret.source == "macos-keychain" {
+                                            if let Some(ref acct) = secret.account {
+                                                let _ = crate::compose::delete_password_from_keychain(acct);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            match std::fs::remove_file(&env_file) {
+                                Ok(()) => format!("Deleted environment '{name}'"),
+                                Err(e) => format!("Delete failed: {e}"),
+                            }
+                        };
+
+                        let resp = JsonRpcResponse {
+                            jsonrpc: "2.0",
+                            id: msg.id,
+                            result: Some(serde_json::json!({
+                                "content": [{
+                                    "type": "text",
+                                    "text": text
+                                }]
+                            })),
+                            error: None,
+                        };
+                        write_setup_response(&resp)?;
+                    }
+                    "rename_environment" => {
+                        let args = params
+                            .get("arguments")
+                            .cloned()
+                            .unwrap_or(serde_json::json!({}));
+
+                        let old_name = match args.get("old_name").and_then(|v| v.as_str()) {
+                            Some(n) => n,
+                            None => {
+                                let resp = JsonRpcResponse {
+                                    jsonrpc: "2.0",
+                                    id: msg.id,
+                                    result: None,
+                                    error: Some(JsonRpcError {
+                                        code: -32602,
+                                        message: "Missing 'old_name'".into(),
+                                        data: None,
+                                    }),
+                                };
+                                write_setup_response(&resp)?;
+                                continue;
+                            }
+                        };
+                        let new_name = match args.get("new_name").and_then(|v| v.as_str()) {
+                            Some(n) => n,
+                            None => {
+                                let resp = JsonRpcResponse {
+                                    jsonrpc: "2.0",
+                                    id: msg.id,
+                                    result: None,
+                                    error: Some(JsonRpcError {
+                                        code: -32602,
+                                        message: "Missing 'new_name'".into(),
+                                        data: None,
+                                    }),
+                                };
+                                write_setup_response(&resp)?;
+                                continue;
+                            }
+                        };
+
+                        let env_dir = repo_root.join(".safeselect").join("environments");
+                        let old_file = env_dir.join(format!("{old_name}.toml"));
+                        let new_file = env_dir.join(format!("{new_name}.toml"));
+
+                        let text = if !old_file.exists() {
+                            format!("Environment '{old_name}' not found")
+                        } else if new_file.exists() {
+                            format!("Environment '{new_name}' already exists")
+                        } else {
+                            let project_name = repo_root
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("project");
+                            let old_account = format!("{project_name}/{old_name}");
+                            let new_account = format!("{project_name}/{new_name}");
+
+                            // Migrate secret before renaming
+                            let old_content = std::fs::read_to_string(&old_file).ok();
+                            let needs_rewrite = old_content.as_ref().and_then(|c| {
+                                let mut env: crate::config::EnvironmentConfig =
+                                    toml::from_str(c).ok()?;
+                                let secret = env.database.secret.as_mut()?;
+                                match secret.source.as_str() {
+                                    "macos-keychain" if cfg!(target_os = "macos") => {
+                                        let pw = crate::compose::read_password_from_keychain(
+                                            &old_account,
+                                        )
+                                        .ok()?;
+                                        crate::compose::store_password_in_keychain(
+                                            &new_account,
+                                            &pw,
+                                        )
+                                        .ok()?;
+                                        crate::compose::delete_password_from_keychain(
+                                            &old_account,
+                                        )
+                                        .ok()?;
+                                        secret.account = Some(new_account);
+                                        Some(env)
+                                    }
+                                    "env" => {
+                                        let var = format!(
+                                            "SAFESELECT_PASSWORD_{}",
+                                            new_name.to_uppercase().replace('-', "_")
+                                        );
+                                        secret.variable = Some(var);
+                                        Some(env)
+                                    }
+                                    _ => None,
+                                }
+                            });
+
+                            let migrated = needs_rewrite.is_some();
+                            match std::fs::rename(&old_file, &new_file) {
+                                Ok(()) => {
+                                    if let Some(env) = needs_rewrite {
+                                        if let Ok(content) = toml::to_string_pretty(&env) {
+                                            let _ = std::fs::write(&new_file, content);
+                                        }
+                                    }
+                                    let mut msg =
+                                        format!("Renamed '{old_name}' → '{new_name}'");
+                                    if migrated {
+                                        msg.push_str("\nSecret migrated automatically.");
+                                    }
+                                    msg
+                                }
+                                Err(e) => format!("Rename failed: {e}"),
+                            }
+                        };
+
+                        let resp = JsonRpcResponse {
+                            jsonrpc: "2.0",
+                            id: msg.id,
+                            result: Some(serde_json::json!({
+                                "content": [{
+                                    "type": "text",
+                                    "text": text
+                                }]
+                            })),
+                            error: None,
+                        };
+                        write_setup_response(&resp)?;
                     }
                     _ => {
                         let resp = JsonRpcResponse {
