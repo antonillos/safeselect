@@ -148,6 +148,12 @@ pub enum ConfigAction {
         #[arg(long)]
         project: Option<PathBuf>,
     },
+    /// Reset project config (removes all environments and keychain entries)
+    Reset {
+        /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
+        #[arg(long)]
+        project: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]

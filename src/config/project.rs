@@ -1,9 +1,13 @@
 use serde::{Deserialize, Serialize};
 
+const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectConfig {
     pub version: u32,
     pub display_name: Option<String>,
+    #[serde(default)]
+    pub generated_by: Option<String>,
     #[serde(default)]
     pub security: SecurityPolicy,
     #[serde(default)]
@@ -17,6 +21,7 @@ impl Default for ProjectConfig {
         Self {
             version: 1,
             display_name: None,
+            generated_by: Some(CURRENT_VERSION.to_string()),
             security: SecurityPolicy::default(),
             limits: LimitsConfig::default(),
             audit: AuditConfig::default(),
