@@ -14,11 +14,13 @@ struct Request {
 
 #[derive(Deserialize)]
 struct Response {
-    id: u64,
+    id: Option<serde_json::Value>,
     #[serde(default)]
     ok: Option<serde_json::Value>,
     #[serde(default)]
     error: Option<ResponseError>,
+    #[serde(default)]
+    r#type: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -43,22 +45,46 @@ pub struct QueryResult {
 }
 
 impl SidecarProcess {
-    pub fn start(driver_path: &str, driver_class: &str, jdbc_url: &str, username: &str, password: &str) -> Result<Self> {
+    pub fn start(
+        driver_path: &str,
+        driver_class: &str,
+        jdbc_url: &str,
+        username: &str,
+        password: &str,
+    ) -> Result<Self> {
+        Self::start_with_timeout(driver_path, driver_class, jdbc_url, username, password, 0)
+    }
+
+    pub fn start_with_timeout(
+        driver_path: &str,
+        driver_class: &str,
+        jdbc_url: &str,
+        username: &str,
+        password: &str,
+        idle_timeout_seconds: u64,
+    ) -> Result<Self> {
         let jar_path = Self::ensure_sidecar_jar()?;
+        let cp = format!("{}:{}", jar_path.display(), driver_path);
+
+        let mut args = vec![
+            "-cp",
+            cp.as_str(),
+            "com.safeselect.Main",
+            "--driver",
+            driver_class,
+            "--url",
+            jdbc_url,
+            "--user",
+            username,
+            "--password-stdin",
+        ];
+        if idle_timeout_seconds > 0 {
+            args.push("--idle-timeout-seconds");
+            args.push(Box::leak(idle_timeout_seconds.to_string().into_boxed_str()));
+        }
 
         let mut child = Command::new("java")
-            .args([
-                "-cp",
-                &format!("{}:{}", jar_path.display(), driver_path),
-                "com.safeselect.Main",
-                "--driver",
-                driver_class,
-                "--url",
-                jdbc_url,
-                "--user",
-                username,
-                "--password-stdin",
-            ])
+            .args(&args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -165,15 +191,43 @@ impl SidecarProcess {
         writeln!(self.writer, "{line}")?;
         self.writer.flush()?;
 
-        let mut response_line = String::new();
-        self.reader.read_line(&mut response_line)?;
+        loop {
+            let mut response_line = String::new();
+            self.reader.read_line(&mut response_line)?;
 
-        if response_line.is_empty() {
-            return Err(SafeselectError::Sidecar("sidecar process terminated".into()));
+            if response_line.is_empty() {
+                return Err(SafeselectError::Sidecar("sidecar process terminated".into()));
+            }
+
+            let resp: Response = serde_json::from_str(&response_line)?;
+            // Skip async notifications (idle_disconnect, etc.) that have no id
+            if resp.r#type.is_some() && resp.id.is_none() {
+                continue;
+            }
+            return Ok(resp);
         }
+    }
 
-        let resp: Response = serde_json::from_str(&response_line)?;
-        Ok(resp)
+    pub fn disconnect(&mut self) -> Result<()> {
+        let resp = self.send_request("disconnect", None)?;
+        if let Some(err) = resp.error {
+            return Err(SafeselectError::Sidecar(format!(
+                "disconnect failed [{}]: {}",
+                err.code, err.message
+            )));
+        }
+        Ok(())
+    }
+
+    pub fn connect(&mut self) -> Result<()> {
+        let resp = self.send_request("connect", None)?;
+        if let Some(err) = resp.error {
+            return Err(SafeselectError::Sidecar(format!(
+                "connect failed [{}]: {}",
+                err.code, err.message
+            )));
+        }
+        Ok(())
     }
 
     pub fn shutdown(mut self) -> Result<()> {
