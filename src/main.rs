@@ -1416,53 +1416,83 @@ fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Result<Vec<u32>>
         print!("  ● Establishing SSH tunnel ({env_name}) ... ");
         std::io::stdout().flush()?;
 
-        let mut ssh_args: Vec<String> = vec![
-            "-o".into(),
-            "BatchMode=yes".into(),
-            "-o".into(),
-            "ConnectTimeout=5".into(),
-            "-N".into(),
-            "-f".into(),
-            "-L".into(),
-            format!("{}:{}:{}", local.1, fwd_host, fwd_port),
-            format!("{user}@{bastion}"),
-        ];
-        if let Some(p) = ssh.port {
-            if p != 22 {
-                ssh_args.push("-p".into());
-                ssh_args.push(p.to_string());
-            }
-        }
-        let use_sshpass = match &ssh.auth_type {
+        let use_password = match &ssh.auth_type {
             Some(at) if at == "PASSWORD" => true,
             _ => false,
         };
 
-        let result = if use_sshpass {
-            // Password auth: try sshpass, fall back to ssh
+        let result = if use_password {
+            // Password auth: try sshpass with password from Keychain
             let ssh_acct = format!("{}/{env_name}/ssh", project_display_name(repo_root));
-            if let Ok(pw) = compose::read_password_from_keychain(&ssh_acct) {
-                let mut pass_args = vec!["-p".to_string(), pw];
-                pass_args.extend(ssh_args.iter().cloned());
-                let check = std::process::Command::new("sshpass")
-                    .args(&pass_args)
-                    .output();
-                match check {
-                    Ok(out) if out.status.success() => Ok(out),
-                    Ok(_) => {
-                        // sshpass failed — fall back to plain ssh
-                        std::process::Command::new("ssh").args(&ssh_args).output()
-                    }
-                    Err(_) => {
-                        // sshpass not installed — fall back to plain ssh
-                        std::process::Command::new("ssh").args(&ssh_args).output()
-                    }
+            let pw = match compose::read_password_from_keychain(&ssh_acct) {
+                Ok(p) => p,
+                Err(_) => {
+                    println!("NO PASSWORD");
+                    let cmd = build_ssh_command(ssh, &cfg.database.url)
+                        .unwrap_or_else(|| "ssh command unavailable".to_string());
+                    println!("  Establish it manually:");
+                    println!("    {cmd}");
+                    continue;
                 }
-            } else {
-                std::process::Command::new("ssh").args(&ssh_args).output()
+            };
+
+            let mut pass_args = vec![
+                "-p".to_string(),
+                pw,
+                "ssh".to_string(),
+                "-o".to_string(),
+                "ConnectTimeout=5".to_string(),
+                "-N".to_string(),
+                "-f".to_string(),
+                "-L".to_string(),
+                format!("{}:{}:{}", local.1, fwd_host, fwd_port),
+                format!("{user}@{bastion}"),
+            ];
+            if let Some(p) = ssh.port {
+                if p != 22 {
+                    pass_args.push("-p".into());
+                    pass_args.push(p.to_string());
+                }
+            }
+
+            match std::process::Command::new("sshpass").args(&pass_args).output() {
+                Ok(out) if out.status.success() => Ok(out),
+                Ok(_) => {
+                    println!("FAILED (sshpass)");
+                    let cmd = build_ssh_command(ssh, &cfg.database.url)
+                        .unwrap_or_else(|| "ssh command unavailable".to_string());
+                    println!("  Establish it manually:");
+                    println!("    {cmd}");
+                    continue;
+                }
+                Err(_) => {
+                    println!("sshpass not installed");
+                    let cmd = build_ssh_command(ssh, &cfg.database.url)
+                        .unwrap_or_else(|| "ssh command unavailable".to_string());
+                    println!("  To establish the tunnel manually:");
+                    println!("    {cmd}");
+                    continue;
+                }
             }
         } else {
-            // Key file auth
+            // Key file auth with BatchMode
+            let mut ssh_args: Vec<String> = vec![
+                "-o".into(),
+                "BatchMode=yes".into(),
+                "-o".into(),
+                "ConnectTimeout=5".into(),
+                "-N".into(),
+                "-f".into(),
+                "-L".into(),
+                format!("{}:{}:{}", local.1, fwd_host, fwd_port),
+                format!("{user}@{bastion}"),
+            ];
+            if let Some(p) = ssh.port {
+                if p != 22 {
+                    ssh_args.push("-p".into());
+                    ssh_args.push(p.to_string());
+                }
+            }
             if let Some(ref k) = ssh.identity_file {
                 if Path::new(k).exists() {
                     ssh_args.push("-i".into());
