@@ -4,6 +4,7 @@ on:
   pull_request:
     branches:
       - main
+    types: [opened, synchronize, reopened, labeled]
   push:
     branches:
       - main
@@ -81,16 +82,21 @@ jobs:
   security:
     name: Security & Licenses
     needs: unit
+    if: >
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'safe-to-merge')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - name: Install Rust
         run: rustup toolchain install stable --profile minimal
+      - name: Install cargo-binstall
+        run: curl -fsSL https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
       - name: Install audit & deny tools
         shell: bash
         run: |
-          command -v cargo-audit || cargo install cargo-audit --locked -q
-          command -v cargo-deny || cargo install cargo-deny --locked -q
+          cargo binstall cargo-audit --locked -q
+          cargo binstall cargo-deny --locked -q
       - name: Run cargo audit
         run: cargo audit
       - name: Run cargo deny
