@@ -11,6 +11,7 @@ pub struct DBeaverConnection {
     pub database: String,
     pub driver: String,
     pub username: String,
+    pub password: Option<String>,
     pub ssh_host: Option<String>,
     pub ssh_port: Option<u16>,
     pub ssh_user: Option<String>,
@@ -100,7 +101,7 @@ struct DBeaverConfiguration {
     driver: Option<String>,
     #[serde(default)]
     url: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "userName")]
     user_name: Option<String>,
     #[serde(default)]
     handlers: Option<HashMap<String, DBeaverHandler>>,
@@ -112,6 +113,13 @@ struct DBeaverHandler {
     enabled: Option<bool>,
     #[serde(default)]
     properties: Option<HashMap<String, serde_json::Value>>,
+}
+
+fn normalize_driver(driver: &str) -> String {
+    match driver.to_lowercase().as_str() {
+        "postgres-jdbc" | "postgresql" | "postgres" => "postgresql".to_string(),
+        other => other.to_string(),
+    }
 }
 
 fn parse_data_sources(content: &str) -> Result<Vec<DBeaverConnection>> {
@@ -152,9 +160,7 @@ fn parse_data_sources(content: &str) -> Result<Vec<DBeaverConnection>> {
 
         let name = src.name.unwrap_or_else(|| format!("{host}/{database}"));
 
-        if src.password.is_some() {
-            eprintln!("WARN: Skipping password for '{name}' — SafeSelect does not import credentials");
-        }
+        let password = src.password.clone();
 
         let (ssh_host, ssh_port, ssh_user) = if let Some(handlers) = cfg.and_then(|c| c.handlers.as_ref()) {
             if let Some(tunnel) = handlers.get("ssh_tunnel") {
@@ -180,8 +186,9 @@ fn parse_data_sources(content: &str) -> Result<Vec<DBeaverConnection>> {
             host,
             port,
             database,
-            driver: src.driver.unwrap_or_default(),
+            driver: src.driver.as_deref().map(normalize_driver).unwrap_or_default(),
             username,
+            password,
             ssh_host,
             ssh_port,
             ssh_user,
