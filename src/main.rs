@@ -140,28 +140,25 @@ fn cmd_serve(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
     }
 
     tracing::info!(
-        "Starting sidecar with driver '{}'",
-        resolved.driver.vendor
+        "Starting MCP server (sidecar will start lazily on first query)"
     );
 
-    let idle_timeout = resolved.environment.limits.idle_timeout_seconds.unwrap_or(0);
-    let sidecar = SidecarProcess::start_with_timeout(
-        &resolved.driver.path,
-        &resolved.driver.class,
-        &resolved.environment.database.url,
-        &resolved.environment.database.username,
-        &resolved.password,
-        idle_timeout,
-    )?;
-
-    tracing::info!("Sidecar ready, starting MCP server");
+    let db_url = resolved.environment.database.url.clone();
+    let db_username = resolved.environment.database.username.clone();
+    let db_password = resolved.password.clone();
+    let driver_path = resolved.driver.path.clone();
+    let driver_class = resolved.driver.class.clone();
 
     let mut server = mcp::McpServer::new(
-        sidecar,
         resolved.project,
         resolved.environment,
         &name,
         environment,
+        &driver_path,
+        &driver_class,
+        &db_url,
+        &db_username,
+        &db_password,
     )?;
 
     server.run()?;
