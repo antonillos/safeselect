@@ -2,7 +2,16 @@
 # asdf install: move the binary into place
 set -euo pipefail
 
-install_path="${ASDF_INSTALL_PATH}/bin"
-mkdir -p "$install_path"
-cp -f "${ASDF_DOWNLOAD_PATH}/safeselect" "$install_path/safeselect"
-chmod +x "$install_path/safeselect"
+download_path="${ASDF_DOWNLOAD_PATH:?ASDF_DOWNLOAD_PATH is required}"
+install_path="${ASDF_INSTALL_PATH:?ASDF_INSTALL_PATH is required}"
+
+binary="${download_path}/safeselect"
+[[ -f "${binary}" ]] || { printf 'safeselect binary not found in %s\n' "${download_path}" >&2; exit 1; }
+
+mkdir -p "${install_path}/bin"
+cp -f "${binary}" "${install_path}/bin/safeselect"
+chmod +x "${install_path}/bin/safeselect"
+
+"${install_path}/bin/safeselect" --version >/dev/null
+
+printf 'safeselect installed at %s/bin/safeselect\n' "${install_path}"
