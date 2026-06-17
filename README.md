@@ -34,6 +34,17 @@ safeselect agent install opencode --project myapp --environment testing --name m
 
 ---
 
+## Architecture
+
+<p align="center">
+  <img src="docs/safeselect-architecture.svg" alt="SafeSelect Architecture" width="750">
+</p>
+
+- All communication between Rust and Java is JSON-lines over stdin/stdout — no network, no sockets, no open ports
+- The Java sidecar is embedded in the Rust binary and extracted at runtime
+
+---
+
 ## Security Model
 
 - **Fail-closed**: any security violation kills the MCP process immediately
@@ -120,15 +131,6 @@ source = "macos-keychain"
 service = "safeselect"
 account = "myapp/testing"
 ```
-
----
-
-## Architecture
-
-<img src="docs/safeselect-architecture.svg" alt="SafeSelect Architecture" width="700">
-
-- All communication between Rust and Java is JSON-lines over stdin/stdout — no network, no sockets, no open ports
-- The Java sidecar is embedded in the Rust binary and extracted at runtime
 
 ---
 
