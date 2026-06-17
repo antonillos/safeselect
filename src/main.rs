@@ -1394,20 +1394,35 @@ fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Result<()> {
             None => continue,
         };
 
-        // Check if already active AND responds like PostgreSQL
+        // Resolve local address for later checks
         let addr = format!("{}:{}", local.0, local.1)
             .to_socket_addrs()
             .ok()
             .and_then(|mut a| a.next());
 
-        let is_pg = addr.as_ref().is_some_and(check_postgres);
+        // Check if we CAN establish our own tunnel (sshpass or key available)
+        let can_establish = match &ssh.auth_type {
+            Some(at) if at == "PASSWORD" => {
+                // Check if sshpass is available
+                std::process::Command::new("sshpass")
+                    .arg("--help")
+                    .output()
+                    .is_ok()
+            }
+            _ => ssh.identity_file.is_some(),
+        };
 
-        if is_pg {
-            print!("  ◉ PostgreSQL tunnel active ({env_name})");
-            std::io::stdout().flush()?;
-            continue;
+        if !can_establish {
+            // Can't establish — just check if existing tunnel works
+            let is_pg = addr.as_ref().is_some_and(check_postgres);
+            if is_pg {
+                print!("  ◉ PostgreSQL tunnel active ({env_name})");
+                std::io::stdout().flush()?;
+                continue;
+            }
         }
-        // If not active, ensure nothing blocks the port before we establish
+
+        // Kill any process on the port before we establish our tunnel
         if kill_process_on_port(local.1) {
             std::thread::sleep(Duration::from_millis(500));
         }
