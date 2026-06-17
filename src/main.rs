@@ -1026,22 +1026,20 @@ fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
             None
         };
 
-        let requires_ssl = conn.host.contains(".azure.com") || conn.host.contains(".database.azure");
-        let ssl_param = if requires_ssl { "?sslmode=require" } else { "" };
-
         let url = if has_ssh {
             if let Some(lp) = conn.ssh_local_port {
-                format!("jdbc:postgresql://{lh}:{lp}/{db}{ssl_param}",
-                    lh = conn.ssh_local_host.as_deref().unwrap_or("localhost"),
-                    db = conn.database)
+                format!("jdbc:postgresql://{}:{}/{}",
+                    conn.ssh_local_host.as_deref().unwrap_or("localhost"),
+                    lp,
+                    conn.database)
             } else {
-                format!("jdbc:postgresql://{h}:{p}/{db}{ssl_param}",
-                    h = conn.ssh_host.as_deref().unwrap_or("localhost"),
-                    p = conn.ssh_port.unwrap_or(5432),
-                    db = conn.database)
+                format!("jdbc:postgresql://{}:{}/{}",
+                    conn.ssh_host.as_deref().unwrap_or("localhost"),
+                    conn.ssh_port.unwrap_or(5432),
+                    conn.database)
             }
         } else {
-            format!("jdbc:postgresql://{}:{}/{}{ssl_param}",
+            format!("jdbc:postgresql://{}:{}/{}",
                 conn.host, conn.port, conn.database)
         };
 
