@@ -167,7 +167,16 @@ impl ConfigLoader {
             ));
         }
         let content = std::fs::read_to_string(&env_file)?;
-        let mut environment: EnvironmentConfig = toml::from_str(&content)?;
+        let mut environment: EnvironmentConfig = toml::from_str(&content).map_err(|e| {
+            let msg = format!(
+                "invalid {}: {e}\n\
+                 Hint: if you added [database.secret] manually, ensure it has a \"source\" field.\n  \
+                 Valid sources: \"macos-keychain\" (macOS Keychain) or \"env\" (environment variable).\n  \
+                 See: safeselect import-compose --help",
+                env_file.display()
+            );
+            SafeselectError::Config(msg)
+        })?;
 
         let driver = self.load_driver(&environment.database.driver)?;
         self.validate_driver_file(&driver)?;
@@ -183,8 +192,29 @@ impl ConfigLoader {
                 repo_root: repo_root.to_path_buf(),
             })
         } else {
+            let project_name = repo_root
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("project");
+            let hint = if cfg!(target_os = "macos") {
+                format!(
+                    "security add-generic-password -a \"{project_name}/{env_name}\" -s \"safeselect\" -w \"<password>\""
+                )
+            } else {
+                let var = format!(
+                    "SAFESELECT_PASSWORD_{}",
+                    env_name.to_uppercase().replace('-', "_")
+                );
+                format!(
+                    "export {var}=\"<password>\"\n  \
+                     then edit {name}.toml and add:\n  \
+                     [database.secret]\n  source = \"env\"\n  variable = \"{var}\"",
+                    name = env_file.file_stem().and_then(|s| s.to_str()).unwrap_or(env_name)
+                )
+            };
             Err(SafeselectError::Config(format!(
-                "no secret configured in {}",
+                "no secret configured in {}\n\
+                 Hint: configure a password:\n  {hint}",
                 env_file.display()
             )))
         }
