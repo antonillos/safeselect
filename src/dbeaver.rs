@@ -83,7 +83,7 @@ struct DBeaverRawConnection {
     database: Option<String>,
     #[serde(default)]
     driver: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "userName")]
     username: Option<String>,
     #[serde(default)]
     password: Option<String>,
