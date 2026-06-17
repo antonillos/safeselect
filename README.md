@@ -70,7 +70,7 @@ safeselect agent install opencode --environment testing --name myapp-testing
 ## CLI Reference
 
 | Command | Description |
-|---|---|---|
+|---|---|
 | `serve --project <p> --environment <e>` | Start the MCP server |
 | `query --project <p> --environment <e> --sql <q>` | Execute SQL directly |
 | `check --project <p> --environment <e>` | Test connectivity |
@@ -96,7 +96,7 @@ safeselect agent install opencode --environment testing --name myapp-testing
 ## MCP Tools
 
 | Tool | Description | Arguments |
-|---|---|---|---|
+|---|---|---|
 | `select` | Execute a SELECT query | `sql` (required) |
 | `list_tables` | List database tables | `schema` (optional) |
 | `explain` | Show execution plan | `sql` (required, not executed) |
