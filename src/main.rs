@@ -1232,6 +1232,14 @@ fn cmd_serve_setup(_loader: &ConfigLoader, repo_root: &Path) -> Result<()> {
     mcp::run_setup_server(repo_root)
 }
 
+fn extract_host_port(url: &str) -> Option<(String, u16)> {
+    let without_prefix = url.strip_prefix("jdbc:postgresql://")?;
+    let host_port = without_prefix.split('/').next()?;
+    let (host, port_str) = host_port.split_once(':')?;
+    let port: u16 = port_str.parse().ok()?;
+    Some((host.to_string(), port))
+}
+
 fn cmd_check(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &str) -> Result<()> {
     let name = project_display_name(repo_root);
     println!("Checking configuration for {name}/{environment}...");
@@ -1245,7 +1253,28 @@ fn cmd_check(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
     if let Some(ref ssh) = resolved.environment.ssh {
         if ssh.enabled {
             println!("  SSH bastion: {}:{}", ssh.host.as_deref().unwrap_or("unknown"), ssh.port.unwrap_or(22));
-            println!("  Ensure tunnel is active before connecting");
+            if let Some((host, port)) = extract_host_port(&resolved.environment.database.url) {
+                use std::net::ToSocketAddrs;
+                let addr = format!("{host}:{port}")
+                    .to_socket_addrs()
+                    .ok()
+                    .and_then(|mut a| a.next())
+                    .ok_or_else(|| SafeselectError::Other(format!(
+                        "Cannot resolve {host}:{port}"
+                    )))?;
+                match std::net::TcpStream::connect_timeout(
+                    &addr,
+                    std::time::Duration::from_secs(5),
+                ) {
+                    Ok(_) => println!("  ✓ Tunnel reachable at {host}:{port}"),
+                    Err(_) => {
+                        println!("  ✗ Cannot reach {host}:{port}");
+                        return Err(SafeselectError::Other(format!(
+                            "SSH tunnel not detected at {host}:{port}. Ensure the tunnel is active."
+                        )));
+                    }
+                }
+            }
         }
     }
 
