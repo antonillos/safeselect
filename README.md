@@ -104,6 +104,9 @@ safeselect agent install opencode --environment testing
 | `explain` | Show execution plan | `sql` (required, not executed) |
 | `connect` | Reconnect to the database after connection loss | _(none)_ |
 | `disconnect` | Close the database connection | _(none)_ |
+| `import_compose` | Scan docker-compose files and import PostgreSQL services | `scan_path` (optional) |
+| `delete_environment` | Delete an environment configuration | `name` (required) |
+| `rename_environment` | Rename an environment (migrates secret reference) | `old_name` (required), `new_name` (required) |
 
 ---
 
@@ -190,10 +193,7 @@ variable = "SAFESELECT_PASSWORD_TESTING"
 ```
 
 Then export the variable before running `safeselect`.
-
 ---
-
-
 
 ## Detected AI Agents
 
