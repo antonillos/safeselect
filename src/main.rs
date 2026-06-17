@@ -466,13 +466,41 @@ fn cmd_import_dbeaver(path: &str) -> Result<()> {
         return Ok(());
     }
 
-    println!("Found {} connection(s):\n", connections.len());
-    for conn in &connections {
-        let ssh = conn.ssh_host.as_deref().unwrap_or("-");
-        println!("  {:<30}  {}:{}  ssh={}", conn.name, conn.host, conn.port, ssh);
+    struct ConnLabel(usize, String);
+    impl std::fmt::Display for ConnLabel {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{}", self.1)
+        }
     }
 
-    println!();
+    let options: Vec<ConnLabel> = connections
+        .iter()
+        .enumerate()
+        .map(|(i, conn)| {
+            let ssh = conn.ssh_host.as_deref().unwrap_or("-");
+            ConnLabel(
+                i,
+                format!(
+                    "{:<30}  {}:{:<6}  db={:<20}  ssh={}",
+                    conn.name, conn.host, conn.port, conn.database, ssh,
+                ),
+            )
+        })
+        .collect();
+
+    let selected = inquire::MultiSelect::new(
+        "Select connections to import (Space to toggle, Enter to confirm):",
+        options,
+    )
+    .with_page_size(20)
+    .prompt()
+    .map_err(|e| SafeselectError::Other(format!("Selection cancelled: {e}")))?;
+
+    if selected.is_empty() {
+        println!("No connections selected. Nothing to import.");
+        return Ok(());
+    }
+
     let cwd = std::env::current_dir()?;
     let safeselect_dir = cwd.join(".safeselect");
     let env_dir = safeselect_dir.join("environments");
@@ -480,7 +508,19 @@ fn cmd_import_dbeaver(path: &str) -> Result<()> {
 
     let mut created_any = false;
 
-    for conn in &connections {
+    let project_config = config::ProjectConfig::default();
+    let project_toml = toml::to_string_pretty(&project_config)
+        .map_err(|e| SafeselectError::TomlSer(e.to_string()))?;
+    let project_file = safeselect_dir.join("project.toml");
+    if !project_file.exists() {
+        std::fs::write(&project_file, project_toml)?;
+        println!("  ✔ Created {}", project_file.display());
+        created_any = true;
+    }
+
+    for label in &selected {
+        let conn = &connections[label.0];
+
         let env = conn
             .name
             .split_once(" (")
@@ -489,17 +529,6 @@ fn cmd_import_dbeaver(path: &str) -> Result<()> {
             .to_lowercase()
             .replace(' ', "-")
             .replace("--", "-");
-
-        // Write project.toml once
-        let project_config = config::ProjectConfig::default();
-        let project_toml = toml::to_string_pretty(&project_config)
-            .map_err(|e| SafeselectError::TomlSer(e.to_string()))?;
-        let project_file = safeselect_dir.join("project.toml");
-        if !project_file.exists() {
-            std::fs::write(&project_file, project_toml)?;
-            println!("  ✔ Created {}", project_file.display());
-            created_any = true;
-        }
 
         let ssh = conn.ssh_host.as_ref().map(|h| config::SshConfig {
             enabled: true,
@@ -527,13 +556,17 @@ fn cmd_import_dbeaver(path: &str) -> Result<()> {
         let env_file = env_dir.join(format!("{env}.toml"));
         if !env_file.exists() {
             std::fs::write(&env_file, env_toml)?;
-            println!("  ✔ Created {}", env_file.display());
+            println!("  ✔ Created {} → {}", env_file.display(), conn.name);
             created_any = true;
         }
     }
 
     if created_any {
-        println!("\nImport complete. Edit the new files and add secrets.");
+        println!(
+            "\nImport complete. {} environment(s) added to .safeselect/.",
+            selected.len()
+        );
+        println!("  Edit the .toml files and add secrets.");
         println!("  Example: security add-generic-password -a \"<project>/<env>\" -s \"safeselect\" -w \"<password>\"");
         check_gitignore(&cwd);
     } else {
