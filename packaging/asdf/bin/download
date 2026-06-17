@@ -3,7 +3,7 @@
 set -euo pipefail
 
 VERSION="$1"
-REPO="anomalyco/safeselect"
+REPO="antonillos/safeselect"
 
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 ARCH="$(uname -m)"
