@@ -208,6 +208,16 @@ public class Main {
                         List<Object> row = new ArrayList<>();
                         for (int i = 1; i <= columnCount; i++) {
                             Object val = rs.getObject(i);
+                            if (val instanceof java.sql.Clob) {
+                                val = ((java.sql.Clob) val).getSubString(1, (int) ((java.sql.Clob) val).length());
+                            } else if (val != null) {
+                                try {
+                                    java.lang.reflect.Method getValue = val.getClass().getMethod("getValue");
+                                    val = getValue.invoke(val);
+                                } catch (NoSuchMethodException | SecurityException e) {
+                                    // Not a PGobject or similar — keep original value
+                                }
+                            }
                             row.add(val);
                             if (val != null) {
                                 byteCount += val.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length;

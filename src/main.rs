@@ -65,6 +65,20 @@ fn run(cli: Cli) -> Result<()> {
             let dir = resolve_project_dir(&loader, project)?;
             cmd_query(&loader, &dir, &environment, sql.as_deref())
         }
+        Command::Disconnect {
+            project,
+            environment,
+        } => {
+            let dir = resolve_project_dir(&loader, project)?;
+            cmd_connectivity_action(&loader, &dir, &environment, "disconnect")
+        }
+        Command::Connect {
+            project,
+            environment,
+        } => {
+            let dir = resolve_project_dir(&loader, project)?;
+            cmd_connectivity_action(&loader, &dir, &environment, "connect")
+        }
         Command::Uninstall { force } => cmd_uninstall(force),
     }
 }
@@ -228,7 +242,7 @@ fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
             println!("Password: [redacted]");
             println!();
             println!("--- Security Policy ---");
-            println!("Read only: {}", resolved.project.security.read_only);
+            println!("Read only: enforced (cannot be disabled)");
             println!(
                 "Allowed schemas: {}",
                 resolved.project.security.allowed_schemas.join(", ")
@@ -706,6 +720,35 @@ fn cmd_query(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
     separator();
     println!("({} rows, {} bytes)", result.row_count, result.byte_count);
 
+    Ok(())
+}
+
+fn cmd_connectivity_action(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &str, action: &str) -> Result<()> {
+    let name = project_display_name(repo_root);
+    let resolved = loader.resolve_local(repo_root, environment)?;
+
+    let mut sidecar = SidecarProcess::start(
+        &resolved.driver.path,
+        &resolved.driver.class,
+        &resolved.environment.database.url,
+        &resolved.environment.database.username,
+        &resolved.password,
+    )?;
+
+    match action {
+        "disconnect" => {
+            sidecar.disconnect()?;
+            println!("Disconnected from {name}/{environment}.");
+            println!("  The AI agent can reconnect via the 'connect' MCP tool.");
+        }
+        "connect" => {
+            sidecar.connect()?;
+            println!("Connected to {name}/{environment}.");
+        }
+        _ => unreachable!(),
+    }
+
+    sidecar.shutdown()?;
     Ok(())
 }
 

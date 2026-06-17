@@ -57,6 +57,22 @@ pub enum Command {
         #[arg(long)]
         sql: Option<String>,
     },
+    /// Disconnect from the database (MCP tool — callable by AI agents)
+    Disconnect {
+        /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
+        #[arg(long)]
+        project: Option<PathBuf>,
+        #[arg(long)]
+        environment: String,
+    },
+    /// Reconnect to the database (MCP tool — callable by AI agents)
+    Connect {
+        /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
+        #[arg(long)]
+        project: Option<PathBuf>,
+        #[arg(long)]
+        environment: String,
+    },
     /// Uninstall SafeSelect (binary, global config, data, audit, keychain)
     Uninstall {
         /// Skip confirmation prompt
