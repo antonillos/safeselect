@@ -921,14 +921,13 @@ fn cmd_import_compose(path: Option<PathBuf>, non_interactive: bool) -> Result<()
     let result = compose::write_config_files(dest_dir, &to_import, &project_name)?;
 
     if result.created > 0 {
-        println!(
-            "\nImport complete. {} environment(s) added to {}",
-            to_import.len(),
-            dest_dir.join(".safeselect").display()
-        );
+        println!();
+        println!("── Import Complete ──────────────────────────────");
+        println!();
+        println!("  ✓ {} environment(s) added", to_import.len());
         check_gitignore(dest_dir);
     } else {
-        println!("All environments already exist. Nothing to import.");
+        println!("  ◉ All environments already exist.");
     }
 
     let env_names: Vec<String> = to_import.iter().map(|c| c.env_name.clone()).collect();
@@ -968,14 +967,13 @@ fn setup_driver_if_missing() -> Result<()> {
         return Ok(());
     }
     println!();
-    println!("  No JDBC driver found. Downloading PostgreSQL driver...");
+    println!("── JDBC Driver ──────────────────────────────────");
+    println!();
     cmd_driver(&loader, DriverAction::Download { vendor: "postgresql".into() })?;
     Ok(())
 }
 
 fn setup_passwords_for_missing(repo_root: &std::path::Path, env_names: &[String]) -> Result<()> {
-    use std::io::Write;
-    let loader = config::ConfigLoader::new();
     for env_name in env_names {
         let env_file = repo_root
             .join(".safeselect")
@@ -993,13 +991,11 @@ fn setup_passwords_for_missing(repo_root: &std::path::Path, env_names: &[String]
                 if cfg!(target_os = "macos") {
                     let account = secret.account.as_deref().unwrap_or("");
                     let service = secret.service.as_deref().unwrap_or("");
-                    let output = std::process::Command::new("security")
+                    std::process::Command::new("security")
                         .args(["find-generic-password", "-a", account, "-s", service, "-w"])
-                        .output();
-                    match output {
-                        Ok(o) if o.status.success() => false,
-                        _ => true,
-                    }
+                        .output()
+                        .map(|o| !o.status.success())
+                        .unwrap_or(true)
                 } else {
                     let var = secret.variable.as_deref().unwrap_or("");
                     std::env::var(var).is_err()
@@ -1008,47 +1004,56 @@ fn setup_passwords_for_missing(repo_root: &std::path::Path, env_names: &[String]
             None => true,
         };
 
-        if !needs_password { continue; }
+        if !needs_password {
+            println!("  ◉ Password already configured for '{env_name}'");
+            continue;
+        }
+
+        println!();
+        println!("── Database Password ───────────────────────────");
+        println!();
 
         let repo_name = project_display_name(repo_root);
         let account = format!("{repo_name}/{env_name}");
-        print!("  Password for '{repo_name}/{env_name}': ");
-        std::io::stdout().flush()?;
-        let mut pw = String::new();
-        std::io::stdin().read_line(&mut pw)?;
+        let pw = rpassword::prompt_password(format!(
+            "  Password for '{repo_name}/{env_name}': "
+        ))?;
         let pw = pw.trim().to_string();
         if pw.is_empty() {
-            println!("  Skipped (empty password).");
+            println!("  ⚠ Skipped (empty password).");
             continue;
         }
         compose::store_password_in_keychain(&account, &pw)?;
-        println!("  ✓ Password stored in Keychain");
+        println!("  ● Password stored in Keychain");
 
-        let new_secret = toml::to_string(&config::SecretConfig {
-            source: "macos-keychain".to_string(),
-            service: Some("safeselect".to_string()),
-            account: Some(account),
-            variable: None,
-        }).map_err(|e| SafeselectError::TomlSer(e.to_string()))?;
+        let secret_section = format!(
+            "[database.secret]\nsource = \"macos-keychain\"\nservice = \"safeselect\"\naccount = \"{account}\"\n"
+        );
         let updated = if config.database.secret.is_some() {
-            let mut lines: Vec<&str> = content.lines().collect();
-            // Remove old [database.secret] block
-            let mut i = 0;
+            let mut buf = String::with_capacity(content.len());
             let mut in_secret = false;
-            lines.retain(|l| {
-                if l.trim() == "[database.secret]" { in_secret = true; false }
-                else if in_secret && l.starts_with('[') { in_secret = false; true }
-                else if in_secret { false }
-                else { true }
-            });
-            lines.push("");
-            lines.push(&new_secret.trim());
-            lines.join("\n")
+            for line in content.lines() {
+                if line.trim() == "[database.secret]" {
+                    in_secret = true;
+                    continue;
+                }
+                if in_secret && (line.trim().starts_with('[') || line.trim().is_empty()) {
+                    in_secret = false;
+                }
+                if in_secret { continue; }
+                buf.push_str(line);
+                buf.push('\n');
+            }
+            while buf.ends_with('\n') { buf.pop(); }
+            buf.push('\n');
+            buf.push('\n');
+            buf.push_str(&secret_section);
+            buf
         } else {
             let mut c = content;
             if !c.ends_with('\n') { c.push('\n'); }
             c.push('\n');
-            c.push_str(&new_secret);
+            c.push_str(&secret_section);
             c
         };
         std::fs::write(&env_file, &updated)?;
@@ -1061,17 +1066,25 @@ fn setup_passwords_for_missing(repo_root: &std::path::Path, env_names: &[String]
 fn run_checks(repo_root: &std::path::Path, env_names: &[String]) -> Result<()> {
     use std::io::Write;
     println!();
+    println!("── Verification ──────────────────────────────────");
+    println!();
+    let mut all_ok = true;
     for env_name in env_names {
-        print!("  Checking {env_name}... ");
+        print!("  • {env_name} ... ");
         std::io::stdout().flush()?;
         let loader = config::ConfigLoader::new();
         match cmd_check(&loader, repo_root, env_name) {
             Ok(()) => println!("OK"),
             Err(e) => {
                 println!("FAILED");
-                eprintln!("    {e}");
+                println!("    {e}");
+                all_ok = false;
             }
         }
+    }
+    if all_ok {
+        println!();
+        println!("  ✓ All environments ready.");
     }
     Ok(())
 }
