@@ -29,9 +29,8 @@ impl ConfigLoader {
         let base = if let Ok(dir) = std::env::var("SAFESELECT_CONFIG_DIR") {
             PathBuf::from(dir)
         } else {
-            dirs::config_dir()
-                .unwrap_or_else(|| PathBuf::from("~/.config"))
-                .join("safeselect")
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+            PathBuf::from(home).join(".config/safeselect")
         };
         Self {
             drivers_dir: base.join("drivers"),

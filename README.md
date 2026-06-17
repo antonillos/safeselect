@@ -97,7 +97,7 @@ safeselect agent install opencode --project myapp --environment testing --name m
 
 ## Configuration
 
-Config is loaded from `$SAFESELECT_CONFIG_DIR` (default: `~/.config/safeselect/` on Linux, `~/Library/Application Support/safeselect/` on macOS).
+Config is loaded from `$SAFESELECT_CONFIG_DIR` (default: `~/.config/safeselect/`).
 
 ```
 config/
