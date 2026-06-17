@@ -320,13 +320,6 @@ pub fn write_config_files(
                 variable: None,
             })
         } else {
-            let account = format!("{}/{}", project_name, conn.env_name);
-            eprintln!(
-                "WARN: No password configured for '{}'.\n  {}",
-                conn.service,
-                secret_setup_hint(project_name, &conn.env_name)
-            );
-            no_password.push((conn.env_name.clone(), account));
             None
         };
 
@@ -347,6 +340,15 @@ pub fn write_config_files(
             .map_err(|e| crate::error::SafeselectError::TomlSer(e.to_string()))?;
         let env_file = env_dir.join(format!("{}.toml", conn.env_name));
         if !env_file.exists() {
+            if conn.password_var.is_none() && conn.password_literal.is_none() {
+                let account = format!("{}/{}", project_name, conn.env_name);
+                eprintln!(
+                    "WARN: No password configured for '{}'.\n  {}",
+                    conn.service,
+                    secret_setup_hint(project_name, &conn.env_name)
+                );
+                no_password.push((conn.env_name.clone(), account));
+            }
             std::fs::write(&env_file, env_toml)?;
             created += 1;
         }
