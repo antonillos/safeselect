@@ -589,9 +589,6 @@ fn cmd_driver(loader: &ConfigLoader, action: DriverAction) -> Result<()> {
             println!("Downloaded and registered '{vendor}' driver");
             println!("  Path: {}", jar_path.display());
             println!("  SHA-256: {checksum}");
-            println!();
-            println!("Next step:");
-            println!("  safeselect check --environment <name>");
 
             Ok(())
         }
