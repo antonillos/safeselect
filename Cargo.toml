@@ -1,6 +1,6 @@
 [package]
 name = "safeselect"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "MCP SQL Fail-Closed for AI Agents"
 license = "MIT OR Apache-2.0"
@@ -22,7 +22,7 @@ reqwest = { version = "0.13.4", features = ["blocking"] }
 zip = "8.6.0"
 similar = "3.1.1"
 indoc = "2"
-inquire = "0.7"
+inquire = "0.9"
 
 
 [profile.release]

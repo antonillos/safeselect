@@ -70,9 +70,6 @@ feature-depth = 1
 # A list of advisory IDs to ignore. Note that ignored advisories will still
 # output a note when they are encountered.
 ignore = [
-    # fxhash is a transitive dep of inquire (v0.7.5). inquire is unmaintained
-    # but works fine for our interactive import picker use case.
-    { id = "RUSTSEC-2025-0057", reason = "Transitive via inquire — only used for interactive import-dbeaver CLI" },
 ]
 # If this is true, then cargo deny will use the git executable to fetch advisory database.
 # If this is false, then it uses a built-in git library.
