@@ -1,7 +1,7 @@
 use crate::audit::AuditLog;
 use crate::compose;
 use crate::config::{EnvironmentConfig, ProjectConfig};
-use crate::error::{Result, SafeselectError};
+use crate::error::Result;
 use crate::security::SecurityEngine;
 use crate::sidecar::SidecarProcess;
 use serde::{Deserialize, Serialize};
