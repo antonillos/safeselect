@@ -827,7 +827,7 @@ fn cmd_import_dbeaver(path: &str) -> Result<()> {
     let env_names: Vec<String> = imported_envs.iter().map(|(n, _)| n.clone()).collect();
     setup_driver_if_missing()?;
     setup_passwords_for_missing(&cwd, &env_names)?;
-    print_import_next_steps(&env_names);
+    run_checks(&cwd, &env_names)?;
     Ok(())
 }
 
@@ -934,7 +934,7 @@ fn cmd_import_compose(path: Option<PathBuf>, non_interactive: bool) -> Result<()
     let env_names: Vec<String> = to_import.iter().map(|c| c.env_name.clone()).collect();
     setup_driver_if_missing()?;
     setup_passwords_for_missing(dest_dir, &env_names)?;
-    print_import_next_steps(&env_names);
+    run_checks(dest_dir, &env_names)?;
 
     Ok(())
 }
@@ -957,7 +957,7 @@ fn import_selected_connections(connections: &[compose::ComposeConnection]) -> Re
     let env_names: Vec<String> = connections.iter().map(|c| c.env_name.clone()).collect();
     setup_driver_if_missing()?;
     setup_passwords_for_missing(&cwd, &env_names)?;
-    print_import_next_steps(&env_names);
+    run_checks(&cwd, &env_names)?;
 
     Ok(())
 }
@@ -975,27 +975,40 @@ fn setup_driver_if_missing() -> Result<()> {
 
 fn setup_passwords_for_missing(repo_root: &std::path::Path, env_names: &[String]) -> Result<()> {
     use std::io::Write;
+    let loader = config::ConfigLoader::new();
     for env_name in env_names {
         let env_file = repo_root
             .join(".safeselect")
             .join("environments")
             .join(format!("{env_name}.toml"));
-        if !env_file.exists() {
-            eprintln!("  [{env_name}] file not found: {}", env_file.display());
-            continue;
-        }
-        let content = match std::fs::read_to_string(&env_file) {
-            Ok(c) => c,
-            Err(e) => { eprintln!("  [{env_name}] read error: {e}"); continue; }
-        };
+        if !env_file.exists() { continue; }
+        let content = std::fs::read_to_string(&env_file)?;
         let config = match toml::from_str::<config::EnvironmentConfig>(&content) {
             Ok(c) => c,
-            Err(e) => { eprintln!("  [{env_name}] parse error: {e}"); continue; }
+            Err(_) => continue,
         };
-        if config.database.secret.is_some() {
-            eprintln!("  [{env_name}] already has secret, skipping");
-            continue;
-        }
+
+        let needs_password = match &config.database.secret {
+            Some(secret) => {
+                if cfg!(target_os = "macos") {
+                    let account = secret.account.as_deref().unwrap_or("");
+                    let service = secret.service.as_deref().unwrap_or("");
+                    let output = std::process::Command::new("security")
+                        .args(["find-generic-password", "-a", account, "-s", service, "-w"])
+                        .output();
+                    match output {
+                        Ok(o) if o.status.success() => false,
+                        _ => true,
+                    }
+                } else {
+                    let var = secret.variable.as_deref().unwrap_or("");
+                    std::env::var(var).is_err()
+                }
+            }
+            None => true,
+        };
+
+        if !needs_password { continue; }
 
         let repo_name = project_display_name(repo_root);
         let account = format!("{repo_name}/{env_name}");
@@ -1005,28 +1018,62 @@ fn setup_passwords_for_missing(repo_root: &std::path::Path, env_names: &[String]
         std::io::stdin().read_line(&mut pw)?;
         let pw = pw.trim().to_string();
         if pw.is_empty() {
-            eprintln!("  WARN: empty password, skipping");
+            println!("  Skipped (empty password).");
             continue;
         }
         compose::store_password_in_keychain(&account, &pw)?;
         println!("  ✓ Password stored in Keychain");
 
-        let mut new_content = std::fs::read_to_string(&env_file)?;
-        if !new_content.ends_with('\n') { new_content.push('\n'); }
-        new_content.push_str(&format!(
-            "[database.secret]\nsource = \"macos-keychain\"\nservice = \"safeselect\"\naccount = \"{account}\"\n"
-        ));
-        std::fs::write(&env_file, &new_content)?;
+        let new_secret = toml::to_string(&config::SecretConfig {
+            source: "macos-keychain".to_string(),
+            service: Some("safeselect".to_string()),
+            account: Some(account),
+            variable: None,
+        }).map_err(|e| SafeselectError::TomlSer(e.to_string()))?;
+        let updated = if config.database.secret.is_some() {
+            let mut lines: Vec<&str> = content.lines().collect();
+            // Remove old [database.secret] block
+            let mut i = 0;
+            let mut in_secret = false;
+            lines.retain(|l| {
+                if l.trim() == "[database.secret]" { in_secret = true; false }
+                else if in_secret && l.starts_with('[') { in_secret = false; true }
+                else if in_secret { false }
+                else { true }
+            });
+            lines.push("");
+            lines.push(&new_secret.trim());
+            lines.join("\n")
+        } else {
+            let mut c = content;
+            if !c.ends_with('\n') { c.push('\n'); }
+            c.push('\n');
+            c.push_str(&new_secret);
+            c
+        };
+        std::fs::write(&env_file, &updated)?;
         println!("  ✓ Updated {env_name}.toml");
     }
     Ok(())
 }
 
-fn print_import_next_steps(env_names: &[String]) {
+/// Run `safeselect check` for each environment and report results.
+fn run_checks(repo_root: &std::path::Path, env_names: &[String]) -> Result<()> {
+    use std::io::Write;
     println!();
     for env_name in env_names {
-        println!("  safeselect check --environment {env_name}");
+        print!("  Checking {env_name}... ");
+        std::io::stdout().flush()?;
+        let loader = config::ConfigLoader::new();
+        match cmd_check(&loader, repo_root, env_name) {
+            Ok(()) => println!("OK"),
+            Err(e) => {
+                println!("FAILED");
+                eprintln!("    {e}");
+            }
+        }
     }
+    Ok(())
 }
 
 fn cmd_serve_setup(_loader: &ConfigLoader, repo_root: &Path) -> Result<()> {
