@@ -35,6 +35,7 @@ pub struct SidecarProcess {
     writer: BufWriter<ChildStdin>,
     reader: BufReader<ChildStdout>,
     next_id: u64,
+    statement_timeout_ms: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -109,6 +110,7 @@ impl SidecarProcess {
             reader: BufReader::new(stdout),
             child,
             next_id: 0,
+            statement_timeout_ms,
         };
 
         proc.send_password(password)?;
@@ -198,7 +200,13 @@ impl SidecarProcess {
         self.writer.flush()?;
 
         let fd = self.reader.get_ref().as_raw_fd();
-        let timeout_ms = 30_000;
+        // Wait for statement timeout + 10s buffer, minimum 30s
+        let timeout_ms = if self.statement_timeout_ms > 0 {
+            let t = (self.statement_timeout_ms + 10_000u64).max(30_000u64);
+            if t > i32::MAX as u64 { i32::MAX } else { t as i32 }
+        } else {
+            30_000i32
+        };
 
         loop {
             let mut pollfd = libc::pollfd {
@@ -218,7 +226,7 @@ impl SidecarProcess {
                 }
                 0 => {
                     return Err(SafeselectError::Sidecar(
-                        "sidecar did not respond within 30s — restarting".into(),
+                        format!("sidecar did not respond within {timeout_ms}ms — restarting"),
                     ));
                 }
                 _ => {}
