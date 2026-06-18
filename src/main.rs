@@ -1362,7 +1362,7 @@ fn setup_passwords_for_missing(repo_root: &std::path::Path, env_names: &[String]
 
 /// Try to establish SSH tunnels for environments that need one.
 /// Returns PIDs of tunnels started by this call.
-fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Result<()> {
+pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Result<()> {
     use std::io::Write;
     use std::net::ToSocketAddrs;
     use std::time::Duration;
@@ -2065,6 +2065,14 @@ fn cmd_reconnect(loader: &ConfigLoader, repo_root: &std::path::Path, environment
     println!("Reconnecting to {name}/{environment}...");
 
     let resolved = loader.resolve_local(repo_root, environment)?;
+
+    // Establish SSH tunnel if configured
+    if let Some(ref ssh) = resolved.environment.ssh {
+        if ssh.enabled {
+            println!("  ◇ Establishing SSH tunnel...");
+            setup_ssh_tunnels(repo_root, &[environment.to_string()])?;
+        }
+    }
 
     let mut sidecar = SidecarProcess::start_with_timeout(
         &resolved.driver.path,

@@ -4,6 +4,7 @@ use crate::compose;
 use crate::config::{ConfigLoader, EnvironmentConfig, ProjectConfig};
 use crate::error::Result;
 use crate::security::SecurityEngine;
+use crate::setup_ssh_tunnels;
 use crate::sidecar::SidecarProcess;
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
@@ -1495,6 +1496,19 @@ impl McpServer {
 
     fn handle_reconnect(&mut self, id: Option<serde_json::Value>) -> Result<()> {
         tracing::info!("Reconnecting sidecar");
+
+        // Load config to check if SSH tunnel needs to be established
+        let loader = ConfigLoader::new();
+        if let Ok(resolved) = loader.resolve_local(&self.repo_root, &self.env_name) {
+            if let Some(ref ssh) = resolved.environment.ssh {
+                if ssh.enabled {
+                    tracing::info!("Establishing SSH tunnel before reconnect");
+                    if let Err(e) = setup_ssh_tunnels(&self.repo_root, &[self.env_name.clone()]) {
+                        return self.send_error(id, -32000, format!("SSH tunnel setup failed: {e}"));
+                    }
+                }
+            }
+        }
 
         match self.restart_sidecar() {
             Ok(()) => {}
