@@ -1813,15 +1813,29 @@ fn cmd_check(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
                 }
             }
 
-            // 2) Check PostgreSQL reachability through the tunnel
+            // 2) Check PostgreSQL reachability — try to establish tunnel if needed
             if let Some((host, port)) = extract_host_port(&resolved.environment.database.url) {
-                let pg_addr = format!("{host}:{port}")
+                use std::net::ToSocketAddrs;
+                let mut pg_addr = format!("{host}:{port}")
                     .to_socket_addrs()
                     .ok()
-                    .and_then(|mut a| a.next())
-                    .ok_or_else(|| SafeselectError::Other(format!(
-                        "Cannot resolve database host {host}:{port}"
-                    )))?;
+                    .and_then(|mut a| a.next());
+
+                // If database can't be resolved, try establishing the SSH tunnel first
+                if pg_addr.is_none() {
+                    println!("  ◇ Establishing tunnel to reach {host}:{port}...");
+                    let _ = setup_ssh_tunnels(repo_root, &[environment.to_string()]);
+                    // Retry resolution after tunnel establishment
+                    pg_addr = format!("{host}:{port}")
+                        .to_socket_addrs()
+                        .ok()
+                        .and_then(|mut a| a.next());
+                }
+
+                let pg_addr = pg_addr.ok_or_else(|| SafeselectError::Other(format!(
+                    "Cannot resolve database host {host}:{port}. Ensure VPN or SSH tunnel is active."
+                )))?;
+
                 if check_postgres(&pg_addr) {
                     println!("  ✓ PostgreSQL reachable at {host}:{port}");
                 } else {
