@@ -1026,10 +1026,13 @@ fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
             None
         };
 
-        // URL always points to the original database target.
-        // SSH tunnel provides network connectivity, but JDBC connects directly.
-        let url = format!("jdbc:postgresql://{}:{}/{}",
-            conn.host, conn.port, conn.database);
+        // URL points through the SSH tunnel when one is configured
+        let url = if has_ssh {
+            let tunnel_port = conn.ssh_port.unwrap_or(22);
+            format!("jdbc:postgresql://localhost:{}/{}", tunnel_port, conn.database)
+        } else {
+            format!("jdbc:postgresql://{}:{}/{}", conn.host, conn.port, conn.database)
+        };
 
         let (secret, has_secret) = if let Some(ref pw) = conn.password {
             if !pw.is_empty() {
@@ -1822,53 +1825,27 @@ fn cmd_check(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
                 }
             }
 
-            // 2) Check PostgreSQL reachability — try both original target and tunnel endpoint
+            // 2) Check PostgreSQL reachability via the tunnel endpoint (from URL)
             if let Some((host, port)) = extract_host_port(&resolved.environment.database.url) {
                 use std::net::ToSocketAddrs;
-                let mut pg_addr = format!("{host}:{port}")
-                    .to_socket_addrs()
-                    .ok()
-                    .and_then(|mut a| a.next());
-
-                // If database can't be resolved, try establishing the SSH tunnel first
-                if pg_addr.is_none() {
-                    println!("  ◇ Establishing tunnel...");
-                    let _ = setup_ssh_tunnels(repo_root, &[environment.to_string()]);
-                    pg_addr = format!("{host}:{port}")
-                        .to_socket_addrs()
-                        .ok()
-                        .and_then(|mut a| a.next());
-                }
-
-                // Try original target first, then localhost:tunnel_port
-                let tunnel_port = ssh.port.unwrap_or(22);
-                let check_targets: Vec<(&str, u16)> = if pg_addr.is_some() {
-                    vec![(host.as_str(), port)]
-                } else {
-                    // Can't resolve original target — try tunnel endpoint instead
-                    vec![("localhost", tunnel_port)]
+                let pg_addr = match format!("{host}:{port}").to_socket_addrs() {
+                    Ok(mut addrs) => addrs.next(),
+                    Err(_) => {
+                        println!("  ◇ Establishing tunnel...");
+                        let _ = setup_ssh_tunnels(repo_root, &[environment.to_string()]);
+                        format!("{host}:{port}").to_socket_addrs().ok().and_then(|mut a| a.next())
+                    }
                 };
 
-                let mut pg_ok = false;
-                for (chost, cport) in &check_targets {
-                    if let Ok(mut addrs) = format!("{chost}:{cport}").to_socket_addrs() {
-                        if let Some(addr) = addrs.next() {
-                            if check_postgres(&addr) {
-                                println!("  ✓ PostgreSQL reachable at {chost}:{cport}");
-                                pg_ok = true;
-                                break;
-                            }
-                        }
+                match pg_addr {
+                    Some(ref a) if check_postgres(a) =>
+                        println!("  ✓ PostgreSQL reachable at {host}:{port}"),
+                    _ => {
+                        println!("  ✗ PostgreSQL unreachable at {host}:{port}");
+                        let cmd = build_ssh_command(ssh, &resolved.environment.database.url);
+                        if let Some(c) = cmd { println!("  To establish tunnel: {c}"); }
+                        return Err(SafeselectError::Other("Cannot reach PostgreSQL through SSH tunnel.".into()));
                     }
-                }
-
-                if !pg_ok {
-                    println!("  ✗ PostgreSQL unreachable at {host}:{port}");
-                    let cmd = build_ssh_command(ssh, &resolved.environment.database.url);
-                    if let Some(c) = cmd { println!("  To establish tunnel: {c}"); }
-                    return Err(SafeselectError::Other(format!(
-                        "Cannot reach PostgreSQL. Ensure SSH tunnel is active."
-                    )));
                 }
             }
         }
