@@ -1026,20 +1026,17 @@ fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
             None
         };
 
-        let ssl_param = if has_ssh { "?sslmode=disable" } else { "" };
         let url = if has_ssh {
             if let Some(lp) = conn.ssh_local_port {
-                format!("jdbc:postgresql://{}:{}/{}{}",
+                format!("jdbc:postgresql://{}:{}/{}",
                     conn.ssh_local_host.as_deref().unwrap_or("localhost"),
                     lp,
-                    conn.database,
-                    ssl_param)
+                    conn.database)
             } else {
-                format!("jdbc:postgresql://{}:{}/{}{}",
+                format!("jdbc:postgresql://{}:{}/{}",
                     conn.ssh_host.as_deref().unwrap_or("localhost"),
                     conn.ssh_port.unwrap_or(5432),
-                    conn.database,
-                    ssl_param)
+                    conn.database)
             }
         } else {
             format!("jdbc:postgresql://{}:{}/{}",
