@@ -1816,6 +1816,12 @@ fn cmd_check(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
     }
 
     println!("  Attempting sidecar connection...");
+    println!(
+        "    url={} user={} db={}",
+        resolved.environment.database.url,
+        resolved.environment.database.username,
+        resolved.environment.database.url.split('/').last().unwrap_or("?")
+    );
 
     let mut sidecar = SidecarProcess::start(
         &resolved.driver.path,

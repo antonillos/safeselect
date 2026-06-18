@@ -58,6 +58,7 @@ public class Main {
 
         try {
             Class.forName(driverClass);
+            System.err.println("Connecting: url=" + jdbcUrl + " user=" + user + " driver=" + driverClass);
             connection = DriverManager.getConnection(jdbcUrl, user, password);
 
             while (RUNNING.get()) {
