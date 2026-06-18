@@ -52,7 +52,7 @@ impl SidecarProcess {
         username: &str,
         password: &str,
     ) -> Result<Self> {
-        Self::start_with_timeout(driver_path, driver_class, jdbc_url, username, password, 0)
+        Self::start_with_timeout(driver_path, driver_class, jdbc_url, username, password, 0, 0)
     }
 
     pub fn start_with_timeout(
@@ -62,6 +62,7 @@ impl SidecarProcess {
         username: &str,
         password: &str,
         idle_timeout_seconds: u64,
+        statement_timeout_ms: u64,
     ) -> Result<Self> {
         let jar_path = Self::ensure_sidecar_jar()?;
         let cp = format!("{}:{}", jar_path.display(), driver_path);
@@ -81,6 +82,10 @@ impl SidecarProcess {
         if idle_timeout_seconds > 0 {
             args.push("--idle-timeout-seconds");
             args.push(Box::leak(idle_timeout_seconds.to_string().into_boxed_str()));
+        }
+        if statement_timeout_ms > 0 {
+            args.push("--statement-timeout-ms");
+            args.push(Box::leak(statement_timeout_ms.to_string().into_boxed_str()));
         }
 
         let mut child = Command::new("java")

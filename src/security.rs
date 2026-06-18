@@ -13,6 +13,10 @@ impl SecurityEngine {
         Self { policy, limits }
     }
 
+    pub fn limits(&self) -> &LimitsConfig {
+        &self.limits
+    }
+
     pub fn allowed_schemas(&self) -> &[String] {
         &self.policy.allowed_schemas
     }
