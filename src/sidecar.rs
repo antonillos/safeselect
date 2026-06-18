@@ -1,6 +1,7 @@
 use crate::error::{Result, SafeselectError};
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
@@ -196,7 +197,33 @@ impl SidecarProcess {
         writeln!(self.writer, "{line}")?;
         self.writer.flush()?;
 
+        let fd = self.reader.get_ref().as_raw_fd();
+        let timeout_ms = 30_000;
+
         loop {
+            let mut pollfd = libc::pollfd {
+                fd,
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            let ret = unsafe { libc::poll(&mut pollfd, 1, timeout_ms) };
+            match ret {
+                -1 => {
+                    let err = std::io::Error::last_os_error();
+                    // EINTR = interrupted by signal, retry
+                    if err.kind() == std::io::ErrorKind::Interrupted {
+                        continue;
+                    }
+                    return Err(SafeselectError::Sidecar(format!("poll error: {err}")));
+                }
+                0 => {
+                    return Err(SafeselectError::Sidecar(
+                        "sidecar did not respond within 30s — restarting".into(),
+                    ));
+                }
+                _ => {}
+            }
+
             let mut response_line = String::new();
             self.reader.read_line(&mut response_line)?;
 

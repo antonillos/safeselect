@@ -202,6 +202,10 @@ public class Main {
         }
 
         try (Statement stmt = connection.createStatement()) {
+            if (statementTimeoutMs > 0) {
+                int timeoutSeconds = (int) Math.ceil(statementTimeoutMs / 1000.0);
+                stmt.setQueryTimeout(timeoutSeconds);
+            }
             boolean isResultSet = stmt.execute(sql);
 
             if (isResultSet) {
