@@ -13,6 +13,10 @@ impl SecurityEngine {
         Self { policy, limits }
     }
 
+    pub fn allowed_schemas(&self) -> &[String] {
+        &self.policy.allowed_schemas
+    }
+
     pub fn validate(&self, sql: &str) -> Result<()> {
         let trimmed = sql.trim();
 
@@ -36,6 +40,36 @@ impl SecurityEngine {
         if !self.policy.allowed_schemas.is_empty() {
             self.check_allowed_schemas(trimmed)?;
         }
+
+        if !self.policy.denied_relations.is_empty() {
+            self.check_denied_relations(trimmed)?;
+        }
+
+        Ok(())
+    }
+
+    /// Like `validate` but skips schema allowlist checking.
+    /// Use for tool-generated queries (e.g. `list_tables`) that
+    /// reference system catalogs like `information_schema`.
+    pub fn validate_system(&self, sql: &str) -> Result<()> {
+        let trimmed = sql.trim();
+
+        if trimmed.is_empty() {
+            return Err(SafeselectError::QueryRejected("Empty query".into()));
+        }
+
+        if trimmed.len() > MAX_SQL_BYTES {
+            return Err(SafeselectError::QueryRejected(format!(
+                "Query exceeds maximum size ({} bytes)",
+                MAX_SQL_BYTES
+            )));
+        }
+
+        if self.policy.require_single_statement {
+            self.check_single_statement(trimmed)?;
+        }
+
+        self.check_read_only(trimmed)?;
 
         if !self.policy.denied_relations.is_empty() {
             self.check_denied_relations(trimmed)?;
