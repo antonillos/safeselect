@@ -162,6 +162,8 @@ fn cmd_serve(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
         &db_url,
         &db_username,
         &db_password,
+        repo_root,
+        loader.config_dir(),
     )?;
 
     server.run()?;
@@ -1418,21 +1420,34 @@ fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Result<()> {
             std::io::stdout().flush()?;
         }
 
+        let use_password = match &ssh.auth_type {
+            Some(at) if at == "PASSWORD" => true,
+            _ => false,
+        };
+
         // Check if we CAN establish our own tunnel (sshpass or key available)
-        let can_establish = match &ssh.auth_type {
-            Some(at) if at == "PASSWORD" => {
-                std::process::Command::new("sshpass")
-                    .arg("--help")
-                    .output()
-                    .is_ok()
-            }
-            _ => ssh.identity_file.is_some(),
+        let can_establish = if use_password {
+            std::process::Command::new("sshpass")
+                .arg("--help")
+                .output()
+                .is_ok()
+        } else {
+            ssh.identity_file.is_some()
         };
 
         if !can_establish && !bastion_up {
-            // Can't establish and no existing tunnel — inform user
+            // Can't establish and no existing tunnel — inform user with timeout details
+            println!("  ⚠  SSH bastion {bastion_host}:{bastion_port} unreachable (connect timed out after 3s)");
+            if !use_password && ssh.identity_file.is_none() {
+                println!("  ⚠  No SSH key or password configured");
+            }
+            if let Some(ref identity_file) = ssh.identity_file {
+                if !std::path::Path::new(identity_file).exists() {
+                    println!("  ⚠  SSH identity file not found: {identity_file}");
+                }
+            }
             let cmd = build_ssh_command(ssh, &cfg.database.url).unwrap_or_default();
-            println!("  ⚠  Install sshpass or establish tunnel manually:\n    {cmd}");
+            println!("  Establish tunnel manually:\n    {cmd}");
             continue;
         }
 
@@ -1443,18 +1458,18 @@ fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Result<()> {
         let fwd_port = ssh.forward_port.unwrap_or(0);
 
         if bastion.is_empty() || user.is_empty() || fwd_host.is_empty() || fwd_port == 0 {
-            print!("  ⚠  Incomplete SSH config for '{env_name}'");
+            let mut missing = vec![];
+            if bastion.is_empty() { missing.push("host"); }
+            if user.is_empty() { missing.push("username"); }
+            if fwd_host.is_empty() { missing.push("forward_host"); }
+            if fwd_port == 0 { missing.push("forward_port"); }
+            println!("  ⚠  Incomplete SSH config for '{env_name}': missing {}", missing.join(", "));
             std::io::stdout().flush()?;
             continue;
         }
 
         print!("  ● Establishing SSH tunnel ({env_name}) ... ");
         std::io::stdout().flush()?;
-
-        let use_password = match &ssh.auth_type {
-            Some(at) if at == "PASSWORD" => true,
-            _ => false,
-        };
 
         // Use a different local port (15432) for forwarding, not the SSH server port
         let tunnel_local_port = 15432;
@@ -1514,10 +1529,18 @@ fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Result<()> {
             }
         } else {
             let extra = vec!["-o".into(), "BatchMode=yes".into()];
+            let full_cmd = {
+                let mut parts = vec!["ssh".to_string()];
+                parts.extend(extra.clone());
+                parts.extend(ssh_args.clone());
+                parts.join(" ")
+            };
             match spawn_ssh(extra) {
                 Ok(c) => c,
                 Err(e) => {
                     println!("FAILED: {e}");
+                    println!("  Command: {full_cmd}");
+                    println!("  Check that ssh is installed and the identity file is accessible.");
                     let cmd = build_ssh_command(ssh, &cfg.database.url).unwrap_or_default();
                     println!("  Establish it manually:\n    {cmd}");
                     continue;
@@ -1548,9 +1571,14 @@ fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Result<()> {
             let _ = child.kill();
             let _ = child.wait();
             println!("FAILED");
+            println!("  PostgreSQL not reachable through SSH tunnel (polled for up to 30s)");
+            println!("  Possible causes:");
+            println!("    - Database host:port is wrong: {fwd_host}:{fwd_port}");
+            println!("    - Database is not running or not accepting connections");
+            println!("    - SSH tunnel failed to forward (check bastion logs)");
             let cmd = build_ssh_command(ssh, &cfg.database.url)
                 .unwrap_or_else(|| "ssh command unavailable".to_string());
-            println!("  Establish it manually:\n    {cmd}");
+            println!("  Establish tunnel manually for debug:\n    {cmd}");
         }
     }
     Ok(())
@@ -1703,7 +1731,7 @@ fn cmd_serve_setup(_loader: &ConfigLoader, repo_root: &Path) -> Result<()> {
     mcp::run_setup_server(repo_root)
 }
 
-fn extract_host_port(url: &str) -> Option<(String, u16)> {
+pub(crate) fn extract_host_port(url: &str) -> Option<(String, u16)> {
     let without_prefix = url.strip_prefix("jdbc:postgresql://")?;
     let host_port = without_prefix.split('/').next()?;
     let (host, port_str) = host_port.split_once(':')?;
@@ -1712,7 +1740,7 @@ fn extract_host_port(url: &str) -> Option<(String, u16)> {
 }
 
 /// Quick check if a TCP endpoint responds like a PostgreSQL server.
-fn check_postgres(addr: &std::net::SocketAddr) -> bool {
+pub(crate) fn check_postgres(addr: &std::net::SocketAddr) -> bool {
     use std::io::{Read, Write};
     use std::time::Duration;
     let mut stream = match std::net::TcpStream::connect_timeout(addr, Duration::from_secs(3)) {
@@ -1816,11 +1844,16 @@ fn cmd_check(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
                 Some(a) if std::net::TcpStream::connect_timeout(a, std::time::Duration::from_secs(3)).is_ok() =>
                     println!("  ✓ Bastion reachable at {bastion_host}:{bastion_port}"),
                 Some(_) => {
-                    println!("  ✗ Bastion unreachable at {bastion_host}:{bastion_port}");
+                    println!("  ✗ Bastion unreachable at {bastion_host}:{bastion_port} (connect timed out after 3s)");
+                    if let Some(ref identity_file) = ssh.identity_file {
+                        if !std::path::Path::new(identity_file).exists() {
+                            println!("  ✗ SSH identity file not found: {identity_file}");
+                        }
+                    }
                     let cmd = build_ssh_command(ssh, &resolved.environment.database.url);
                     if let Some(c) = cmd { println!("  To establish: {c}"); }
                     return Err(SafeselectError::Other(
-                        format!("SSH bastion {bastion_host}:{bastion_port} not reachable.")
+                        format!("SSH bastion {bastion_host}:{bastion_port} not reachable (connect timed out after 3s).")
                     ));
                 }
                 None => {
@@ -1831,16 +1864,17 @@ fn cmd_check(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
                 }
             }
 
-            // 2) Check PostgreSQL reachability via the tunnel endpoint (from URL)
+            // 2) Establish SSH tunnel if needed, then check PostgreSQL reachability
             if let Some((host, port)) = extract_host_port(&resolved.environment.database.url) {
                 use std::net::ToSocketAddrs;
-                let pg_addr = match format!("{host}:{port}").to_socket_addrs() {
-                    Ok(mut addrs) => addrs.next(),
-                    Err(_) => {
-                        println!("  ◇ Establishing tunnel...");
-                        let _ = setup_ssh_tunnels(repo_root, &[environment.to_string()]);
-                        format!("{host}:{port}").to_socket_addrs().ok().and_then(|mut a| a.next())
-                    }
+                let pg_addr = format!("{host}:{port}").to_socket_addrs().ok().and_then(|mut a| a.next());
+                // If SSH is enabled and PostgreSQL is not already reachable, try establishing the tunnel
+                let pg_addr = if pg_addr.as_ref().is_some_and(|a| check_postgres(a)) {
+                    pg_addr
+                } else {
+                    println!("  ◇ Establishing SSH tunnel...");
+                    let _ = setup_ssh_tunnels(repo_root, &[environment.to_string()]);
+                    format!("{host}:{port}").to_socket_addrs().ok().and_then(|mut a| a.next())
                 };
 
                 match pg_addr {
@@ -1848,9 +1882,15 @@ fn cmd_check(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
                         println!("  ✓ PostgreSQL reachable at {host}:{port}"),
                     _ => {
                         println!("  ✗ PostgreSQL unreachable at {host}:{port}");
+                        println!("  Possible causes:");
+                        println!("    - Database host:port is wrong ({host}:{port})");
+                        println!("    - Database is not running or not accepting connections");
+                        println!("    - SSH tunnel is not established or not forwarding correctly");
                         let cmd = build_ssh_command(ssh, &resolved.environment.database.url);
                         if let Some(c) = cmd { println!("  To establish tunnel: {c}"); }
-                        return Err(SafeselectError::Other("Cannot reach PostgreSQL through SSH tunnel.".into()));
+                        return Err(SafeselectError::Other(
+                            format!("Cannot reach PostgreSQL at {host}:{port} through SSH tunnel (read timed out after 2s).")
+                        ));
                     }
                 }
             }
@@ -1865,12 +1905,14 @@ fn cmd_check(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
         resolved.environment.database.url.split('/').last().unwrap_or("?")
     );
 
-    let mut sidecar = SidecarProcess::start(
+    let mut sidecar = SidecarProcess::start_with_timeout(
         &resolved.driver.path,
         &resolved.driver.class,
         &resolved.environment.database.url,
         &resolved.environment.database.username,
         &resolved.password,
+        0,
+        resolved.project.limits.statement_timeout_ms,
     )?;
 
     sidecar.ping()?;
@@ -1899,12 +1941,14 @@ fn cmd_query(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
         }
     };
 
-    let mut sidecar = SidecarProcess::start(
+    let mut sidecar = SidecarProcess::start_with_timeout(
         &resolved.driver.path,
         &resolved.driver.class,
         &resolved.environment.database.url,
         &resolved.environment.database.username,
         &resolved.password,
+        0,
+        resolved.project.limits.statement_timeout_ms,
     )?;
 
     let security = security::SecurityEngine::new(resolved.project.security.clone(), resolved.project.limits.clone());
@@ -1982,12 +2026,14 @@ fn cmd_connectivity_action(loader: &ConfigLoader, repo_root: &std::path::Path, e
     let name = project_display_name(repo_root);
     let resolved = loader.resolve_local(repo_root, environment)?;
 
-    let mut sidecar = SidecarProcess::start(
+    let mut sidecar = SidecarProcess::start_with_timeout(
         &resolved.driver.path,
         &resolved.driver.class,
         &resolved.environment.database.url,
         &resolved.environment.database.username,
         &resolved.password,
+        0,
+        resolved.project.limits.statement_timeout_ms,
     )?;
 
     match action {
