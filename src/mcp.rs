@@ -1495,23 +1495,28 @@ impl McpServer {
     }
 
     fn handle_reconnect(&mut self, id: Option<serde_json::Value>) -> Result<()> {
-        tracing::info!("Reconnecting sidecar");
+        let start = std::time::Instant::now();
+        tracing::info!("Reconnect started");
 
         // Load config to check if SSH tunnel needs to be established
         let loader = ConfigLoader::new();
         if let Ok(resolved) = loader.resolve_local(&self.repo_root, &self.env_name) {
             if let Some(ref ssh) = resolved.environment.ssh {
                 if ssh.enabled {
-                    tracing::info!("Establishing SSH tunnel before reconnect");
+                    tracing::info!("Establishing SSH tunnel before reconnect ({:?})", start.elapsed());
                     if let Err(e) = setup_ssh_tunnels(&self.repo_root, &[self.env_name.clone()]) {
                         return self.send_error(id, -32000, format!("SSH tunnel setup failed: {e}"));
                     }
+                    tracing::info!("SSH tunnel established ({:?})", start.elapsed());
                 }
             }
         }
 
+        tracing::info!("Restarting sidecar ({:?})", start.elapsed());
         match self.restart_sidecar() {
-            Ok(()) => {}
+            Ok(()) => {
+                tracing::info!("Sidecar restarted ({:?})", start.elapsed());
+            }
             Err(e) => return self.send_error(id, -32000, format!("Reconnect failed: {e}")),
         }
 
@@ -1520,14 +1525,19 @@ impl McpServer {
             None => return self.send_error(id, -32000, "Sidecar not available after restart"),
         };
 
+        tracing::info!("Pinging sidecar ({:?})", start.elapsed());
         if let Err(e) = sidecar.ping() {
             return self.send_error(id, -32000, format!("Ping failed: {e}"));
         }
+        tracing::info!("Ping OK ({:?})", start.elapsed());
 
+        tracing::info!("Executing verification query ({:?})", start.elapsed());
         match sidecar.execute("SELECT 1 AS connection_test") {
             Ok(result) => {
+                tracing::info!("Verification query completed ({:?})", start.elapsed());
                 let text = format!(
-                    "Reconnected and verified.\n  ✓ Sidecar restarted\n  ✓ Ping OK\n  ✓ SELECT 1 returned {} row(s)",
+                    "Reconnected and verified in {:?}.\n  ✓ Sidecar restarted\n  ✓ Ping OK\n  ✓ SELECT 1 returned {} row(s)",
+                    start.elapsed(),
                     result.row_count
                 );
                 let resp = ok_text_response(id, text);
