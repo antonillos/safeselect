@@ -805,8 +805,28 @@ impl McpServer {
             let _ = self.audit.record("AUTO_RECONNECT", "allow", "connection lost — reconnected");
             self.sidecar.as_mut().unwrap().execute(sql)
         } else {
-            result
+            tracing::warn!("Execute + reconnect both failed — restarting sidecar process");
+            self.restart_sidecar()?;
+            self.sidecar.as_mut().unwrap().execute(sql)
         }
+    }
+
+    fn restart_sidecar(&mut self) -> Result<()> {
+        if let Some(s) = self.sidecar.take() {
+            let _ = s.shutdown();
+        }
+        let sidecar = SidecarProcess::start_with_timeout(
+            &self.driver_path,
+            &self.driver_class,
+            &self.db_url,
+            &self.db_username,
+            &self.db_password,
+            self.idle_timeout_seconds,
+            self.security.limits().statement_timeout_ms,
+        )?;
+        tracing::info!("Sidecar restarted successfully");
+        self.sidecar = Some(sidecar);
+        Ok(())
     }
 
     fn handle_config_validate(&mut self, id: Option<serde_json::Value>, args: &serde_json::Value) -> Result<()> {
