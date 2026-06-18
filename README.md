@@ -32,12 +32,18 @@ SafeSelect is a secure SQL proxy between AI coding agents and your databases. It
 # 1. Install
 brew install antonillos/tap/safeselect
 
-# 2. Import — auto-detects driver, passwords, everything
+# 2. Import — auto-detects driver, passwords, SSH, everything
 safeselect import-dbeaver ~/Downloads/dbeaver-export.zip
 #    Or from docker-compose:
 #    safeselect import-compose
 
-# 3. Verify connectivity
+#    During import, you will be prompted for:
+#    - Environment names (one per connection)
+#    - SSH tunnel config (if detected from DBeaver)
+#    - Database username (if not found in export)
+#    - Database passwords (stored in macOS Keychain)
+
+# 3. Verify connectivity (auto-establishes SSH tunnel if needed)
 safeselect check --environment testing
 
 # 4. Connect your AI agent (name auto-generates as <project>-testing)
@@ -71,6 +77,7 @@ safeselect agent install opencode --environment testing
 | `config rename-environment --old <o> --new <n>` | Rename environment |
 | `config delete-environment --name <n>` | Delete environment |
 | `config set-password --environment <e>` | Store password in Keychain and update config |
+| `config reset [--project <p>]` | Remove all environments + keychain entries |
 | `driver download --vendor postgresql` | Download JDBC driver |
 | `driver add --vendor <v> --path <jar> --class <c>` | Register custom driver |
 | `driver list` | List registered drivers |
@@ -78,7 +85,7 @@ safeselect agent install opencode --environment testing
 | `agent uninstall <client> --name <n>` | Remove MCP entry |
 | `agent detect` | Detect installed MCP clients |
 | `agent status` | Show installation status |
-| `import-dbeaver <path-to-zip>` | Import from DBeaver export (stores passwords in Keychain) |
+| `import-dbeaver <path-to-zip> [--non-interactive]` | Import from DBeaver export (interactive wizard with SSH setup) |
 | `import-compose [--path <yml>] [--non-interactive]` | Import from docker-compose (auto-downloads driver, prompts for passwords) |
 | `connect --project <p> --environment <e>` | Reconnect to database |
 | `disconnect --project <p> --environment <e>` | Disconnect from database |
@@ -151,9 +158,13 @@ max_result_bytes = 2_000_000
 version = 1
 [database]
 driver = "postgresql"
-url = "jdbc:postgresql://localhost:5432/myapp"
+url = "jdbc:postgresql://localhost:15432/myapp?sslmode=require"
 username = "reader"
 ```
+
+When SSH tunneling is configured, the JDBC URL uses `localhost:15432` (forwarding port)
+with `sslmode=require` (Azure PostgreSQL requires SSL at protocol level).
+The SSH server port and forwarding port are intentionally different to avoid conflicts.
 
 The password is configured separately — run this once:
 
@@ -162,6 +173,34 @@ safeselect config set-password --environment testing
 ```
 
 This stores the password in your macOS Keychain and adds the `[database.secret]` section to the toml automatically.
+
+### SSH tunnels
+
+If your DBeaver connection uses an SSH tunnel, SafeSelect will prompt for
+SSH configuration during import:
+
+- **SSH bastion host**: the jump host (e.g., `localhost` if using a local forward)
+- **SSH port**: the SSH server port (e.g., `2222`)
+- **SSH user**: the SSH username (e.g., `jumpboxdev`)
+- **Auth method**: key file or password
+
+For password-based SSH auth, install `sshpass` for automatic tunnel setup:
+```bash
+brew install <your-tap>/sshpass
+```
+
+SafeSelect forwards local port `15432` to the database through the SSH tunnel
+and uses `sslmode=require` for Azure PostgreSQL compatibility.
+
+Tunnel health is verified in two steps:
+1. **Bastion reachability**: TCP check to the SSH server endpoint
+2. **PostgreSQL protocol check**: SSLRequest to verify the target responds as PostgreSQL
+
+### Version tracking
+
+`project.toml` stores a `generated_by` field with the SafeSelect version that
+created the config. When reimporting with a different version, you will be
+prompted to reset environments first.
 
 ### Advanced: Manual secret setup
 
@@ -203,6 +242,7 @@ Then export the variable before running `safeselect`.
 - Rust 1.81+ (to build from source)
 - Java 17+
 - Maven 3.8+ (to rebuild the sidecar)
+- `sshpass` (optional, for automatic password-based SSH tunnel setup)
 
 To build from source:
 
