@@ -1,8 +1,13 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
+const VERSION: &str = match option_env!("SAFESELECT_BUILD_VERSION") {
+    Some(v) => v,
+    None => env!("CARGO_PKG_VERSION"),
+};
+
 #[derive(Parser)]
-#[command(name = "safeselect", about = "MCP SQL Fail-Closed for AI Agents", version)]
+#[command(name = "safeselect", about = "MCP SQL Fail-Closed for AI Agents", version = VERSION)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
@@ -37,6 +42,9 @@ pub enum Command {
     ImportDbeaver {
         /// Path to DBeaver .zip export
         path: String,
+        /// Non-interactive mode — import all connections without prompting
+        #[arg(long, default_value_t = false)]
+        non_interactive: bool,
     },
     /// Discover PostgreSQL connections from docker-compose files
     ImportCompose {
@@ -108,6 +116,44 @@ pub enum ConfigAction {
         #[arg(long)]
         environment: String,
     },
+    /// Rename an environment
+    RenameEnvironment {
+        /// Current environment name
+        #[arg(long)]
+        old: String,
+        /// New environment name
+        #[arg(long)]
+        new: String,
+        /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
+        #[arg(long)]
+        project: Option<PathBuf>,
+    },
+    /// Delete an environment configuration
+    DeleteEnvironment {
+        /// Environment name to delete
+        #[arg(long)]
+        name: String,
+        /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
+        #[arg(long)]
+        project: Option<PathBuf>,
+    },
+    /// Store a password in the Keychain and update the environment config
+    SetPassword {
+        #[arg(long)]
+        environment: String,
+        /// Password value (prompts securely if omitted)
+        #[arg(long)]
+        password: Option<String>,
+        /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
+        #[arg(long)]
+        project: Option<PathBuf>,
+    },
+    /// Reset project config (removes all environments and keychain entries)
+    Reset {
+        /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
+        #[arg(long)]
+        project: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -145,8 +191,9 @@ pub enum AgentAction {
         project: Option<PathBuf>,
         #[arg(long)]
         environment: String,
+        /// Entry name (default: <project-dir>-<environment>)
         #[arg(long)]
-        name: String,
+        name: Option<String>,
     },
     /// Uninstall MCP entry
     Uninstall {

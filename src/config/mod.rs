@@ -167,7 +167,16 @@ impl ConfigLoader {
             ));
         }
         let content = std::fs::read_to_string(&env_file)?;
-        let mut environment: EnvironmentConfig = toml::from_str(&content)?;
+        let mut environment: EnvironmentConfig = toml::from_str(&content).map_err(|e| {
+            let msg = format!(
+                "invalid {}: {e}\n\
+                 Hint: if you added [database.secret] manually, ensure it has a \"source\" field.\n  \
+                 Valid sources: \"macos-keychain\" (macOS Keychain) or \"env\" (environment variable).\n  \
+                 See: safeselect import-compose --help",
+                env_file.display()
+            );
+            SafeselectError::Config(msg)
+        })?;
 
         let driver = self.load_driver(&environment.database.driver)?;
         self.validate_driver_file(&driver)?;
@@ -184,7 +193,8 @@ impl ConfigLoader {
             })
         } else {
             Err(SafeselectError::Config(format!(
-                "no secret configured in {}",
+                "no secret configured in {}\n\
+                 Run:\n  safeselect config set-password --environment {env_name}",
                 env_file.display()
             )))
         }

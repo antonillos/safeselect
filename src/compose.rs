@@ -2,6 +2,32 @@ use crate::error::Result;
 use std::collections::HashMap;
 use std::path::Path;
 
+/// Returns a platform-appropriate hint for configuring a database secret.
+pub fn secret_setup_hint(project_name: &str, env_name: &str) -> String {
+    if cfg!(target_os = "macos") {
+        format!(
+            "security add-generic-password -a \"{project_name}/{env_name}\" -s \"safeselect\" -w \"<password>\""
+        )
+    } else {
+        let var = format!(
+            "SAFESELECT_PASSWORD_{}",
+            env_name.to_uppercase().replace('-', "_")
+        );
+        format!(
+            "export {var}=\"<password>\"  # then edit .safeselect/environments/{env_name}.toml:\n  \
+             [database.secret]\n  source = \"env\"\n  variable = \"{var}\""
+        )
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ImportResult {
+    pub created: usize,
+    pub env_names: Vec<String>,
+    /// (env_name, account_name_for_keychain)
+    pub no_password: Vec<(String, String)>,
+}
+
 #[derive(Debug, Clone)]
 pub struct ComposeConnection {
     pub name: String,
@@ -251,7 +277,7 @@ pub fn write_config_files(
     repo_root: &Path,
     connections: &[ComposeConnection],
     project_name: &str,
-) -> Result<usize> {
+) -> Result<ImportResult> {
     use crate::config;
 
     let safeselect_dir = repo_root.join(".safeselect");
@@ -259,6 +285,8 @@ pub fn write_config_files(
     std::fs::create_dir_all(&env_dir)?;
 
     let mut created = 0;
+    let mut env_names = vec![];
+    let mut no_password = vec![];
 
     let project_config = config::ProjectConfig::default();
     let project_toml = toml::to_string_pretty(&project_config)
@@ -292,10 +320,6 @@ pub fn write_config_files(
                 variable: None,
             })
         } else {
-            eprintln!(
-                "WARN: No password configured for '{}' — set one manually or via keychain",
-                conn.service
-            );
             None
         };
 
@@ -316,12 +340,76 @@ pub fn write_config_files(
             .map_err(|e| crate::error::SafeselectError::TomlSer(e.to_string()))?;
         let env_file = env_dir.join(format!("{}.toml", conn.env_name));
         if !env_file.exists() {
+            if conn.password_var.is_none() && conn.password_literal.is_none() {
+                let account = format!("{}/{}", project_name, conn.env_name);
+                eprintln!(
+                    "WARN: No password configured for '{}'.\n  {}",
+                    conn.service,
+                    secret_setup_hint(project_name, &conn.env_name)
+                );
+                no_password.push((conn.env_name.clone(), account));
+            }
             std::fs::write(&env_file, env_toml)?;
             created += 1;
         }
+        env_names.push(conn.env_name.clone());
     }
 
-    Ok(created)
+    Ok(ImportResult {
+        created,
+        env_names,
+        no_password,
+    })
+}
+
+pub fn read_password_from_keychain(account: &str) -> Result<String> {
+    let output = std::process::Command::new("security")
+        .args([
+            "find-generic-password",
+            "-a",
+            account,
+            "-s",
+            "safeselect",
+            "-w",
+        ])
+        .output()
+        .map_err(|e| {
+            crate::error::SafeselectError::Secret(format!("security find failed: {e}"))
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(crate::error::SafeselectError::KeychainNotFound(format!(
+            "{account}: {stderr}"
+        )));
+    }
+
+    Ok(String::from_utf8(output.stdout)
+        .map_err(|_| crate::error::SafeselectError::Secret("invalid UTF-8 from keychain".into()))?
+        .trim()
+        .to_string())
+}
+
+pub fn delete_password_from_keychain(account: &str) -> Result<()> {
+    let output = std::process::Command::new("security")
+        .args([
+            "delete-generic-password",
+            "-a",
+            account,
+            "-s",
+            "safeselect",
+        ])
+        .output()
+        .map_err(|e| {
+            crate::error::SafeselectError::Secret(format!("security delete failed: {e}"))
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        eprintln!("WARN: could not delete old Keychain entry: {stderr}");
+    }
+
+    Ok(())
 }
 
 pub fn store_password_in_keychain(account: &str, password: &str) -> Result<()> {

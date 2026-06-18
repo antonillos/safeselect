@@ -13,7 +13,7 @@ SQL proxy for AI agents. Fail-closed security model: any incident terminates the
 - `sidecar/` — Java sidecar (JDBC proxy via stdin/stdout JSON-lines)
 - `skills/` — OpenCode skill manifest
 - `docs/` — Documentation
-- `Formula/` — Homebrew formula (published to antonillos/homebrew-tap)
+- `packaging/homebrew/` — Homebrew formula (published to antonillos/homebrew-tap)
 
 ## Key Architecture Decisions
 
