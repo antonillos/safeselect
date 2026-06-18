@@ -1513,12 +1513,19 @@ fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Result<()> {
             }
         };
 
-        // Wait a moment for the tunnel to establish
-        std::thread::sleep(Duration::from_secs(2));
-        let pg_ok = db_addr.as_ref().is_some_and(|a| {
-            std::net::TcpStream::connect_timeout(a, Duration::from_secs(3)).is_ok()
-                && check_postgres(a)
-        });
+        // Wait for the tunnel to establish (retry up to 30s)
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        let mut pg_ok = false;
+        while std::time::Instant::now() < deadline {
+            pg_ok = db_addr.as_ref().is_some_and(|a| {
+                std::net::TcpStream::connect_timeout(a, Duration::from_secs(3)).is_ok()
+                    && check_postgres(a)
+            });
+            if pg_ok {
+                break;
+            }
+            std::thread::sleep(Duration::from_secs(2));
+        }
         if pg_ok {
             println!("OK");
             // Detach child so it survives after we exit
