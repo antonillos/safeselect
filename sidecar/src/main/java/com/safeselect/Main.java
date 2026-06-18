@@ -17,6 +17,7 @@ public class Main {
     private static String user;
     private static String password;
     private static long idleTimeoutMs = 0;
+    private static long statementTimeoutMs = 0;
     private static final AtomicLong lastActivityMs = new AtomicLong(System.currentTimeMillis());
 
     public static void main(String[] args) throws Exception {
@@ -32,11 +33,12 @@ public class Main {
                 case "--user" -> user = args[++i];
                 case "--password-stdin" -> passwordStdin = true;
                 case "--idle-timeout-seconds" -> idleTimeoutMs = Long.parseLong(args[++i]) * 1000;
+                case "--statement-timeout-ms" -> statementTimeoutMs = Long.parseLong(args[++i]);
             }
         }
 
         if (driverClass == null || jdbcUrl == null || user == null || !passwordStdin) {
-            System.err.println("Usage: --driver <class> --url <jdbc> --user <name> --password-stdin [--idle-timeout-seconds <sec>]");
+            System.err.println("Usage: --driver <class> --url <jdbc> --user <name> --password-stdin [--idle-timeout-seconds <sec>] [--statement-timeout-ms <ms>]");
             System.exit(1);
         }
 
@@ -60,6 +62,7 @@ public class Main {
             Class.forName(driverClass);
             System.err.println("Connecting: url=" + jdbcUrl + " user=" + user + " driver=" + driverClass);
             connection = DriverManager.getConnection(jdbcUrl, user, password);
+            applyStatementTimeout();
 
             while (RUNNING.get()) {
                 String line = reader.readLine();
@@ -108,6 +111,15 @@ public class Main {
             System.err.println("Fatal error: " + e.getMessage());
             e.printStackTrace(System.err);
             System.exit(1);
+        }
+    }
+
+    private static void applyStatementTimeout() throws SQLException {
+        if (statementTimeoutMs > 0 && connection != null && !connection.isClosed()) {
+            try (Statement s = connection.createStatement()) {
+                s.execute("SET statement_timeout = " + statementTimeoutMs);
+                System.err.println("Statement timeout set to " + statementTimeoutMs + "ms");
+            }
         }
     }
 
@@ -165,6 +177,7 @@ public class Main {
             return;
         }
         connection = DriverManager.getConnection(jdbcUrl, user, password);
+        applyStatementTimeout();
         sendResponse(writer, id, Map.of("status", "connected"), null);
     }
 
@@ -245,9 +258,15 @@ public class Main {
         } catch (SQLException e) {
             Map<String, Object> error = new LinkedHashMap<>();
             error.put("code", "SQL_ERROR");
-            error.put("message", e.getMessage());
             error.put("sql_state", e.getSQLState());
             error.put("error_code", e.getErrorCode());
+            String sqlState = e.getSQLState();
+            if ("57014".equals(sqlState) && statementTimeoutMs > 0) {
+                error.put("message", "Statement timeout exceeded: " + statementTimeoutMs + "ms - the query took too long to execute");
+                error.put("timeout_ms", statementTimeoutMs);
+            } else {
+                error.put("message", e.getMessage());
+            }
             sendResponse(writer, id, null, error);
         }
     }
