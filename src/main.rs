@@ -100,6 +100,13 @@ fn run(cli: Cli) -> Result<()> {
             let dir = resolve_project_dir(&loader, project)?;
             cmd_connectivity_action(&loader, &dir, &environment, "connect")
         }
+        Command::Reconnect {
+            project,
+            environment,
+        } => {
+            let dir = resolve_project_dir(&loader, project)?;
+            cmd_reconnect(&loader, &dir, &environment)
+        }
         Command::Uninstall { force } => cmd_uninstall(force),
     }
 }
@@ -2050,6 +2057,34 @@ fn cmd_connectivity_action(loader: &ConfigLoader, repo_root: &std::path::Path, e
     }
 
     sidecar.shutdown()?;
+    Ok(())
+}
+
+fn cmd_reconnect(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &str) -> Result<()> {
+    let name = project_display_name(repo_root);
+    println!("Reconnecting to {name}/{environment}...");
+
+    let resolved = loader.resolve_local(repo_root, environment)?;
+
+    let mut sidecar = SidecarProcess::start_with_timeout(
+        &resolved.driver.path,
+        &resolved.driver.class,
+        &resolved.environment.database.url,
+        &resolved.environment.database.username,
+        &resolved.password,
+        0,
+        resolved.project.limits.statement_timeout_ms,
+    )?;
+
+    sidecar.ping()?;
+    println!("  ✓ Sidecar started and pinged");
+
+    let result = sidecar.execute("SELECT 1 AS connection_test")?;
+    println!("  ✓ Connection verified: SELECT 1 returned {} row(s)", result.row_count);
+
+    sidecar.shutdown()?;
+    println!("  ✓ Reconnection successful to {name}/{environment}");
+
     Ok(())
 }
 

@@ -524,6 +524,14 @@ impl McpServer {
                     "required": ["confirm"]
                 }),
             },
+            ToolDefinition {
+                name: "reconnect".into(),
+                description: "Restart the sidecar process and verify the database connection with a test query".into(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }),
+            },
         ];
 
         let resp = JsonRpcResponse {
@@ -572,6 +580,7 @@ impl McpServer {
             "import_compose" => self.handle_import_compose(msg.id.clone(), &args),
             "check" => self.handle_check(msg.id.clone()),
             "uninstall" => self.handle_uninstall(msg.id.clone(), &args),
+            "reconnect" => self.handle_reconnect(msg.id.clone()),
             _ => self.send_error(msg.id.clone(), -32602, format!("Unknown tool: {tool_name}")),
         }
     }
@@ -1482,6 +1491,36 @@ impl McpServer {
 
         let resp = ok_text_response(id, lines.join("\n"));
         self.write_response(&resp)
+    }
+
+    fn handle_reconnect(&mut self, id: Option<serde_json::Value>) -> Result<()> {
+        tracing::info!("Reconnecting sidecar");
+
+        match self.restart_sidecar() {
+            Ok(()) => {}
+            Err(e) => return self.send_error(id, -32000, format!("Reconnect failed: {e}")),
+        }
+
+        let sidecar = match self.sidecar.as_mut() {
+            Some(s) => s,
+            None => return self.send_error(id, -32000, "Sidecar not available after restart"),
+        };
+
+        if let Err(e) = sidecar.ping() {
+            return self.send_error(id, -32000, format!("Ping failed: {e}"));
+        }
+
+        match sidecar.execute("SELECT 1 AS connection_test") {
+            Ok(result) => {
+                let text = format!(
+                    "Reconnected and verified.\n  ✓ Sidecar restarted\n  ✓ Ping OK\n  ✓ SELECT 1 returned {} row(s)",
+                    result.row_count
+                );
+                let resp = ok_text_response(id, text);
+                self.write_response(&resp)
+            }
+            Err(e) => self.send_error(id, -32000, format!("Verification query failed: {e}")),
+        }
     }
 
     fn handle_uninstall(&mut self, id: Option<serde_json::Value>, args: &serde_json::Value) -> Result<()> {
