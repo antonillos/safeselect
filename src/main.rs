@@ -1027,9 +1027,11 @@ fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
         };
 
         // URL points through the SSH tunnel when one is configured
+        // Azure PostgreSQL requires SSL at protocol level
+        // Use 15432 as local forward port (different from SSH server port 2222)
         let url = if has_ssh {
-            let tunnel_port = conn.ssh_port.unwrap_or(22);
-            format!("jdbc:postgresql://localhost:{}/{}", tunnel_port, conn.database)
+            let local_forward_port = 15432;
+            format!("jdbc:postgresql://localhost:{}/{}?sslmode=require", local_forward_port, conn.database)
         } else {
             format!("jdbc:postgresql://{}:{}/{}", conn.host, conn.port, conn.database)
         };
@@ -1395,8 +1397,12 @@ fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Result<()> {
             std::net::TcpStream::connect_timeout(a, Duration::from_secs(3)).is_ok()
         });
 
-        // Step 2: Check PostgreSQL via tunnel endpoint (localhost:bastion_port)
-        let pg_via_tunnel = bastion_addr.as_ref().is_some_and(check_postgres);
+        // Step 2: Check PostgreSQL via tunnel endpoint (localhost:15432)
+        let tunnel_pg_addr = format!("localhost:15432")
+            .to_socket_addrs()
+            .ok()
+            .and_then(|mut a| a.next());
+        let pg_via_tunnel = tunnel_pg_addr.as_ref().is_some_and(check_postgres);
 
         // Step 3: Check PostgreSQL via original target (if resolvable)
         let pg_via_direct = db_addr.as_ref().is_some_and(check_postgres);
@@ -1450,8 +1456,8 @@ fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Result<()> {
             _ => false,
         };
 
-        // Use SSH bastion port as the local forward port
-        let tunnel_local_port = ssh.port.unwrap_or(2222);
+        // Use a different local port (15432) for forwarding, not the SSH server port
+        let tunnel_local_port = 15432;
         // Build SSH args
         let mut ssh_args: Vec<String> = vec![
             "-o".into(), "ConnectTimeout=5".into(),
@@ -1763,8 +1769,8 @@ fn build_ssh_command(ssh: &config::SshConfig, _db_url: &str) -> Option<String> {
     let forward_host = ssh.forward_host.as_deref()?;
     let forward_port = ssh.forward_port?;
 
-    // Use the SSH bastion port as the local forward port
-    let local_port = ssh.port.unwrap_or(22);
+    // Use 15432 as the local forward port (different from SSH server port)
+    let local_port = 15432;
 
     let mut cmd = format!(
         "ssh -L {local_port}:{forward_host}:{forward_port} {user}@{bastion}"
