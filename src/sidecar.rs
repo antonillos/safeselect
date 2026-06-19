@@ -206,9 +206,11 @@ impl SidecarProcess {
         self.writer.flush()?;
 
         let fd = self.reader.get_ref().as_raw_fd();
-        // Wait for statement timeout + 10s buffer, minimum 30s
+        // Wait for statement timeout + 1s buffer, minimum 30s
+        // The 1s buffer allows PostgreSQL to cancel the query via statement_timeout
+        // before we kill the sidecar process
         let timeout_ms = if self.statement_timeout_ms > 0 {
-            let t = (self.statement_timeout_ms + 10_000u64).max(30_000u64);
+            let t = (self.statement_timeout_ms + 1_000u64).max(30_000u64);
             if t > i32::MAX as u64 { i32::MAX } else { t as i32 }
         } else {
             30_000i32
@@ -280,6 +282,23 @@ impl SidecarProcess {
         let _ = self.send_request("shutdown", None);
         let _ = self.child.wait();
         Ok(())
+    }
+
+    /// Force kill the sidecar without trying to send a shutdown request.
+    /// Use this when the sidecar is hung or unresponsive.
+    pub fn force_kill(mut self) -> Result<()> {
+        tracing::warn!("Force killing sidecar process (PID: {})", self.child.id());
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        Ok(())
+    }
+
+    /// Force kill the sidecar without consuming self.
+    /// Use this when restarting after a timeout.
+    pub fn force_kill_ref(&mut self) {
+        tracing::warn!("Force killing sidecar process (PID: {})", self.child.id());
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 
