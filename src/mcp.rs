@@ -805,18 +805,31 @@ impl McpServer {
 
     /// Execute a query, reconnecting once if the connection is lost.
     fn execute_with_reconnect(&mut self, sql: &str) -> std::result::Result<crate::sidecar::QueryResult, crate::error::SafeselectError> {
+        let start = std::time::Instant::now();
+        tracing::debug!("execute_with_reconnect started");
+        
         self.ensure_sidecar()?;
+        tracing::debug!("Sidecar ensured ({:?})", start.elapsed());
+        
         let result = self.sidecar.as_mut().unwrap().execute(sql);
+        tracing::debug!("First execute attempt completed ({:?})", start.elapsed());
+        
         if result.is_ok() {
             return result;
         }
+        
+        tracing::warn!("First execute failed ({:?}), attempting JDBC reconnect", start.elapsed());
         let reconnected = self.sidecar.as_mut().unwrap().connect().is_ok();
+        tracing::debug!("JDBC reconnect completed ({:?})", start.elapsed());
+        
         if reconnected {
             let _ = self.audit.record("AUTO_RECONNECT", "allow", "connection lost — reconnected");
+            tracing::info!("JDBC reconnect succeeded, retrying query ({:?})", start.elapsed());
             self.sidecar.as_mut().unwrap().execute(sql)
         } else {
-            tracing::warn!("Execute + reconnect both failed — restarting sidecar process");
+            tracing::warn!("Execute + reconnect both failed — restarting sidecar process ({:?})", start.elapsed());
             self.restart_sidecar()?;
+            tracing::info!("Sidecar restarted ({:?}), retrying query", start.elapsed());
             self.sidecar.as_mut().unwrap().execute(sql)
         }
     }

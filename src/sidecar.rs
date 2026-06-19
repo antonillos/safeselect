@@ -166,8 +166,13 @@ impl SidecarProcess {
     }
 
     pub fn execute(&mut self, sql: &str) -> Result<QueryResult> {
+        let start = std::time::Instant::now();
+        tracing::debug!("Sidecar execute started");
+        
         let params = serde_json::json!({"sql": sql});
         let resp = self.send_request("execute", Some(params))?;
+        
+        tracing::debug!("Sidecar execute send_request completed ({:?})", start.elapsed());
 
         if let Some(err) = resp.error {
             return Err(SafeselectError::Sidecar(format!(
@@ -179,6 +184,7 @@ impl SidecarProcess {
         match resp.ok {
             Some(val) => {
                 let result: QueryResult = serde_json::from_value(val)?;
+                tracing::debug!("Sidecar execute completed ({:?})", start.elapsed());
                 Ok(result)
             }
             None => Err(SafeselectError::Sidecar("empty response from sidecar".into())),
