@@ -73,6 +73,9 @@ pub enum Command {
         /// SQL query to execute (reads from stdin if omitted)
         #[arg(long)]
         sql: Option<String>,
+        /// Enable verbose logging (sidecar debug output)
+        #[arg(long, default_value_t = false)]
+        verbose: bool,
     },
     /// Disconnect from the database (MCP tool — callable by AI agents)
     Disconnect {
@@ -202,6 +205,9 @@ pub enum AgentAction {
         /// Entry name (default: <project-dir>-<environment>)
         #[arg(long)]
         name: Option<String>,
+        /// Install to project-local config instead of global config
+        #[arg(long)]
+        local: bool,
     },
     /// Uninstall MCP entry
     Uninstall {

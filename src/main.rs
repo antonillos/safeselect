@@ -82,9 +82,10 @@ fn run(cli: Cli) -> Result<()> {
             project,
             environment,
             sql,
+            verbose,
         } => {
             let dir = resolve_project_dir(&loader, project)?;
-            cmd_query(&loader, &dir, &environment, sql.as_deref())
+            cmd_query(&loader, &dir, &environment, sql.as_deref(), verbose)
         }
         Command::Disconnect {
             project,
@@ -708,6 +709,7 @@ fn cmd_agent(action: AgentAction) -> Result<()> {
             project,
             environment,
             name,
+            local,
         } => {
             let loader = ConfigLoader::new();
             let (repo_root, project_dir) = match project {
@@ -754,7 +756,7 @@ fn cmd_agent(action: AgentAction) -> Result<()> {
                 120_000 // Default 2 minutes if no repo_root
             };
             
-            agents::install_entry(&client, &environment, &entry_name, repo_root.as_deref(), Some(loader.config_dir()), mcp_timeout_ms)
+            agents::install_entry(&client, &environment, &entry_name, repo_root.as_deref(), Some(loader.config_dir()), mcp_timeout_ms, local)
         }
         AgentAction::Uninstall { client, name } => {
             agents::uninstall_entry(&client, &name)
@@ -1942,6 +1944,7 @@ fn cmd_check(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
         &resolved.password,
         0,
         resolved.project.limits.statement_timeout_ms,
+        false,
     )?;
 
     sidecar.ping()?;
@@ -1956,7 +1959,7 @@ fn cmd_check(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
     Ok(())
 }
 
-fn cmd_query(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &str, sql: Option<&str>) -> Result<()> {
+fn cmd_query(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &str, sql: Option<&str>, verbose: bool) -> Result<()> {
     let resolved = loader.resolve_local(repo_root, environment)?;
 
     let sql = match sql {
@@ -1981,6 +1984,7 @@ fn cmd_query(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
         &resolved.password,
         0,
         resolved.project.limits.statement_timeout_ms,
+        verbose,
     )?;
 
     let security = security::SecurityEngine::new(resolved.project.security.clone(), resolved.project.limits.clone());
@@ -1992,7 +1996,7 @@ fn cmd_query(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
     sidecar.shutdown()?;
 
     if result.columns.is_empty() {
-        println!("Query executed. {} rows affected.", result.row_count);
+        println!("Query executed. {} rows affected. ({}ms)", result.row_count, result.elapsed_ms);
         return Ok(());
     }
 
@@ -2049,7 +2053,7 @@ fn cmd_query(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
         print_row(&cells);
     }
     separator();
-    println!("({} rows, {} bytes)", result.row_count, result.byte_count);
+    println!("({} rows, {} bytes, {}ms)", result.row_count, result.byte_count, result.elapsed_ms);
 
     Ok(())
 }
@@ -2066,6 +2070,7 @@ fn cmd_connectivity_action(loader: &ConfigLoader, repo_root: &std::path::Path, e
         &resolved.password,
         0,
         resolved.project.limits.statement_timeout_ms,
+        false,
     )?;
 
     match action {
@@ -2107,6 +2112,7 @@ fn cmd_reconnect(loader: &ConfigLoader, repo_root: &std::path::Path, environment
         &resolved.password,
         0,
         resolved.project.limits.statement_timeout_ms,
+        false,
     )?;
 
     sidecar.ping()?;
