@@ -1503,6 +1503,31 @@ impl McpServer {
         if let Ok(resolved) = loader.resolve_local(&self.repo_root, &self.env_name) {
             if let Some(ref ssh) = resolved.environment.ssh {
                 if ssh.enabled {
+                    // Quick bastion reachability check before attempting tunnel
+                    let bastion_host = ssh.host.as_deref().unwrap_or("unknown");
+                    let bastion_port = ssh.port.unwrap_or(22);
+                    tracing::info!("Checking bastion reachability: {}:{}", bastion_host, bastion_port);
+                    
+                    use std::net::ToSocketAddrs;
+                    let bastion_addr = format!("{bastion_host}:{bastion_port}")
+                        .to_socket_addrs()
+                        .ok()
+                        .and_then(|mut a| a.next());
+                    
+                    match bastion_addr.as_ref() {
+                        Some(a) if std::net::TcpStream::connect_timeout(a, std::time::Duration::from_secs(3)).is_ok() => {
+                            tracing::info!("Bastion reachable ({:?})", start.elapsed());
+                        }
+                        Some(_) => {
+                            return self.send_error(id, -32000, 
+                                format!("SSH bastion unreachable at {}:{} (connect timed out after 3s). Cannot establish tunnel.", bastion_host, bastion_port));
+                        }
+                        None => {
+                            return self.send_error(id, -32000, 
+                                format!("Cannot resolve SSH bastion {}:{}", bastion_host, bastion_port));
+                        }
+                    }
+                    
                     tracing::info!("Establishing SSH tunnel before reconnect ({:?})", start.elapsed());
                     if let Err(e) = setup_ssh_tunnels(&self.repo_root, &[self.env_name.clone()]) {
                         return self.send_error(id, -32000, format!("SSH tunnel setup failed: {e}"));
