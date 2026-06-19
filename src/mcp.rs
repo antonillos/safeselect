@@ -850,9 +850,14 @@ impl McpServer {
     }
 
     fn restart_sidecar(&mut self) -> Result<()> {
-        if let Some(s) = self.sidecar.take() {
-            let _ = s.shutdown();
+        if let Some(mut s) = self.sidecar.take() {
+            // Use force_kill to avoid timeout when sidecar is hung
+            s.force_kill_ref();
         }
+        
+        // Wait a bit for resources to be released
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        
         let sidecar = SidecarProcess::start_with_timeout(
             &self.driver_path,
             &self.driver_class,
