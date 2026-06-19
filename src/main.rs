@@ -1924,6 +1924,9 @@ fn cmd_check(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
 
     sidecar.ping()?;
     println!("  ✓ Sidecar JDBC connection OK");
+
+    let result = sidecar.execute("SELECT 1 AS connection_test")?;
+    println!("  ✓ Connection verified: SELECT 1 returned {} row(s)", result.row_count);
     println!("  ✓ All checks passed for {name}/{environment}");
 
     sidecar.shutdown()?;

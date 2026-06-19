@@ -1485,9 +1485,17 @@ impl McpServer {
         match self.ensure_sidecar() {
             Ok(_) => {
                 lines.push("  ✓ Sidecar JDBC connection OK".into());
-                lines.push(format!("  ✓ All checks passed for {}/{}", self.project_name, self.env_name));
             }
             Err(e) => return self.send_error(id, -32000, format!("Sidecar connection failed: {e}")),
+        }
+
+        // Execute verification query
+        match self.sidecar.as_mut().unwrap().execute("SELECT 1 AS connection_test") {
+            Ok(result) => {
+                lines.push(format!("  ✓ Connection verified: SELECT 1 returned {} row(s)", result.row_count));
+                lines.push(format!("  ✓ All checks passed for {}/{}", self.project_name, self.env_name));
+            }
+            Err(e) => return self.send_error(id, -32000, format!("Verification query failed: {e}")),
         }
 
         let resp = ok_text_response(id, lines.join("\n"));
