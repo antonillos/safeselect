@@ -1491,6 +1491,23 @@ impl McpServer {
                         .to_socket_addrs()
                         .ok()
                         .and_then(|mut a| a.next());
+                    
+                    // If not reachable directly, try establishing SSH tunnel
+                    let pg_addr = if pg_addr.as_ref().is_some_and(|a| crate::check_postgres(a)) {
+                        pg_addr
+                    } else {
+                        lines.push("  ◇ Establishing SSH tunnel...".into());
+                        if let Err(e) = setup_ssh_tunnels(&self.repo_root, &[self.env_name.clone()]) {
+                            lines.push(format!("  ✗ SSH tunnel setup failed: {e}"));
+                            let resp = ok_text_response(id, lines.join("\n"));
+                            return self.write_response(&resp);
+                        }
+                        format!("{host}:{port}")
+                            .to_socket_addrs()
+                            .ok()
+                            .and_then(|mut a| a.next())
+                    };
+                    
                     match pg_addr.as_ref() {
                         Some(a) if crate::check_postgres(a) =>
                             lines.push(format!("  ✓ PostgreSQL reachable at {host}:{port}")),
