@@ -44,6 +44,10 @@ pub struct QueryResult {
     pub rows: Vec<Vec<serde_json::Value>>,
     pub row_count: u64,
     pub byte_count: u64,
+    #[serde(default)]
+    pub elapsed_ms: u64,
+    #[serde(default)]
+    pub affected_rows: Option<u64>,
 }
 
 impl SidecarProcess {
@@ -54,7 +58,7 @@ impl SidecarProcess {
         username: &str,
         password: &str,
     ) -> Result<Self> {
-        Self::start_with_timeout(driver_path, driver_class, jdbc_url, username, password, 0, 0)
+        Self::start_with_timeout(driver_path, driver_class, jdbc_url, username, password, 0, 0, false)
     }
 
     pub fn start_with_timeout(
@@ -65,6 +69,7 @@ impl SidecarProcess {
         password: &str,
         idle_timeout_seconds: u64,
         statement_timeout_ms: u64,
+        verbose: bool,
     ) -> Result<Self> {
         let jar_path = Self::ensure_sidecar_jar()?;
         let cp = format!("{}:{}", jar_path.display(), driver_path);
@@ -88,6 +93,9 @@ impl SidecarProcess {
         if statement_timeout_ms > 0 {
             args.push("--statement-timeout-ms");
             args.push(Box::leak(statement_timeout_ms.to_string().into_boxed_str()));
+        }
+        if verbose {
+            args.push("--verbose");
         }
 
         let mut child = Command::new("java")
@@ -133,6 +141,17 @@ impl SidecarProcess {
     }
 
     fn ensure_sidecar_jar() -> Result<PathBuf> {
+        // First, try to use the JAR from the build directory (for development)
+        let build_jar = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("sidecar")
+            .join("target")
+            .join("safeselect-sidecar.jar");
+        
+        if build_jar.exists() {
+            return Ok(build_jar);
+        }
+        
+        // Fallback to embedded JAR (for production)
         let data_dir = dirs::data_dir()
             .unwrap_or_else(|| PathBuf::from("~/.local/share"))
             .join("safeselect")

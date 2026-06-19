@@ -32,8 +32,30 @@ pub struct ClientConfig {
     pub detected: bool,
 }
 
-pub fn install_entry(client: &str, environment: &str, entry_name: &str, repo_root: Option<&Path>, config_dir: Option<&Path>, mcp_timeout_ms: u64) -> Result<()> {
-    let config_path = get_client_config(client)?;
+pub fn install_entry(client: &str, environment: &str, entry_name: &str, repo_root: Option<&Path>, config_dir: Option<&Path>, mcp_timeout_ms: u64, local: bool) -> Result<()> {
+    let config_path = if local {
+        get_local_client_config(client, repo_root)?
+    } else {
+        // Auto-detect local config and ask user
+        if let Some(root) = repo_root {
+            if let Some(local_path) = detect_local_client_config(client, root) {
+                println!("Found local config: {}", local_path.display());
+                println!("Install to local project config instead of global? [y/N] ");
+                let mut input = String::new();
+                std::io::stdin().read_line(&mut input)?;
+                if input.trim().eq_ignore_ascii_case("y") {
+                    println!("Installing to local config...");
+                    local_path
+                } else {
+                    get_client_config(client)?
+                }
+            } else {
+                get_client_config(client)?
+            }
+        } else {
+            get_client_config(client)?
+        }
+    };
     let content = std::fs::read_to_string(&config_path)?;
 
     verify_permissions(&config_path)?;
@@ -120,6 +142,120 @@ fn get_client_config(client: &str) -> Result<PathBuf> {
     };
 
     detector().ok_or_else(|| SafeselectError::Other(format!("{client} not found on this system")))
+}
+
+fn detect_local_client_config(client: &str, repo_root: &Path) -> Option<PathBuf> {
+    match client {
+        "opencode" => {
+            let opencode_dir = repo_root.join(".opencode");
+            let jsonc = opencode_dir.join("config.jsonc");
+            let json = opencode_dir.join("config.json");
+            if jsonc.exists() {
+                Some(jsonc)
+            } else if json.exists() {
+                Some(json)
+            } else {
+                None
+            }
+        }
+        "cursor" => {
+            let config = repo_root.join(".cursor").join("settings.json");
+            if config.exists() { Some(config) } else { None }
+        }
+        "windsurf" => {
+            let config = repo_root.join(".windsurf").join("settings.json");
+            if config.exists() { Some(config) } else { None }
+        }
+        "claude-code" => {
+            let config = repo_root.join(".claude").join("settings.json");
+            if config.exists() { Some(config) } else { None }
+        }
+        "codex" => {
+            let config = repo_root.join(".codex").join("settings.json");
+            if config.exists() { Some(config) } else { None }
+        }
+        _ => None,
+    }
+}
+
+fn get_local_client_config(client: &str, repo_root: Option<&Path>) -> Result<PathBuf> {
+    let root = repo_root.ok_or_else(|| SafeselectError::Other(
+        "no project root specified; use --project or run from a project directory".into()
+    ))?;
+
+    let local_path = match client {
+        "opencode" => {
+            let opencode_dir = root.join(".opencode");
+            let jsonc = opencode_dir.join("config.jsonc");
+            let json = opencode_dir.join("config.json");
+            if jsonc.exists() {
+                jsonc
+            } else if json.exists() {
+                json
+            } else {
+                // Create default local config
+                std::fs::create_dir_all(&opencode_dir)?;
+                let default_config = serde_json::json!({
+                    "mcp": {}
+                });
+                std::fs::write(&jsonc, serde_json::to_string_pretty(&default_config)?)?;
+                jsonc
+            }
+        }
+        "cursor" => {
+            let cursor_dir = root.join(".cursor");
+            let config = cursor_dir.join("settings.json");
+            if !config.exists() {
+                std::fs::create_dir_all(&cursor_dir)?;
+                let default_config = serde_json::json!({
+                    "mcpServers": {}
+                });
+                std::fs::write(&config, serde_json::to_string_pretty(&default_config)?)?;
+            }
+            config
+        }
+        "windsurf" => {
+            let windsurf_dir = root.join(".windsurf");
+            let config = windsurf_dir.join("settings.json");
+            if !config.exists() {
+                std::fs::create_dir_all(&windsurf_dir)?;
+                let default_config = serde_json::json!({
+                    "mcpServers": {}
+                });
+                std::fs::write(&config, serde_json::to_string_pretty(&default_config)?)?;
+            }
+            config
+        }
+        "claude-code" => {
+            let claude_dir = root.join(".claude");
+            let config = claude_dir.join("settings.json");
+            if !config.exists() {
+                std::fs::create_dir_all(&claude_dir)?;
+                let default_config = serde_json::json!({
+                    "mcpServers": {}
+                });
+                std::fs::write(&config, serde_json::to_string_pretty(&default_config)?)?;
+            }
+            config
+        }
+        "codex" => {
+            let codex_dir = root.join(".codex");
+            let config = codex_dir.join("settings.json");
+            if !config.exists() {
+                std::fs::create_dir_all(&codex_dir)?;
+                let default_config = serde_json::json!({
+                    "mcpServers": {}
+                });
+                std::fs::write(&config, serde_json::to_string_pretty(&default_config)?)?;
+            }
+            config
+        }
+        c => return Err(SafeselectError::Other(format!(
+            "Local config not supported for {c}; use global install (without --local)"
+        ))),
+    };
+
+    Ok(local_path)
 }
 
 fn detect_opencode_config() -> Option<PathBuf> {

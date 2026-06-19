@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.io.*;
 import java.sql.*;
+import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -18,9 +19,40 @@ public class Main {
     private static String password;
     private static long idleTimeoutMs = 0;
     private static long statementTimeoutMs = 0;
+    private static boolean verboseMode = false;
     private static final AtomicLong lastActivityMs = new AtomicLong(System.currentTimeMillis());
+    private static PrintWriter logWriter;
+
+    private static void log(String message) {
+        if (!verboseMode) {
+            return;
+        }
+        String timestamp = Instant.now().toString();
+        String logLine = "[" + timestamp + "] " + message;
+        System.err.println(logLine);
+        if (logWriter != null) {
+            logWriter.println(logLine);
+            logWriter.flush();
+        }
+    }
+
+    private static void error(String message) {
+        String timestamp = Instant.now().toString();
+        String logLine = "[" + timestamp + "] ERROR: " + message;
+        System.err.println(logLine);
+        if (logWriter != null) {
+            logWriter.println(logLine);
+            logWriter.flush();
+        }
+    }
 
     public static void main(String[] args) throws Exception {
+        // Initialize file logger
+        String logDir = System.getProperty("user.home") + "/.local/state/safeselect/logs";
+        new File(logDir).mkdirs();
+        String logFile = logDir + "/sidecar-" + System.currentTimeMillis() + ".log";
+        logWriter = new PrintWriter(new FileWriter(logFile, true));
+        log("Starting sidecar, log file: " + logFile);
         driverClass = null;
         jdbcUrl = null;
         user = null;
@@ -34,11 +66,12 @@ public class Main {
                 case "--password-stdin" -> passwordStdin = true;
                 case "--idle-timeout-seconds" -> idleTimeoutMs = Long.parseLong(args[++i]) * 1000;
                 case "--statement-timeout-ms" -> statementTimeoutMs = Long.parseLong(args[++i]);
+                case "--verbose" -> verboseMode = true;
             }
         }
 
         if (driverClass == null || jdbcUrl == null || user == null || !passwordStdin) {
-            System.err.println("Usage: --driver <class> --url <jdbc> --user <name> --password-stdin [--idle-timeout-seconds <sec>] [--statement-timeout-ms <ms>]");
+            error("Usage: --driver <class> --url <jdbc> --user <name> --password-stdin [--idle-timeout-seconds <sec>] [--statement-timeout-ms <ms>]");
             System.exit(1);
         }
 
@@ -47,7 +80,7 @@ public class Main {
 
         password = reader.readLine();
         if (password == null || password.isBlank()) {
-            System.err.println("Password required on stdin");
+            error("Password required on stdin");
             System.exit(1);
         }
 
@@ -60,7 +93,7 @@ public class Main {
 
         try {
             Class.forName(driverClass);
-            System.err.println("Connecting: url=" + jdbcUrl + " user=" + user + " driver=" + driverClass);
+            log("Connecting: url=" + jdbcUrl + " user=" + user + " driver=" + driverClass);
             connection = DriverManager.getConnection(jdbcUrl, user, password);
             applyStatementTimeout();
 
@@ -99,7 +132,7 @@ public class Main {
                                 Map.of("code", "UNKNOWN_METHOD", "message", "Unknown method: " + method));
                     }
                 } catch (Exception e) {
-                    System.err.println("Error processing request: " + e.getMessage());
+                    error("Error processing request: " + e.getMessage());
                     e.printStackTrace(System.err);
                 }
             }
@@ -108,7 +141,7 @@ public class Main {
                 connection.close();
             }
         } catch (Exception e) {
-            System.err.println("Fatal error: " + e.getMessage());
+            error("Fatal error: " + e.getMessage());
             e.printStackTrace(System.err);
             System.exit(1);
         }
@@ -118,13 +151,71 @@ public class Main {
         if (statementTimeoutMs > 0 && connection != null && !connection.isClosed()) {
             try (Statement s = connection.createStatement()) {
                 s.execute("SET statement_timeout = " + statementTimeoutMs);
-                System.err.println("Statement timeout set to " + statementTimeoutMs + "ms");
+                log("Statement timeout set to " + statementTimeoutMs + "ms");
             }
         }
     }
 
     private static void touchActivity() {
         lastActivityMs.set(System.currentTimeMillis());
+    }
+
+    /**
+     * Convert PostgreSQL-specific objects to Java standard types for JSON serialization.
+     */
+    private static Object convertPgObject(Object val) throws Exception {
+        if (val == null) {
+            return null;
+        }
+        
+        // Handle Clob
+        if (val instanceof java.sql.Clob) {
+            return ((java.sql.Clob) val).getSubString(1, (int) ((java.sql.Clob) val).length());
+        }
+        
+        String className = val.getClass().getName();
+        
+        // Handle PGobject (jsonb, hstore, etc.) via reflection
+        if (className.startsWith("org.postgresql.util.PGobject")) {
+            try {
+                java.lang.reflect.Method getValue = val.getClass().getMethod("getValue");
+                String pgValue = (String) getValue.invoke(val);
+                
+                // Get type via reflection
+                java.lang.reflect.Method getType = val.getClass().getMethod("getType");
+                String pgType = (String) getType.invoke(val);
+                
+                // Parse JSON types
+                if ("jsonb".equals(pgType) || "json".equals(pgType)) {
+                    return MAPPER.readValue(pgValue, Object.class);
+                }
+                return pgValue;
+            } catch (Exception e) {
+                log("[CONVERT] Failed to convert PGobject: " + e.getMessage());
+                return val.toString();
+            }
+        }
+        
+        // Handle PgArray
+        if (val instanceof java.sql.Array) {
+            java.sql.Array array = (java.sql.Array) val;
+            Object[] arrayData = (Object[]) array.getArray();
+            List<Object> converted = new ArrayList<>();
+            for (Object item : arrayData) {
+                converted.add(convertPgObject(item));
+            }
+            return converted;
+        }
+        
+        // Handle other types with getValue method (legacy support)
+        try {
+            java.lang.reflect.Method getValue = val.getClass().getMethod("getValue");
+            Object extracted = getValue.invoke(val);
+            return convertPgObject(extracted);
+        } catch (NoSuchMethodException | SecurityException e) {
+            // Not a PGobject or similar — keep original value
+            return val;
+        }
     }
 
     private static void startIdleTimer(PrintWriter writer) {
@@ -151,9 +242,9 @@ public class Main {
                                 writer.flush();
                             }
                         }
-                    } catch (Exception e) {
-                        System.err.println("Idle disconnect error: " + e.getMessage());
-                    }
+            } catch (Exception e) {
+                error("Idle disconnect error: " + e.getMessage());
+            }
                 }
             }
         });
@@ -183,7 +274,11 @@ public class Main {
 
     @SuppressWarnings("unchecked")
     private static void handleExecute(PrintWriter writer, Object id, Map<String, Object> request) throws Exception {
+        long startTime = System.currentTimeMillis();
+        log("[EXECUTE] Starting query execution, id=" + id);
+        
         if (connection == null || connection.isClosed()) {
+            error("Not connected, returning error");
             sendResponse(writer, id, null,
                     Map.of("code", "NOT_CONNECTED", "message", "Database not connected. Use 'connect' first."));
             return;
@@ -191,22 +286,28 @@ public class Main {
 
         Map<String, Object> params = (Map<String, Object>) request.get("params");
         if (params == null) {
+            error("Missing params");
             sendResponse(writer, id, null, Map.of("code", "MISSING_PARAMS", "message", "No params"));
             return;
         }
 
         String sql = (String) params.get("sql");
         if (sql == null || sql.isBlank()) {
+            error("Missing SQL");
             sendResponse(writer, id, null, Map.of("code", "MISSING_SQL", "message", "No SQL provided"));
             return;
         }
+
+        log("[EXECUTE] SQL: " + sql.substring(0, Math.min(100, sql.length())) + "...");
 
         try (Statement stmt = connection.createStatement()) {
             if (statementTimeoutMs > 0) {
                 int timeoutSeconds = (int) Math.ceil(statementTimeoutMs / 1000.0);
                 stmt.setQueryTimeout(timeoutSeconds);
             }
+            log("[EXECUTE] Executing statement...");
             boolean isResultSet = stmt.execute(sql);
+            log("[EXECUTE] Statement executed in " + (System.currentTimeMillis() - startTime) + "ms, isResultSet=" + isResultSet);
 
             if (isResultSet) {
                 try (ResultSet rs = stmt.getResultSet()) {
@@ -222,20 +323,12 @@ public class Main {
                     long rowCount = 0;
                     long byteCount = 0;
 
+                    log("[EXECUTE] Reading result set...");
                     while (rs.next()) {
                         List<Object> row = new ArrayList<>();
                         for (int i = 1; i <= columnCount; i++) {
                             Object val = rs.getObject(i);
-                            if (val instanceof java.sql.Clob) {
-                                val = ((java.sql.Clob) val).getSubString(1, (int) ((java.sql.Clob) val).length());
-                            } else if (val != null) {
-                                try {
-                                    java.lang.reflect.Method getValue = val.getClass().getMethod("getValue");
-                                    val = getValue.invoke(val);
-                                } catch (NoSuchMethodException | SecurityException e) {
-                                    // Not a PGobject or similar — keep original value
-                                }
-                            }
+                            val = convertPgObject(val);
                             row.add(val);
                             if (val != null) {
                                 byteCount += val.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
@@ -244,22 +337,31 @@ public class Main {
                         rows.add(row);
                         rowCount++;
                     }
+                    long elapsedMs = System.currentTimeMillis() - startTime;
+                    log("[EXECUTE] Read " + rowCount + " rows, " + byteCount + " bytes in " + elapsedMs + "ms");
 
                     Map<String, Object> result = new LinkedHashMap<>();
                     result.put("columns", columns);
                     result.put("rows", rows);
                     result.put("row_count", rowCount);
                     result.put("byte_count", byteCount);
+                    result.put("elapsed_ms", elapsedMs);
 
+                    log("[EXECUTE] Sending response...");
                     sendResponse(writer, id, result, null);
+                    log("[EXECUTE] Completed in " + elapsedMs + "ms");
                 }
             } else {
                 int updateCount = stmt.getUpdateCount();
+                long elapsedMs = System.currentTimeMillis() - startTime;
                 Map<String, Object> result = new LinkedHashMap<>();
                 result.put("affected_rows", updateCount);
+                result.put("elapsed_ms", elapsedMs);
+                log("[EXECUTE] Update query, affected_rows=" + updateCount + " in " + elapsedMs + "ms");
                 sendResponse(writer, id, result, null);
             }
         } catch (SQLException e) {
+            error("SQL error: " + e.getMessage() + " (state=" + e.getSQLState() + ")");
             Map<String, Object> error = new LinkedHashMap<>();
             error.put("code", "SQL_ERROR");
             error.put("sql_state", e.getSQLState());
