@@ -32,7 +32,7 @@ pub struct ClientConfig {
     pub detected: bool,
 }
 
-pub fn install_entry(client: &str, environment: &str, entry_name: &str, repo_root: Option<&Path>, config_dir: Option<&Path>) -> Result<()> {
+pub fn install_entry(client: &str, environment: &str, entry_name: &str, repo_root: Option<&Path>, config_dir: Option<&Path>, mcp_timeout_ms: u64) -> Result<()> {
     let config_path = get_client_config(client)?;
     let content = std::fs::read_to_string(&config_path)?;
 
@@ -44,13 +44,13 @@ pub fn install_entry(client: &str, environment: &str, entry_name: &str, repo_roo
     let entry = serde_json::json!({
         "command": "safeselect",
         "args": ["serve", "--environment", environment],
-        "timeout": 30000
+        "timeout": mcp_timeout_ms
     });
 
     let mut opencode_entry = serde_json::json!({
         "type": "local",
         "command": ["safeselect", "serve", "--environment", environment],
-        "timeout": 30000,
+        "timeout": mcp_timeout_ms,
         "enabled": true
     });
 

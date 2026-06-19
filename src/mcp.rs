@@ -1331,8 +1331,11 @@ impl McpServer {
 
         let repo_root = self.repo_root.clone();
         let config_dir = self.config_dir.clone();
+        
+        // Calculate MCP client timeout: statement_timeout + 30s buffer
+        let mcp_timeout_ms = self.security.limits().statement_timeout_ms + 30_000;
 
-        match agents::install_entry(client, environment, &entry_name, Some(&repo_root), Some(&config_dir)) {
+        match agents::install_entry(client, environment, &entry_name, Some(&repo_root), Some(&config_dir), mcp_timeout_ms) {
             Ok(()) => {
                 let text = format!("Entry '{entry_name}' installed for {client}");
                 let resp = ok_text_response(id, text);
