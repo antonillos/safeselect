@@ -855,8 +855,9 @@ impl McpServer {
             s.force_kill_ref();
         }
         
-        // Wait a bit for resources to be released
-        std::thread::sleep(std::time::Duration::from_millis(500));
+        // Wait for PostgreSQL to detect connection closure and clean up resources
+        // This prevents zombie queries and connection state issues
+        std::thread::sleep(std::time::Duration::from_secs(2));
         
         let sidecar = SidecarProcess::start_with_timeout(
             &self.driver_path,
