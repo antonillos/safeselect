@@ -818,19 +818,34 @@ impl McpServer {
             return result;
         }
         
-        tracing::warn!("First execute failed ({:?}), attempting JDBC reconnect", start.elapsed());
-        let reconnected = self.sidecar.as_mut().unwrap().connect().is_ok();
-        tracing::debug!("JDBC reconnect completed ({:?})", start.elapsed());
+        // Check if the error was a timeout (sidecar didn't respond)
+        let is_timeout = result.as_ref().err().map_or(false, |e| {
+            let msg = e.to_string();
+            msg.contains("did not respond within") || msg.contains("poll error")
+        });
         
-        if reconnected {
-            let _ = self.audit.record("AUTO_RECONNECT", "allow", "connection lost — reconnected");
-            tracing::info!("JDBC reconnect succeeded, retrying query ({:?})", start.elapsed());
-            self.sidecar.as_mut().unwrap().execute(sql)
-        } else {
-            tracing::warn!("Execute + reconnect both failed — restarting sidecar process ({:?})", start.elapsed());
+        if is_timeout {
+            // Sidecar is hung, do full restart immediately
+            tracing::warn!("Execute timed out — restarting sidecar process immediately ({:?})", start.elapsed());
             self.restart_sidecar()?;
             tracing::info!("Sidecar restarted ({:?}), retrying query", start.elapsed());
             self.sidecar.as_mut().unwrap().execute(sql)
+        } else {
+            // Other error, try JDBC reconnect first
+            tracing::warn!("First execute failed ({:?}), attempting JDBC reconnect", start.elapsed());
+            let reconnected = self.sidecar.as_mut().unwrap().connect().is_ok();
+            tracing::debug!("JDBC reconnect completed ({:?})", start.elapsed());
+            
+            if reconnected {
+                let _ = self.audit.record("AUTO_RECONNECT", "allow", "connection lost — reconnected");
+                tracing::info!("JDBC reconnect succeeded, retrying query ({:?})", start.elapsed());
+                self.sidecar.as_mut().unwrap().execute(sql)
+            } else {
+                tracing::warn!("Execute + reconnect both failed — restarting sidecar process ({:?})", start.elapsed());
+                self.restart_sidecar()?;
+                tracing::info!("Sidecar restarted ({:?}), retrying query", start.elapsed());
+                self.sidecar.as_mut().unwrap().execute(sql)
+            }
         }
     }
 
