@@ -732,7 +732,29 @@ fn cmd_agent(action: AgentAction) -> Result<()> {
                     format!("{}-{}", project_display_name(&root), environment)
                 }
             };
-            agents::install_entry(&client, &environment, &entry_name, repo_root.as_deref(), Some(loader.config_dir()))
+            
+            // Calculate MCP client timeout based on project's statement_timeout_ms
+            let mcp_timeout_ms = if let Some(ref root) = repo_root {
+                let project_file = root.join(".safeselect").join("project.toml");
+                if project_file.exists() {
+                    if let Ok(content) = std::fs::read_to_string(&project_file) {
+                        if let Ok(project) = toml::from_str::<config::ProjectConfig>(&content) {
+                            // MCP timeout = statement_timeout + 30s buffer
+                            (project.limits.statement_timeout_ms + 30_000) as u64
+                        } else {
+                            120_000 // Default 2 minutes if config parse fails
+                        }
+                    } else {
+                        120_000 // Default 2 minutes if file read fails
+                    }
+                } else {
+                    120_000 // Default 2 minutes if no project.toml
+                }
+            } else {
+                120_000 // Default 2 minutes if no repo_root
+            };
+            
+            agents::install_entry(&client, &environment, &entry_name, repo_root.as_deref(), Some(loader.config_dir()), mcp_timeout_ms)
         }
         AgentAction::Uninstall { client, name } => {
             agents::uninstall_entry(&client, &name)
