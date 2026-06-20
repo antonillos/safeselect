@@ -3,20 +3,20 @@ class Safeselect < Formula
   homepage "https://github.com/antonillos/safeselect"
   license "MIT OR Apache-2.0"
 
+  version "0.3.0"
+
   if Hardware::CPU.arm?
-    url "https://github.com/antonillos/safeselect/releases/download/v0.1.0/safeselect-aarch64-apple-darwin.tar.gz"
-    sha256 "PLACEHOLDER_ARM64"
+    url "https://github.com/antonillos/safeselect/releases/download/v#{version}/safeselect-v#{version}-aarch64-apple-darwin.tar.gz"
+    sha256 "RELEASE_SHA256_ARM64"
   else
-    url "https://github.com/antonillos/safeselect/releases/download/v0.1.0/safeselect-x86_64-apple-darwin.tar.gz"
-    sha256 "PLACEHOLDER_X86_64"
+    url "https://github.com/antonillos/safeselect/releases/download/v#{version}/safeselect-v#{version}-x86_64-apple-darwin.tar.gz"
+    sha256 "RELEASE_SHA256_X86_64"
   end
 
-  depends_on "openjdk"
+  depends_on "openjdk@17"
 
   def install
-    libexec.install "safeselect"
-    (bin/"safeselect").write_env_script libexec/"safeselect",
-      JAVA_HOME: Formula["openjdk"].opt_prefix
+    bin.install "safeselect"
   end
 
   def caveats

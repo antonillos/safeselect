@@ -20,6 +20,8 @@ public class Main {
     private static String password;
     private static long idleTimeoutMs = 0;
     private static long statementTimeoutMs = 0;
+    private static long maxRows = Long.MAX_VALUE;
+    private static long maxResultBytes = Long.MAX_VALUE;
     private static boolean verboseMode = false;
     private static final AtomicLong lastActivityMs = new AtomicLong(System.currentTimeMillis());
     private static PrintWriter logWriter;
@@ -82,6 +84,8 @@ public class Main {
                 case "--password-stdin" -> passwordStdin = true;
                 case "--idle-timeout-seconds" -> idleTimeoutMs = Long.parseLong(args[++i]) * 1000;
                 case "--statement-timeout-ms" -> statementTimeoutMs = Long.parseLong(args[++i]);
+                case "--max-rows" -> maxRows = Long.parseLong(args[++i]);
+                case "--max-result-bytes" -> maxResultBytes = Long.parseLong(args[++i]);
                 case "--verbose" -> verboseMode = true;
             }
         }
@@ -92,7 +96,7 @@ public class Main {
         }
 
         if (driverClass == null || jdbcUrl == null || user == null || !passwordStdin) {
-            error("Usage: --driver <class> --url <jdbc> --user <name> --password-stdin [--idle-timeout-seconds <sec>] [--statement-timeout-ms <ms>]");
+            error("Usage: --driver <class> --url <jdbc> --user <name> --password-stdin [--idle-timeout-seconds <sec>] [--statement-timeout-ms <ms>] [--max-rows <n>] [--max-result-bytes <n>]");
             System.exit(1);
         }
 
@@ -361,15 +365,35 @@ public class Main {
 
                     log("[EXECUTE] Reading result set...");
                     while (rs.next()) {
+                        if (rowCount >= maxRows) {
+                            sendResponse(writer, id, null, Map.of(
+                                    "code", "RESULT_LIMIT_EXCEEDED",
+                                    "message", "Row limit exceeded: " + maxRows,
+                                    "limit_type", "max_rows",
+                                    "limit_value", maxRows
+                            ));
+                            return;
+                        }
                         List<Object> row = new ArrayList<>();
+                        long rowBytes = 0;
                         for (int i = 1; i <= columnCount; i++) {
                             Object val = rs.getObject(i);
                             val = convertPgObject(val);
                             row.add(val);
                             if (val != null) {
-                                byteCount += val.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+                                rowBytes += val.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
                             }
                         }
+                        if (byteCount + rowBytes > maxResultBytes) {
+                            sendResponse(writer, id, null, Map.of(
+                                    "code", "RESULT_LIMIT_EXCEEDED",
+                                    "message", "Result size limit exceeded: " + maxResultBytes + " bytes",
+                                    "limit_type", "max_result_bytes",
+                                    "limit_value", maxResultBytes
+                            ));
+                            return;
+                        }
+                        byteCount += rowBytes;
                         rows.add(row);
                         rowCount++;
                     }
