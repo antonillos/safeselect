@@ -8,6 +8,25 @@ tools:
   - select
   - list_tables
   - explain
+  - connect
+  - disconnect
+  - reconnect
+  - check
+  - config_validate
+  - config_show
+  - config_set_password
+  - config_rename_environment
+  - config_delete_environment
+  - config_reset
+  - driver_list
+  - driver_add
+  - driver_download
+  - agent_detect
+  - agent_install
+  - agent_uninstall
+  - agent_status
+  - import_compose
+  - uninstall
 setup: |
   # Install
   brew install antonillos/tap/safeselect
@@ -58,11 +77,17 @@ config:
         └── production.toml
 security:
   - Fail-closed: any security incident terminates the process
-  - AST-level SQL validation (PostgreSQL parser)
+  - Read-only SQL validation for SELECT, EXPLAIN, and WITH
   - Read-only enforcement per project policy
   - Secrets via macOS Keychain or env vars (never in config files)
   - SHA-256 driver validation on every connection
   - No credentials in JDBC URLs
+agent_guidance:
+  - Use list_tables before guessing schema names
+  - Use explain with FORMAT JSON by default for agent parsing
+  - Use explain analyze + buffers + explain_verbose for index and bottleneck analysis
+  - Use format text only when the plan is meant for a human
+  - Use check then reconnect to recover stale sidecar/JDBC/SSH tunnel failures
 audit:
   - JSON audit log with query hashes (never full SQL)
   - Audit location: ~/.local/state/safeselect/audit/

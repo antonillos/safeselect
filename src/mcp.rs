@@ -64,6 +64,7 @@ pub struct McpServer {
     db_password: String,
     repo_root: PathBuf,
     config_dir: PathBuf,
+    verbose_sidecar: bool,
 }
 
 impl McpServer {
@@ -105,7 +106,16 @@ impl McpServer {
             db_password: db_password.to_string(),
             repo_root: repo_root.to_path_buf(),
             config_dir: config_dir.to_path_buf(),
+            verbose_sidecar: false,
         })
+    }
+
+    fn set_verbose_sidecar(&mut self, verbose: bool) -> Result<()> {
+        if self.verbose_sidecar == verbose {
+            return Ok(());
+        }
+        self.verbose_sidecar = verbose;
+        self.restart_sidecar()
     }
 
     fn ensure_sidecar(&mut self) -> Result<&mut SidecarProcess> {
@@ -121,7 +131,7 @@ impl McpServer {
             &self.db_password,
             self.idle_timeout_seconds,
             self.security.limits().statement_timeout_ms,
-            false,
+            self.verbose_sidecar,
         )?;
         tracing::info!("Sidecar ready");
         self.sidecar = Some(sidecar);
@@ -252,6 +262,10 @@ impl McpServer {
                         "sql": {
                             "type": "string",
                             "description": "SQL SELECT query to execute"
+                        },
+                        "verbose": {
+                            "type": "boolean",
+                            "description": "Enable verbose sidecar logging for this execution"
                         }
                     },
                     "required": ["sql"]
@@ -272,13 +286,34 @@ impl McpServer {
             },
             ToolDefinition {
                 name: "explain".into(),
-                description: "Show the execution plan for a query without executing it".into(),
+                description: "Show the execution plan for a query; ANALYZE executes the SELECT".into(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
                         "sql": {
                             "type": "string",
                             "description": "SQL query to explain"
+                        },
+                        "verbose": {
+                            "type": "boolean",
+                            "description": "Enable verbose sidecar logging for this execution"
+                        },
+                        "analyze": {
+                            "type": "boolean",
+                            "description": "Run EXPLAIN ANALYZE to execute the query and include actual runtime statistics"
+                        },
+                        "buffers": {
+                            "type": "boolean",
+                            "description": "Include buffer usage details in the execution plan"
+                        },
+                        "explain_verbose": {
+                            "type": "boolean",
+                            "description": "Include additional planner output via EXPLAIN VERBOSE"
+                        },
+                        "format": {
+                            "type": "string",
+                            "enum": ["json", "text"],
+                            "description": "Execution plan format; defaults to json for agent consumption"
                         }
                     },
                     "required": ["sql"]
@@ -607,6 +642,12 @@ impl McpServer {
             Some(s) => s,
             None => return self.send_error(id, -32602, "Missing 'sql' argument"),
         };
+        let verbose = args
+            .get("verbose")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        self.set_verbose_sidecar(verbose)?;
 
         let start = std::time::Instant::now();
 
@@ -664,7 +705,10 @@ impl McpServer {
                 let elapsed = start.elapsed();
                 tracing::error!("Query failed after {elapsed:?}: {e}");
                 self.audit.record("JDBC_ERROR", "error", sql)?;
-                self.send_error(id, -32000, format!("Query execution failed: {e}"))
+                self.write_response(&tool_error_response(
+                    id,
+                    format!("Query execution failed: {e}"),
+                ))
             }
         }
     }
@@ -745,7 +789,7 @@ impl McpServer {
             }
             Err(e) => {
                 self.audit.record("JDBC_ERROR", "error", &sql)?;
-                self.send_error(id, -32000, format!("Query failed: {e}"))
+                self.write_response(&tool_error_response(id, format!("Query failed: {e}")))
             }
         }
     }
@@ -759,8 +803,17 @@ impl McpServer {
             Some(s) => s,
             None => return self.send_error(id, -32602, "Missing 'sql' argument"),
         };
+        let verbose = args
+            .get("verbose")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
-        let explain_sql = format!("EXPLAIN (FORMAT JSON) {}", sql);
+        self.set_verbose_sidecar(verbose)?;
+
+        let explain_sql = match build_explain_sql(sql, args) {
+            Ok(s) => s,
+            Err(e) => return self.send_error(id, -32602, e),
+        };
 
         match self.security.validate(&explain_sql) {
             Ok(()) => {}
@@ -2101,6 +2154,21 @@ fn ok_text_response(id: Option<serde_json::Value>, text: String) -> JsonRpcRespo
     }
 }
 
+fn tool_error_response(id: Option<serde_json::Value>, text: String) -> JsonRpcResponse {
+    JsonRpcResponse {
+        jsonrpc: "2.0",
+        id,
+        result: Some(serde_json::json!({
+            "content": [{
+                "type": "text",
+                "text": text
+            }],
+            "isError": true
+        })),
+        error: None,
+    }
+}
+
 pub fn run_setup_server(repo_root: &Path) -> Result<()> {
     let stdin = std::io::stdin();
     let mut reader = BufReader::new(stdin.lock());
@@ -2625,8 +2693,7 @@ fn is_sidecar_timeout(message: &str) -> bool {
 
 fn is_recoverable_connection_error(message: &str) -> bool {
     let msg = message.to_lowercase();
-    msg.contains("sql_error")
-        || msg.contains("sqlstate 08")
+    msg.contains("sqlstate 08")
         || msg.contains("sql_state\":\"08")
         || msg.contains("08006")
         || msg.contains("08001")
@@ -2651,4 +2718,82 @@ fn is_valid_identifier(s: &str) -> bool {
     bytes
         .iter()
         .all(|b| b.is_ascii_alphanumeric() || *b == b'_')
+}
+
+fn build_explain_sql(sql: &str, args: &serde_json::Value) -> std::result::Result<String, String> {
+    let format = match args.get("format").and_then(|v| v.as_str()) {
+        Some("json") | None => "JSON",
+        Some("text") => "TEXT",
+        Some(other) => return Err(format!("Unsupported explain format: {other}")),
+    };
+
+    let mut options = Vec::new();
+    if args
+        .get("analyze")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        options.push("ANALYZE");
+    }
+    if args
+        .get("buffers")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        options.push("BUFFERS");
+    }
+    if args
+        .get("explain_verbose")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        options.push("VERBOSE");
+    }
+    options.push(if format == "JSON" {
+        "FORMAT JSON"
+    } else {
+        "FORMAT TEXT"
+    });
+
+    Ok(format!("EXPLAIN ({}) {}", options.join(", "), sql))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_explain_sql_defaults_to_json() {
+        let args = serde_json::json!({});
+
+        let sql = build_explain_sql("SELECT * FROM users", &args).unwrap();
+
+        assert_eq!(sql, "EXPLAIN (FORMAT JSON) SELECT * FROM users");
+    }
+
+    #[test]
+    fn build_explain_sql_includes_requested_options() {
+        let args = serde_json::json!({
+            "analyze": true,
+            "buffers": true,
+            "explain_verbose": true,
+            "format": "text"
+        });
+
+        let sql = build_explain_sql("SELECT * FROM users", &args).unwrap();
+
+        assert_eq!(
+            sql,
+            "EXPLAIN (ANALYZE, BUFFERS, VERBOSE, FORMAT TEXT) SELECT * FROM users"
+        );
+    }
+
+    #[test]
+    fn build_explain_sql_rejects_unknown_format() {
+        let args = serde_json::json!({ "format": "xml" });
+
+        let err = build_explain_sql("SELECT * FROM users", &args).unwrap_err();
+
+        assert_eq!(err, "Unsupported explain format: xml");
+    }
 }

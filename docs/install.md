@@ -8,6 +8,13 @@
 The Java sidecar is embedded in the Rust binary, so you only need the JDK at
 runtime. No Maven or Rust is needed to run SafeSelect.
 
+SafeSelect also needs a PostgreSQL JDBC driver registered in its global config.
+The usual setup path downloads it automatically during import, or you can run:
+
+```bash
+safeselect driver download --vendor postgresql
+```
+
 ## Homebrew (macOS)
 
 ```bash
@@ -52,5 +59,22 @@ curl -fsSL https://raw.githubusercontent.com/antonillos/safeselect/main/packagin
 
 ```bash
 safeselect --version
-# safeselect 0.1.0
+# safeselect 0.3.0
 ```
+
+## First Project Setup
+
+For most users, import existing connection details and then install the MCP entry
+for the agent:
+
+```bash
+safeselect import-dbeaver ~/Downloads/dbeaver-export.zip
+# or:
+safeselect import-compose
+
+safeselect check --environment testing
+safeselect agent install opencode --environment testing
+```
+
+The agent installation writes an MCP stdio entry that runs `safeselect serve` for
+one project and one environment. Agents do not receive raw database passwords.
