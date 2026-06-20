@@ -4,6 +4,8 @@ use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::mpsc;
+use std::time::Duration;
 
 #[derive(Serialize)]
 struct Request {
@@ -234,7 +236,7 @@ impl SidecarProcess {
 
         if let Some(err) = resp.error {
             return Err(SafeselectError::Sidecar(format!(
-                "JDBC error [{}]: {}",
+                "SQL execution failed [{}]: {}",
                 err.code, err.message
             )));
         }
@@ -288,7 +290,7 @@ impl SidecarProcess {
         loop {
             let mut pollfd = libc::pollfd {
                 fd,
-                events: libc::POLLIN,
+                events: libc::POLLIN | libc::POLLERR | libc::POLLHUP,
                 revents: 0,
             };
             let ret = unsafe { libc::poll(&mut pollfd, 1, timeout_ms) };
@@ -309,8 +311,32 @@ impl SidecarProcess {
                 _ => {}
             }
 
-            let mut response_line = String::new();
-            self.reader.read_line(&mut response_line)?;
+            if (pollfd.revents & (libc::POLLERR | libc::POLLHUP)) != 0 {
+                return Err(SafeselectError::Sidecar(
+                    "sidecar process became unavailable while waiting for a response".into(),
+                ));
+            }
+
+            let (tx, rx) = mpsc::channel();
+            let response_line = std::thread::scope(|scope| {
+                let reader = &mut self.reader;
+                scope.spawn(move || {
+                    let mut response_line = String::new();
+                    let result = reader.read_line(&mut response_line);
+                    let _ = tx.send((result, response_line));
+                });
+
+                match rx.recv_timeout(Duration::from_millis(timeout_ms as u64)) {
+                    Ok((Ok(_), response_line)) => Ok(response_line),
+                    Ok((Err(err), _)) => Err(SafeselectError::Io(err)),
+                    Err(mpsc::RecvTimeoutError::Timeout) => Err(SafeselectError::Sidecar(format!(
+                        "sidecar returned partial or stalled output for more than {timeout_ms}ms"
+                    ))),
+                    Err(mpsc::RecvTimeoutError::Disconnected) => Err(SafeselectError::Sidecar(
+                        "sidecar response reader stopped unexpectedly".into(),
+                    )),
+                }
+            })?;
 
             if response_line.is_empty() {
                 return Err(SafeselectError::Sidecar(

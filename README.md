@@ -113,17 +113,49 @@ Example phases:
 Use these codes when reporting issues or asking an agent to recover a broken
 environment.
 
+MCP query responses include execution metadata for agent decisions:
+
+- `row_count` and `byte_count` for result sizing
+- `elapsed_ms` for precise timing
+- `elapsed` for human-readable timing such as `842ms`, `1.3s`, or `2m 4s`
+
+Sidecar pipe timeouts and MCP reconnect behavior respect the configured
+`statement_timeout_ms`, so agents should prefer `check` and `reconnect` over
+manual retry loops after stale SSH/JDBC connections.
+
 ---
 
 ## MCP Tools
 
 | Tool | Description | Arguments |
 |---|---|---|
-| `select` | Execute a SELECT query | `sql` (required) |
+| `select` | Execute a SELECT query | `sql` (required), `verbose` |
 | `list_tables` | List database tables | `schema` (optional) |
-| `explain` | Show execution plan | `sql` (required, not executed) |
+| `explain` | Show execution plan | `sql` (required), `analyze`, `buffers`, `explain_verbose`, `format` (`json` default, `text`) |
 | `connect` | Reconnect to the database after connection loss | _(none)_ |
 | `disconnect` | Close the database connection | _(none)_ |
+| `reconnect` | Restart the sidecar and verify the database connection | _(none)_ |
+| `check` | Diagnose MCP database connectivity | _(none)_ |
+
+Configuration and setup tools available through MCP:
+
+| Tool | Description | Arguments |
+|---|---|---|
+| `config_validate` | Validate `.safeselect/` configuration | `environment` (optional) |
+| `config_show` | Show resolved config with secrets redacted | `environment` (required) |
+| `config_set_password` | Store an environment password in Keychain | `environment`, `password` |
+| `config_rename_environment` | Rename an environment | `old_name`, `new_name` |
+| `config_delete_environment` | Delete an environment | `name` |
+| `config_reset` | Delete all project environments and keychain entries | `confirm: true` |
+| `driver_list` | List registered JDBC drivers | _(none)_ |
+| `driver_add` | Register a JDBC driver | `vendor`, `path`, `class`, `sha256` (optional) |
+| `driver_download` | Download/register PostgreSQL JDBC driver | `vendor: "postgresql"` |
+| `agent_detect` | Detect installed MCP clients | _(none)_ |
+| `agent_install` | Install a SafeSelect MCP entry | `client`, `environment`, `name` (optional) |
+| `agent_uninstall` | Remove a SafeSelect MCP entry | `client`, `name` |
+| `agent_status` | Show SafeSelect install status for clients | _(none)_ |
+| `import_compose` | Scan docker-compose files and import PostgreSQL services | `scan_path` (optional) |
+| `uninstall` | Remove SafeSelect binary/config/data/audit/keychain | `confirm: true` |
 
 Setup mode tools (available when no `.safeselect/` found — `safeselect serve --setup`):
 

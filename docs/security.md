@@ -45,7 +45,9 @@ Raw SQL → Size check → Single statement check → Read-only check
 
 - Connection uses `READ ONLY` transaction mode
 - `statement_timeout` prevents runaway queries
+- Sidecar read timeouts respect `statement_timeout_ms` so MCP calls cannot hang indefinitely on zombie queries
 - No `SET` statements or session modifications allowed
+- `EXPLAIN ANALYZE` is allowed only through the read-only validation path; it executes the SELECT to collect runtime statistics but still cannot run DDL or DML
 
 ### 5. Fail-Closed
 
@@ -80,3 +82,4 @@ Any violation triggers:
 | Malicious driver JAR | SHA-256 checksum |
 | Process memory dump | Secret not on CLI args |
 | Unauthorized config modification | Permission check + backup |
+| Agent needs query tuning | `EXPLAIN` defaults to JSON plans; `ANALYZE`, `BUFFERS`, and `VERBOSE` are explicit options |

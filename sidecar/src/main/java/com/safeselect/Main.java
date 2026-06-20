@@ -12,6 +12,7 @@ import java.util.concurrent.atomic.AtomicLong;
 public class Main {
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final AtomicBoolean RUNNING = new AtomicBoolean(true);
+    private static final long MAX_LOG_BYTES = 10L * 1024 * 1024;
     private static Connection connection;
     private static String driverClass;
     private static String jdbcUrl;
@@ -22,6 +23,27 @@ public class Main {
     private static boolean verboseMode = false;
     private static final AtomicLong lastActivityMs = new AtomicLong(System.currentTimeMillis());
     private static PrintWriter logWriter;
+
+    private static void initializeLogWriter() throws IOException {
+        String logDir = System.getProperty("user.home") + "/.local/state/safeselect/logs";
+        File logDirectory = new File(logDir);
+        if (!logDirectory.exists()) {
+            logDirectory.mkdirs();
+        }
+
+        File activeLog = new File(logDirectory, "sidecar.log");
+        if (activeLog.exists() && activeLog.length() >= MAX_LOG_BYTES) {
+            File rotatedLog = new File(logDirectory, "sidecar.log.1");
+            if (rotatedLog.exists() && !rotatedLog.delete()) {
+                throw new IOException("Failed to delete rotated log: " + rotatedLog.getAbsolutePath());
+            }
+            if (!activeLog.renameTo(rotatedLog)) {
+                throw new IOException("Failed to rotate log file: " + activeLog.getAbsolutePath());
+            }
+        }
+
+        logWriter = new PrintWriter(new FileWriter(activeLog, true));
+    }
 
     private static void log(String message) {
         if (!verboseMode) {
@@ -47,12 +69,6 @@ public class Main {
     }
 
     public static void main(String[] args) throws Exception {
-        // Initialize file logger
-        String logDir = System.getProperty("user.home") + "/.local/state/safeselect/logs";
-        new File(logDir).mkdirs();
-        String logFile = logDir + "/sidecar-" + System.currentTimeMillis() + ".log";
-        logWriter = new PrintWriter(new FileWriter(logFile, true));
-        log("Starting sidecar, log file: " + logFile);
         driverClass = null;
         jdbcUrl = null;
         user = null;
@@ -68,6 +84,11 @@ public class Main {
                 case "--statement-timeout-ms" -> statementTimeoutMs = Long.parseLong(args[++i]);
                 case "--verbose" -> verboseMode = true;
             }
+        }
+
+        if (verboseMode) {
+            initializeLogWriter();
+            log("Starting sidecar");
         }
 
         if (driverClass == null || jdbcUrl == null || user == null || !passwordStdin) {

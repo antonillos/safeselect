@@ -32,7 +32,7 @@ best-effort basis.
 SafeSelect implements multiple layers of security (all enforced server-side, not configurable by the agent):
 
 - **Fail-closed**: any security incident terminates the MCP process immediately
-- **Read-only always enforced**: only SELECT and EXPLAIN queries allowed, never configurable
+- **Read-only always enforced**: only SELECT, EXPLAIN, and WITH queries allowed, never configurable
 - **Single statement**: multi-statement SQL is rejected unless explicitly allowed
 - **SQL validation**: parsed and validated against policy before execution
 - **Allowed schemas / denied relations**: policy-based access control per project
@@ -42,3 +42,4 @@ SafeSelect implements multiple layers of security (all enforced server-side, not
 - **Audit log**: all queries hashed (SHA-256), never stored in plain text
 - **Result limits**: row count and byte size limits enforced
 - **Auto-disconnect**: configurable idle timeout closes connection after inactivity
+- **Explicit query-plan analysis**: `EXPLAIN ANALYZE` is opt-in and still constrained by read-only validation

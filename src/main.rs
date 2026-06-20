@@ -2212,7 +2212,14 @@ fn cmd_query(
         verbose,
     )?;
 
-    let result = sidecar.execute(&sql)?;
+    let result = match sidecar.execute(&sql) {
+        Ok(result) => result,
+        Err(SafeselectError::Sidecar(message)) => {
+            eprintln!("ERROR: SQL query failed: {message}");
+            return Err(SafeselectError::Sidecar(message));
+        }
+        Err(error) => return Err(error),
+    };
     security.check_result_size(result.row_count, result.byte_count)?;
 
     sidecar.shutdown()?;
