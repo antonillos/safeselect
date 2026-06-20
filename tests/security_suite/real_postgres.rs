@@ -11,9 +11,9 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const TEST_DB: &str = "safeselect_security_test";
-const TEST_USER: &str = "safeselect_test_user";
-const TEST_PASSWORD: &str = "testpass";
+pub const TEST_DB: &str = "safeselect_security_test";
+pub const TEST_USER: &str = "safeselect_test_user";
+pub const TEST_PASSWORD: &str = "testpass";
 
 pub fn run() {
     if std::env::var("SAFESELECT_SECURITY_TEST").is_err() {
@@ -115,7 +115,7 @@ pub fn run() {
     }
 }
 
-fn safeselect_bin() -> PathBuf {
+pub fn safeselect_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_safeselect"))
 }
 
@@ -136,23 +136,23 @@ fn strip_ansi(s: &str) -> String {
         .0
 }
 
-fn pg_host() -> String {
+pub fn pg_host() -> String {
     std::env::var("SAFESELECT_SECURITY_HOST").unwrap_or_else(|_| "localhost".into())
 }
 
-fn pg_port() -> String {
+pub fn pg_port() -> String {
     std::env::var("SAFESELECT_SECURITY_PORT").unwrap_or_else(|_| "5432".into())
 }
 
-fn pg_admin_user() -> String {
+pub fn pg_admin_user() -> String {
     std::env::var("SAFESELECT_SECURITY_ADMIN_USER").unwrap_or_else(|_| "postgres".into())
 }
 
-fn pg_admin_password() -> String {
+pub fn pg_admin_password() -> String {
     std::env::var("SAFESELECT_SECURITY_ADMIN_PASSWORD").unwrap_or_else(|_| TEST_PASSWORD.into())
 }
 
-fn psql(database: &str, sql: &str) -> String {
+pub fn psql(database: &str, sql: &str) -> String {
     let output = if let Ok(container) = std::env::var("SAFESELECT_SECURITY_DOCKER_CONTAINER") {
         Command::new("docker")
             .args([
@@ -205,7 +205,7 @@ fn psql(database: &str, sql: &str) -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
-fn setup_database() {
+pub fn setup_database() {
     psql("postgres", &format!("DROP DATABASE IF EXISTS {TEST_DB};"));
     psql("postgres", &format!("DROP ROLE IF EXISTS {TEST_USER};"));
     psql(
@@ -232,12 +232,12 @@ fn setup_database() {
     );
 }
 
-fn cleanup_database() {
+pub fn cleanup_database() {
     psql("postgres", &format!("DROP DATABASE IF EXISTS {TEST_DB};"));
     psql("postgres", &format!("DROP ROLE IF EXISTS {TEST_USER};"));
 }
 
-fn write_config(root: &Path) {
+pub fn write_config(root: &Path) {
     let safeselect_dir = root.join(".safeselect");
     let env_dir = safeselect_dir.join("environments");
     std::fs::create_dir_all(&env_dir).unwrap();
@@ -286,7 +286,7 @@ variable = "SAFESELECT_SECURITY_TEST_PASSWORD"
     .unwrap();
 }
 
-fn run_safeselect(root: &Path, config_dir: &Path, sql: &str) -> (String, String, bool) {
+pub fn run_safeselect(root: &Path, config_dir: &Path, sql: &str) -> (String, String, bool) {
     let output = Command::new(safeselect_bin())
         .args([
             "query",
@@ -309,7 +309,7 @@ fn run_safeselect(root: &Path, config_dir: &Path, sql: &str) -> (String, String,
     )
 }
 
-fn download_driver(config_dir: &Path) {
+pub fn download_driver(config_dir: &Path) {
     let output = Command::new(safeselect_bin())
         .args(["driver", "download", "--vendor", "postgresql"])
         .env("SAFESELECT_CONFIG_DIR", config_dir)
