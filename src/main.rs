@@ -1441,6 +1441,8 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
     use std::io::Write;
     use std::time::Duration;
 
+    let mut failures = vec![];
+
     for env_name in env_names {
         let env_file = repo_root
             .join(".safeselect")
@@ -1520,6 +1522,9 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
             }
             let cmd = build_ssh_command(ssh, &cfg.database.url).unwrap_or_default();
             println!("  Establish tunnel manually:\n    {cmd}");
+            failures.push(format!(
+                "{env_name}: SSH bastion {bastion_host}:{bastion_port} unreachable and no active PostgreSQL tunnel"
+            ));
             continue;
         }
 
@@ -1548,6 +1553,10 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
                 missing.join(", ")
             );
             std::io::stdout().flush()?;
+            failures.push(format!(
+                "{env_name}: incomplete SSH config, missing {}",
+                missing.join(", ")
+            ));
             continue;
         }
 
@@ -1613,6 +1622,7 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
                     let cmd = build_ssh_command(ssh, &cfg.database.url)
                         .unwrap_or_else(|| "ssh command unavailable".to_string());
                     println!("  Establish it manually:\n    {cmd}");
+                    failures.push(format!("{env_name}: SSH password not found in Keychain"));
                     continue;
                 }
             };
@@ -1624,6 +1634,7 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
                     println!("  Then run:  safeselect check --environment {env_name}");
                     let cmd = build_ssh_command(ssh, &cfg.database.url).unwrap_or_default();
                     println!("  Or establish the tunnel manually:\n    {cmd}");
+                    failures.push(format!("{env_name}: sshpass not installed"));
                     continue;
                 }
             }
@@ -1643,13 +1654,15 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
                     println!("  Check that ssh is installed and the identity file is accessible.");
                     let cmd = build_ssh_command(ssh, &cfg.database.url).unwrap_or_default();
                     println!("  Establish it manually:\n    {cmd}");
+                    failures.push(format!("{env_name}: failed to spawn ssh: {e}"));
                     continue;
                 }
             }
         };
 
-        // Wait for the tunnel to establish (retry up to 30s)
-        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        // Wait briefly: if the bastion/tunnel is down, fail fast like JDBC clients do.
+        let tunnel_wait = Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + tunnel_wait;
         let mut pg_ok = false;
         while std::time::Instant::now() < deadline {
             pg_ok = check_postgres_endpoint(tunnel_local_host, tunnel_local_port)
@@ -1671,7 +1684,10 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
             let _ = child.kill();
             let _ = child.wait();
             println!("FAILED");
-            println!("  PostgreSQL not reachable through SSH tunnel (polled for up to 30s)");
+            println!(
+                "  PostgreSQL not reachable through SSH tunnel (polled for up to {}s)",
+                tunnel_wait.as_secs()
+            );
             println!("  Possible causes:");
             println!("    - Database host:port is wrong: {fwd_host}:{fwd_port}");
             println!("    - Database is not running or not accepting connections");
@@ -1679,9 +1695,21 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
             let cmd = build_ssh_command(ssh, &cfg.database.url)
                 .unwrap_or_else(|| "ssh command unavailable".to_string());
             println!("  Establish tunnel manually for debug:\n    {cmd}");
+            failures.push(format!(
+                "{env_name}: PostgreSQL not reachable through SSH tunnel after {}s",
+                tunnel_wait.as_secs()
+            ));
         }
     }
-    Ok(())
+
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(SafeselectError::Other(format!(
+            "SSH tunnel setup failed: {}",
+            failures.join("; ")
+        )))
+    }
 }
 
 /// Run `safeselect check` for each environment and report results.
@@ -1689,7 +1717,9 @@ fn run_checks(repo_root: &std::path::Path, env_names: &[String]) -> Result<()> {
     use std::io::Write;
 
     // Try to auto-establish SSH tunnels
-    setup_ssh_tunnels(repo_root, env_names)?;
+    if let Err(e) = setup_ssh_tunnels(repo_root, env_names) {
+        println!("  ⚠  {e}");
+    }
 
     // Pre-scan for SSH bastions (only warn if still not active)
     let ssh_envs: Vec<&String> = env_names

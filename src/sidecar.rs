@@ -142,6 +142,11 @@ impl SidecarProcess {
         self.writer.flush()?;
         let mut ack = String::new();
         self.reader.read_line(&mut ack)?;
+        if ack.is_empty() {
+            return Err(SafeselectError::Sidecar(
+                "sidecar process terminated during startup — JDBC connection failed".into(),
+            ));
+        }
         let ack = ack.trim();
         if ack != "ready" {
             return Err(SafeselectError::Sidecar(format!(
