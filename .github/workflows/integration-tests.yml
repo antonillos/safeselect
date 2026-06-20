@@ -1,0 +1,108 @@
+name: Integration Tests
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+  workflow_call:
+
+jobs:
+  integration-tests:
+    name: Real Integration Tests
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: testpass
+          POSTGRES_DB: testdb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Install Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build sidecar
+        run: |
+          cd sidecar
+          mvn clean package -DskipTests
+          cp target/safeselect-sidecar-*.jar target/safeselect-sidecar.jar
+
+      - name: Build SafeSelect
+        run: cargo build --release
+
+      - name: Download PostgreSQL JDBC driver
+        run: cargo run -- driver download --vendor postgresql
+
+      - name: Run security tests
+        env:
+          SAFESELECT_SECURITY_TEST: 1
+          SAFESELECT_SECURITY_HOST: localhost
+          SAFESELECT_SECURITY_PORT: 5432
+          SAFESELECT_SECURITY_ADMIN_USER: postgres
+          SAFESELECT_SECURITY_ADMIN_PASSWORD: testpass
+        run: |
+          echo "=== Running Security Tests ==="
+          cargo test --test security -- --nocapture
+
+      - name: Run smoke tests
+        env:
+          SAFESELECT_REAL_SMOKE_TEST: 1
+          SAFESELECT_SECURITY_HOST: localhost
+          SAFESELECT_SECURITY_PORT: 5432
+          SAFESELECT_SECURITY_ADMIN_USER: postgres
+          SAFESELECT_SECURITY_ADMIN_PASSWORD: testpass
+        run: |
+          echo "=== Running Smoke Tests ==="
+          cargo test --test smoke_suite postgres_smoke_errors_and_timeouts -- --nocapture
+
+      - name: Run reconnect test
+        env:
+          SAFESELECT_RECONNECT_TEST: 1
+          SAFESELECT_SECURITY_HOST: localhost
+          SAFESELECT_SECURITY_PORT: 5432
+          SAFESELECT_SECURITY_ADMIN_USER: postgres
+          SAFESELECT_SECURITY_ADMIN_PASSWORD: testpass
+        run: |
+          echo "=== Running Reconnect Test ==="
+          cargo test --test smoke_suite postgres_reconnect_after_docker_restart -- --nocapture
+
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-logs
+          path: |
+            target/debug/deps/*.log
+            ~/.local/state/safeselect/logs/
+          retention-days: 7
