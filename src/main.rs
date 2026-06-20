@@ -17,7 +17,7 @@ use cli::{AgentAction, Cli, Command, ConfigAction, DriverAction};
 use config::ConfigLoader;
 use diagnostics::{DiagnosticCode, DiagnosticStatus};
 use error::{Result, SafeselectError};
-use sidecar::SidecarProcess;
+use sidecar::{format_elapsed, SidecarProcess};
 use std::path::{Path, PathBuf};
 
 fn main() {
@@ -2219,8 +2219,9 @@ fn cmd_query(
 
     if result.columns.is_empty() {
         println!(
-            "Query executed. {} rows affected. ({}ms)",
-            result.row_count, result.elapsed_ms
+            "Read completed. {} rows returned. ({})",
+            result.row_count,
+            format_elapsed(result.elapsed_ms)
         );
         return Ok(());
     }
@@ -2287,8 +2288,10 @@ fn cmd_query(
     }
     separator();
     println!(
-        "({} rows, {} bytes, {}ms)",
-        result.row_count, result.byte_count, result.elapsed_ms
+        "({} rows, {} bytes, {})",
+        result.row_count,
+        result.byte_count,
+        format_elapsed(result.elapsed_ms)
     );
 
     Ok(())
