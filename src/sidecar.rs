@@ -46,8 +46,6 @@ pub struct QueryResult {
     pub byte_count: u64,
     #[serde(default)]
     pub elapsed_ms: u64,
-    #[serde(default)]
-    pub affected_rows: Option<u64>,
 }
 
 impl SidecarProcess {

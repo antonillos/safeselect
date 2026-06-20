@@ -367,12 +367,10 @@ public class Main {
                     log("[EXECUTE] Completed in " + elapsedMs + "ms");
                 }
             } else {
-                int updateCount = stmt.getUpdateCount();
                 long elapsedMs = System.currentTimeMillis() - startTime;
                 Map<String, Object> result = new LinkedHashMap<>();
-                result.put("affected_rows", updateCount);
                 result.put("elapsed_ms", elapsedMs);
-                log("[EXECUTE] Update query, affected_rows=" + updateCount + " in " + elapsedMs + "ms");
+                log("[EXECUTE] Update query completed in " + elapsedMs + "ms");
                 sendResponse(writer, id, result, null);
             }
         } catch (SQLException e) {
