@@ -1890,6 +1890,22 @@ pub(crate) fn check_postgres_endpoint(host: &str, port: u16) -> bool {
         .unwrap_or(false)
 }
 
+pub(crate) fn is_ssh_ready_for_query(ssh: &config::SshConfig, jdbc_url: &str) -> bool {
+    let bastion_host = ssh.host.as_deref().unwrap_or("");
+    let bastion_port = ssh.port.unwrap_or(22);
+    if !check_tcp_endpoint(
+        bastion_host,
+        bastion_port,
+        std::time::Duration::from_secs(3),
+    ) {
+        return false;
+    }
+
+    extract_host_port(jdbc_url)
+        .map(|(host, port)| check_postgres_endpoint(&host, port))
+        .unwrap_or(false)
+}
+
 /// Quick check if a TCP endpoint responds like a PostgreSQL server.
 pub(crate) fn check_postgres(addr: &std::net::SocketAddr) -> bool {
     use std::io::{Read, Write};

@@ -250,11 +250,12 @@ impl SidecarProcess {
         self.writer.flush()?;
 
         let fd = self.reader.get_ref().as_raw_fd();
-        // Wait for statement timeout + 1s buffer, minimum 30s
+        // Wait for statement timeout + 1s buffer, with a short minimum so broken
+        // tunnels fail fast instead of looking stuck to MCP clients.
         // The 1s buffer allows PostgreSQL to cancel the query via statement_timeout
         // before we kill the sidecar process
         let timeout_ms = if self.statement_timeout_ms > 0 {
-            let t = (self.statement_timeout_ms + 1_000u64).max(30_000u64);
+            let t = (self.statement_timeout_ms + 1_000u64).max(5_000u64);
             if t > i32::MAX as u64 {
                 i32::MAX
             } else {

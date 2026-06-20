@@ -6,7 +6,7 @@ use crate::diagnostics::{self, DiagnosticCode, DiagnosticStatus};
 use crate::error::Result;
 use crate::security::SecurityEngine;
 use crate::sidecar::SidecarProcess;
-use crate::{setup_ssh_tunnels, update_generated_by};
+use crate::{is_ssh_ready_for_query, setup_ssh_tunnels, update_generated_by};
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -851,6 +851,7 @@ impl McpServer {
         let start = std::time::Instant::now();
         tracing::debug!("execute_with_reconnect started");
 
+        self.ensure_ssh_ready_for_query()?;
         self.ensure_sidecar()?;
         tracing::debug!("Sidecar ensured ({:?})", start.elapsed());
 
@@ -950,6 +951,38 @@ impl McpServer {
                 }
                 retry
             }
+        }
+    }
+
+    fn ensure_ssh_ready_for_query(&mut self) -> Result<()> {
+        let loader = ConfigLoader::new();
+        let resolved = loader.resolve_local(&self.repo_root, &self.env_name)?;
+        let ssh = match resolved.environment.ssh.as_ref() {
+            Some(ssh) if ssh.enabled => ssh,
+            _ => return Ok(()),
+        };
+
+        if is_ssh_ready_for_query(ssh, &resolved.environment.database.url) {
+            return Ok(());
+        }
+
+        tracing::warn!(
+            "{}: SSH preflight failed before query; preparing tunnel",
+            DiagnosticCode::SshTunnelRecoveryAttempt.as_str()
+        );
+        setup_ssh_tunnels(&self.repo_root, &[self.env_name.clone()])?;
+
+        let resolved = loader.resolve_local(&self.repo_root, &self.env_name)?;
+        match resolved.environment.ssh.as_ref() {
+            Some(ssh)
+                if ssh.enabled
+                    && is_ssh_ready_for_query(ssh, &resolved.environment.database.url) =>
+            {
+                Ok(())
+            }
+            _ => Err(crate::error::SafeselectError::Other(
+                "SSH tunnel is not ready for query execution".into(),
+            )),
         }
     }
 
