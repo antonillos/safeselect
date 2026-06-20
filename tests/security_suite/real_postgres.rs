@@ -309,6 +309,27 @@ pub fn run_safeselect(root: &Path, config_dir: &Path, sql: &str) -> (String, Str
     )
 }
 
+pub fn run_safeselect_args(
+    root: &Path,
+    config_dir: &Path,
+    args: &[&str],
+) -> (String, String, bool) {
+    let output = Command::new(safeselect_bin())
+        .args(args)
+        .env("SAFESELECT_CONFIG_DIR", config_dir)
+        .env("SAFESELECT_SECURITY_TEST_PASSWORD", TEST_PASSWORD)
+        .env("NO_COLOR", "1")
+        .current_dir(root)
+        .output()
+        .expect("failed to run safeselect");
+
+    (
+        strip_ansi(&String::from_utf8_lossy(&output.stdout)),
+        strip_ansi(&String::from_utf8_lossy(&output.stderr)),
+        output.status.success(),
+    )
+}
+
 pub fn download_driver(config_dir: &Path) {
     let output = Command::new(safeselect_bin())
         .args(["driver", "download", "--vendor", "postgresql"])
