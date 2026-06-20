@@ -68,6 +68,25 @@ List database tables, optionally filtered by schema name.
 
 Show the execution plan for a query without executing it.
 
+### `check`
+
+Diagnose the configured environment from inside MCP. The response includes
+stable diagnostic codes such as `SAFESELECT_CONFIG_RESOLVED`,
+`SAFESELECT_SSH_BASTION_REACHABLE`, `SAFESELECT_SIDECAR_JDBC_OK`, and
+`SAFESELECT_QUERY_SELECT_ONE_OK` so agents can identify the failing layer before
+trying a recovery action.
+
+### `reconnect`
+
+Restart the sidecar and verify the database connection after connection loss or
+an SSH tunnel change.
+
+### `import_compose`
+
+Import PostgreSQL services discovered in docker-compose files. The MCP importer
+creates `.safeselect/` config and records the SafeSelect version metadata; run
+`check` afterwards to verify driver, secret, SSH, sidecar, and `SELECT 1`.
+
 ## Security
 
 - Each MCP entry is locked to a single project and environment

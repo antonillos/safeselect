@@ -96,17 +96,14 @@ impl SecurityEngine {
     fn check_read_only(&self, sql: &str) -> Result<()> {
         let upper = sql.trim().to_uppercase();
 
-        if upper.starts_with("SELECT")
-            || upper.starts_with("EXPLAIN")
-            || upper.starts_with("WITH")
+        if upper.starts_with("SELECT") || upper.starts_with("EXPLAIN") || upper.starts_with("WITH")
         {
             return Ok(());
         }
 
         let disallowed = [
-            "INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER",
-            "TRUNCATE", "COPY", "SET ", "PREPARE", "EXECUTE",
-            "CALL", "MERGE", "REPLACE", "GRANT", "REVOKE",
+            "INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER", "TRUNCATE", "COPY", "SET ",
+            "PREPARE", "EXECUTE", "CALL", "MERGE", "REPLACE", "GRANT", "REVOKE",
         ];
 
         for kw in &disallowed {
@@ -193,7 +190,9 @@ fn has_schema_reference(sql_lower: &str, allowed_patterns: &[String]) -> bool {
             let schema = &sql_lower[start..end];
             let schemaname = schema.trim_end_matches('.');
             if !schemaname.is_empty()
-                && schemaname.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                && schemaname
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_')
                 && !is_sql_keyword(schemaname)
                 && !allowed_patterns.iter().any(|p| p.starts_with(schemaname))
             {
@@ -207,17 +206,70 @@ fn has_schema_reference(sql_lower: &str, allowed_patterns: &[String]) -> bool {
 fn is_sql_keyword(word: &str) -> bool {
     matches!(
         word,
-        "select" | "from" | "where" | "and" | "or" | "not" | "in" | "on" | "as"
-            | "join" | "left" | "right" | "inner" | "outer" | "cross" | "full"
-            | "order" | "group" | "by" | "having" | "limit" | "offset"
-            | "insert" | "update" | "delete" | "into" | "values" | "set"
-            | "create" | "alter" | "drop" | "table" | "index" | "view"
-            | "distinct" | "count" | "sum" | "avg" | "min" | "max" | "exists"
-            | "true" | "false" | "null" | "is" | "like" | "between"
-            | "union" | "all" | "any" | "some" | "case" | "when" | "then" | "else" | "end"
-            | "cast" | "coalesce" | "nullif"
-            | "begin" | "commit" | "rollback"
-            | "grant" | "revoke"
+        "select"
+            | "from"
+            | "where"
+            | "and"
+            | "or"
+            | "not"
+            | "in"
+            | "on"
+            | "as"
+            | "join"
+            | "left"
+            | "right"
+            | "inner"
+            | "outer"
+            | "cross"
+            | "full"
+            | "order"
+            | "group"
+            | "by"
+            | "having"
+            | "limit"
+            | "offset"
+            | "insert"
+            | "update"
+            | "delete"
+            | "into"
+            | "values"
+            | "set"
+            | "create"
+            | "alter"
+            | "drop"
+            | "table"
+            | "index"
+            | "view"
+            | "distinct"
+            | "count"
+            | "sum"
+            | "avg"
+            | "min"
+            | "max"
+            | "exists"
+            | "true"
+            | "false"
+            | "null"
+            | "is"
+            | "like"
+            | "between"
+            | "union"
+            | "all"
+            | "any"
+            | "some"
+            | "case"
+            | "when"
+            | "then"
+            | "else"
+            | "end"
+            | "cast"
+            | "coalesce"
+            | "nullif"
+            | "begin"
+            | "commit"
+            | "rollback"
+            | "grant"
+            | "revoke"
     )
 }
 
@@ -386,7 +438,9 @@ mod tests {
     #[test]
     fn test_read_only_with_cte() {
         let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
-        assert!(engine.check_read_only("WITH x AS (SELECT 1) SELECT * FROM x").is_ok());
+        assert!(engine
+            .check_read_only("WITH x AS (SELECT 1) SELECT * FROM x")
+            .is_ok());
     }
 
     #[test]
@@ -409,6 +463,8 @@ mod tests {
         let mut policy = SecurityPolicy::default();
         policy.denied_relations = vec!["public.users_credentials".into()];
         let engine = SecurityEngine::new(policy, LimitsConfig::default());
-        assert!(engine.validate("SELECT * FROM public.users_credentials").is_err());
+        assert!(engine
+            .validate("SELECT * FROM public.users_credentials")
+            .is_err());
     }
 }

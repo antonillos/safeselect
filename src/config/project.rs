@@ -101,11 +101,27 @@ impl Default for AuditConfig {
     }
 }
 
-fn default_true() -> bool { true }
-fn default_stmt_timeout() -> u64 { 5000 }
-fn default_conn_timeout() -> u64 { 5000 }
-fn default_max_rows() -> u64 { 500 }
-fn default_max_bytes() -> u64 { 2_000_000 }
-fn default_audit_dir() -> String { "~/.local/state/safeselect/audit".to_string() }
-fn default_audit_max_bytes() -> u64 { 10_000_000 }
-fn default_audit_retain() -> u32 { 10 }
+fn default_true() -> bool {
+    true
+}
+fn default_stmt_timeout() -> u64 {
+    5000
+}
+fn default_conn_timeout() -> u64 {
+    5000
+}
+fn default_max_rows() -> u64 {
+    500
+}
+fn default_max_bytes() -> u64 {
+    2_000_000
+}
+fn default_audit_dir() -> String {
+    "~/.local/state/safeselect/audit".to_string()
+}
+fn default_audit_max_bytes() -> u64 {
+    10_000_000
+}
+fn default_audit_retain() -> u32 {
+    10
+}

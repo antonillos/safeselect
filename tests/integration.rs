@@ -121,7 +121,13 @@ fn test_integration_check() {
 
     let repo_root = setup_test_config();
     let (stdout, stderr, success) = run_with_config(
-        &["check", "--project", repo_root.to_str().unwrap(), "--environment", "testing"],
+        &[
+            "check",
+            "--project",
+            repo_root.to_str().unwrap(),
+            "--environment",
+            "testing",
+        ],
         repo_root.parent().unwrap().to_str().unwrap(),
     );
 
@@ -130,7 +136,10 @@ fn test_integration_check() {
         eprintln!("stderr: {stderr}");
     }
 
-    assert!(success, "check failed:\nstdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(
+        success,
+        "check failed:\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
     assert!(
         stdout.contains("All checks passed"),
         "expected success message, got: {stdout}"

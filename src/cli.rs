@@ -63,6 +63,14 @@ pub enum Command {
         #[arg(long)]
         environment: String,
     },
+    /// Diagnose configuration, SSH, sidecar, JDBC, and SELECT 1 connectivity
+    Doctor {
+        /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
+        #[arg(long)]
+        project: Option<PathBuf>,
+        #[arg(long)]
+        environment: String,
+    },
     /// Execute a SQL query and display results
     Query {
         /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)

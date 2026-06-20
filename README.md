@@ -72,6 +72,7 @@ safeselect agent install opencode --environment testing
 | `serve --project <p> --environment <e>` | Start the MCP server |
 | `query --project <p> --environment <e> --sql <q>` | Execute SQL directly |
 | `check --project <p> --environment <e>` | Test connectivity |
+| `doctor --project <p> --environment <e>` | Diagnose config, SSH, sidecar, JDBC, and `SELECT 1` |
 | `config validate [--project <p>] [--environment <e>]` | Validate config |
 | `config show --project <p> --environment <e>` | Show resolved config |
 | `config rename-environment --old <o> --new <n>` | Rename environment |
@@ -90,6 +91,27 @@ safeselect agent install opencode --environment testing
 | `connect --project <p> --environment <e>` | Reconnect to database |
 | `disconnect --project <p> --environment <e>` | Disconnect from database |
 | `uninstall` | Remove SafeSelect entirely |
+
+---
+
+## Diagnostics
+
+`check` and `doctor` report each phase with a stable diagnostic code so humans
+and AI agents can identify exactly where a failure happens without changing the
+normal connection behavior.
+
+Example phases:
+
+- `SAFESELECT_CONFIG_RESOLVED`
+- `SAFESELECT_DRIVER_VERIFIED`
+- `SAFESELECT_SECRET_RESOLVED`
+- `SAFESELECT_SSH_BASTION_REACHABLE`
+- `SAFESELECT_POSTGRES_REACHABLE`
+- `SAFESELECT_SIDECAR_JDBC_OK`
+- `SAFESELECT_QUERY_SELECT_ONE_OK`
+
+Use these codes when reporting issues or asking an agent to recover a broken
+environment.
 
 ---
 
