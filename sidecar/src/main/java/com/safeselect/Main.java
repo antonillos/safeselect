@@ -88,14 +88,15 @@ public class Main {
             startIdleTimer(writer);
         }
 
-        writer.println("ready");
-        writer.flush();
-
         try {
             Class.forName(driverClass);
+            DriverManager.setLoginTimeout(3);
             log("Connecting: url=" + jdbcUrl + " user=" + user + " driver=" + driverClass);
             connection = DriverManager.getConnection(jdbcUrl, user, password);
             applyStatementTimeout();
+
+            writer.println("ready");
+            writer.flush();
 
             while (RUNNING.get()) {
                 String line = reader.readLine();
