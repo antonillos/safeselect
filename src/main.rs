@@ -1439,7 +1439,6 @@ fn setup_passwords_for_missing(repo_root: &std::path::Path, env_names: &[String]
 /// Returns PIDs of tunnels started by this call.
 pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Result<()> {
     use std::io::Write;
-    use std::net::ToSocketAddrs;
     use std::time::Duration;
 
     for env_name in env_names {
@@ -1464,35 +1463,23 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
         };
 
         // Database connection target (original host:port from config)
-        let db_addr = extract_host_port(&cfg.database.url)
-            .and_then(|(h, p)| format!("{h}:{p}").to_socket_addrs().ok())
-            .and_then(|mut a| a.next());
-
         // SSH bastion address (where we SSH to + tunnel endpoint)
         let bastion_host = ssh.host.as_deref().unwrap_or("");
         let bastion_port = ssh.port.unwrap_or(22);
-        let bastion_addr = format!("{bastion_host}:{bastion_port}")
-            .to_socket_addrs()
-            .ok()
-            .and_then(|mut a| a.next());
 
         // Step 1: Check if the SSH bastion is reachable
-        let bastion_up = bastion_addr.as_ref().is_some_and(|a| {
-            std::net::TcpStream::connect_timeout(a, Duration::from_secs(3)).is_ok()
-        });
+        let bastion_up = check_tcp_endpoint(bastion_host, bastion_port, Duration::from_secs(3));
 
         let tunnel_local_host = ssh.local_host.as_deref().unwrap_or("localhost");
         let tunnel_local_port = ssh.local_port.unwrap_or(15432);
 
         // Step 2: Check PostgreSQL via tunnel endpoint.
-        let tunnel_pg_addr = format!("{tunnel_local_host}:{tunnel_local_port}")
-            .to_socket_addrs()
-            .ok()
-            .and_then(|mut a| a.next());
-        let pg_via_tunnel = tunnel_pg_addr.as_ref().is_some_and(check_postgres);
+        let pg_via_tunnel = check_postgres_endpoint(tunnel_local_host, tunnel_local_port);
 
         // Step 3: Check PostgreSQL via original target (if resolvable)
-        let pg_via_direct = db_addr.as_ref().is_some_and(check_postgres);
+        let pg_via_direct = extract_host_port(&cfg.database.url)
+            .map(|(host, port)| check_postgres_endpoint(&host, port))
+            .unwrap_or(false);
 
         if pg_via_direct || pg_via_tunnel {
             print!("  ◉ PostgreSQL reachable ({env_name})");
@@ -1597,14 +1584,24 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
         let spawn_sshpass = |password: &str| -> std::io::Result<std::process::Child> {
             let mut full = vec!["-p".into(), password.to_string(), "ssh".into()];
             full.extend(ssh_args.clone());
-            std::process::Command::new("sshpass").args(&full).spawn()
+            std::process::Command::new("sshpass")
+                .args(&full)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
         };
 
         // Helper: spawn ssh <ssh_args> with optional extra flags
         let spawn_ssh = |extra: Vec<String>| -> std::io::Result<std::process::Child> {
             let mut full = extra;
             full.extend(ssh_args.clone());
-            std::process::Command::new("ssh").args(&full).spawn()
+            std::process::Command::new("ssh")
+                .args(&full)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
         };
 
         let mut child = if use_password {
@@ -1655,10 +1652,10 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
         let deadline = std::time::Instant::now() + Duration::from_secs(30);
         let mut pg_ok = false;
         while std::time::Instant::now() < deadline {
-            pg_ok = db_addr.as_ref().is_some_and(|a| {
-                std::net::TcpStream::connect_timeout(a, Duration::from_secs(3)).is_ok()
-                    && check_postgres(a)
-            });
+            pg_ok = check_postgres_endpoint(tunnel_local_host, tunnel_local_port)
+                || extract_host_port(&cfg.database.url)
+                    .map(|(host, port)| check_postgres_endpoint(&host, port))
+                    .unwrap_or(false);
             if pg_ok {
                 break;
             }
@@ -1843,6 +1840,26 @@ pub(crate) fn extract_host_port(url: &str) -> Option<(String, u16)> {
     Some((host.to_string(), port))
 }
 
+pub(crate) fn check_tcp_endpoint(host: &str, port: u16, timeout: std::time::Duration) -> bool {
+    use std::net::ToSocketAddrs;
+
+    format!("{host}:{port}")
+        .to_socket_addrs()
+        .map(|mut addrs| {
+            addrs.any(|addr| std::net::TcpStream::connect_timeout(&addr, timeout).is_ok())
+        })
+        .unwrap_or(false)
+}
+
+pub(crate) fn check_postgres_endpoint(host: &str, port: u16) -> bool {
+    use std::net::ToSocketAddrs;
+
+    format!("{host}:{port}")
+        .to_socket_addrs()
+        .map(|addrs| addrs.into_iter().any(|addr| check_postgres(&addr)))
+        .unwrap_or(false)
+}
+
 /// Quick check if a TCP endpoint responds like a PostgreSQL server.
 pub(crate) fn check_postgres(addr: &std::net::SocketAddr) -> bool {
     use std::io::{Read, Write};
@@ -1944,32 +1961,36 @@ fn cmd_check(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
 
     if let Some(ref ssh) = resolved.environment.ssh {
         if ssh.enabled {
-            use std::net::ToSocketAddrs;
             let bastion_host = ssh.host.as_deref().unwrap_or("unknown");
             let bastion_port = ssh.port.unwrap_or(22);
             println!("  SSH bastion: {bastion_host}:{bastion_port}");
 
-            // 1) Check bastion reachability
-            let bastion_addr = format!("{bastion_host}:{bastion_port}")
-                .to_socket_addrs()
-                .ok()
-                .and_then(|mut a| a.next());
+            let mut postgres_reachable = false;
+            if let Some((host, port)) = extract_host_port(&resolved.environment.database.url) {
+                postgres_reachable = check_postgres_endpoint(&host, port);
+                if postgres_reachable {
+                    diagnostics::print(
+                        DiagnosticStatus::Ok,
+                        DiagnosticCode::PostgresReachable,
+                        format!("PostgreSQL reachable at {host}:{port}"),
+                    );
+                }
+            }
 
-            match bastion_addr.as_ref() {
-                Some(a)
-                    if std::net::TcpStream::connect_timeout(
-                        a,
-                        std::time::Duration::from_secs(3),
-                    )
-                    .is_ok() =>
-                {
+            // If the local PostgreSQL endpoint is already reachable, an external
+            // tunnel (for example DBeaver) is active and that is good enough.
+            if !postgres_reachable {
+                if check_tcp_endpoint(
+                    bastion_host,
+                    bastion_port,
+                    std::time::Duration::from_secs(3),
+                ) {
                     diagnostics::print(
                         DiagnosticStatus::Ok,
                         DiagnosticCode::SshBastionReachable,
                         format!("Bastion reachable at {bastion_host}:{bastion_port}"),
-                    )
-                }
-                Some(_) => {
+                    );
+                } else {
                     diagnostics::print(
                         DiagnosticStatus::Fail,
                         DiagnosticCode::SshBastionUnreachable,
@@ -1992,28 +2013,13 @@ fn cmd_check(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
                         format!("SSH bastion {bastion_host}:{bastion_port} not reachable (connect timed out after 3s).")
                     ));
                 }
-                None => {
-                    diagnostics::print(
-                        DiagnosticStatus::Fail,
-                        DiagnosticCode::SshBastionUnresolved,
-                        format!("Cannot resolve bastion {bastion_host}:{bastion_port}"),
-                    );
-                    return Err(SafeselectError::Other(format!(
-                        "Cannot resolve SSH bastion {bastion_host}:{bastion_port}"
-                    )));
-                }
             }
 
             // 2) Establish SSH tunnel if needed, then check PostgreSQL reachability
             if let Some((host, port)) = extract_host_port(&resolved.environment.database.url) {
-                use std::net::ToSocketAddrs;
-                let pg_addr = format!("{host}:{port}")
-                    .to_socket_addrs()
-                    .ok()
-                    .and_then(|mut a| a.next());
                 // If SSH is enabled and PostgreSQL is not already reachable, try establishing the tunnel
-                let pg_addr = if pg_addr.as_ref().is_some_and(|a| check_postgres(a)) {
-                    pg_addr
+                let pg_reachable = if postgres_reachable {
+                    true
                 } else {
                     diagnostics::print(
                         DiagnosticStatus::Info,
@@ -2021,14 +2027,11 @@ fn cmd_check(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
                         "Establishing SSH tunnel...",
                     );
                     let _ = setup_ssh_tunnels(repo_root, &[environment.to_string()]);
-                    format!("{host}:{port}")
-                        .to_socket_addrs()
-                        .ok()
-                        .and_then(|mut a| a.next())
+                    check_postgres_endpoint(&host, port)
                 };
 
-                match pg_addr {
-                    Some(ref a) if check_postgres(a) => diagnostics::print(
+                match pg_reachable {
+                    true => diagnostics::print(
                         DiagnosticStatus::Ok,
                         DiagnosticCode::PostgresReachable,
                         format!("PostgreSQL reachable at {host}:{port}"),

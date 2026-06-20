@@ -1675,31 +1675,36 @@ impl McpServer {
 
         if let Some(ref ssh) = resolved.environment.ssh {
             if ssh.enabled {
-                use std::net::ToSocketAddrs;
                 let bastion_host = ssh.host.as_deref().unwrap_or("unknown");
                 let bastion_port = ssh.port.unwrap_or(22);
                 lines.push(format!("  SSH bastion: {bastion_host}:{bastion_port}"));
 
-                let bastion_addr = format!("{bastion_host}:{bastion_port}")
-                    .to_socket_addrs()
-                    .ok()
-                    .and_then(|mut a| a.next());
+                let mut postgres_reachable = false;
+                if let Some((host, port)) =
+                    crate::extract_host_port(&resolved.environment.database.url)
+                {
+                    postgres_reachable = crate::check_postgres_endpoint(&host, port);
+                    if postgres_reachable {
+                        lines.push(diagnostics::line(
+                            DiagnosticStatus::Ok,
+                            DiagnosticCode::PostgresReachable,
+                            format!("PostgreSQL reachable at {host}:{port}"),
+                        ));
+                    }
+                }
 
-                match bastion_addr.as_ref() {
-                    Some(a)
-                        if std::net::TcpStream::connect_timeout(
-                            a,
-                            std::time::Duration::from_secs(3),
-                        )
-                        .is_ok() =>
-                    {
+                if !postgres_reachable {
+                    if crate::check_tcp_endpoint(
+                        bastion_host,
+                        bastion_port,
+                        std::time::Duration::from_secs(3),
+                    ) {
                         lines.push(diagnostics::line(
                             DiagnosticStatus::Ok,
                             DiagnosticCode::SshBastionReachable,
                             format!("SSH bastion reachable at {bastion_host}:{bastion_port}"),
-                        ))
-                    }
-                    Some(_) => {
+                        ));
+                    } else {
                         lines.push(diagnostics::line(
                             DiagnosticStatus::Fail,
                             DiagnosticCode::SshBastionUnreachable,
@@ -1717,29 +1722,15 @@ impl McpServer {
                         let resp = ok_text_response(id, lines.join("\n"));
                         return self.write_response(&resp);
                     }
-                    None => {
-                        lines.push(diagnostics::line(
-                            DiagnosticStatus::Fail,
-                            DiagnosticCode::SshBastionUnresolved,
-                            format!("Cannot resolve bastion {bastion_host}:{bastion_port} — check DNS or hostname"),
-                        ));
-                        let resp = ok_text_response(id, lines.join("\n"));
-                        return self.write_response(&resp);
-                    }
                 }
 
                 // Check if PostgreSQL is reachable (direct or via tunnel)
                 if let Some((host, port)) =
                     crate::extract_host_port(&resolved.environment.database.url)
                 {
-                    let pg_addr = format!("{host}:{port}")
-                        .to_socket_addrs()
-                        .ok()
-                        .and_then(|mut a| a.next());
-
                     // If not reachable directly, try establishing SSH tunnel
-                    let pg_addr = if pg_addr.as_ref().is_some_and(|a| crate::check_postgres(a)) {
-                        pg_addr
+                    let pg_reachable = if postgres_reachable {
+                        true
                     } else {
                         lines.push(diagnostics::line(
                             DiagnosticStatus::Info,
@@ -1756,14 +1747,11 @@ impl McpServer {
                             let resp = ok_text_response(id, lines.join("\n"));
                             return self.write_response(&resp);
                         }
-                        format!("{host}:{port}")
-                            .to_socket_addrs()
-                            .ok()
-                            .and_then(|mut a| a.next())
+                        crate::check_postgres_endpoint(&host, port)
                     };
 
-                    match pg_addr.as_ref() {
-                        Some(a) if crate::check_postgres(a) => lines.push(diagnostics::line(
+                    match pg_reachable {
+                        true => lines.push(diagnostics::line(
                             DiagnosticStatus::Ok,
                             DiagnosticCode::PostgresReachable,
                             format!("PostgreSQL reachable at {host}:{port}"),
