@@ -82,9 +82,7 @@ fn test_config_validate_missing_project() {
 #[test]
 fn test_driver_list_empty() {
     let (stdout, _stderr, _success) = &run(&["driver", "list"]);
-    assert!(
-        stdout.contains("postgresql") || stdout.contains("drivers")
-    );
+    assert!(stdout.contains("postgresql") || stdout.contains("drivers"));
 }
 
 #[test]

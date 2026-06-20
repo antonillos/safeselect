@@ -2,10 +2,11 @@ use crate::agents;
 use crate::audit::AuditLog;
 use crate::compose;
 use crate::config::{ConfigLoader, EnvironmentConfig, ProjectConfig};
+use crate::diagnostics::{self, DiagnosticCode, DiagnosticStatus};
 use crate::error::Result;
 use crate::security::SecurityEngine;
-use crate::setup_ssh_tunnels;
 use crate::sidecar::SidecarProcess;
+use crate::{setup_ssh_tunnels, update_generated_by};
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -80,16 +81,14 @@ impl McpServer {
         repo_root: &Path,
         config_dir: &Path,
     ) -> Result<Self> {
-        let security = SecurityEngine::new(project_config.security.clone(), project_config.limits.clone());
+        let security = SecurityEngine::new(
+            project_config.security.clone(),
+            project_config.limits.clone(),
+        );
 
         let idle_timeout_seconds = env_config.limits.idle_timeout_seconds.unwrap_or(0);
 
-        let audit = AuditLog::open(
-            &project_config.audit,
-            project_name,
-            env_name,
-            "unknown",
-        )?;
+        let audit = AuditLog::open(&project_config.audit, project_name, env_name, "unknown")?;
 
         Ok(Self {
             sidecar: None,
@@ -194,7 +193,8 @@ impl McpServer {
     }
 
     fn handle_initialize(&mut self, msg: &JsonRpcMessage) -> Result<()> {
-        let client_name = msg.params
+        let client_name = msg
+            .params
             .as_ref()
             .and_then(|p| p.get("clientInfo"))
             .and_then(|v| v.get("name"))
@@ -202,7 +202,8 @@ impl McpServer {
             .unwrap_or("unknown")
             .to_string();
 
-        let proto_version = msg.params
+        let proto_version = msg
+            .params
             .as_ref()
             .and_then(|p| p.get("protocolVersion"))
             .and_then(|v| v.as_str())
@@ -558,7 +559,10 @@ impl McpServer {
             None => return self.send_error(msg.id.clone(), -32602, "Missing tool name"),
         };
 
-        let args = params.get("arguments").cloned().unwrap_or(serde_json::json!({}));
+        let args = params
+            .get("arguments")
+            .cloned()
+            .unwrap_or(serde_json::json!({}));
 
         match tool_name {
             "select" => self.handle_select(msg.id.clone(), &args),
@@ -568,8 +572,12 @@ impl McpServer {
             "connect" => self.handle_connect(msg.id.clone()),
             "config_validate" => self.handle_config_validate(msg.id.clone(), &args),
             "config_show" => self.handle_config_show(msg.id.clone(), &args),
-            "config_rename_environment" => self.handle_config_rename_environment(msg.id.clone(), &args),
-            "config_delete_environment" => self.handle_config_delete_environment(msg.id.clone(), &args),
+            "config_rename_environment" => {
+                self.handle_config_rename_environment(msg.id.clone(), &args)
+            }
+            "config_delete_environment" => {
+                self.handle_config_delete_environment(msg.id.clone(), &args)
+            }
             "config_set_password" => self.handle_config_set_password(msg.id.clone(), &args),
             "config_reset" => self.handle_config_reset(msg.id.clone(), &args),
             "driver_list" => self.handle_driver_list(msg.id.clone()),
@@ -587,7 +595,11 @@ impl McpServer {
         }
     }
 
-    fn handle_select(&mut self, id: Option<serde_json::Value>, args: &serde_json::Value) -> Result<()> {
+    fn handle_select(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
         let sql = match args.get("sql").and_then(|v| v.as_str()) {
             Some(s) => s,
             None => return self.send_error(id, -32602, "Missing 'sql' argument"),
@@ -609,7 +621,10 @@ impl McpServer {
 
         match result {
             Ok(query_result) => {
-                if let Err(e) = self.security.check_result_size(query_result.row_count, query_result.byte_count) {
+                if let Err(e) = self
+                    .security
+                    .check_result_size(query_result.row_count, query_result.byte_count)
+                {
                     self.audit.record("LIMIT_EXCEEDED", "reject", sql)?;
                     let _ = self.send_error(id, -32000, format!("{e}"));
                     self.fail_closed("Limit exceeded");
@@ -618,11 +633,17 @@ impl McpServer {
                 self.audit.record("PASS", "allow", sql)?;
                 let elapsed = start.elapsed();
                 if elapsed > std::time::Duration::from_secs(1) {
-                    tracing::warn!("Slow query: {elapsed:?} — {} rows, {} bytes",
-                        query_result.row_count, query_result.byte_count);
+                    tracing::warn!(
+                        "Slow query: {elapsed:?} — {} rows, {} bytes",
+                        query_result.row_count,
+                        query_result.byte_count
+                    );
                 }
-                tracing::debug!("Query completed in {elapsed:?}: {} rows, {} bytes",
-                    query_result.row_count, query_result.byte_count);
+                tracing::debug!(
+                    "Query completed in {elapsed:?}: {} rows, {} bytes",
+                    query_result.row_count,
+                    query_result.byte_count
+                );
                 let resp = JsonRpcResponse {
                     jsonrpc: "2.0",
                     id,
@@ -645,17 +666,25 @@ impl McpServer {
         }
     }
 
-    fn handle_list_tables(&mut self, id: Option<serde_json::Value>, args: &serde_json::Value) -> Result<()> {
+    fn handle_list_tables(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
         let schema = args.get("schema").and_then(|v| v.as_str());
 
         let allowed = self.security.allowed_schemas();
         let sql = match schema {
             Some(s) if is_valid_identifier(s) => {
                 if !allowed.is_empty() && !allowed.iter().any(|a| a == s) {
-                    return self.send_error(id, -32000, format!(
-                        "Schema '{s}' is not in the allowed schemas list ({})",
-                        allowed.join(", ")
-                    ));
+                    return self.send_error(
+                        id,
+                        -32000,
+                        format!(
+                            "Schema '{s}' is not in the allowed schemas list ({})",
+                            allowed.join(", ")
+                        ),
+                    );
                 }
                 format!(
                     "SELECT table_schema, table_name, table_type FROM information_schema.tables WHERE table_schema = '{}' ORDER BY table_schema, table_name",
@@ -663,15 +692,20 @@ impl McpServer {
                 )
             }
             Some(_) => {
-                return self.send_error(id, -32602, "Invalid schema name: only alphanumeric and underscores allowed");
+                return self.send_error(
+                    id,
+                    -32602,
+                    "Invalid schema name: only alphanumeric and underscores allowed",
+                );
             }
             None => {
                 if allowed.is_empty() {
                     "SELECT table_schema, table_name, table_type FROM information_schema.tables ORDER BY table_schema, table_name".into()
                 } else {
-                    let schemas: Vec<String> = allowed.iter().map(|s| {
-                        format!("'{}'", s.replace('\'', "''"))
-                    }).collect();
+                    let schemas: Vec<String> = allowed
+                        .iter()
+                        .map(|s| format!("'{}'", s.replace('\'', "''")))
+                        .collect();
                     format!(
                         "SELECT table_schema, table_name, table_type FROM information_schema.tables WHERE table_schema IN ({}) ORDER BY table_schema, table_name",
                         schemas.join(", ")
@@ -713,7 +747,11 @@ impl McpServer {
         }
     }
 
-    fn handle_explain(&mut self, id: Option<serde_json::Value>, args: &serde_json::Value) -> Result<()> {
+    fn handle_explain(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
         let sql = match args.get("sql").and_then(|v| v.as_str()) {
             Some(s) => s,
             None => return self.send_error(id, -32602, "Missing 'sql' argument"),
@@ -761,7 +799,8 @@ impl McpServer {
         };
         match sidecar.disconnect() {
             Ok(()) => {
-                self.audit.record("DISCONNECT", "allow", "manual disconnect")?;
+                self.audit
+                    .record("DISCONNECT", "allow", "manual disconnect")?;
                 let resp = JsonRpcResponse {
                     jsonrpc: "2.0",
                     id,
@@ -805,44 +844,61 @@ impl McpServer {
     }
 
     /// Execute a query, reconnecting once if the connection is lost.
-    fn execute_with_reconnect(&mut self, sql: &str) -> std::result::Result<crate::sidecar::QueryResult, crate::error::SafeselectError> {
+    fn execute_with_reconnect(
+        &mut self,
+        sql: &str,
+    ) -> std::result::Result<crate::sidecar::QueryResult, crate::error::SafeselectError> {
         let start = std::time::Instant::now();
         tracing::debug!("execute_with_reconnect started");
-        
+
         self.ensure_sidecar()?;
         tracing::debug!("Sidecar ensured ({:?})", start.elapsed());
-        
+
         let result = self.sidecar.as_mut().unwrap().execute(sql);
         tracing::debug!("First execute attempt completed ({:?})", start.elapsed());
-        
+
         if result.is_ok() {
             return result;
         }
-        
+
         // Check if the error was a timeout (sidecar didn't respond)
         let is_timeout = result.as_ref().err().map_or(false, |e| {
             let msg = e.to_string();
             msg.contains("did not respond within") || msg.contains("poll error")
         });
-        
+
         if is_timeout {
             // Sidecar is hung, do full restart immediately
-            tracing::warn!("Execute timed out — restarting sidecar process immediately ({:?})", start.elapsed());
+            tracing::warn!(
+                "Execute timed out — restarting sidecar process immediately ({:?})",
+                start.elapsed()
+            );
             self.restart_sidecar()?;
             tracing::info!("Sidecar restarted ({:?}), retrying query", start.elapsed());
             self.sidecar.as_mut().unwrap().execute(sql)
         } else {
             // Other error, try JDBC reconnect first
-            tracing::warn!("First execute failed ({:?}), attempting JDBC reconnect", start.elapsed());
+            tracing::warn!(
+                "First execute failed ({:?}), attempting JDBC reconnect",
+                start.elapsed()
+            );
             let reconnected = self.sidecar.as_mut().unwrap().connect().is_ok();
             tracing::debug!("JDBC reconnect completed ({:?})", start.elapsed());
-            
+
             if reconnected {
-                let _ = self.audit.record("AUTO_RECONNECT", "allow", "connection lost — reconnected");
-                tracing::info!("JDBC reconnect succeeded, retrying query ({:?})", start.elapsed());
+                let _ =
+                    self.audit
+                        .record("AUTO_RECONNECT", "allow", "connection lost — reconnected");
+                tracing::info!(
+                    "JDBC reconnect succeeded, retrying query ({:?})",
+                    start.elapsed()
+                );
                 self.sidecar.as_mut().unwrap().execute(sql)
             } else {
-                tracing::warn!("Execute + reconnect both failed — restarting sidecar process ({:?})", start.elapsed());
+                tracing::warn!(
+                    "Execute + reconnect both failed — restarting sidecar process ({:?})",
+                    start.elapsed()
+                );
                 self.restart_sidecar()?;
                 tracing::info!("Sidecar restarted ({:?}), retrying query", start.elapsed());
                 self.sidecar.as_mut().unwrap().execute(sql)
@@ -855,11 +911,11 @@ impl McpServer {
             // Use force_kill to avoid timeout when sidecar is hung
             s.force_kill_ref();
         }
-        
+
         // Wait for PostgreSQL to detect connection closure and clean up resources
         // This prevents zombie queries and connection state issues
         std::thread::sleep(std::time::Duration::from_secs(2));
-        
+
         let sidecar = SidecarProcess::start_with_timeout(
             &self.driver_path,
             &self.driver_class,
@@ -875,7 +931,11 @@ impl McpServer {
         Ok(())
     }
 
-    fn handle_config_validate(&mut self, id: Option<serde_json::Value>, args: &serde_json::Value) -> Result<()> {
+    fn handle_config_validate(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
         let environment = args.get("environment").and_then(|v| v.as_str());
         let loader = ConfigLoader::new();
 
@@ -891,7 +951,11 @@ impl McpServer {
             if has_project || has_envs {
                 format!("Config valid: {}", self.project_name)
             } else {
-                return self.send_error(id, -32000, format!("Incomplete .safeselect/ in {}", self.repo_root.display()));
+                return self.send_error(
+                    id,
+                    -32000,
+                    format!("Incomplete .safeselect/ in {}", self.repo_root.display()),
+                );
             }
         };
 
@@ -899,7 +963,11 @@ impl McpServer {
         self.write_response(&resp)
     }
 
-    fn handle_config_show(&mut self, id: Option<serde_json::Value>, args: &serde_json::Value) -> Result<()> {
+    fn handle_config_show(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
         let environment = match args.get("environment").and_then(|v| v.as_str()) {
             Some(e) => e,
             None => return self.send_error(id, -32602, "Missing 'environment' argument"),
@@ -914,21 +982,39 @@ impl McpServer {
         let lines = vec![
             format!("Project: {}", self.project_name),
             format!("Environment: {environment}"),
-            format!("Driver: {} ({})", resolved.driver.vendor, resolved.driver.class),
+            format!(
+                "Driver: {} ({})",
+                resolved.driver.vendor, resolved.driver.class
+            ),
             format!("JDBC URL: {}", resolved.environment.database.url),
             format!("Username: {}", resolved.environment.database.username),
             "Password: [redacted]".into(),
             String::new(),
             "--- Security Policy ---".into(),
             "Read only: enforced (cannot be disabled)".into(),
-            format!("Allowed schemas: {}", resolved.project.security.allowed_schemas.join(", ")),
-            format!("Denied relations: {}", resolved.project.security.denied_relations.join(", ")),
-            format!("Single statement: {}", resolved.project.security.require_single_statement),
+            format!(
+                "Allowed schemas: {}",
+                resolved.project.security.allowed_schemas.join(", ")
+            ),
+            format!(
+                "Denied relations: {}",
+                resolved.project.security.denied_relations.join(", ")
+            ),
+            format!(
+                "Single statement: {}",
+                resolved.project.security.require_single_statement
+            ),
             String::new(),
             "--- Limits ---".into(),
-            format!("Statement timeout: {}ms", resolved.project.limits.statement_timeout_ms),
+            format!(
+                "Statement timeout: {}ms",
+                resolved.project.limits.statement_timeout_ms
+            ),
             format!("Max rows: {}", resolved.project.limits.max_rows),
-            format!("Max result bytes: {}", resolved.project.limits.max_result_bytes),
+            format!(
+                "Max result bytes: {}",
+                resolved.project.limits.max_result_bytes
+            ),
             String::new(),
             "--- TLS ---".into(),
             match resolved.environment.tls {
@@ -947,7 +1033,11 @@ impl McpServer {
         self.write_response(&resp)
     }
 
-    fn handle_config_rename_environment(&mut self, id: Option<serde_json::Value>, args: &serde_json::Value) -> Result<()> {
+    fn handle_config_rename_environment(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
         let old_name = match args.get("old_name").and_then(|v| v.as_str()) {
             Some(n) => n,
             None => return self.send_error(id, -32602, "Missing 'old_name' argument"),
@@ -965,7 +1055,11 @@ impl McpServer {
             return self.send_error(id, -32000, format!("Environment '{old_name}' not found"));
         }
         if new_file.exists() {
-            return self.send_error(id, -32000, format!("Environment '{new_name}' already exists"));
+            return self.send_error(
+                id,
+                -32000,
+                format!("Environment '{new_name}' already exists"),
+            );
         }
 
         let old_account = format!("{}/{old_name}", self.project_name);
@@ -1000,7 +1094,10 @@ impl McpServer {
                     }
                 }
                 "env" => {
-                    let var = format!("SAFESELECT_PASSWORD_{}", new_name.to_uppercase().replace('-', "_"));
+                    let var = format!(
+                        "SAFESELECT_PASSWORD_{}",
+                        new_name.to_uppercase().replace('-', "_")
+                    );
                     secret.variable = Some(var);
                     needs_rewrite = true;
                 }
@@ -1026,7 +1123,11 @@ impl McpServer {
         }
     }
 
-    fn handle_config_delete_environment(&mut self, id: Option<serde_json::Value>, args: &serde_json::Value) -> Result<()> {
+    fn handle_config_delete_environment(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
         let name = match args.get("name").and_then(|v| v.as_str()) {
             Some(n) => n,
             None => return self.send_error(id, -32602, "Missing 'name' argument"),
@@ -1063,7 +1164,11 @@ impl McpServer {
         }
     }
 
-    fn handle_config_set_password(&mut self, id: Option<serde_json::Value>, args: &serde_json::Value) -> Result<()> {
+    fn handle_config_set_password(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
         let environment = match args.get("environment").and_then(|v| v.as_str()) {
             Some(e) => e,
             None => return self.send_error(id, -32602, "Missing 'environment' argument"),
@@ -1073,7 +1178,11 @@ impl McpServer {
             None => return self.send_error(id, -32602, "Missing 'password' argument"),
         };
 
-        let env_file = self.repo_root.join(".safeselect").join("environments").join(format!("{environment}.toml"));
+        let env_file = self
+            .repo_root
+            .join(".safeselect")
+            .join("environments")
+            .join(format!("{environment}.toml"));
         if !env_file.exists() {
             return self.send_error(id, -32000, format!("Environment '{environment}' not found"));
         }
@@ -1081,7 +1190,11 @@ impl McpServer {
         let account = format!("{}/{environment}", self.project_name);
 
         if let Err(e) = compose::store_password_in_keychain(&account, password) {
-            return self.send_error(id, -32000, format!("Failed to store password in Keychain: {e}"));
+            return self.send_error(
+                id,
+                -32000,
+                format!("Failed to store password in Keychain: {e}"),
+            );
         }
 
         let secret_section = format!(
@@ -1094,18 +1207,36 @@ impl McpServer {
         }
         content.push_str(&secret_section);
         if let Err(e) = std::fs::write(&env_file, &content) {
-            return self.send_error(id, -32000, format!("Failed to update environment file: {e}"));
+            return self.send_error(
+                id,
+                -32000,
+                format!("Failed to update environment file: {e}"),
+            );
         }
 
-        let text = format!("Password stored in Keychain ({account})\nUpdated {}.toml", environment);
+        let text = format!(
+            "Password stored in Keychain ({account})\nUpdated {}.toml",
+            environment
+        );
         let resp = ok_text_response(id, text);
         self.write_response(&resp)
     }
 
-    fn handle_config_reset(&mut self, id: Option<serde_json::Value>, args: &serde_json::Value) -> Result<()> {
-        let confirm = args.get("confirm").and_then(|v| v.as_bool()).unwrap_or(false);
+    fn handle_config_reset(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        let confirm = args
+            .get("confirm")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         if !confirm {
-            return self.send_error(id, -32000, "Set 'confirm' to true to reset all environments");
+            return self.send_error(
+                id,
+                -32000,
+                "Set 'confirm' to true to reset all environments",
+            );
         }
 
         let safeselect_dir = self.repo_root.join(".safeselect");
@@ -1168,9 +1299,13 @@ impl McpServer {
         };
 
         let text = if drivers.is_empty() {
-            format!("No drivers registered in {}. Use driver_add or driver_download.", loader.drivers_dir().display())
+            format!(
+                "No drivers registered in {}. Use driver_add or driver_download.",
+                loader.drivers_dir().display()
+            )
         } else {
-            drivers.iter()
+            drivers
+                .iter()
                 .map(|(name, config)| format!("  {name}: {} ({})", config.class, config.path))
                 .collect::<Vec<_>>()
                 .join("\n")
@@ -1180,7 +1315,11 @@ impl McpServer {
         self.write_response(&resp)
     }
 
-    fn handle_driver_add(&mut self, id: Option<serde_json::Value>, args: &serde_json::Value) -> Result<()> {
+    fn handle_driver_add(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
         let vendor = match args.get("vendor").and_then(|v| v.as_str()) {
             Some(v) => v,
             None => return self.send_error(id, -32602, "Missing 'vendor' argument"),
@@ -1206,7 +1345,13 @@ impl McpServer {
             None => {
                 let mut file = match std::fs::File::open(driver_path) {
                     Ok(f) => f,
-                    Err(e) => return self.send_error(id, -32000, format!("Failed to open driver file: {e}")),
+                    Err(e) => {
+                        return self.send_error(
+                            id,
+                            -32000,
+                            format!("Failed to open driver file: {e}"),
+                        )
+                    }
                 };
                 let mut hasher = Sha256::new();
                 let mut buf = Vec::new();
@@ -1240,12 +1385,19 @@ impl McpServer {
             return self.send_error(id, -32000, format!("Failed to write driver file: {e}"));
         }
 
-        let text = format!("Driver '{vendor}' registered at {}\nSHA-256: {checksum}", driver_file.display());
+        let text = format!(
+            "Driver '{vendor}' registered at {}\nSHA-256: {checksum}",
+            driver_file.display()
+        );
         let resp = ok_text_response(id, text);
         self.write_response(&resp)
     }
 
-    fn handle_driver_download(&mut self, id: Option<serde_json::Value>, args: &serde_json::Value) -> Result<()> {
+    fn handle_driver_download(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
         let vendor = match args.get("vendor").and_then(|v| v.as_str()) {
             Some(v) => v,
             None => return self.send_error(id, -32602, "Missing 'vendor' argument"),
@@ -1253,7 +1405,13 @@ impl McpServer {
 
         let url = match vendor {
             "postgresql" => "https://jdbc.postgresql.org/download/postgresql-42.7.4.jar",
-            v => return self.send_error(id, -32000, format!("Unknown vendor '{v}'. Use driver_add for custom drivers.")),
+            v => {
+                return self.send_error(
+                    id,
+                    -32000,
+                    format!("Unknown vendor '{v}'. Use driver_add for custom drivers."),
+                )
+            }
         };
 
         let loader = ConfigLoader::new();
@@ -1297,7 +1455,10 @@ impl McpServer {
             return self.send_error(id, -32000, format!("Failed to write config: {e}"));
         }
 
-        let text = format!("Downloaded and registered '{vendor}' driver\n  Path: {}\n  SHA-256: {checksum}", jar_path.display());
+        let text = format!(
+            "Downloaded and registered '{vendor}' driver\n  Path: {}\n  SHA-256: {checksum}",
+            jar_path.display()
+        );
         let resp = ok_text_response(id, text);
         self.write_response(&resp)
     }
@@ -1321,7 +1482,11 @@ impl McpServer {
         self.write_response(&resp)
     }
 
-    fn handle_agent_install(&mut self, id: Option<serde_json::Value>, args: &serde_json::Value) -> Result<()> {
+    fn handle_agent_install(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
         let client = match args.get("client").and_then(|v| v.as_str()) {
             Some(c) => c,
             None => return self.send_error(id, -32602, "Missing 'client' argument"),
@@ -1330,7 +1495,10 @@ impl McpServer {
             Some(e) => e,
             None => return self.send_error(id, -32602, "Missing 'environment' argument"),
         };
-        let name = args.get("name").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let name = args
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
 
         let entry_name = match name {
             Some(n) => n,
@@ -1339,11 +1507,19 @@ impl McpServer {
 
         let repo_root = self.repo_root.clone();
         let config_dir = self.config_dir.clone();
-        
+
         // Calculate MCP client timeout: statement_timeout + 30s buffer
         let mcp_timeout_ms = self.security.limits().statement_timeout_ms + 30_000;
 
-        match agents::install_entry(client, environment, &entry_name, Some(&repo_root), Some(&config_dir), mcp_timeout_ms, false) {
+        match agents::install_entry(
+            client,
+            environment,
+            &entry_name,
+            Some(&repo_root),
+            Some(&config_dir),
+            mcp_timeout_ms,
+            false,
+        ) {
             Ok(()) => {
                 let text = format!("Entry '{entry_name}' installed for {client}");
                 let resp = ok_text_response(id, text);
@@ -1353,7 +1529,11 @@ impl McpServer {
         }
     }
 
-    fn handle_agent_uninstall(&mut self, id: Option<serde_json::Value>, args: &serde_json::Value) -> Result<()> {
+    fn handle_agent_uninstall(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
         let client = match args.get("client").and_then(|v| v.as_str()) {
             Some(c) => c,
             None => return self.send_error(id, -32602, "Missing 'client' argument"),
@@ -1396,7 +1576,11 @@ impl McpServer {
         self.write_response(&resp)
     }
 
-    fn handle_import_compose(&mut self, id: Option<serde_json::Value>, args: &serde_json::Value) -> Result<()> {
+    fn handle_import_compose(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
         let scan_path = args
             .get("scan_path")
             .and_then(|v| v.as_str())
@@ -1420,7 +1604,17 @@ impl McpServer {
                 .unwrap_or("project");
             match compose::write_config_files(scan_path, &all_connections, project_name) {
                 Ok(import) => {
-                    let names: Vec<&str> = all_connections.iter().map(|c| c.env_name.as_str()).collect();
+                    if let Err(e) = update_generated_by(&scan_path.join(".safeselect")) {
+                        return self.send_error(
+                            id,
+                            -32000,
+                            format!("Import metadata update failed: {e}"),
+                        );
+                    }
+                    let names: Vec<&str> = all_connections
+                        .iter()
+                        .map(|c| c.env_name.as_str())
+                        .collect();
                     if import.created == 0 {
                         "All environments already exist. Nothing imported.".to_string()
                     } else {
@@ -1457,12 +1651,27 @@ impl McpServer {
         };
 
         let mut lines = vec![
-            format!("Checking configuration for {}/{}...", self.project_name, self.env_name),
-            "  ✓ Config valid".into(),
+            format!(
+                "Checking configuration for {}/{}...",
+                self.project_name, self.env_name
+            ),
+            diagnostics::line(
+                DiagnosticStatus::Ok,
+                DiagnosticCode::ConfigResolved,
+                "Config resolved",
+            ),
         ];
 
-        lines.push(format!("  ✓ Driver '{}' found and checksum OK", resolved.driver.vendor));
-        lines.push("  ✓ Secret resolved".into());
+        lines.push(diagnostics::line(
+            DiagnosticStatus::Ok,
+            DiagnosticCode::DriverVerified,
+            format!("Driver '{}' found and checksum OK", resolved.driver.vendor),
+        ));
+        lines.push(diagnostics::line(
+            DiagnosticStatus::Ok,
+            DiagnosticCode::SecretResolved,
+            "Secret resolved",
+        ));
 
         if let Some(ref ssh) = resolved.environment.ssh {
             if ssh.enabled {
@@ -1477,39 +1686,73 @@ impl McpServer {
                     .and_then(|mut a| a.next());
 
                 match bastion_addr.as_ref() {
-                    Some(a) if std::net::TcpStream::connect_timeout(a, std::time::Duration::from_secs(3)).is_ok() =>
-                        lines.push(format!("  ✓ SSH bastion reachable at {bastion_host}:{bastion_port}")),
+                    Some(a)
+                        if std::net::TcpStream::connect_timeout(
+                            a,
+                            std::time::Duration::from_secs(3),
+                        )
+                        .is_ok() =>
+                    {
+                        lines.push(diagnostics::line(
+                            DiagnosticStatus::Ok,
+                            DiagnosticCode::SshBastionReachable,
+                            format!("SSH bastion reachable at {bastion_host}:{bastion_port}"),
+                        ))
+                    }
                     Some(_) => {
-                        lines.push(format!("  ✗ SSH bastion unreachable at {bastion_host}:{bastion_port} (connect timed out after 3s)"));
+                        lines.push(diagnostics::line(
+                            DiagnosticStatus::Fail,
+                            DiagnosticCode::SshBastionUnreachable,
+                            format!("SSH bastion unreachable at {bastion_host}:{bastion_port} (connect timed out after 3s)"),
+                        ));
                         if let Some(ref identity_file) = ssh.identity_file {
                             if !std::path::Path::new(identity_file).exists() {
-                                lines.push(format!("  ✗ SSH identity file not found: {identity_file}"));
+                                lines.push(diagnostics::line(
+                                    DiagnosticStatus::Fail,
+                                    DiagnosticCode::SshIdentityMissing,
+                                    format!("SSH identity file not found: {identity_file}"),
+                                ));
                             }
                         }
                         let resp = ok_text_response(id, lines.join("\n"));
                         return self.write_response(&resp);
                     }
                     None => {
-                        lines.push(format!("  ✗ Cannot resolve bastion {bastion_host}:{bastion_port} — check DNS or hostname"));
+                        lines.push(diagnostics::line(
+                            DiagnosticStatus::Fail,
+                            DiagnosticCode::SshBastionUnresolved,
+                            format!("Cannot resolve bastion {bastion_host}:{bastion_port} — check DNS or hostname"),
+                        ));
                         let resp = ok_text_response(id, lines.join("\n"));
                         return self.write_response(&resp);
                     }
                 }
 
                 // Check if PostgreSQL is reachable (direct or via tunnel)
-                if let Some((host, port)) = crate::extract_host_port(&resolved.environment.database.url) {
+                if let Some((host, port)) =
+                    crate::extract_host_port(&resolved.environment.database.url)
+                {
                     let pg_addr = format!("{host}:{port}")
                         .to_socket_addrs()
                         .ok()
                         .and_then(|mut a| a.next());
-                    
+
                     // If not reachable directly, try establishing SSH tunnel
                     let pg_addr = if pg_addr.as_ref().is_some_and(|a| crate::check_postgres(a)) {
                         pg_addr
                     } else {
-                        lines.push("  ◇ Establishing SSH tunnel...".into());
-                        if let Err(e) = setup_ssh_tunnels(&self.repo_root, &[self.env_name.clone()]) {
-                            lines.push(format!("  ✗ SSH tunnel setup failed: {e}"));
+                        lines.push(diagnostics::line(
+                            DiagnosticStatus::Info,
+                            DiagnosticCode::SshTunnelAttempt,
+                            "Establishing SSH tunnel...",
+                        ));
+                        if let Err(e) = setup_ssh_tunnels(&self.repo_root, &[self.env_name.clone()])
+                        {
+                            lines.push(diagnostics::line(
+                                DiagnosticStatus::Fail,
+                                DiagnosticCode::SshTunnelFailed,
+                                format!("SSH tunnel setup failed: {e}"),
+                            ));
                             let resp = ok_text_response(id, lines.join("\n"));
                             return self.write_response(&resp);
                         }
@@ -1518,16 +1761,29 @@ impl McpServer {
                             .ok()
                             .and_then(|mut a| a.next())
                     };
-                    
+
                     match pg_addr.as_ref() {
-                        Some(a) if crate::check_postgres(a) =>
-                            lines.push(format!("  ✓ PostgreSQL reachable at {host}:{port}")),
+                        Some(a) if crate::check_postgres(a) => lines.push(diagnostics::line(
+                            DiagnosticStatus::Ok,
+                            DiagnosticCode::PostgresReachable,
+                            format!("PostgreSQL reachable at {host}:{port}"),
+                        )),
                         _ => {
-                            lines.push(format!("  ✗ PostgreSQL unreachable at {host}:{port} (read timed out after 2s)"));
+                            lines.push(diagnostics::line(
+                                DiagnosticStatus::Fail,
+                                DiagnosticCode::PostgresUnreachable,
+                                format!("PostgreSQL unreachable at {host}:{port} (read timed out after 2s)"),
+                            ));
                             lines.push("  Possible causes:".into());
-                            lines.push(format!("    - Database host:port is wrong ({host}:{port})"));
-                            lines.push("    - Database is not running or not accepting connections".into());
-                            lines.push("    - SSH tunnel is not established or not forwarding correctly".into());
+                            lines
+                                .push(format!("    - Database host:port is wrong ({host}:{port})"));
+                            lines.push(
+                                "    - Database is not running or not accepting connections".into(),
+                            );
+                            lines.push(
+                                "    - SSH tunnel is not established or not forwarding correctly"
+                                    .into(),
+                            );
                             let resp = ok_text_response(id, lines.join("\n"));
                             return self.write_response(&resp);
                         }
@@ -1536,22 +1792,63 @@ impl McpServer {
             }
         }
 
-        lines.push("  Attempting sidecar connection...".into());
+        lines.push(diagnostics::line(
+            DiagnosticStatus::Info,
+            DiagnosticCode::SidecarStartAttempt,
+            "Attempting sidecar connection...",
+        ));
 
         match self.ensure_sidecar() {
             Ok(_) => {
-                lines.push("  ✓ Sidecar JDBC connection OK".into());
+                lines.push(diagnostics::line(
+                    DiagnosticStatus::Ok,
+                    DiagnosticCode::SidecarJdbcOk,
+                    "Sidecar JDBC connection OK",
+                ));
             }
-            Err(e) => return self.send_error(id, -32000, format!("Sidecar connection failed: {e}")),
+            Err(e) => {
+                lines.push(diagnostics::line(
+                    DiagnosticStatus::Fail,
+                    DiagnosticCode::SidecarConnectionFailed,
+                    format!("Sidecar connection failed: {e}"),
+                ));
+                return self.send_error(id, -32000, lines.join("\n"));
+            }
         }
 
         // Execute verification query
-        match self.sidecar.as_mut().unwrap().execute("SELECT 1 AS connection_test") {
+        match self
+            .sidecar
+            .as_mut()
+            .unwrap()
+            .execute("SELECT 1 AS connection_test")
+        {
             Ok(result) => {
-                lines.push(format!("  ✓ Connection verified: SELECT 1 returned {} row(s)", result.row_count));
-                lines.push(format!("  ✓ All checks passed for {}/{}", self.project_name, self.env_name));
+                lines.push(diagnostics::line(
+                    DiagnosticStatus::Ok,
+                    DiagnosticCode::QuerySelectOneOk,
+                    format!(
+                        "Connection verified: SELECT 1 returned {} row(s)",
+                        result.row_count
+                    ),
+                ));
+                lines.push(diagnostics::line(
+                    DiagnosticStatus::Ok,
+                    DiagnosticCode::AllChecksPassed,
+                    format!(
+                        "All checks passed for {}/{}",
+                        self.project_name, self.env_name
+                    ),
+                ));
             }
-            Err(e) => return self.send_error(id, -32000, format!("Verification query failed: {e}")),
+            Err(e) => {
+                lines.push(diagnostics::line(
+                    DiagnosticStatus::Fail,
+                    DiagnosticCode::QuerySelectOneFailed,
+                    format!("Verification query failed: {e}"),
+                ));
+                return self.send_error(id, -32000, lines.join("\n"));
+            }
         }
 
         let resp = ok_text_response(id, lines.join("\n"));
@@ -1570,31 +1867,60 @@ impl McpServer {
                     // Quick bastion reachability check before attempting tunnel
                     let bastion_host = ssh.host.as_deref().unwrap_or("unknown");
                     let bastion_port = ssh.port.unwrap_or(22);
-                    tracing::info!("Checking bastion reachability: {}:{}", bastion_host, bastion_port);
-                    
+                    tracing::info!(
+                        "Checking bastion reachability: {}:{}",
+                        bastion_host,
+                        bastion_port
+                    );
+
                     use std::net::ToSocketAddrs;
                     let bastion_addr = format!("{bastion_host}:{bastion_port}")
                         .to_socket_addrs()
                         .ok()
                         .and_then(|mut a| a.next());
-                    
+
                     match bastion_addr.as_ref() {
-                        Some(a) if std::net::TcpStream::connect_timeout(a, std::time::Duration::from_secs(3)).is_ok() => {
+                        Some(a)
+                            if std::net::TcpStream::connect_timeout(
+                                a,
+                                std::time::Duration::from_secs(3),
+                            )
+                            .is_ok() =>
+                        {
                             tracing::info!("Bastion reachable ({:?})", start.elapsed());
                         }
                         Some(_) => {
-                            return self.send_error(id, -32000, 
-                                format!("SSH bastion unreachable at {}:{} (connect timed out after 3s). Cannot establish tunnel.", bastion_host, bastion_port));
+                            return self.send_error(
+                                id,
+                                -32000,
+                                format!(
+                                    "SSH bastion unreachable at {}:{} (connect timed out after 3s). Cannot establish tunnel.",
+                                    bastion_host, bastion_port
+                                ),
+                            );
                         }
                         None => {
-                            return self.send_error(id, -32000, 
-                                format!("Cannot resolve SSH bastion {}:{}", bastion_host, bastion_port));
+                            return self.send_error(
+                                id,
+                                -32000,
+                                format!(
+                                    "Cannot resolve SSH bastion {}:{}",
+                                    bastion_host, bastion_port
+                                ),
+                            );
                         }
                     }
-                    
-                    tracing::info!("Establishing SSH tunnel before reconnect ({:?})", start.elapsed());
+
+                    tracing::info!(
+                        "Establishing SSH tunnel before reconnect ({:?})",
+                        start.elapsed()
+                    );
                     if let Err(e) = setup_ssh_tunnels(&self.repo_root, &[self.env_name.clone()]) {
-                        return self.send_error(id, -32000, format!("SSH tunnel setup failed: {e}"));
+                        return self.send_error(
+                            id,
+                            -32000,
+                            format!("SSH tunnel setup failed: {e}"),
+                        );
                     }
                     tracing::info!("SSH tunnel established ({:?})", start.elapsed());
                 }
@@ -1636,8 +1962,15 @@ impl McpServer {
         }
     }
 
-    fn handle_uninstall(&mut self, id: Option<serde_json::Value>, args: &serde_json::Value) -> Result<()> {
-        let confirm = args.get("confirm").and_then(|v| v.as_bool()).unwrap_or(false);
+    fn handle_uninstall(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        let confirm = args
+            .get("confirm")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         if !confirm {
             return self.send_error(id, -32000, "Set 'confirm' to true to uninstall safeselect");
         }
@@ -1645,8 +1978,7 @@ impl McpServer {
         let mut removed_anything = false;
         let mut lines = vec![];
 
-        let bin = dirs::home_dir()
-            .map(|h| h.join(".local").join("bin").join("safeselect"));
+        let bin = dirs::home_dir().map(|h| h.join(".local").join("bin").join("safeselect"));
         if let Some(ref path) = bin.filter(|p| p.exists()) {
             if std::fs::remove_file(path).is_ok() {
                 lines.push(format!("  ✓ Removed {}", path.display()));
@@ -1654,7 +1986,8 @@ impl McpServer {
             }
         }
 
-        let config_dir = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/tmp".into())).join(".config/safeselect");
+        let config_dir = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/tmp".into()))
+            .join(".config/safeselect");
         if config_dir.exists() && std::fs::remove_dir_all(&config_dir).is_ok() {
             lines.push(format!("  ✓ Removed {}", config_dir.display()));
             removed_anything = true;
@@ -1667,8 +2000,7 @@ impl McpServer {
             }
         }
 
-        let audit_dir = dirs::home_dir()
-            .map(|h| h.join(".local").join("state").join("safeselect"));
+        let audit_dir = dirs::home_dir().map(|h| h.join(".local").join("state").join("safeselect"));
         if let Some(ref path) = audit_dir {
             if path.exists() && std::fs::remove_dir_all(path).is_ok() {
                 lines.push(format!("  ✓ Removed {}", path.display()));
@@ -1968,14 +2300,15 @@ pub fn run_setup_server(repo_root: &Path) -> Result<()> {
                                                     for (env, _) in &import.no_password {
                                                         parts.push(format!(
                                                             "No password set for '{env}':\n{}",
-                                                            crate::compose::secret_setup_hint(project_name, env)
+                                                            crate::compose::secret_setup_hint(
+                                                                project_name,
+                                                                env
+                                                            )
                                                         ));
                                                     }
                                                 }
                                                 parts.push(String::new());
-                                                parts.push(
-                                                    "Run the server with:".to_string(),
-                                                );
+                                                parts.push("Run the server with:".to_string());
                                                 for env_name in &import.env_names {
                                                     parts.push(format!(
                                                         "  safeselect serve --environment {env_name}"
@@ -2066,7 +2399,10 @@ pub fn run_setup_server(repo_root: &Path) -> Result<()> {
                                     if let Some(secret) = env_config.database.secret {
                                         if secret.source == "macos-keychain" {
                                             if let Some(ref acct) = secret.account {
-                                                let _ = crate::compose::delete_password_from_keychain(acct);
+                                                let _ =
+                                                    crate::compose::delete_password_from_keychain(
+                                                        acct,
+                                                    );
                                             }
                                         }
                                     }
@@ -2165,10 +2501,8 @@ pub fn run_setup_server(repo_root: &Path) -> Result<()> {
                                             &pw,
                                         )
                                         .ok()?;
-                                        crate::compose::delete_password_from_keychain(
-                                            &old_account,
-                                        )
-                                        .ok()?;
+                                        crate::compose::delete_password_from_keychain(&old_account)
+                                            .ok()?;
                                         secret.account = Some(new_account);
                                         Some(env)
                                     }
@@ -2192,8 +2526,7 @@ pub fn run_setup_server(repo_root: &Path) -> Result<()> {
                                             let _ = std::fs::write(&new_file, content);
                                         }
                                     }
-                                    let mut msg =
-                                        format!("Renamed '{old_name}' → '{new_name}'");
+                                    let mut msg = format!("Renamed '{old_name}' → '{new_name}'");
                                     if migrated {
                                         msg.push_str("\nSecret migrated automatically.");
                                     }
@@ -2268,5 +2601,7 @@ fn is_valid_identifier(s: &str) -> bool {
     if !bytes[0].is_ascii_alphabetic() && bytes[0] != b'_' {
         return false;
     }
-    bytes.iter().all(|b| b.is_ascii_alphanumeric() || *b == b'_')
+    bytes
+        .iter()
+        .all(|b| b.is_ascii_alphanumeric() || *b == b'_')
 }

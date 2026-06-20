@@ -6,14 +6,16 @@ mod cli;
 mod compose;
 mod config;
 mod dbeaver;
+mod diagnostics;
 mod error;
 mod mcp;
 mod security;
 mod sidecar;
 
 use clap::Parser;
-use cli::{Cli, Command, ConfigAction, DriverAction, AgentAction};
+use cli::{AgentAction, Cli, Command, ConfigAction, DriverAction};
 use config::ConfigLoader;
+use diagnostics::{DiagnosticCode, DiagnosticStatus};
 use error::{Result, SafeselectError};
 use sidecar::SidecarProcess;
 use std::path::{Path, PathBuf};
@@ -43,23 +45,21 @@ fn run(cli: Cli) -> Result<()> {
         Command::Serve {
             project,
             environment,
-        } => {
-            match resolve_project_dir(&loader, project.clone()) {
-                Ok(dir) => cmd_serve(&loader, &dir, &environment),
-                Err(_) => {
-                    let cwd = project
-                        .clone()
-                        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-                    if !cwd.exists() {
-                        return Err(SafeselectError::Other(format!(
-                            "path does not exist: {}",
-                            cwd.display()
-                        )));
-                    }
-                    cmd_serve_setup(&loader, &cwd)
+        } => match resolve_project_dir(&loader, project.clone()) {
+            Ok(dir) => cmd_serve(&loader, &dir, &environment),
+            Err(_) => {
+                let cwd = project
+                    .clone()
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+                if !cwd.exists() {
+                    return Err(SafeselectError::Other(format!(
+                        "path does not exist: {}",
+                        cwd.display()
+                    )));
                 }
+                cmd_serve_setup(&loader, &cwd)
             }
-        }
+        },
         Command::Config { action } => cmd_config(&loader, action),
         Command::Driver { action } => cmd_driver(&loader, action),
         Command::Agent { action } => cmd_agent(action),
@@ -72,6 +72,13 @@ fn run(cli: Cli) -> Result<()> {
             non_interactive,
         } => cmd_import_compose(path, non_interactive),
         Command::Check {
+            project,
+            environment,
+        } => {
+            let dir = resolve_project_dir(&loader, project)?;
+            cmd_check(&loader, &dir, &environment)
+        }
+        Command::Doctor {
             project,
             environment,
         } => {
@@ -150,9 +157,7 @@ fn cmd_serve(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
         }
     }
 
-    tracing::info!(
-        "Starting MCP server (sidecar will start lazily on first query)"
-    );
+    tracing::info!("Starting MCP server (sidecar will start lazily on first query)");
 
     let db_url = resolved.environment.database.url.clone();
     let db_username = resolved.environment.database.username.clone();
@@ -192,18 +197,13 @@ fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
                     }
                     if let Some(ref env) = environment {
                         let _ = loader.resolve_local(&dir, env)?;
-                        println!(
-                            "Config valid: {}/{}",
-                            project_display_name(&dir),
-                            env
-                        );
+                        println!("Config valid: {}/{}", project_display_name(&dir), env);
                     } else {
                         let safeselect_dir = dir.join(".safeselect");
-                        if safeselect_dir.join("project.toml").exists() || safeselect_dir.join("environments").is_dir() {
-                            println!(
-                                "Config valid: {}",
-                                project_display_name(&dir)
-                            );
+                        if safeselect_dir.join("project.toml").exists()
+                            || safeselect_dir.join("environments").is_dir()
+                        {
+                            println!("Config valid: {}", project_display_name(&dir));
                         } else {
                             return Err(SafeselectError::Config(format!(
                                 "incomplete .safeselect/ in {}",
@@ -221,15 +221,23 @@ fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
                                 dir.display(),
                                 project_display_name(&dir)
                             );
-                            println!("Use --environment <name> to validate a specific environment.");
+                            println!(
+                                "Use --environment <name> to validate a specific environment."
+                            );
                             let envs_dir = dir.join(".safeselect").join("environments");
                             if envs_dir.is_dir() {
                                 let mut entries: Vec<_> = std::fs::read_dir(&envs_dir)
                                     .into_iter()
                                     .flatten()
                                     .flatten()
-                                    .filter(|e| e.path().extension().map_or(false, |ext| ext == "toml"))
-                                    .filter_map(|e| e.path().file_stem().and_then(|s| s.to_str().map(String::from)))
+                                    .filter(|e| {
+                                        e.path().extension().map_or(false, |ext| ext == "toml")
+                                    })
+                                    .filter_map(|e| {
+                                        e.path()
+                                            .file_stem()
+                                            .and_then(|s| s.to_str().map(String::from))
+                                    })
                                     .collect();
                                 entries.sort();
                                 if !entries.is_empty() {
@@ -255,16 +263,19 @@ fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
                 Some(d) => d,
                 None => {
                     let cwd = std::env::current_dir()?;
-                    loader.find_local_project(&cwd).ok_or_else(|| {
-                        SafeselectError::LocalProjectNotFound(cwd)
-                    })?
+                    loader
+                        .find_local_project(&cwd)
+                        .ok_or_else(|| SafeselectError::LocalProjectNotFound(cwd))?
                 }
             };
             let resolved = loader.resolve_local(&dir, &environment)?;
             let name = project_display_name(&dir);
             println!("Project: {name}");
             println!("Environment: {environment}");
-            println!("Driver: {} ({})", resolved.driver.vendor, resolved.driver.class);
+            println!(
+                "Driver: {} ({})",
+                resolved.driver.vendor, resolved.driver.class
+            );
             println!("JDBC URL: {}", resolved.environment.database.url);
             println!("Username: {}", resolved.environment.database.username);
             println!("Password: [redacted]");
@@ -290,7 +301,10 @@ fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
                 resolved.project.limits.statement_timeout_ms
             );
             println!("Max rows: {}", resolved.project.limits.max_rows);
-            println!("Max result bytes: {}", resolved.project.limits.max_result_bytes);
+            println!(
+                "Max result bytes: {}",
+                resolved.project.limits.max_result_bytes
+            );
             println!();
             println!("--- TLS ---");
             match resolved.environment.tls {
@@ -306,18 +320,14 @@ fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
 
             Ok(())
         }
-        ConfigAction::RenameEnvironment {
-            old,
-            new,
-            project,
-        } => {
+        ConfigAction::RenameEnvironment { old, new, project } => {
             let dir = match project {
                 Some(d) => d,
                 None => {
                     let cwd = std::env::current_dir()?;
-                    loader.find_local_project(&cwd).ok_or_else(|| {
-                        SafeselectError::LocalProjectNotFound(cwd)
-                    })?
+                    loader
+                        .find_local_project(&cwd)
+                        .ok_or_else(|| SafeselectError::LocalProjectNotFound(cwd))?
                 }
             };
 
@@ -397,9 +407,9 @@ fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
                 Some(d) => d,
                 None => {
                     let cwd = std::env::current_dir()?;
-                    loader.find_local_project(&cwd).ok_or_else(|| {
-                        SafeselectError::LocalProjectNotFound(cwd)
-                    })?
+                    loader
+                        .find_local_project(&cwd)
+                        .ok_or_else(|| SafeselectError::LocalProjectNotFound(cwd))?
                 }
             };
 
@@ -417,7 +427,10 @@ fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
             let old_content = std::fs::read_to_string(&env_file).ok();
             let secret_source = old_content.as_ref().and_then(|c| {
                 let env_config: config::EnvironmentConfig = toml::from_str(c).ok()?;
-                env_config.database.secret.map(|s| (s.source, s.account, s.variable))
+                env_config
+                    .database
+                    .secret
+                    .map(|s| (s.source, s.account, s.variable))
             });
 
             std::fs::remove_file(&env_file)?;
@@ -452,13 +465,16 @@ fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
                 Some(d) => d,
                 None => {
                     let cwd = std::env::current_dir()?;
-                    loader.find_local_project(&cwd).ok_or_else(|| {
-                        SafeselectError::LocalProjectNotFound(cwd)
-                    })?
+                    loader
+                        .find_local_project(&cwd)
+                        .ok_or_else(|| SafeselectError::LocalProjectNotFound(cwd))?
                 }
             };
 
-            let env_file = dir.join(".safeselect").join("environments").join(format!("{environment}.toml"));
+            let env_file = dir
+                .join(".safeselect")
+                .join("environments")
+                .join(format!("{environment}.toml"));
             if !env_file.exists() {
                 return Err(SafeselectError::EnvironmentNotFound(
                     environment.clone(),
@@ -469,15 +485,16 @@ fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
             let project_name = project_display_name(&dir);
             let account = format!("{project_name}/{environment}");
 
-            let pw = match password {
-                Some(p) => p,
-                None => {
-                    inquire::Password::new(&format!("Password for '{project_name}/{environment}'"))
-                        .without_confirmation()
-                        .prompt()
-                        .map_err(|e| SafeselectError::Other(format!("Failed to read password: {e}")))?
-                }
-            };
+            let pw =
+                match password {
+                    Some(p) => p,
+                    None => inquire::Password::new(&format!(
+                        "Password for '{project_name}/{environment}'"
+                    ))
+                    .without_confirmation()
+                    .prompt()
+                    .map_err(|e| SafeselectError::Other(format!("Failed to read password: {e}")))?,
+                };
 
             compose::store_password_in_keychain(&account, &pw)?;
             println!("  ✓ Password stored in Keychain ({account})");
@@ -499,9 +516,9 @@ fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
                 Some(d) => d,
                 None => {
                     let cwd = std::env::current_dir()?;
-                    loader.find_local_project(&cwd).ok_or_else(|| {
-                        SafeselectError::LocalProjectNotFound(cwd)
-                    })?
+                    loader
+                        .find_local_project(&cwd)
+                        .ok_or_else(|| SafeselectError::LocalProjectNotFound(cwd))?
                 }
             };
             reset_project_config(&dir)
@@ -518,10 +535,12 @@ fn reset_project_config(repo_root: &Path) -> Result<()> {
         return Ok(());
     }
 
-    let ans = inquire::Confirm::new("This will remove all environments and their keychain entries. Continue?")
-        .with_default(true)
-        .prompt()
-        .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?;
+    let ans = inquire::Confirm::new(
+        "This will remove all environments and their keychain entries. Continue?",
+    )
+    .with_default(true)
+    .prompt()
+    .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?;
 
     if !ans {
         println!("Cancelled.");
@@ -618,8 +637,8 @@ fn cmd_driver(loader: &ConfigLoader, action: DriverAction) -> Result<()> {
             let driver_dir = loader.drivers_dir();
             std::fs::create_dir_all(driver_dir)?;
             let driver_file = driver_dir.join(format!("{vendor}.toml"));
-            let content = toml::to_string(&config)
-                .map_err(|e| SafeselectError::TomlSer(e.to_string()))?;
+            let content =
+                toml::to_string(&config).map_err(|e| SafeselectError::TomlSer(e.to_string()))?;
             std::fs::write(&driver_file, content)?;
 
             println!("Driver '{vendor}' registered at {}", driver_file.display());
@@ -630,7 +649,10 @@ fn cmd_driver(loader: &ConfigLoader, action: DriverAction) -> Result<()> {
         DriverAction::List => {
             let drivers = loader.list_drivers()?;
             if drivers.is_empty() {
-                println!("No drivers registered in {}", loader.drivers_dir().display());
+                println!(
+                    "No drivers registered in {}",
+                    loader.drivers_dir().display()
+                );
                 println!("Use `safeselect driver add` or `safeselect driver download`");
             } else {
                 for (name, config) in &drivers {
@@ -673,8 +695,8 @@ fn cmd_driver(loader: &ConfigLoader, action: DriverAction) -> Result<()> {
             };
 
             let config_path = driver_dir.join(format!("{vendor}.toml"));
-            let content = toml::to_string(&config)
-                .map_err(|e| SafeselectError::TomlSer(e.to_string()))?;
+            let content =
+                toml::to_string(&config).map_err(|e| SafeselectError::TomlSer(e.to_string()))?;
             std::fs::write(&config_path, content)?;
 
             println!("Downloaded and registered '{vendor}' driver");
@@ -692,11 +714,7 @@ fn cmd_agent(action: AgentAction) -> Result<()> {
             let clients = agents::detect_clients()?;
             println!("Detected MCP clients:");
             for client in &clients {
-                let status = if client.detected {
-                    "✓"
-                } else {
-                    "✗"
-                };
+                let status = if client.detected { "✓" } else { "✗" };
                 println!("  {status} {}", client.name);
                 if client.detected {
                     println!("    Config: {}", client.config_path.display());
@@ -728,13 +746,15 @@ fn cmd_agent(action: AgentAction) -> Result<()> {
             let entry_name = match name {
                 Some(n) => n,
                 None => {
-                    let root = project_dir.ok_or_else(|| SafeselectError::Other(
-                        "no .safeselect/ found; use --project or --name to specify".into()
-                    ))?;
+                    let root = project_dir.ok_or_else(|| {
+                        SafeselectError::Other(
+                            "no .safeselect/ found; use --project or --name to specify".into(),
+                        )
+                    })?;
                     format!("{}-{}", project_display_name(&root), environment)
                 }
             };
-            
+
             // Calculate MCP client timeout based on project's statement_timeout_ms
             let mcp_timeout_ms = if let Some(ref root) = repo_root {
                 let project_file = root.join(".safeselect").join("project.toml");
@@ -755,12 +775,18 @@ fn cmd_agent(action: AgentAction) -> Result<()> {
             } else {
                 120_000 // Default 2 minutes if no repo_root
             };
-            
-            agents::install_entry(&client, &environment, &entry_name, repo_root.as_deref(), Some(loader.config_dir()), mcp_timeout_ms, local)
+
+            agents::install_entry(
+                &client,
+                &environment,
+                &entry_name,
+                repo_root.as_deref(),
+                Some(loader.config_dir()),
+                mcp_timeout_ms,
+                local,
+            )
         }
-        AgentAction::Uninstall { client, name } => {
-            agents::uninstall_entry(&client, &name)
-        }
+        AgentAction::Uninstall { client, name } => agents::uninstall_entry(&client, &name),
         AgentAction::Status => {
             let clients = agents::detect_clients()?;
             println!("Agent integration status:");
@@ -788,25 +814,31 @@ fn check_gitignore(repo_root: &std::path::Path) {
     let gitignore = repo_root.join(".gitignore");
     if gitignore.exists() {
         if let Ok(content) = std::fs::read_to_string(&gitignore) {
-            if !content.lines().any(|l| l.trim() == ".safeselect/" || l.trim() == ".safeselect") {
+            if !content
+                .lines()
+                .any(|l| l.trim() == ".safeselect/" || l.trim() == ".safeselect")
+            {
                 println!("  ⚠  .safeselect/ not found in .gitignore — consider adding it");
             }
         }
     } else {
-        println!("  ⚠  No .gitignore found at {} — consider adding .safeselect/ to it", gitignore.display());
+        println!(
+            "  ⚠  No .gitignore found at {} — consider adding .safeselect/ to it",
+            gitignore.display()
+        );
     }
 }
 
 fn write_project_toml(safeselect_dir: &Path) -> Result<()> {
     let project_file = safeselect_dir.join("project.toml");
     let config = config::ProjectConfig::default();
-    let toml_str = toml::to_string_pretty(&config)
-        .map_err(|e| SafeselectError::TomlSer(e.to_string()))?;
+    let toml_str =
+        toml::to_string_pretty(&config).map_err(|e| SafeselectError::TomlSer(e.to_string()))?;
     std::fs::write(&project_file, toml_str)?;
     Ok(())
 }
 
-fn update_generated_by(safeselect_dir: &Path) -> Result<()> {
+pub(crate) fn update_generated_by(safeselect_dir: &Path) -> Result<()> {
     let project_file = safeselect_dir.join("project.toml");
     if !project_file.exists() {
         return write_project_toml(safeselect_dir);
@@ -815,8 +847,8 @@ fn update_generated_by(safeselect_dir: &Path) -> Result<()> {
     let mut proj: config::ProjectConfig = toml::from_str(&content)
         .map_err(|e| SafeselectError::Config(format!("invalid project.toml: {e}")))?;
     proj.generated_by = Some(env!("CARGO_PKG_VERSION").to_string());
-    let new_content = toml::to_string_pretty(&proj)
-        .map_err(|e| SafeselectError::TomlSer(e.to_string()))?;
+    let new_content =
+        toml::to_string_pretty(&proj).map_err(|e| SafeselectError::TomlSer(e.to_string()))?;
     std::fs::write(&project_file, new_content)?;
     Ok(())
 }
@@ -878,6 +910,8 @@ fn prompt_ssh_config(
             username: conn.ssh_user.clone(),
             identity_file: conn.ssh_key_file.clone(),
             known_hosts: None,
+            local_host: conn.ssh_local_host.clone(),
+            local_port: conn.ssh_local_port,
             forward_host: Some(conn.host.clone()),
             forward_port: Some(conn.port),
             auth_type: conn.ssh_auth_type.clone(),
@@ -906,13 +940,11 @@ fn prompt_ssh_config(
         .trim()
         .to_string();
 
-    let auth_method = inquire::Select::new(
-        "  Authentication method:",
-        vec!["Key file", "Password"],
-    )
-    .with_starting_cursor(if default_auth == "PASSWORD" { 1 } else { 0 })
-    .prompt()
-    .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?;
+    let auth_method =
+        inquire::Select::new("  Authentication method:", vec!["Key file", "Password"])
+            .with_starting_cursor(if default_auth == "PASSWORD" { 1 } else { 0 })
+            .prompt()
+            .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?;
 
     let (key_file, auth_type) = match auth_method {
         "Key file" => {
@@ -922,7 +954,10 @@ fn prompt_ssh_config(
                 .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?
                 .trim()
                 .to_string();
-            (if kf.is_empty() { None } else { Some(kf) }, Some("KEY".into()))
+            (
+                if kf.is_empty() { None } else { Some(kf) },
+                Some("KEY".into()),
+            )
         }
         _ => {
             let ssh_acct = format!("{project_name}/{env_name}/ssh");
@@ -945,6 +980,8 @@ fn prompt_ssh_config(
         username: Some(user),
         identity_file: key_file,
         known_hosts: None,
+        local_host: conn.ssh_local_host.clone(),
+        local_port: conn.ssh_local_port,
         forward_host: Some(conn.host.clone()),
         forward_port: Some(conn.port),
         auth_type,
@@ -1064,21 +1101,30 @@ fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
         // Use 15432 as local forward port (different from SSH server port 2222)
         let url = if has_ssh {
             let local_forward_port = 15432;
-            format!("jdbc:postgresql://localhost:{}/{}?sslmode=require", local_forward_port, conn.database)
+            format!(
+                "jdbc:postgresql://localhost:{}/{}?sslmode=require",
+                local_forward_port, conn.database
+            )
         } else {
-            format!("jdbc:postgresql://{}:{}/{}", conn.host, conn.port, conn.database)
+            format!(
+                "jdbc:postgresql://{}:{}/{}",
+                conn.host, conn.port, conn.database
+            )
         };
 
         let (secret, has_secret) = if let Some(ref pw) = conn.password {
             if !pw.is_empty() {
                 let account = format!("{project_name}/{env_name}");
                 compose::store_password_in_keychain(&account, pw)?;
-                (Some(config::SecretConfig {
-                    source: "macos-keychain".to_string(),
-                    service: Some("safeselect".to_string()),
-                    account: Some(account),
-                    variable: None,
-                }), true)
+                (
+                    Some(config::SecretConfig {
+                        source: "macos-keychain".to_string(),
+                        service: Some("safeselect".to_string()),
+                        account: Some(account),
+                        variable: None,
+                    }),
+                    true,
+                )
             } else {
                 (None, false)
             }
@@ -1164,9 +1210,7 @@ fn cmd_import_compose(path: Option<PathBuf>, non_interactive: bool) -> Result<()
 
     let all_connections: Vec<(String, compose::ComposeConnection)> = groups
         .into_iter()
-        .flat_map(|(label, conns)| {
-            conns.into_iter().map(move |c| (label.clone(), c))
-        })
+        .flat_map(|(label, conns)| conns.into_iter().map(move |c| (label.clone(), c)))
         .collect();
 
     if all_connections.is_empty() {
@@ -1175,11 +1219,7 @@ fn cmd_import_compose(path: Option<PathBuf>, non_interactive: bool) -> Result<()
     }
 
     let mut to_import: Vec<compose::ComposeConnection> = if non_interactive {
-        all_connections
-            .iter()
-            .map(|(_, c)| c)
-            .cloned()
-            .collect()
+        all_connections.iter().map(|(_, c)| c).cloned().collect()
     } else {
         struct ConnLabel(usize, String);
         impl std::fmt::Display for ConnLabel {
@@ -1291,7 +1331,12 @@ fn setup_driver_if_missing() -> Result<()> {
     println!();
     println!("── JDBC Driver ──────────────────────────────────");
     println!();
-    cmd_driver(&loader, DriverAction::Download { vendor: "postgresql".into() })?;
+    cmd_driver(
+        &loader,
+        DriverAction::Download {
+            vendor: "postgresql".into(),
+        },
+    )?;
     Ok(())
 }
 
@@ -1301,7 +1346,9 @@ fn setup_passwords_for_missing(repo_root: &std::path::Path, env_names: &[String]
             .join(".safeselect")
             .join("environments")
             .join(format!("{env_name}.toml"));
-        if !env_file.exists() { continue; }
+        if !env_file.exists() {
+            continue;
+        }
         let content = std::fs::read_to_string(&env_file)?;
         let config = match toml::from_str::<config::EnvironmentConfig>(&content) {
             Ok(c) => c,
@@ -1337,9 +1384,7 @@ fn setup_passwords_for_missing(repo_root: &std::path::Path, env_names: &[String]
 
         let repo_name = project_display_name(repo_root);
         let account = format!("{repo_name}/{env_name}");
-        let pw = rpassword::prompt_password(format!(
-            "  Password for '{repo_name}/{env_name}': "
-        ))?;
+        let pw = rpassword::prompt_password(format!("  Password for '{repo_name}/{env_name}': "))?;
         let pw = pw.trim().to_string();
         if pw.is_empty() {
             println!("  ⚠ Skipped (empty password).");
@@ -1362,18 +1407,24 @@ fn setup_passwords_for_missing(repo_root: &std::path::Path, env_names: &[String]
                 if in_secret && (line.trim().starts_with('[') || line.trim().is_empty()) {
                     in_secret = false;
                 }
-                if in_secret { continue; }
+                if in_secret {
+                    continue;
+                }
                 buf.push_str(line);
                 buf.push('\n');
             }
-            while buf.ends_with('\n') { buf.pop(); }
+            while buf.ends_with('\n') {
+                buf.pop();
+            }
             buf.push('\n');
             buf.push('\n');
             buf.push_str(&secret_section);
             buf
         } else {
             let mut c = content;
-            if !c.ends_with('\n') { c.push('\n'); }
+            if !c.ends_with('\n') {
+                c.push('\n');
+            }
             c.push('\n');
             c.push_str(&secret_section);
             c
@@ -1430,8 +1481,11 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
             std::net::TcpStream::connect_timeout(a, Duration::from_secs(3)).is_ok()
         });
 
-        // Step 2: Check PostgreSQL via tunnel endpoint (localhost:15432)
-        let tunnel_pg_addr = format!("localhost:15432")
+        let tunnel_local_host = ssh.local_host.as_deref().unwrap_or("localhost");
+        let tunnel_local_port = ssh.local_port.unwrap_or(15432);
+
+        // Step 2: Check PostgreSQL via tunnel endpoint.
+        let tunnel_pg_addr = format!("{tunnel_local_host}:{tunnel_local_port}")
             .to_socket_addrs()
             .ok()
             .and_then(|mut a| a.next());
@@ -1490,11 +1544,22 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
 
         if bastion.is_empty() || user.is_empty() || fwd_host.is_empty() || fwd_port == 0 {
             let mut missing = vec![];
-            if bastion.is_empty() { missing.push("host"); }
-            if user.is_empty() { missing.push("username"); }
-            if fwd_host.is_empty() { missing.push("forward_host"); }
-            if fwd_port == 0 { missing.push("forward_port"); }
-            println!("  ⚠  Incomplete SSH config for '{env_name}': missing {}", missing.join(", "));
+            if bastion.is_empty() {
+                missing.push("host");
+            }
+            if user.is_empty() {
+                missing.push("username");
+            }
+            if fwd_host.is_empty() {
+                missing.push("forward_host");
+            }
+            if fwd_port == 0 {
+                missing.push("forward_port");
+            }
+            println!(
+                "  ⚠  Incomplete SSH config for '{env_name}': missing {}",
+                missing.join(", ")
+            );
             std::io::stdout().flush()?;
             continue;
         }
@@ -1502,16 +1567,23 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
         print!("  ● Establishing SSH tunnel ({env_name}) ... ");
         std::io::stdout().flush()?;
 
-        // Use a different local port (15432) for forwarding, not the SSH server port
-        let tunnel_local_port = 15432;
+        // Use the DBeaver-exported local endpoint when available; otherwise keep the
+        // historical SafeSelect default to avoid changing existing behavior.
+        let tunnel_local_host = ssh.local_host.as_deref().unwrap_or("localhost");
+        let tunnel_local_port = ssh.local_port.unwrap_or(15432);
         // Build SSH args
         let mut ssh_args: Vec<String> = vec![
-            "-o".into(), "ConnectTimeout=5".into(),
-            "-o".into(), "ExitOnForwardFailure=yes".into(),
-            "-o".into(), "ServerAliveInterval=15".into(),
-            "-o".into(), "ServerAliveCountMax=3".into(),
+            "-o".into(),
+            "ConnectTimeout=5".into(),
+            "-o".into(),
+            "ExitOnForwardFailure=yes".into(),
+            "-o".into(),
+            "ServerAliveInterval=15".into(),
+            "-o".into(),
+            "ServerAliveCountMax=3".into(),
             "-N".into(),
-            "-L".into(), format!("{}:{}:{}", tunnel_local_port, fwd_host, fwd_port),
+            "-L".into(),
+            format!("{tunnel_local_host}:{tunnel_local_port}:{fwd_host}:{fwd_port}"),
             format!("{user}@{bastion}"),
         ];
         if let Some(p) = ssh.port {
@@ -1647,16 +1719,19 @@ fn run_checks(repo_root: &std::path::Path, env_names: &[String]) -> Result<()> {
                 .join(".safeselect")
                 .join("environments")
                 .join(format!("{env}.toml"));
-            let active = std::fs::read_to_string(&env_file).ok().and_then(|c| {
-                toml::from_str::<config::EnvironmentConfig>(&c).ok()
-            }).and_then(|cfg| {
-                extract_host_port(&cfg.database.url)
-            }).map(|(h, p)| {
-                format!("{h}:{p}").to_socket_addrs().ok()
-                    .and_then(|mut a| a.next())
-                    .map(|a| check_postgres(&a))
-                    .unwrap_or(false)
-            }).unwrap_or(false);
+            let active = std::fs::read_to_string(&env_file)
+                .ok()
+                .and_then(|c| toml::from_str::<config::EnvironmentConfig>(&c).ok())
+                .and_then(|cfg| extract_host_port(&cfg.database.url))
+                .map(|(h, p)| {
+                    format!("{h}:{p}")
+                        .to_socket_addrs()
+                        .ok()
+                        .and_then(|mut a| a.next())
+                        .map(|a| check_postgres(&a))
+                        .unwrap_or(false)
+                })
+                .unwrap_or(false);
             if !active {
                 still_down.push(env.as_str());
             }
@@ -1742,10 +1817,8 @@ fn cmd_serve_setup(_loader: &ConfigLoader, repo_root: &Path) -> Result<()> {
         total
     );
 
-    let auto_import: Vec<compose::ComposeConnection> = dirs
-        .into_iter()
-        .flat_map(|(_, conns)| conns)
-        .collect();
+    let auto_import: Vec<compose::ComposeConnection> =
+        dirs.into_iter().flat_map(|(_, conns)| conns).collect();
 
     let project_name = project_display_name(repo_root);
     let _result = compose::write_config_files(repo_root, &auto_import, &project_name)?;
@@ -1828,12 +1901,11 @@ fn build_ssh_command(ssh: &config::SshConfig, _db_url: &str) -> Option<String> {
     let forward_host = ssh.forward_host.as_deref()?;
     let forward_port = ssh.forward_port?;
 
-    // Use 15432 as the local forward port (different from SSH server port)
-    let local_port = 15432;
+    let local_host = ssh.local_host.as_deref().unwrap_or("localhost");
+    let local_port = ssh.local_port.unwrap_or(15432);
 
-    let mut cmd = format!(
-        "ssh -L {local_port}:{forward_host}:{forward_port} {user}@{bastion}"
-    );
+    let mut cmd =
+        format!("ssh -L {local_host}:{local_port}:{forward_host}:{forward_port} {user}@{bastion}");
 
     if let Some(p) = ssh.port {
         if p != 22 {
@@ -1854,9 +1926,21 @@ fn cmd_check(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
 
     let resolved = loader.resolve_local(repo_root, environment)?;
 
-    println!("  ✓ Config valid");
-    println!("  ✓ Driver '{}' found and checksum OK", resolved.driver.vendor);
-    println!("  ✓ Secret resolved");
+    diagnostics::print(
+        DiagnosticStatus::Ok,
+        DiagnosticCode::ConfigResolved,
+        "Config resolved",
+    );
+    diagnostics::print(
+        DiagnosticStatus::Ok,
+        DiagnosticCode::DriverVerified,
+        format!("Driver '{}' found and checksum OK", resolved.driver.vendor),
+    );
+    diagnostics::print(
+        DiagnosticStatus::Ok,
+        DiagnosticCode::SecretResolved,
+        "Secret resolved",
+    );
 
     if let Some(ref ssh) = resolved.environment.ssh {
         if ssh.enabled {
@@ -1872,53 +1956,97 @@ fn cmd_check(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
                 .and_then(|mut a| a.next());
 
             match bastion_addr.as_ref() {
-                Some(a) if std::net::TcpStream::connect_timeout(a, std::time::Duration::from_secs(3)).is_ok() =>
-                    println!("  ✓ Bastion reachable at {bastion_host}:{bastion_port}"),
+                Some(a)
+                    if std::net::TcpStream::connect_timeout(
+                        a,
+                        std::time::Duration::from_secs(3),
+                    )
+                    .is_ok() =>
+                {
+                    diagnostics::print(
+                        DiagnosticStatus::Ok,
+                        DiagnosticCode::SshBastionReachable,
+                        format!("Bastion reachable at {bastion_host}:{bastion_port}"),
+                    )
+                }
                 Some(_) => {
-                    println!("  ✗ Bastion unreachable at {bastion_host}:{bastion_port} (connect timed out after 3s)");
+                    diagnostics::print(
+                        DiagnosticStatus::Fail,
+                        DiagnosticCode::SshBastionUnreachable,
+                        format!("Bastion unreachable at {bastion_host}:{bastion_port} (connect timed out after 3s)"),
+                    );
                     if let Some(ref identity_file) = ssh.identity_file {
                         if !std::path::Path::new(identity_file).exists() {
-                            println!("  ✗ SSH identity file not found: {identity_file}");
+                            diagnostics::print(
+                                DiagnosticStatus::Fail,
+                                DiagnosticCode::SshIdentityMissing,
+                                format!("SSH identity file not found: {identity_file}"),
+                            );
                         }
                     }
                     let cmd = build_ssh_command(ssh, &resolved.environment.database.url);
-                    if let Some(c) = cmd { println!("  To establish: {c}"); }
+                    if let Some(c) = cmd {
+                        println!("  To establish: {c}");
+                    }
                     return Err(SafeselectError::Other(
                         format!("SSH bastion {bastion_host}:{bastion_port} not reachable (connect timed out after 3s).")
                     ));
                 }
                 None => {
-                    println!("  ✗ Cannot resolve bastion {bastion_host}:{bastion_port}");
-                    return Err(SafeselectError::Other(
-                        format!("Cannot resolve SSH bastion {bastion_host}:{bastion_port}")
-                    ));
+                    diagnostics::print(
+                        DiagnosticStatus::Fail,
+                        DiagnosticCode::SshBastionUnresolved,
+                        format!("Cannot resolve bastion {bastion_host}:{bastion_port}"),
+                    );
+                    return Err(SafeselectError::Other(format!(
+                        "Cannot resolve SSH bastion {bastion_host}:{bastion_port}"
+                    )));
                 }
             }
 
             // 2) Establish SSH tunnel if needed, then check PostgreSQL reachability
             if let Some((host, port)) = extract_host_port(&resolved.environment.database.url) {
                 use std::net::ToSocketAddrs;
-                let pg_addr = format!("{host}:{port}").to_socket_addrs().ok().and_then(|mut a| a.next());
+                let pg_addr = format!("{host}:{port}")
+                    .to_socket_addrs()
+                    .ok()
+                    .and_then(|mut a| a.next());
                 // If SSH is enabled and PostgreSQL is not already reachable, try establishing the tunnel
                 let pg_addr = if pg_addr.as_ref().is_some_and(|a| check_postgres(a)) {
                     pg_addr
                 } else {
-                    println!("  ◇ Establishing SSH tunnel...");
+                    diagnostics::print(
+                        DiagnosticStatus::Info,
+                        DiagnosticCode::SshTunnelAttempt,
+                        "Establishing SSH tunnel...",
+                    );
                     let _ = setup_ssh_tunnels(repo_root, &[environment.to_string()]);
-                    format!("{host}:{port}").to_socket_addrs().ok().and_then(|mut a| a.next())
+                    format!("{host}:{port}")
+                        .to_socket_addrs()
+                        .ok()
+                        .and_then(|mut a| a.next())
                 };
 
                 match pg_addr {
-                    Some(ref a) if check_postgres(a) =>
-                        println!("  ✓ PostgreSQL reachable at {host}:{port}"),
+                    Some(ref a) if check_postgres(a) => diagnostics::print(
+                        DiagnosticStatus::Ok,
+                        DiagnosticCode::PostgresReachable,
+                        format!("PostgreSQL reachable at {host}:{port}"),
+                    ),
                     _ => {
-                        println!("  ✗ PostgreSQL unreachable at {host}:{port}");
+                        diagnostics::print(
+                            DiagnosticStatus::Fail,
+                            DiagnosticCode::PostgresUnreachable,
+                            format!("PostgreSQL unreachable at {host}:{port}"),
+                        );
                         println!("  Possible causes:");
                         println!("    - Database host:port is wrong ({host}:{port})");
                         println!("    - Database is not running or not accepting connections");
                         println!("    - SSH tunnel is not established or not forwarding correctly");
                         let cmd = build_ssh_command(ssh, &resolved.environment.database.url);
-                        if let Some(c) = cmd { println!("  To establish tunnel: {c}"); }
+                        if let Some(c) = cmd {
+                            println!("  To establish tunnel: {c}");
+                        }
                         return Err(SafeselectError::Other(
                             format!("Cannot reach PostgreSQL at {host}:{port} through SSH tunnel (read timed out after 2s).")
                         ));
@@ -1928,12 +2056,22 @@ fn cmd_check(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
         }
     }
 
-    println!("  Attempting sidecar connection...");
+    diagnostics::print(
+        DiagnosticStatus::Info,
+        DiagnosticCode::SidecarStartAttempt,
+        "Attempting sidecar connection...",
+    );
     println!(
         "    url={} user={} db={}",
         resolved.environment.database.url,
         resolved.environment.database.username,
-        resolved.environment.database.url.split('/').last().unwrap_or("?")
+        resolved
+            .environment
+            .database
+            .url
+            .split('/')
+            .last()
+            .unwrap_or("?")
     );
 
     let mut sidecar = SidecarProcess::start_with_timeout(
@@ -1948,18 +2086,39 @@ fn cmd_check(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
     )?;
 
     sidecar.ping()?;
-    println!("  ✓ Sidecar JDBC connection OK");
+    diagnostics::print(
+        DiagnosticStatus::Ok,
+        DiagnosticCode::SidecarJdbcOk,
+        "Sidecar JDBC connection OK",
+    );
 
     let result = sidecar.execute("SELECT 1 AS connection_test")?;
-    println!("  ✓ Connection verified: SELECT 1 returned {} row(s)", result.row_count);
-    println!("  ✓ All checks passed for {name}/{environment}");
+    diagnostics::print(
+        DiagnosticStatus::Ok,
+        DiagnosticCode::QuerySelectOneOk,
+        format!(
+            "Connection verified: SELECT 1 returned {} row(s)",
+            result.row_count
+        ),
+    );
+    diagnostics::print(
+        DiagnosticStatus::Ok,
+        DiagnosticCode::AllChecksPassed,
+        format!("All checks passed for {name}/{environment}"),
+    );
 
     sidecar.shutdown()?;
 
     Ok(())
 }
 
-fn cmd_query(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &str, sql: Option<&str>, verbose: bool) -> Result<()> {
+fn cmd_query(
+    loader: &ConfigLoader,
+    repo_root: &std::path::Path,
+    environment: &str,
+    sql: Option<&str>,
+    verbose: bool,
+) -> Result<()> {
     let resolved = loader.resolve_local(repo_root, environment)?;
 
     let sql = match sql {
@@ -1970,7 +2129,9 @@ fn cmd_query(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
             std::io::stdin().read_to_string(&mut buf)?;
             let trimmed = buf.trim().to_string();
             if trimmed.is_empty() {
-                return Err(SafeselectError::Other("No SQL provided. Use --sql or pipe a query.".into()));
+                return Err(SafeselectError::Other(
+                    "No SQL provided. Use --sql or pipe a query.".into(),
+                ));
             }
             trimmed
         }
@@ -1987,7 +2148,10 @@ fn cmd_query(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
         verbose,
     )?;
 
-    let security = security::SecurityEngine::new(resolved.project.security.clone(), resolved.project.limits.clone());
+    let security = security::SecurityEngine::new(
+        resolved.project.security.clone(),
+        resolved.project.limits.clone(),
+    );
     security.validate(&sql)?;
 
     let result = sidecar.execute(&sql)?;
@@ -1996,14 +2160,21 @@ fn cmd_query(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
     sidecar.shutdown()?;
 
     if result.columns.is_empty() {
-        println!("Query executed. {} rows affected. ({}ms)", result.row_count, result.elapsed_ms);
+        println!(
+            "Query executed. {} rows affected. ({}ms)",
+            result.row_count, result.elapsed_ms
+        );
         return Ok(());
     }
 
-    let col_widths: Vec<usize> = result.columns.iter()
+    let col_widths: Vec<usize> = result
+        .columns
+        .iter()
         .enumerate()
         .map(|(i, col)| {
-            let max_data = result.rows.iter()
+            let max_data = result
+                .rows
+                .iter()
                 .filter_map(|row| row.get(i))
                 .filter_map(|v| v.as_str())
                 .map(|s| s.len())
@@ -2014,7 +2185,9 @@ fn cmd_query(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
         .collect();
 
     let print_row = |cells: &[String]| {
-        let parts: Vec<String> = cells.iter().enumerate()
+        let parts: Vec<String> = cells
+            .iter()
+            .enumerate()
             .map(|(i, cell)| {
                 let width = col_widths.get(i).copied().unwrap_or(20);
                 format!(" {:width$} ", cell, width = width)
@@ -2024,7 +2197,8 @@ fn cmd_query(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
     };
 
     let separator = || {
-        let parts: Vec<String> = col_widths.iter()
+        let parts: Vec<String> = col_widths
+            .iter()
             .map(|w| format!("-{:-<width$}-", "", width = w))
             .collect();
         println!("|{}|", parts.join("+"));
@@ -2034,7 +2208,8 @@ fn cmd_query(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
     print_row(&result.columns);
     separator();
     for row in &result.rows {
-        let cells: Vec<String> = row.iter()
+        let cells: Vec<String> = row
+            .iter()
             .enumerate()
             .map(|(i, v)| {
                 let s = match v {
@@ -2053,12 +2228,20 @@ fn cmd_query(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
         print_row(&cells);
     }
     separator();
-    println!("({} rows, {} bytes, {}ms)", result.row_count, result.byte_count, result.elapsed_ms);
+    println!(
+        "({} rows, {} bytes, {}ms)",
+        result.row_count, result.byte_count, result.elapsed_ms
+    );
 
     Ok(())
 }
 
-fn cmd_connectivity_action(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &str, action: &str) -> Result<()> {
+fn cmd_connectivity_action(
+    loader: &ConfigLoader,
+    repo_root: &std::path::Path,
+    environment: &str,
+    action: &str,
+) -> Result<()> {
     let name = project_display_name(repo_root);
     let resolved = loader.resolve_local(repo_root, environment)?;
 
@@ -2090,7 +2273,11 @@ fn cmd_connectivity_action(loader: &ConfigLoader, repo_root: &std::path::Path, e
     Ok(())
 }
 
-fn cmd_reconnect(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &str) -> Result<()> {
+fn cmd_reconnect(
+    loader: &ConfigLoader,
+    repo_root: &std::path::Path,
+    environment: &str,
+) -> Result<()> {
     let name = project_display_name(repo_root);
     println!("Reconnecting to {name}/{environment}...");
 
@@ -2119,7 +2306,10 @@ fn cmd_reconnect(loader: &ConfigLoader, repo_root: &std::path::Path, environment
     println!("  ✓ Sidecar started and pinged");
 
     let result = sidecar.execute("SELECT 1 AS connection_test")?;
-    println!("  ✓ Connection verified: SELECT 1 returned {} row(s)", result.row_count);
+    println!(
+        "  ✓ Connection verified: SELECT 1 returned {} row(s)",
+        result.row_count
+    );
 
     sidecar.shutdown()?;
     println!("  ✓ Reconnection successful to {name}/{environment}");
@@ -2147,8 +2337,7 @@ fn cmd_uninstall(force: bool) -> Result<()> {
 
     let mut removed_anything = false;
 
-    let bin = dirs::home_dir()
-        .map(|h| h.join(".local").join("bin").join("safeselect"));
+    let bin = dirs::home_dir().map(|h| h.join(".local").join("bin").join("safeselect"));
     if let Some(ref path) = bin {
         if path.exists() {
             std::fs::remove_file(path)?;
@@ -2175,8 +2364,7 @@ fn cmd_uninstall(force: bool) -> Result<()> {
         }
     }
 
-    let audit_dir = dirs::home_dir()
-        .map(|h| h.join(".local").join("state").join("safeselect"));
+    let audit_dir = dirs::home_dir().map(|h| h.join(".local").join("state").join("safeselect"));
     if let Some(ref path) = audit_dir {
         if path.exists() {
             std::fs::remove_dir_all(path)?;
@@ -2186,9 +2374,12 @@ fn cmd_uninstall(force: bool) -> Result<()> {
     }
 
     let backup_paths = [
-        dirs::home_dir().map(|h| h.join("Library/Application Support/opencode/opencode.json.safeselect.bak")),
+        dirs::home_dir()
+            .map(|h| h.join("Library/Application Support/opencode/opencode.json.safeselect.bak")),
         dirs::config_dir().map(|d| d.join("opencode/opencode.json.safeselect.bak")),
-        Some(std::path::PathBuf::from("~/.config/opencode/opencode.json.safeselect.bak")),
+        Some(std::path::PathBuf::from(
+            "~/.config/opencode/opencode.json.safeselect.bak",
+        )),
     ];
     for path in backup_paths.into_iter().flatten() {
         if path.exists() {

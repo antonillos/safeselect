@@ -32,7 +32,15 @@ pub struct ClientConfig {
     pub detected: bool,
 }
 
-pub fn install_entry(client: &str, environment: &str, entry_name: &str, repo_root: Option<&Path>, config_dir: Option<&Path>, mcp_timeout_ms: u64, local: bool) -> Result<()> {
+pub fn install_entry(
+    client: &str,
+    environment: &str,
+    entry_name: &str,
+    repo_root: Option<&Path>,
+    config_dir: Option<&Path>,
+    mcp_timeout_ms: u64,
+    local: bool,
+) -> Result<()> {
     let config_path = if local {
         get_local_client_config(client, repo_root)?
     } else {
@@ -88,12 +96,17 @@ pub fn install_entry(client: &str, environment: &str, entry_name: &str, repo_roo
 
     let new_content = match client {
         "opencode" => append_opencode_json(&content, &opencode_entry, entry_name)?,
-        "cursor" | "windsurf" | "codex" | "claude-code" => append_mcp_json(&content, &entry, entry_name)?,
+        "cursor" | "windsurf" | "codex" | "claude-code" => {
+            append_mcp_json(&content, &entry, entry_name)?
+        }
         "copilot" | "gemini-cli" => append_ini_entry(&content, entry_name, environment)?,
         _ => return Err(SafeselectError::Other(format!("Unknown client: {client}"))),
     };
 
-    println!("--- Config diff for {client} ({}) ---", config_path.display());
+    println!(
+        "--- Config diff for {client} ({}) ---",
+        config_path.display()
+    );
     show_diff(&content, &new_content);
     println!("\nBackup saved to: {}", backup_path.display());
 
@@ -102,7 +115,9 @@ pub fn install_entry(client: &str, environment: &str, entry_name: &str, repo_roo
     let verify = std::fs::read_to_string(&config_path)?;
     if verify != new_content {
         std::fs::write(&config_path, &content)?;
-        return Err(SafeselectError::Other("Write verification failed, rolled back".into()));
+        return Err(SafeselectError::Other(
+            "Write verification failed, rolled back".into(),
+        ));
     }
 
     println!("Entry '{entry_name}' installed for {client}");
@@ -160,28 +175,46 @@ fn detect_local_client_config(client: &str, repo_root: &Path) -> Option<PathBuf>
         }
         "cursor" => {
             let config = repo_root.join(".cursor").join("settings.json");
-            if config.exists() { Some(config) } else { None }
+            if config.exists() {
+                Some(config)
+            } else {
+                None
+            }
         }
         "windsurf" => {
             let config = repo_root.join(".windsurf").join("settings.json");
-            if config.exists() { Some(config) } else { None }
+            if config.exists() {
+                Some(config)
+            } else {
+                None
+            }
         }
         "claude-code" => {
             let config = repo_root.join(".claude").join("settings.json");
-            if config.exists() { Some(config) } else { None }
+            if config.exists() {
+                Some(config)
+            } else {
+                None
+            }
         }
         "codex" => {
             let config = repo_root.join(".codex").join("settings.json");
-            if config.exists() { Some(config) } else { None }
+            if config.exists() {
+                Some(config)
+            } else {
+                None
+            }
         }
         _ => None,
     }
 }
 
 fn get_local_client_config(client: &str, repo_root: Option<&Path>) -> Result<PathBuf> {
-    let root = repo_root.ok_or_else(|| SafeselectError::Other(
-        "no project root specified; use --project or run from a project directory".into()
-    ))?;
+    let root = repo_root.ok_or_else(|| {
+        SafeselectError::Other(
+            "no project root specified; use --project or run from a project directory".into(),
+        )
+    })?;
 
     let local_path = match client {
         "opencode" => {
@@ -250,9 +283,11 @@ fn get_local_client_config(client: &str, repo_root: Option<&Path>) -> Result<Pat
             }
             config
         }
-        c => return Err(SafeselectError::Other(format!(
-            "Local config not supported for {c}; use global install (without --local)"
-        ))),
+        c => {
+            return Err(SafeselectError::Other(format!(
+                "Local config not supported for {c}; use global install (without --local)"
+            )))
+        }
     };
 
     Ok(local_path)
@@ -277,39 +312,62 @@ fn detect_copilot_config() -> Option<PathBuf> {
     let home = dirs::home_dir()?;
     let candidates = vec![
         home.join(".vscode").join("argv.json"),
-        home.join(".config").join("Code").join("User").join("argv.json"),
+        home.join(".config")
+            .join("Code")
+            .join("User")
+            .join("argv.json"),
     ];
     candidates.into_iter().find(|p| p.exists())
 }
 
 fn detect_cursor_config() -> Option<PathBuf> {
     let home = dirs::home_dir()?;
-    [home.join(".cursor").join("config.json"), home.join(".config").join("cursor").join("config.json")]
-        .into_iter().find(|p| p.exists())
+    [
+        home.join(".cursor").join("config.json"),
+        home.join(".config").join("cursor").join("config.json"),
+    ]
+    .into_iter()
+    .find(|p| p.exists())
 }
 
 fn detect_windsurf_config() -> Option<PathBuf> {
     let home = dirs::home_dir()?;
     let path = home.join(".windsurf").join("config.json");
-    if path.exists() { Some(path) } else { None }
+    if path.exists() {
+        Some(path)
+    } else {
+        None
+    }
 }
 
 fn detect_claude_code_config() -> Option<PathBuf> {
     let home = dirs::home_dir()?;
     let path = home.join(".claude").join("config.json");
-    if path.exists() { Some(path) } else { None }
+    if path.exists() {
+        Some(path)
+    } else {
+        None
+    }
 }
 
 fn detect_codex_config() -> Option<PathBuf> {
     let home = dirs::home_dir()?;
     let path = home.join(".codex").join("config.json");
-    if path.exists() { Some(path) } else { None }
+    if path.exists() {
+        Some(path)
+    } else {
+        None
+    }
 }
 
 fn detect_gemini_config() -> Option<PathBuf> {
     let home = dirs::home_dir()?;
     let path = home.join(".gemini").join("config.json");
-    if path.exists() { Some(path) } else { None }
+    if path.exists() {
+        Some(path)
+    } else {
+        None
+    }
 }
 
 fn verify_permissions(path: &PathBuf) -> Result<()> {
@@ -319,13 +377,15 @@ fn verify_permissions(path: &PathBuf) -> Result<()> {
         let meta = path.metadata()?;
         if meta.file_type().is_symlink() {
             return Err(SafeselectError::Other(format!(
-                "Config file is a symlink: {}", path.display()
+                "Config file is a symlink: {}",
+                path.display()
             )));
         }
         let mode = meta.permissions().mode();
         if mode & 0o002 != 0 || mode & 0o020 != 0 {
             return Err(SafeselectError::Other(format!(
-                "Config file has unsafe permissions (group/world writable): {}", path.display()
+                "Config file has unsafe permissions (group/world writable): {}",
+                path.display()
             )));
         }
     }
@@ -391,9 +451,7 @@ fn append_opencode_json(content: &str, entry: &serde_json::Value, name: &str) ->
     let mut config: serde_json::Value = parse_json_or_jsonc(content)
         .map_err(|e| SafeselectError::Other(format!("Cannot parse JSON config: {e}")))?;
 
-    let servers = config
-        .get_mut("mcp")
-        .and_then(|v| v.as_object_mut());
+    let servers = config.get_mut("mcp").and_then(|v| v.as_object_mut());
 
     match servers {
         Some(map) => {
@@ -413,9 +471,7 @@ fn append_mcp_json(content: &str, entry: &serde_json::Value, name: &str) -> Resu
     let mut config: serde_json::Value = parse_json_or_jsonc(content)
         .map_err(|e| SafeselectError::Other(format!("Cannot parse JSON config: {e}")))?;
 
-    let servers = config
-        .get_mut("mcpServers")
-        .and_then(|v| v.as_object_mut());
+    let servers = config.get_mut("mcpServers").and_then(|v| v.as_object_mut());
 
     match servers {
         Some(map) => {
@@ -455,9 +511,7 @@ fn remove_mcp_entry(content: &str, name: &str) -> Result<String> {
 fn remove_text_block(content: &str, name: &str) -> String {
     content
         .lines()
-        .filter(|line| {
-            !line.contains(name) && !line.contains("safeselect")
-        })
+        .filter(|line| !line.contains(name) && !line.contains("safeselect"))
         .collect::<Vec<_>>()
         .join("\n")
 }

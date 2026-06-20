@@ -58,7 +58,16 @@ impl SidecarProcess {
         username: &str,
         password: &str,
     ) -> Result<Self> {
-        Self::start_with_timeout(driver_path, driver_class, jdbc_url, username, password, 0, 0, false)
+        Self::start_with_timeout(
+            driver_path,
+            driver_class,
+            jdbc_url,
+            username,
+            password,
+            0,
+            0,
+            false,
+        )
     }
 
     pub fn start_with_timeout(
@@ -106,12 +115,14 @@ impl SidecarProcess {
             .spawn()
             .map_err(|e| SafeselectError::Sidecar(format!("failed to start Java: {e}")))?;
 
-        let stdin = child.stdin.take().ok_or_else(|| {
-            SafeselectError::Sidecar("failed to capture stdin".into())
-        })?;
-        let stdout = child.stdout.take().ok_or_else(|| {
-            SafeselectError::Sidecar("failed to capture stdout".into())
-        })?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| SafeselectError::Sidecar("failed to capture stdin".into()))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| SafeselectError::Sidecar("failed to capture stdout".into()))?;
 
         let mut proc = Self {
             writer: BufWriter::new(stdin),
@@ -146,11 +157,11 @@ impl SidecarProcess {
             .join("sidecar")
             .join("target")
             .join("safeselect-sidecar.jar");
-        
+
         if build_jar.exists() {
             return Ok(build_jar);
         }
-        
+
         // Fallback to embedded JAR (for production)
         let data_dir = dirs::data_dir()
             .unwrap_or_else(|| PathBuf::from("~/.local/share"))
@@ -187,11 +198,14 @@ impl SidecarProcess {
     pub fn execute(&mut self, sql: &str) -> Result<QueryResult> {
         let start = std::time::Instant::now();
         tracing::debug!("Sidecar execute started");
-        
+
         let params = serde_json::json!({"sql": sql});
         let resp = self.send_request("execute", Some(params))?;
-        
-        tracing::debug!("Sidecar execute send_request completed ({:?})", start.elapsed());
+
+        tracing::debug!(
+            "Sidecar execute send_request completed ({:?})",
+            start.elapsed()
+        );
 
         if let Some(err) = resp.error {
             return Err(SafeselectError::Sidecar(format!(
@@ -206,11 +220,17 @@ impl SidecarProcess {
                 tracing::debug!("Sidecar execute completed ({:?})", start.elapsed());
                 Ok(result)
             }
-            None => Err(SafeselectError::Sidecar("empty response from sidecar".into())),
+            None => Err(SafeselectError::Sidecar(
+                "empty response from sidecar".into(),
+            )),
         }
     }
 
-    fn send_request(&mut self, method: &str, params: Option<serde_json::Value>) -> Result<Response> {
+    fn send_request(
+        &mut self,
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> Result<Response> {
         let id = self.next_id;
         self.next_id += 1;
 
@@ -230,7 +250,11 @@ impl SidecarProcess {
         // before we kill the sidecar process
         let timeout_ms = if self.statement_timeout_ms > 0 {
             let t = (self.statement_timeout_ms + 1_000u64).max(30_000u64);
-            if t > i32::MAX as u64 { i32::MAX } else { t as i32 }
+            if t > i32::MAX as u64 {
+                i32::MAX
+            } else {
+                t as i32
+            }
         } else {
             30_000i32
         };
@@ -252,9 +276,9 @@ impl SidecarProcess {
                     return Err(SafeselectError::Sidecar(format!("poll error: {err}")));
                 }
                 0 => {
-                    return Err(SafeselectError::Sidecar(
-                        format!("sidecar did not respond within {timeout_ms}ms — restarting"),
-                    ));
+                    return Err(SafeselectError::Sidecar(format!(
+                        "sidecar did not respond within {timeout_ms}ms — restarting"
+                    )));
                 }
                 _ => {}
             }
@@ -263,7 +287,9 @@ impl SidecarProcess {
             self.reader.read_line(&mut response_line)?;
 
             if response_line.is_empty() {
-                return Err(SafeselectError::Sidecar("sidecar process terminated".into()));
+                return Err(SafeselectError::Sidecar(
+                    "sidecar process terminated".into(),
+                ));
             }
 
             let resp: Response = serde_json::from_str(&response_line)?;
