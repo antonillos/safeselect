@@ -46,6 +46,28 @@ pub struct QueryResult {
     pub byte_count: u64,
     #[serde(default)]
     pub elapsed_ms: u64,
+    #[serde(default)]
+    pub elapsed: String,
+}
+
+pub fn format_elapsed(elapsed_ms: u64) -> String {
+    if elapsed_ms < 1_000 {
+        return format!("{elapsed_ms}ms");
+    }
+
+    let seconds = elapsed_ms as f64 / 1_000.0;
+    if elapsed_ms < 60_000 {
+        return format!("{seconds:.1}s");
+    }
+
+    let total_seconds = elapsed_ms / 1_000;
+    let minutes = total_seconds / 60;
+    let seconds_remainder = total_seconds % 60;
+    if seconds_remainder == 0 {
+        format!("{minutes}m")
+    } else {
+        format!("{minutes}m {seconds_remainder}s")
+    }
 }
 
 impl SidecarProcess {

@@ -361,6 +361,7 @@ public class Main {
                     result.put("row_count", rowCount);
                     result.put("byte_count", byteCount);
                     result.put("elapsed_ms", elapsedMs);
+                    result.put("elapsed", formatElapsed(elapsedMs));
 
                     log("[EXECUTE] Sending response...");
                     sendResponse(writer, id, result, null);
@@ -370,7 +371,8 @@ public class Main {
                 long elapsedMs = System.currentTimeMillis() - startTime;
                 Map<String, Object> result = new LinkedHashMap<>();
                 result.put("elapsed_ms", elapsedMs);
-                log("[EXECUTE] Update query completed in " + elapsedMs + "ms");
+                result.put("elapsed", formatElapsed(elapsedMs));
+                log("[EXECUTE] Non-result statement completed in " + elapsedMs + "ms");
                 sendResponse(writer, id, result, null);
             }
         } catch (SQLException e) {
@@ -402,5 +404,22 @@ public class Main {
         String json = MAPPER.writeValueAsString(response);
         writer.println(json);
         writer.flush();
+    }
+
+    private static String formatElapsed(long elapsedMs) {
+        if (elapsedMs < 1000) {
+            return elapsedMs + "ms";
+        }
+        if (elapsedMs < 60000) {
+            return String.format(Locale.ROOT, "%.1fs", elapsedMs / 1000.0);
+        }
+
+        long totalSeconds = elapsedMs / 1000;
+        long minutes = totalSeconds / 60;
+        long seconds = totalSeconds % 60;
+        if (seconds == 0) {
+            return minutes + "m";
+        }
+        return minutes + "m " + seconds + "s";
     }
 }
