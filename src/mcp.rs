@@ -216,7 +216,7 @@ impl McpServer {
         tracing::info!("Pre-starting sidecar during initialize (client: {client_name})");
         if let Err(e) = self
             .ensure_ssh_ready_for_query()
-            .and_then(|()| self.ensure_sidecar())
+            .and_then(|_| self.ensure_sidecar())
         {
             tracing::warn!("Sidecar pre-start failed during initialize: {e}");
         }
@@ -822,7 +822,7 @@ impl McpServer {
     }
 
     fn handle_connect(&mut self, id: Option<serde_json::Value>) -> Result<()> {
-        if let Err(e) = self.ensure_ssh_ready_for_query() {
+        if let Err(e) = self.ensure_ssh_ready_for_query().map(|_| ()) {
             return self.send_error(id, -32000, format!("SSH tunnel is not ready: {e}"));
         }
 
@@ -854,7 +854,9 @@ impl McpServer {
         let start = std::time::Instant::now();
         tracing::debug!("execute_with_reconnect started");
 
-        self.ensure_ssh_ready_for_query()?;
+        if self.ensure_ssh_ready_for_query()? {
+            self.restart_sidecar()?;
+        }
         self.ensure_sidecar()?;
         tracing::debug!("Sidecar ensured ({:?})", start.elapsed());
 
@@ -957,16 +959,16 @@ impl McpServer {
         }
     }
 
-    fn ensure_ssh_ready_for_query(&mut self) -> Result<()> {
+    fn ensure_ssh_ready_for_query(&mut self) -> Result<bool> {
         let loader = ConfigLoader::new();
         let resolved = loader.resolve_local(&self.repo_root, &self.env_name)?;
         let ssh = match resolved.environment.ssh.as_ref() {
             Some(ssh) if ssh.enabled => ssh,
-            _ => return Ok(()),
+            _ => return Ok(false),
         };
 
         if is_ssh_ready_for_query(ssh, &resolved.environment.database.url) {
-            return Ok(());
+            return Ok(true);
         }
 
         tracing::warn!(
@@ -981,7 +983,7 @@ impl McpServer {
                 if ssh.enabled
                     && is_ssh_ready_for_query(ssh, &resolved.environment.database.url) =>
             {
-                Ok(())
+                Ok(true)
             }
             _ => Err(crate::error::SafeselectError::Other(
                 "SSH tunnel is not ready for query execution".into(),
