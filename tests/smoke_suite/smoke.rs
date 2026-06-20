@@ -4,13 +4,17 @@
 //! timeout-related controls using a real database. Gated separately because it
 //! requires PostgreSQL and downloads/registers a JDBC driver in a temp config.
 
-use super::real_postgres;
+use super::postgres;
 
 pub fn run() {
     if std::env::var("SAFESELECT_REAL_SMOKE_TEST").is_err() {
         eprintln!("Skipping: set SAFESELECT_REAL_SMOKE_TEST=1 to run real smoke tests");
         return;
     }
+    std::env::set_var(
+        "SAFESELECT_TEST_SUFFIX",
+        format!("smoke_{}", std::process::id()),
+    );
 
     let tmp = std::env::temp_dir().join(format!(
         "safeselect-real-smoke-{}",
@@ -22,9 +26,9 @@ pub fn run() {
     std::fs::create_dir_all(&repo_root).unwrap();
     std::fs::create_dir_all(&config_dir).unwrap();
 
-    real_postgres::setup_database();
-    real_postgres::write_config(&repo_root);
-    real_postgres::download_driver(&config_dir);
+    postgres::setup_database();
+    postgres::write_config(&repo_root);
+    postgres::download_driver(&config_dir);
 
     let result = std::panic::catch_unwind(|| {
         assert_check_ok(&repo_root, &config_dir);
@@ -35,7 +39,7 @@ pub fn run() {
         assert_timeout_control_visible(&repo_root, &config_dir);
     });
 
-    real_postgres::cleanup_database();
+    postgres::cleanup_database();
     let _ = std::fs::remove_dir_all(&tmp);
 
     if let Err(err) = result {
@@ -44,7 +48,7 @@ pub fn run() {
 }
 
 fn assert_check_ok(repo_root: &std::path::Path, config_dir: &std::path::Path) {
-    let (stdout, stderr, success) = real_postgres::run_safeselect_args(
+    let (stdout, stderr, success) = postgres::run_safeselect_args(
         repo_root,
         config_dir,
         &["check", "--environment", "testing"],
@@ -55,14 +59,14 @@ fn assert_check_ok(repo_root: &std::path::Path, config_dir: &std::path::Path) {
 
 fn assert_select_ok(repo_root: &std::path::Path, config_dir: &std::path::Path) {
     let (stdout, stderr, success) =
-        real_postgres::run_safeselect(repo_root, config_dir, "SELECT 1 AS ok");
+        postgres::run_safeselect(repo_root, config_dir, "SELECT 1 AS ok");
     assert!(success, "SELECT failed\nstdout:\n{stdout}\nstderr:\n{stderr}");
     assert!(stdout.contains("| 1"), "unexpected SELECT output: {stdout}");
     assert!(stdout.contains("rows"), "SELECT output should include row count: {stdout}");
 }
 
 fn assert_sql_error_visible(repo_root: &std::path::Path, config_dir: &std::path::Path) {
-    let (stdout, stderr, success) = real_postgres::run_safeselect(
+    let (stdout, stderr, success) = postgres::run_safeselect(
         repo_root,
         config_dir,
         "SELECT * FROM public.table_that_does_not_exist",
@@ -78,7 +82,7 @@ fn assert_sql_error_visible(repo_root: &std::path::Path, config_dir: &std::path:
 
 fn assert_security_rejection_visible(repo_root: &std::path::Path, config_dir: &std::path::Path) {
     let (stdout, stderr, success) =
-        real_postgres::run_safeselect(repo_root, config_dir, "DELETE FROM public.safe_table");
+        postgres::run_safeselect(repo_root, config_dir, "DELETE FROM public.safe_table");
     assert!(!success, "DELETE unexpectedly succeeded: {stdout}");
     assert!(
         stderr.contains("Query rejected") && stderr.contains("Read-only mode"),
@@ -87,7 +91,7 @@ fn assert_security_rejection_visible(repo_root: &std::path::Path, config_dir: &s
 }
 
 fn assert_result_limit_visible(repo_root: &std::path::Path, config_dir: &std::path::Path) {
-    let (stdout, stderr, success) = real_postgres::run_safeselect(
+    let (stdout, stderr, success) = postgres::run_safeselect(
         repo_root,
         config_dir,
         "SELECT payload FROM public.large_payload WHERE id = 1",
@@ -101,7 +105,7 @@ fn assert_result_limit_visible(repo_root: &std::path::Path, config_dir: &std::pa
 
 fn assert_timeout_control_visible(repo_root: &std::path::Path, config_dir: &std::path::Path) {
     let (stdout, stderr, success) =
-        real_postgres::run_safeselect(repo_root, config_dir, "SELECT pg_sleep(5)");
+        postgres::run_safeselect(repo_root, config_dir, "SELECT pg_sleep(5)");
     assert!(!success, "pg_sleep unexpectedly succeeded: {stdout}");
     assert!(
         stderr.contains("Query rejected")

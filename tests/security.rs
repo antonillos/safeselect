@@ -1,17 +1,9 @@
 #[path = "security_suite/mod.rs"]
 mod security_suite;
+#[path = "smoke_suite/postgres.rs"]
+mod postgres;
 
 #[test]
 fn real_postgres_security_rejections_and_limits() {
     security_suite::real_postgres::run();
-}
-
-#[test]
-fn real_postgres_reconnect_after_docker_restart() {
-    security_suite::reconnect::run();
-}
-
-#[test]
-fn real_postgres_smoke_errors_and_timeouts() {
-    security_suite::smoke::run();
 }
