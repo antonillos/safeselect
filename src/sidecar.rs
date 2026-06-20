@@ -40,6 +40,12 @@ pub struct SidecarProcess {
     statement_timeout_ms: u64,
 }
 
+#[derive(Clone, Copy)]
+pub struct ResultLimits {
+    pub max_rows: u64,
+    pub max_result_bytes: u64,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct QueryResult {
     pub columns: Vec<String>,
@@ -88,6 +94,10 @@ impl SidecarProcess {
             password,
             0,
             0,
+            ResultLimits {
+                max_rows: u64::MAX,
+                max_result_bytes: u64::MAX,
+            },
             false,
         )
     }
@@ -100,6 +110,7 @@ impl SidecarProcess {
         password: &str,
         idle_timeout_seconds: u64,
         statement_timeout_ms: u64,
+        result_limits: ResultLimits,
         verbose: bool,
     ) -> Result<Self> {
         let jar_path = Self::ensure_sidecar_jar()?;
@@ -125,6 +136,12 @@ impl SidecarProcess {
             args.push("--statement-timeout-ms");
             args.push(Box::leak(statement_timeout_ms.to_string().into_boxed_str()));
         }
+        args.push("--max-rows");
+        args.push(Box::leak(result_limits.max_rows.to_string().into_boxed_str()));
+        args.push("--max-result-bytes");
+        args.push(Box::leak(
+            result_limits.max_result_bytes.to_string().into_boxed_str(),
+        ));
         if verbose {
             args.push("--verbose");
         }

@@ -17,7 +17,7 @@ use cli::{AgentAction, Cli, Command, ConfigAction, DriverAction};
 use config::ConfigLoader;
 use diagnostics::{DiagnosticCode, DiagnosticStatus};
 use error::{Result, SafeselectError};
-use sidecar::{format_elapsed, SidecarProcess};
+use sidecar::{format_elapsed, ResultLimits, SidecarProcess};
 use std::path::{Path, PathBuf};
 
 fn main() {
@@ -2131,6 +2131,10 @@ fn cmd_check(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
         &resolved.password,
         0,
         resolved.project.limits.statement_timeout_ms,
+        ResultLimits {
+            max_rows: resolved.project.limits.max_rows,
+            max_result_bytes: resolved.project.limits.max_result_bytes,
+        },
         false,
     )?;
 
@@ -2209,6 +2213,10 @@ fn cmd_query(
         &resolved.password,
         0,
         resolved.project.limits.statement_timeout_ms,
+        ResultLimits {
+            max_rows: resolved.project.limits.max_rows,
+            max_result_bytes: resolved.project.limits.max_result_bytes,
+        },
         verbose,
     )?;
 
@@ -2321,6 +2329,10 @@ fn cmd_connectivity_action(
         &resolved.password,
         0,
         resolved.project.limits.statement_timeout_ms,
+        ResultLimits {
+            max_rows: resolved.project.limits.max_rows,
+            max_result_bytes: resolved.project.limits.max_result_bytes,
+        },
         false,
     )?;
 
@@ -2367,6 +2379,10 @@ fn cmd_reconnect(
         &resolved.password,
         0,
         resolved.project.limits.statement_timeout_ms,
+        ResultLimits {
+            max_rows: resolved.project.limits.max_rows,
+            max_result_bytes: resolved.project.limits.max_result_bytes,
+        },
         false,
     )?;
 

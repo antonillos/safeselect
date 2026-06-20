@@ -94,10 +94,21 @@ impl SecurityEngine {
     }
 
     fn check_read_only(&self, sql: &str) -> Result<()> {
-        let upper = sql.trim().to_uppercase();
+        let trimmed = sql.trim();
+        let upper = trimmed.to_uppercase();
 
-        if upper.starts_with("SELECT") || upper.starts_with("EXPLAIN") || upper.starts_with("WITH")
-        {
+        if upper.starts_with("WITH") {
+            return Err(SafeselectError::QueryRejected(
+                "Read-only mode: WITH queries are not allowed".into(),
+            ));
+        }
+
+        if upper.starts_with("EXPLAIN") {
+            return self.check_explain_read_only(trimmed);
+        }
+
+        if upper.starts_with("SELECT") {
+            self.check_forbidden_tokens(trimmed)?;
             return Ok(());
         }
 
@@ -118,6 +129,76 @@ impl SecurityEngine {
         Err(SafeselectError::QueryRejected(
             "Read-only mode: unrecognized statement type".into(),
         ))
+    }
+
+    fn check_explain_read_only(&self, sql: &str) -> Result<()> {
+        self.check_forbidden_tokens(sql)?;
+
+        let upper = sql.to_uppercase();
+        if upper.contains("ANALYZE") {
+            return Err(SafeselectError::QueryRejected(
+                "Read-only mode: EXPLAIN ANALYZE is not allowed".into(),
+            ));
+        }
+
+        let explained_sql = extract_explain_target(sql).ok_or_else(|| {
+            SafeselectError::QueryRejected(
+                "Read-only mode: could not validate EXPLAIN target statement".into(),
+            )
+        })?;
+
+        let explained_upper = explained_sql.trim_start().to_uppercase();
+        if !explained_upper.starts_with("SELECT") {
+            return Err(SafeselectError::QueryRejected(
+                "Read-only mode: EXPLAIN is only allowed for SELECT statements".into(),
+            ));
+        }
+
+        self.check_forbidden_tokens(explained_sql)
+    }
+
+    fn check_forbidden_tokens(&self, sql: &str) -> Result<()> {
+        let compact = sanitize_for_keyword_scan(sql);
+        let forbidden = [
+            "INSERT",
+            "UPDATE",
+            "DELETE",
+            "DROP",
+            "CREATE",
+            "ALTER",
+            "TRUNCATE",
+            "COPY",
+            "PREPARE",
+            "EXECUTE",
+            "CALL",
+            "MERGE",
+            "REPLACE",
+            "GRANT",
+            "REVOKE",
+            "WITH",
+            "DO",
+            "DECLARE",
+            "LOCK",
+            "VACUUM",
+            "REINDEX",
+            "ANALYZE",
+        ];
+
+        for keyword in forbidden {
+            if contains_keyword(&compact, keyword) {
+                return Err(SafeselectError::QueryRejected(format!(
+                    "Read-only mode: {keyword} not allowed"
+                )));
+            }
+        }
+
+        if contains_keyword(&compact, "SET") || compact.contains("SETROLE") {
+            return Err(SafeselectError::QueryRejected(
+                "Read-only mode: session changes are not allowed".into(),
+            ));
+        }
+
+        Ok(())
     }
 
     fn check_allowed_schemas(&self, sql: &str) -> Result<()> {
@@ -364,6 +445,128 @@ fn count_statements(sql: &str) -> usize {
     count + 1
 }
 
+fn sanitize_for_keyword_scan(sql: &str) -> String {
+    let mut out = String::with_capacity(sql.len());
+    let chars: Vec<char> = sql.chars().collect();
+    let mut i = 0;
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut in_line_comment = false;
+    let mut in_block_comment = false;
+
+    while i < chars.len() {
+        let c = chars[i];
+
+        if in_line_comment {
+            if c == '\n' {
+                in_line_comment = false;
+                out.push(' ');
+            }
+            i += 1;
+            continue;
+        }
+
+        if in_block_comment {
+            if c == '*' && i + 1 < chars.len() && chars[i + 1] == '/' {
+                in_block_comment = false;
+                i += 2;
+                out.push(' ');
+                continue;
+            }
+            i += 1;
+            continue;
+        }
+
+        if in_single {
+            if c == '\'' {
+                if i + 1 < chars.len() && chars[i + 1] == '\'' {
+                    i += 2;
+                    continue;
+                }
+                in_single = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        if in_double {
+            if c == '"' {
+                in_double = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        if c == '-' && i + 1 < chars.len() && chars[i + 1] == '-' {
+            in_line_comment = true;
+            i += 2;
+            continue;
+        }
+
+        if c == '/' && i + 1 < chars.len() && chars[i + 1] == '*' {
+            in_block_comment = true;
+            i += 2;
+            continue;
+        }
+
+        if c == '\'' {
+            in_single = true;
+            out.push(' ');
+            i += 1;
+            continue;
+        }
+
+        if c == '"' {
+            in_double = true;
+            out.push(' ');
+            i += 1;
+            continue;
+        }
+
+        if c.is_ascii_alphanumeric() || c == '_' {
+            out.push(c.to_ascii_uppercase());
+        } else {
+            out.push(' ');
+        }
+
+        i += 1;
+    }
+
+    out
+}
+
+fn contains_keyword(sql: &str, keyword: &str) -> bool {
+    sql.split_whitespace().any(|token| token == keyword)
+}
+
+fn extract_explain_target(sql: &str) -> Option<&str> {
+    let trimmed = sql.trim_start();
+    let upper = trimmed.to_uppercase();
+    if !upper.starts_with("EXPLAIN") {
+        return None;
+    }
+
+    let after_explain = trimmed.get(7..)?.trim_start();
+    if after_explain.starts_with('(') {
+        let mut depth = 0usize;
+        for (idx, ch) in after_explain.char_indices() {
+            match ch {
+                '(' => depth += 1,
+                ')' => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return after_explain.get(idx + 1..).map(str::trim_start);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    } else {
+        Some(after_explain)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -410,6 +613,38 @@ mod tests {
     }
 
     #[test]
+    fn test_read_only_with_rejected() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        assert!(engine
+            .check_read_only("WITH x AS (SELECT 1) SELECT * FROM x")
+            .is_err());
+    }
+
+    #[test]
+    fn test_read_only_explain_analyze_rejected() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        assert!(engine
+            .check_read_only("EXPLAIN ANALYZE DELETE FROM users")
+            .is_err());
+    }
+
+    #[test]
+    fn test_read_only_explain_delete_rejected() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        assert!(engine
+            .check_read_only("EXPLAIN DELETE FROM users")
+            .is_err());
+    }
+
+    #[test]
+    fn test_read_only_select_with_delete_in_string_allowed() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        assert!(engine
+            .check_read_only("SELECT 'DELETE FROM users' AS sample")
+            .is_ok());
+    }
+
+    #[test]
     fn test_read_only_delete_rejected() {
         let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
         let sql = "DELETE FROM users";
@@ -433,14 +668,6 @@ mod tests {
     fn test_with_cte() {
         let sql = "WITH x AS (SELECT 1) SELECT * FROM x";
         assert_eq!(count_statements(sql), 1);
-    }
-
-    #[test]
-    fn test_read_only_with_cte() {
-        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
-        assert!(engine
-            .check_read_only("WITH x AS (SELECT 1) SELECT * FROM x")
-            .is_ok());
     }
 
     #[test]

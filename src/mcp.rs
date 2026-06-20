@@ -5,7 +5,7 @@ use crate::config::{ConfigLoader, EnvironmentConfig, ProjectConfig};
 use crate::diagnostics::{self, DiagnosticCode, DiagnosticStatus};
 use crate::error::Result;
 use crate::security::SecurityEngine;
-use crate::sidecar::SidecarProcess;
+use crate::sidecar::{ResultLimits, SidecarProcess};
 use crate::{is_ssh_ready_for_query, setup_ssh_tunnels, update_generated_by};
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
@@ -120,7 +120,7 @@ impl McpServer {
 
     fn ensure_sidecar(&mut self) -> Result<&mut SidecarProcess> {
         if self.sidecar.is_some() {
-            return Ok(self.sidecar.as_mut().unwrap());
+            return self.sidecar_mut();
         }
         tracing::info!("Lazy-starting sidecar");
         let sidecar = SidecarProcess::start_with_timeout(
@@ -128,14 +128,24 @@ impl McpServer {
             &self.driver_class,
             &self.db_url,
             &self.db_username,
-            &self.db_password,
-            self.idle_timeout_seconds,
-            self.security.limits().statement_timeout_ms,
-            self.verbose_sidecar,
-        )?;
+                &self.db_password,
+                self.idle_timeout_seconds,
+                self.security.limits().statement_timeout_ms,
+                ResultLimits {
+                    max_rows: self.security.limits().max_rows,
+                    max_result_bytes: self.security.limits().max_result_bytes,
+                },
+                self.verbose_sidecar,
+            )?;
         tracing::info!("Sidecar ready");
         self.sidecar = Some(sidecar);
-        Ok(self.sidecar.as_mut().unwrap())
+        self.sidecar_mut()
+    }
+
+    fn sidecar_mut(&mut self) -> Result<&mut SidecarProcess> {
+        self.sidecar
+            .as_mut()
+            .ok_or(crate::error::SafeselectError::SidecarNotStarted)
     }
 
     pub fn run(&mut self) -> Result<()> {
@@ -907,13 +917,14 @@ impl McpServer {
         let start = std::time::Instant::now();
         tracing::debug!("execute_with_reconnect started");
 
-        if self.ensure_ssh_ready_for_query()? {
+        let ssh_repaired = self.ensure_ssh_ready_for_query()?;
+        if ssh_repaired {
             self.restart_sidecar()?;
         }
         self.ensure_sidecar()?;
         tracing::debug!("Sidecar ensured ({:?})", start.elapsed());
 
-        let result = self.sidecar.as_mut().unwrap().execute(sql);
+        let result = self.sidecar_mut()?.execute(sql);
         tracing::debug!("First execute attempt completed ({:?})", start.elapsed());
 
         if result.is_ok() {
@@ -961,7 +972,7 @@ impl McpServer {
             );
             self.restart_sidecar()?;
             tracing::info!("Sidecar restarted ({:?}), retrying query", start.elapsed());
-            let retry = self.sidecar.as_mut().unwrap().execute(sql);
+            let retry = self.sidecar_mut()?.execute(sql);
             if retry.is_ok() {
                 tracing::info!("{}", DiagnosticCode::RecoveryOk.as_str());
             } else {
@@ -975,7 +986,7 @@ impl McpServer {
                 DiagnosticCode::JdbcReconnectAttempt.as_str(),
                 start.elapsed()
             );
-            let reconnected = self.sidecar.as_mut().unwrap().connect().is_ok();
+            let reconnected = self.sidecar_mut()?.connect().is_ok();
             tracing::debug!("JDBC reconnect completed ({:?})", start.elapsed());
 
             if reconnected {
@@ -986,7 +997,7 @@ impl McpServer {
                     "JDBC reconnect succeeded, retrying query ({:?})",
                     start.elapsed()
                 );
-                let retry = self.sidecar.as_mut().unwrap().execute(sql);
+                let retry = self.sidecar_mut()?.execute(sql);
                 if retry.is_ok() {
                     tracing::info!("{}", DiagnosticCode::RecoveryOk.as_str());
                 } else {
@@ -1001,7 +1012,7 @@ impl McpServer {
                 );
                 self.restart_sidecar()?;
                 tracing::info!("Sidecar restarted ({:?}), retrying query", start.elapsed());
-                let retry = self.sidecar.as_mut().unwrap().execute(sql);
+                let retry = self.sidecar_mut()?.execute(sql);
                 if retry.is_ok() {
                     tracing::info!("{}", DiagnosticCode::RecoveryOk.as_str());
                 } else {
@@ -1021,7 +1032,7 @@ impl McpServer {
         };
 
         if is_ssh_ready_for_query(ssh, &resolved.environment.database.url) {
-            return Ok(true);
+            return Ok(false);
         }
 
         tracing::warn!(
@@ -1062,7 +1073,11 @@ impl McpServer {
             &self.db_password,
             self.idle_timeout_seconds,
             self.security.limits().statement_timeout_ms,
-            false,
+            ResultLimits {
+                max_rows: self.security.limits().max_rows,
+                max_result_bytes: self.security.limits().max_result_bytes,
+            },
+            self.verbose_sidecar,
         )?;
         tracing::info!("Sidecar restarted successfully");
         self.sidecar = Some(sidecar);
@@ -2795,5 +2810,14 @@ mod tests {
         let err = build_explain_sql("SELECT * FROM users", &args).unwrap_err();
 
         assert_eq!(err, "Unsupported explain format: xml");
+    }
+
+    #[test]
+    fn build_explain_sql_still_wraps_analyze_requests() {
+        let args = serde_json::json!({ "analyze": true });
+
+        let sql = build_explain_sql("SELECT * FROM users", &args).unwrap();
+
+        assert_eq!(sql, "EXPLAIN (ANALYZE, FORMAT JSON) SELECT * FROM users");
     }
 }

@@ -157,7 +157,7 @@ Configuration and setup tools available through MCP:
 | `import_compose` | Scan docker-compose files and import PostgreSQL services | `scan_path` (optional) |
 | `uninstall` | Remove SafeSelect binary/config/data/audit/keychain | `confirm: true` |
 
-Setup mode tools (available when no `.safeselect/` found — `safeselect serve --setup`):
+Setup mode tools (available when no `.safeselect/` is found and `safeselect serve --environment <env>` enters setup mode automatically):
 
 | Tool | Description | Arguments |
 |---|---|---|
