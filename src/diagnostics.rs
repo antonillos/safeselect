@@ -36,6 +36,12 @@ pub enum DiagnosticCode {
     QuerySelectOneOk,
     QuerySelectOneFailed,
     AllChecksPassed,
+    ConnectionLost,
+    SshTunnelRecoveryAttempt,
+    JdbcReconnectAttempt,
+    SidecarRestartAttempt,
+    RecoveryOk,
+    RecoveryFailed,
 }
 
 impl DiagnosticCode {
@@ -58,6 +64,12 @@ impl DiagnosticCode {
             Self::QuerySelectOneOk => "SAFESELECT_QUERY_SELECT_ONE_OK",
             Self::QuerySelectOneFailed => "SAFESELECT_QUERY_SELECT_ONE_FAILED",
             Self::AllChecksPassed => "SAFESELECT_ALL_CHECKS_PASSED",
+            Self::ConnectionLost => "SAFESELECT_CONNECTION_LOST",
+            Self::SshTunnelRecoveryAttempt => "SAFESELECT_SSH_TUNNEL_RECOVERY_ATTEMPT",
+            Self::JdbcReconnectAttempt => "SAFESELECT_JDBC_RECONNECT_ATTEMPT",
+            Self::SidecarRestartAttempt => "SAFESELECT_SIDECAR_RESTART_ATTEMPT",
+            Self::RecoveryOk => "SAFESELECT_RECOVERY_OK",
+            Self::RecoveryFailed => "SAFESELECT_RECOVERY_FAILED",
         }
     }
 }

@@ -264,8 +264,22 @@ public class Main {
 
     private static void handleConnect(PrintWriter writer, Object id) throws Exception {
         if (connection != null && !connection.isClosed()) {
-            sendResponse(writer, id, Map.of("status", "already_connected"), null);
-            return;
+            try {
+                if (connection.isValid(2)) {
+                    sendResponse(writer, id, Map.of("status", "already_connected"), null);
+                    return;
+                }
+                error("Existing JDBC connection is not valid; reconnecting");
+            } catch (SQLException e) {
+                error("JDBC validation failed before reconnect: " + e.getMessage());
+            }
+
+            try {
+                connection.close();
+            } catch (SQLException e) {
+                error("Error closing stale JDBC connection: " + e.getMessage());
+            }
+            connection = null;
         }
         connection = DriverManager.getConnection(jdbcUrl, user, password);
         applyStatementTimeout();
