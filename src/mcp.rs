@@ -861,25 +861,59 @@ impl McpServer {
             return result;
         }
 
-        // Check if the error was a timeout (sidecar didn't respond)
-        let is_timeout = result.as_ref().err().map_or(false, |e| {
-            let msg = e.to_string();
-            msg.contains("did not respond within") || msg.contains("poll error")
-        });
+        let err_message = result
+            .as_ref()
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        let is_timeout = is_sidecar_timeout(&err_message);
+        let is_recoverable = is_timeout || is_recoverable_connection_error(&err_message);
+
+        if !is_recoverable {
+            tracing::warn!(
+                "First execute failed with non-recoverable error ({:?}): {}",
+                start.elapsed(),
+                err_message
+            );
+            return result;
+        }
+
+        tracing::warn!(
+            "{}: connection lost during execute ({:?}): {}",
+            DiagnosticCode::ConnectionLost.as_str(),
+            start.elapsed(),
+            err_message
+        );
+
+        tracing::info!(
+            "{}: attempting SSH tunnel recovery",
+            DiagnosticCode::SshTunnelRecoveryAttempt.as_str()
+        );
+        if let Err(e) = setup_ssh_tunnels(&self.repo_root, &[self.env_name.clone()]) {
+            tracing::warn!("SSH tunnel recovery attempt failed: {e}");
+        }
 
         if is_timeout {
             // Sidecar is hung, do full restart immediately
             tracing::warn!(
-                "Execute timed out — restarting sidecar process immediately ({:?})",
+                "{}: execute timed out — restarting sidecar process immediately ({:?})",
+                DiagnosticCode::SidecarRestartAttempt.as_str(),
                 start.elapsed()
             );
             self.restart_sidecar()?;
             tracing::info!("Sidecar restarted ({:?}), retrying query", start.elapsed());
-            self.sidecar.as_mut().unwrap().execute(sql)
+            let retry = self.sidecar.as_mut().unwrap().execute(sql);
+            if retry.is_ok() {
+                tracing::info!("{}", DiagnosticCode::RecoveryOk.as_str());
+            } else {
+                tracing::warn!("{}", DiagnosticCode::RecoveryFailed.as_str());
+            }
+            retry
         } else {
             // Other error, try JDBC reconnect first
             tracing::warn!(
-                "First execute failed ({:?}), attempting JDBC reconnect",
+                "{}: first execute failed ({:?}), attempting JDBC reconnect",
+                DiagnosticCode::JdbcReconnectAttempt.as_str(),
                 start.elapsed()
             );
             let reconnected = self.sidecar.as_mut().unwrap().connect().is_ok();
@@ -893,15 +927,28 @@ impl McpServer {
                     "JDBC reconnect succeeded, retrying query ({:?})",
                     start.elapsed()
                 );
-                self.sidecar.as_mut().unwrap().execute(sql)
+                let retry = self.sidecar.as_mut().unwrap().execute(sql);
+                if retry.is_ok() {
+                    tracing::info!("{}", DiagnosticCode::RecoveryOk.as_str());
+                } else {
+                    tracing::warn!("{}", DiagnosticCode::RecoveryFailed.as_str());
+                }
+                retry
             } else {
                 tracing::warn!(
-                    "Execute + reconnect both failed — restarting sidecar process ({:?})",
+                    "{}: execute + reconnect both failed — restarting sidecar process ({:?})",
+                    DiagnosticCode::SidecarRestartAttempt.as_str(),
                     start.elapsed()
                 );
                 self.restart_sidecar()?;
                 tracing::info!("Sidecar restarted ({:?}), retrying query", start.elapsed());
-                self.sidecar.as_mut().unwrap().execute(sql)
+                let retry = self.sidecar.as_mut().unwrap().execute(sql);
+                if retry.is_ok() {
+                    tracing::info!("{}", DiagnosticCode::RecoveryOk.as_str());
+                } else {
+                    tracing::warn!("{}", DiagnosticCode::RecoveryFailed.as_str());
+                }
+                retry
             }
         }
     }
@@ -2579,6 +2626,27 @@ fn write_setup_response(resp: &JsonRpcResponse) -> Result<()> {
     writeln!(writer, "{line}")?;
     writer.flush()?;
     Ok(())
+}
+
+fn is_sidecar_timeout(message: &str) -> bool {
+    message.contains("did not respond within") || message.contains("poll error")
+}
+
+fn is_recoverable_connection_error(message: &str) -> bool {
+    let msg = message.to_lowercase();
+    msg.contains("sql_error")
+        || msg.contains("sqlstate 08")
+        || msg.contains("sql_state\":\"08")
+        || msg.contains("08006")
+        || msg.contains("08001")
+        || msg.contains("57p01")
+        || msg.contains("connection refused")
+        || msg.contains("connection is closed")
+        || msg.contains("broken pipe")
+        || msg.contains("eof")
+        || msg.contains("sidecar process terminated")
+        || msg.contains("not_connected")
+        || msg.contains("database not connected")
 }
 
 fn is_valid_identifier(s: &str) -> bool {

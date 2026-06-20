@@ -2140,6 +2140,21 @@ fn cmd_query(
         }
     };
 
+    let security = security::SecurityEngine::new(
+        resolved.project.security.clone(),
+        resolved.project.limits.clone(),
+    );
+    security.validate(&sql)?;
+
+    if resolved
+        .environment
+        .ssh
+        .as_ref()
+        .is_some_and(|ssh| ssh.enabled)
+    {
+        setup_ssh_tunnels(repo_root, &[environment.to_string()])?;
+    }
+
     let mut sidecar = SidecarProcess::start_with_timeout(
         &resolved.driver.path,
         &resolved.driver.class,
@@ -2150,12 +2165,6 @@ fn cmd_query(
         resolved.project.limits.statement_timeout_ms,
         verbose,
     )?;
-
-    let security = security::SecurityEngine::new(
-        resolved.project.security.clone(),
-        resolved.project.limits.clone(),
-    );
-    security.validate(&sql)?;
 
     let result = sidecar.execute(&sql)?;
     security.check_result_size(result.row_count, result.byte_count)?;
