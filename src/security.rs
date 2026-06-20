@@ -192,6 +192,34 @@ impl SecurityEngine {
             }
         }
 
+        let forbidden_functions = [
+            "SET_CONFIG",
+            "PG_SLEEP",
+            "PG_ADVISORY_LOCK",
+            "PG_ADVISORY_XACT_LOCK",
+            "PG_CREATE_PHYSICAL_REPLICATION_SLOT",
+            "PG_CREATE_LOGICAL_REPLICATION_SLOT",
+            "PG_DROP_REPLICATION_SLOT",
+            "PG_TERMINATE_BACKEND",
+            "PG_CANCEL_BACKEND",
+            "PG_RELOAD_CONF",
+            "PG_ROTATE_LOGFILE",
+            "PG_START_BACKUP",
+            "PG_STOP_BACKUP",
+            "LO_IMPORT",
+            "LO_EXPORT",
+            "LO_UNLINK",
+            "NEXTVAL",
+        ];
+
+        for function in forbidden_functions {
+            if compact.contains(function) {
+                return Err(SafeselectError::QueryRejected(format!(
+                    "Read-only mode: function {function} not allowed"
+                )));
+            }
+        }
+
         if contains_keyword(&compact, "SET") || compact.contains("SETROLE") {
             return Err(SafeselectError::QueryRejected(
                 "Read-only mode: session changes are not allowed".into(),
@@ -642,6 +670,20 @@ mod tests {
         assert!(engine
             .check_read_only("SELECT 'DELETE FROM users' AS sample")
             .is_ok());
+    }
+
+    #[test]
+    fn test_read_only_rejects_session_change_function() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        assert!(engine
+            .check_read_only("SELECT set_config('role', 'postgres', false)")
+            .is_err());
+    }
+
+    #[test]
+    fn test_read_only_rejects_sleep_function() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        assert!(engine.check_read_only("SELECT pg_sleep(5)").is_err());
     }
 
     #[test]
