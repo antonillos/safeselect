@@ -214,7 +214,10 @@ impl McpServer {
 
         // Pre-start the sidecar so it's ready before the first query
         tracing::info!("Pre-starting sidecar during initialize (client: {client_name})");
-        if let Err(e) = self.ensure_sidecar() {
+        if let Err(e) = self
+            .ensure_ssh_ready_for_query()
+            .and_then(|()| self.ensure_sidecar())
+        {
             tracing::warn!("Sidecar pre-start failed during initialize: {e}");
         }
 
@@ -819,11 +822,11 @@ impl McpServer {
     }
 
     fn handle_connect(&mut self, id: Option<serde_json::Value>) -> Result<()> {
-        let sidecar = match self.sidecar.as_mut() {
-            Some(s) => s,
-            None => return self.send_error(id, -32000, "Not connected"),
-        };
-        match sidecar.connect() {
+        if let Err(e) = self.ensure_ssh_ready_for_query() {
+            return self.send_error(id, -32000, format!("SSH tunnel is not ready: {e}"));
+        }
+
+        match self.restart_sidecar() {
             Ok(()) => {
                 self.audit.record("CONNECT", "allow", "manual reconnect")?;
                 let resp = JsonRpcResponse {
