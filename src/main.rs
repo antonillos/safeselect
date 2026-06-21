@@ -144,6 +144,10 @@ fn project_display_name(dir: &std::path::Path) -> String {
         .to_string()
 }
 
+fn default_agent_entry_name(project_name: &str, environment: &str) -> String {
+    format!("safeselect-{project_name}-{environment}")
+}
+
 fn cmd_serve(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &str) -> Result<()> {
     let name = project_display_name(repo_root);
     tracing::info!("Loading config for {name}/{environment}");
@@ -751,7 +755,7 @@ fn cmd_agent(action: AgentAction) -> Result<()> {
                             "no .safeselect/ found; use --project or --name to specify".into(),
                         )
                     })?;
-                    format!("{}-{}", project_display_name(&root), environment)
+                    default_agent_entry_name(&project_display_name(&root), &environment)
                 }
             };
 
@@ -780,6 +784,56 @@ fn cmd_agent(action: AgentAction) -> Result<()> {
                 &client,
                 &environment,
                 &entry_name,
+                repo_root.as_deref(),
+                Some(loader.config_dir()),
+                mcp_timeout_ms,
+                local,
+            )
+        }
+        AgentAction::Upgrade {
+            client,
+            name,
+            project,
+            environment,
+            local,
+        } => {
+            let loader = ConfigLoader::new();
+            let (repo_root, _project_dir) = match project {
+                Some(dir) => {
+                    if !dir.join(".safeselect").is_dir() {
+                        return Err(SafeselectError::LocalProjectNotFound(dir.clone()));
+                    }
+                    (Some(dir), ())
+                }
+                None => {
+                    let cwd = std::env::current_dir()?;
+                    (loader.find_local_project(&cwd), ())
+                }
+            };
+
+            let mcp_timeout_ms = if let Some(ref root) = repo_root {
+                let project_file = root.join(".safeselect").join("project.toml");
+                if project_file.exists() {
+                    if let Ok(content) = std::fs::read_to_string(&project_file) {
+                        if let Ok(project) = toml::from_str::<config::ProjectConfig>(&content) {
+                            (project.limits.statement_timeout_ms + 30_000) as u64
+                        } else {
+                            120_000
+                        }
+                    } else {
+                        120_000
+                    }
+                } else {
+                    120_000
+                }
+            } else {
+                120_000
+            };
+
+            agents::upgrade_entry(
+                &client,
+                name.as_deref(),
+                environment.as_deref(),
                 repo_root.as_deref(),
                 Some(loader.config_dir()),
                 mcp_timeout_ms,

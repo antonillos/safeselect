@@ -212,6 +212,13 @@ impl McpServer {
         Ok(())
     }
 
+    fn tool_description(&self, action: &str) -> String {
+        format!(
+            "SafeSelect database query MCP for project '{}' environment '{}': {action}",
+            self.project_name, self.env_name
+        )
+    }
+
     fn handle_initialize(&mut self, msg: &JsonRpcMessage) -> Result<()> {
         let client_name = msg
             .params
@@ -252,7 +259,7 @@ impl McpServer {
                     }
                 },
                 "serverInfo": {
-                    "name": "safeselect",
+                    "name": format!("safeselect-{}-{}", self.project_name, self.env_name),
                     "version": env!("CARGO_PKG_VERSION")
                 }
             })),
@@ -265,7 +272,8 @@ impl McpServer {
         let tools = vec![
             ToolDefinition {
                 name: "select".into(),
-                description: "Execute a SELECT query on the database".into(),
+                description: self
+                    .tool_description("execute a read-only SELECT query on the target database"),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -283,7 +291,8 @@ impl McpServer {
             },
             ToolDefinition {
                 name: "list_tables".into(),
-                description: "List tables in the database, optionally filtered by schema".into(),
+                description: self
+                    .tool_description("list database tables, optionally filtered by schema"),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -296,7 +305,8 @@ impl McpServer {
             },
             ToolDefinition {
                 name: "explain".into(),
-                description: "Show the execution plan for a query; ANALYZE executes the SELECT".into(),
+                description: self
+                    .tool_description("show a query execution plan; ANALYZE executes the SELECT"),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -331,7 +341,8 @@ impl McpServer {
             },
             ToolDefinition {
                 name: "disconnect".into(),
-                description: "Disconnect from the database (closes the JDBC connection)".into(),
+                description: self
+                    .tool_description("disconnect from the database by closing the JDBC connection"),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {}
@@ -339,7 +350,7 @@ impl McpServer {
             },
             ToolDefinition {
                 name: "connect".into(),
-                description: "Reconnect to the database (re-establishes the JDBC connection)".into(),
+                description: self.tool_description("connect or reconnect to the database"),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {}
@@ -347,7 +358,7 @@ impl McpServer {
             },
             ToolDefinition {
                 name: "config_validate".into(),
-                description: "Validate the .safeselect/ configuration".into(),
+                description: self.tool_description("validate the .safeselect configuration"),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -360,7 +371,9 @@ impl McpServer {
             },
             ToolDefinition {
                 name: "config_show".into(),
-                description: "Show the resolved configuration for an environment (secrets redacted)".into(),
+                description: self.tool_description(
+                    "show the resolved database connection configuration for an environment with secrets redacted",
+                ),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -374,7 +387,9 @@ impl McpServer {
             },
             ToolDefinition {
                 name: "config_rename_environment".into(),
-                description: "Rename an environment within the project".into(),
+                description: self.tool_description(
+                    "rename a database environment within the project",
+                ),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -392,7 +407,9 @@ impl McpServer {
             },
             ToolDefinition {
                 name: "config_delete_environment".into(),
-                description: "Delete an environment configuration from the project".into(),
+                description: self.tool_description(
+                    "delete a database environment configuration from the project",
+                ),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -406,7 +423,9 @@ impl McpServer {
             },
             ToolDefinition {
                 name: "config_set_password".into(),
-                description: "Store a database password in the macOS Keychain for an environment".into(),
+                description: self.tool_description(
+                    "store a database password in the macOS Keychain for an environment",
+                ),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -424,7 +443,9 @@ impl McpServer {
             },
             ToolDefinition {
                 name: "config_reset".into(),
-                description: "Reset all environments and their keychain entries for the project".into(),
+                description: self.tool_description(
+                    "reset all database environments and their keychain entries for the project",
+                ),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -438,7 +459,7 @@ impl McpServer {
             },
             ToolDefinition {
                 name: "driver_list".into(),
-                description: "List registered JDBC drivers".into(),
+                description: self.tool_description("list registered JDBC database drivers"),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {}
@@ -446,7 +467,7 @@ impl McpServer {
             },
             ToolDefinition {
                 name: "driver_add".into(),
-                description: "Register a JDBC driver".into(),
+                description: self.tool_description("register a JDBC database driver"),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -472,7 +493,9 @@ impl McpServer {
             },
             ToolDefinition {
                 name: "driver_download".into(),
-                description: "Download and register the official PostgreSQL JDBC driver".into(),
+                description: self.tool_description(
+                    "download and register the official PostgreSQL JDBC database driver",
+                ),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -486,7 +509,9 @@ impl McpServer {
             },
             ToolDefinition {
                 name: "agent_detect".into(),
-                description: "Detect installed MCP clients on this system".into(),
+                description: self.tool_description(
+                    "detect installed MCP clients that can use database query tools on this system",
+                ),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {}
@@ -494,7 +519,9 @@ impl McpServer {
             },
             ToolDefinition {
                 name: "agent_install".into(),
-                description: "Install a safeselect MCP entry for a client".into(),
+                description: self.tool_description(
+                    "install a SafeSelect database query MCP entry for a client",
+                ),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -508,7 +535,7 @@ impl McpServer {
                         },
                         "name": {
                             "type": "string",
-                            "description": "Entry name (optional, defaults to '<project-dir>-<environment>')"
+                            "description": "Entry name (optional, defaults to 'safeselect-<project-dir>-<environment>')"
                         }
                     },
                     "required": ["client", "environment"]
@@ -516,7 +543,9 @@ impl McpServer {
             },
             ToolDefinition {
                 name: "agent_uninstall".into(),
-                description: "Uninstall a safeselect MCP entry from a client".into(),
+                description: self.tool_description(
+                    "uninstall a SafeSelect database query MCP entry from a client",
+                ),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -534,7 +563,9 @@ impl McpServer {
             },
             ToolDefinition {
                 name: "agent_status".into(),
-                description: "Show safeselect installation status for all MCP clients".into(),
+                description: self.tool_description(
+                    "show SafeSelect database query MCP installation status for all clients",
+                ),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {}
@@ -542,7 +573,9 @@ impl McpServer {
             },
             ToolDefinition {
                 name: "import_compose".into(),
-                description: "Scan docker-compose files for PostgreSQL services and import into .safeselect/".into(),
+                description: self.tool_description(
+                    "scan docker-compose files for PostgreSQL database services and import them into .safeselect",
+                ),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -555,7 +588,9 @@ impl McpServer {
             },
             ToolDefinition {
                 name: "check".into(),
-                description: "Check database connectivity by starting the sidecar and running a ping".into(),
+                description: self.tool_description(
+                    "check database connectivity by starting the sidecar and running a test query",
+                ),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {}
@@ -563,7 +598,9 @@ impl McpServer {
             },
             ToolDefinition {
                 name: "uninstall".into(),
-                description: "Uninstall safeselect (binary, config, data, audit, keychain)".into(),
+                description: self.tool_description(
+                    "uninstall SafeSelect database query tooling, config, data, audit, and keychain entries",
+                ),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -577,7 +614,9 @@ impl McpServer {
             },
             ToolDefinition {
                 name: "reconnect".into(),
-                description: "Restart the sidecar process and verify the database connection with a test query".into(),
+                description: self.tool_description(
+                    "restart the sidecar process and verify database connectivity with a test query",
+                ),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {}
@@ -1664,7 +1703,7 @@ impl McpServer {
 
         let entry_name = match name {
             Some(n) => n,
-            None => format!("{}-{environment}", self.project_name),
+            None => format!("safeselect-{}-{environment}", self.project_name),
         };
 
         let repo_root = self.repo_root.clone();
