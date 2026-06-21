@@ -93,8 +93,38 @@ impl SecurityEngine {
         Ok(())
     }
 
+    fn strip_sql_comments(sql: &str) -> String {
+        let mut result = String::with_capacity(sql.len());
+        let mut chars = sql.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if ch == '-' && chars.peek() == Some(&'-') {
+                // Line comment: skip until newline
+                for c in chars.by_ref() {
+                    if c == '\n' {
+                        result.push('\n');
+                        break;
+                    }
+                }
+            } else if ch == '/' && chars.peek() == Some(&'*') {
+                // Block comment: skip until */
+                chars.next(); // consume '*'
+                let mut prev = ' ';
+                for c in chars.by_ref() {
+                    if prev == '*' && c == '/' {
+                        break;
+                    }
+                    prev = c;
+                }
+            } else {
+                result.push(ch);
+            }
+        }
+        result
+    }
+
     fn check_read_only(&self, sql: &str) -> Result<()> {
-        let trimmed = sql.trim();
+        let stripped = Self::strip_sql_comments(sql);
+        let trimmed = stripped.trim();
         let upper = trimmed.to_uppercase();
 
         if upper.starts_with("WITH") {
@@ -705,6 +735,27 @@ mod tests {
     fn test_read_only_drop_rejected() {
         let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
         let sql = "DROP TABLE users";
+        assert!(engine.check_read_only(sql).is_err());
+    }
+
+    #[test]
+    fn test_read_only_select_with_leading_line_comment() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        let sql = "-- Valid sampleId for timing tests\nSELECT id FROM users LIMIT 1";
+        assert!(engine.check_read_only(sql).is_ok());
+    }
+
+    #[test]
+    fn test_read_only_select_with_block_comment() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        let sql = "/* get sample */ SELECT id FROM users";
+        assert!(engine.check_read_only(sql).is_ok());
+    }
+
+    #[test]
+    fn test_read_only_dml_hidden_behind_comment_rejected() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        let sql = "-- comment\nDELETE FROM users";
         assert!(engine.check_read_only(sql).is_err());
     }
 
