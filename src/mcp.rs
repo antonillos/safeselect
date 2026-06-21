@@ -715,10 +715,12 @@ impl McpServer {
                 let elapsed = start.elapsed();
                 tracing::error!("Query failed after {elapsed:?}: {e}");
                 self.audit.record("JDBC_ERROR", "error", sql)?;
-                self.write_response(&tool_error_response(
+                let _ = self.write_response(&tool_error_response(
                     id,
                     format!("Query execution failed: {e}"),
-                ))
+                ));
+                self.fail_closed("JDBC error");
+                Ok(())
             }
         }
     }
@@ -799,7 +801,12 @@ impl McpServer {
             }
             Err(e) => {
                 self.audit.record("JDBC_ERROR", "error", &sql)?;
-                self.write_response(&tool_error_response(id, format!("Query failed: {e}")))
+                let _ = self.write_response(&tool_error_response(
+                    id,
+                    format!("Query failed: {e}"),
+                ));
+                self.fail_closed("JDBC error");
+                Ok(())
             }
         }
     }
@@ -853,7 +860,9 @@ impl McpServer {
             }
             Err(e) => {
                 self.audit.record("JDBC_ERROR", "error", sql)?;
-                self.send_error(id, -32000, format!("Explain failed: {e}"))
+                let _ = self.send_error(id, -32000, format!("Explain failed: {e}"));
+                self.fail_closed("JDBC error");
+                Ok(())
             }
         }
     }
@@ -2121,8 +2130,11 @@ impl McpServer {
         self.write_response(&resp)
     }
 
-    fn fail_closed(&self, reason: &str) {
+    fn fail_closed(&mut self, reason: &str) {
         tracing::error!("FAIL-CLOSED: {reason}");
+        if let Some(mut sidecar) = self.sidecar.take() {
+            sidecar.force_kill_ref();
+        }
         std::process::exit(1);
     }
 
