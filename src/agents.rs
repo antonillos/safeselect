@@ -265,15 +265,13 @@ fn detect_local_client_config(client: &str, repo_root: &Path) -> Option<PathBuf>
     match client {
         "opencode" => {
             let opencode_dir = repo_root.join(".opencode");
-            let jsonc = opencode_dir.join("config.jsonc");
-            let json = opencode_dir.join("config.json");
-            if jsonc.exists() {
-                Some(jsonc)
-            } else if json.exists() {
-                Some(json)
-            } else {
-                None
-            }
+            let candidates = [
+                opencode_dir.join("opencode.jsonc"),
+                opencode_dir.join("opencode.json"),
+                opencode_dir.join("config.jsonc"),
+                opencode_dir.join("config.json"),
+            ];
+            candidates.into_iter().find(|p| p.exists())
         }
         "cursor" => {
             let config = repo_root.join(".cursor").join("settings.json");
@@ -321,20 +319,22 @@ fn get_local_client_config(client: &str, repo_root: Option<&Path>) -> Result<Pat
     let local_path = match client {
         "opencode" => {
             let opencode_dir = root.join(".opencode");
-            let jsonc = opencode_dir.join("config.jsonc");
-            let json = opencode_dir.join("config.json");
-            if jsonc.exists() {
-                jsonc
-            } else if json.exists() {
-                json
+            let candidates = [
+                opencode_dir.join("opencode.jsonc"),
+                opencode_dir.join("opencode.json"),
+                opencode_dir.join("config.jsonc"),
+                opencode_dir.join("config.json"),
+            ];
+            if let Some(existing) = candidates.iter().find(|p| p.exists()) {
+                existing.clone()
             } else {
-                // Create default local config
                 std::fs::create_dir_all(&opencode_dir)?;
                 let default_config = serde_json::json!({
                     "mcp": {}
                 });
-                std::fs::write(&jsonc, serde_json::to_string_pretty(&default_config)?)?;
-                jsonc
+                let target = opencode_dir.join("opencode.jsonc");
+                std::fs::write(&target, serde_json::to_string_pretty(&default_config)?)?;
+                target
             }
         }
         "cursor" => {
