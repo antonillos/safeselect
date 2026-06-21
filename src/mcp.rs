@@ -719,9 +719,7 @@ impl McpServer {
                     .check_result_size(query_result.row_count, query_result.byte_count)
                 {
                     self.audit.record("LIMIT_EXCEEDED", "reject", sql)?;
-                    let _ = self.send_error(id, -32000, format!("{e}"));
-                    self.fail_closed("Limit exceeded");
-                    return Ok(());
+                    return self.send_error(id, -32000, format!("{e}"));
                 }
                 self.audit.record("PASS", "allow", sql)?;
                 let elapsed = start.elapsed();
@@ -763,12 +761,10 @@ impl McpServer {
                 let elapsed = start.elapsed();
                 tracing::error!("Query failed after {elapsed:?}: {e}");
                 self.audit.record("JDBC_ERROR", "error", sql)?;
-                let _ = self.write_response(&tool_error_response(
+                self.write_response(&tool_error_response(
                     id,
                     format!("Query execution failed: {e}"),
-                ));
-                self.fail_closed("JDBC error");
-                Ok(())
+                ))
             }
         }
     }
@@ -857,12 +853,10 @@ impl McpServer {
             }
             Err(e) => {
                 self.audit.record("JDBC_ERROR", "error", &sql)?;
-                let _ = self.write_response(&tool_error_response(
+                self.write_response(&tool_error_response(
                     id,
                     format!("Query failed: {e}"),
-                ));
-                self.fail_closed("JDBC error");
-                Ok(())
+                ))
             }
         }
     }
@@ -921,9 +915,7 @@ impl McpServer {
             }
             Err(e) => {
                 self.audit.record("JDBC_ERROR", "error", sql)?;
-                let _ = self.send_error(id, -32000, format!("Explain failed: {e}"));
-                self.fail_closed("JDBC error");
-                Ok(())
+                self.send_error(id, -32000, format!("Explain failed: {e}"))
             }
         }
     }
