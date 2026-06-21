@@ -35,6 +35,9 @@ pub enum SafeselectError {
     #[error("Sidecar error: {0}")]
     Sidecar(String),
 
+    #[error("SQL execution failed: {0}")]
+    SqlError(String),
+
     #[error("Sidecar not started")]
     SidecarNotStarted,
 

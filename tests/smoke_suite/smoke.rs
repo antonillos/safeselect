@@ -37,7 +37,7 @@ pub fn run() {
         assert_check_ok(&repo_root, &config_dir);
         assert_select_ok(&repo_root, &config_dir);
         assert_sql_error_visible(&repo_root, &config_dir);
-        assert_mcp_sql_error_fails_closed(&repo_root, &config_dir);
+        assert_mcp_sql_error_stays_alive(&repo_root, &config_dir);
         assert_security_rejection_visible(&repo_root, &config_dir);
         assert_result_limit_visible(&repo_root, &config_dir);
         assert_timeout_control_visible(&repo_root, &config_dir);
@@ -84,7 +84,7 @@ fn assert_sql_error_visible(repo_root: &std::path::Path, config_dir: &std::path:
     );
 }
 
-fn assert_mcp_sql_error_fails_closed(repo_root: &std::path::Path, config_dir: &std::path::Path) {
+fn assert_mcp_sql_error_stays_alive(repo_root: &std::path::Path, config_dir: &std::path::Path) {
     let project_config = repo_root.join(".safeselect/project.toml");
     let config = std::fs::read_to_string(&project_config).unwrap();
     std::fs::write(&project_config, config.replace("enabled = false", "enabled = true"))
@@ -155,6 +155,7 @@ fn assert_mcp_sql_error_fails_closed(repo_root: &std::path::Path, config_dir: &s
     .unwrap();
     stdin.flush().unwrap();
 
+    // First query: intentional SQL error (table does not exist)
     writeln!(
         stdin,
         "{}",
@@ -173,54 +174,63 @@ fn assert_mcp_sql_error_fails_closed(repo_root: &std::path::Path, config_dir: &s
     .unwrap();
     stdin.flush().unwrap();
 
-    let mut response = String::new();
+    let mut error_response = String::new();
     reader
-        .read_line(&mut response)
-        .expect("failed to read MCP response");
+        .read_line(&mut error_response)
+        .expect("failed to read MCP error response");
 
-    if response.is_empty() {
+    if error_response.is_empty() {
         let mut stderr = String::new();
         if let Some(mut stream) = child.stderr.take() {
             let _ = stream.read_to_string(&mut stderr);
         }
-        panic!("MCP server exited without SQL error response, stderr: {stderr}");
+        panic!("MCP server exited on SQL error instead of staying alive, stderr: {stderr}");
     }
 
     assert!(
-        response.contains("Query execution failed")
-            && response.contains("SQL execution failed [SQL_ERROR]")
-            && response.contains("does not exist"),
-        "SQL error was not visible enough in MCP response: {response}"
+        error_response.contains("Query execution failed")
+            && error_response.contains("SQL execution failed [SQL_ERROR]")
+            && error_response.contains("does not exist"),
+        "SQL error was not visible in MCP response: {error_response}"
     );
 
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let mut status = None;
-    while Instant::now() < deadline {
-        if let Some(exit_status) = child.try_wait().unwrap() {
-            status = Some(exit_status);
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
+    // Server must still be alive after a SQL error
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "MCP server exited after a SQL error — it must stay alive for user SQL mistakes"
+    );
 
-    if status.is_none() {
-        let _ = child.kill();
-    }
+    // Second query: valid SELECT to confirm the server is still serving
+    writeln!(
+        stdin,
+        "{}",
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {
+                "name": "select",
+                "arguments": {
+                    "sql": "SELECT 1 AS ok"
+                }
+            }
+        })
+    )
+    .unwrap();
+    stdin.flush().unwrap();
 
-    let mut stderr = String::new();
-    if let Some(mut stream) = child.stderr.take() {
-        let _ = stream.read_to_string(&mut stderr);
-    }
-    let status = status.unwrap_or_else(|| child.wait().unwrap());
+    let mut ok_response = String::new();
+    reader
+        .read_line(&mut ok_response)
+        .expect("failed to read follow-up MCP response");
 
     assert!(
-        !status.success(),
-        "MCP server should fail closed after SQL error, status: {status}, stderr: {stderr}"
+        !ok_response.is_empty() && ok_response.contains("ok"),
+        "MCP server did not respond to follow-up query after SQL error: {ok_response}"
     );
-    assert!(
-        stderr.contains("FAIL-CLOSED: JDBC error"),
-        "MCP server did not report fail-closed after SQL error, stderr: {stderr}"
-    );
+
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 fn assert_security_rejection_visible(repo_root: &std::path::Path, config_dir: &std::path::Path) {
