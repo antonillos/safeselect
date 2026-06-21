@@ -7,7 +7,6 @@
 use super::postgres;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
 
 pub fn run() {
     if std::env::var("SAFESELECT_REAL_SMOKE_TEST").is_err() {
