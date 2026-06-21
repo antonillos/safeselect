@@ -5,6 +5,9 @@
 //! requires PostgreSQL and downloads/registers a JDBC driver in a temp config.
 
 use super::postgres;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 pub fn run() {
     if std::env::var("SAFESELECT_REAL_SMOKE_TEST").is_err() {
@@ -34,6 +37,7 @@ pub fn run() {
         assert_check_ok(&repo_root, &config_dir);
         assert_select_ok(&repo_root, &config_dir);
         assert_sql_error_visible(&repo_root, &config_dir);
+        assert_mcp_sql_error_fails_closed(&repo_root, &config_dir);
         assert_security_rejection_visible(&repo_root, &config_dir);
         assert_result_limit_visible(&repo_root, &config_dir);
         assert_timeout_control_visible(&repo_root, &config_dir);
@@ -77,6 +81,145 @@ fn assert_sql_error_visible(repo_root: &std::path::Path, config_dir: &std::path:
             && stderr.contains("SQL execution failed [SQL_ERROR]")
             && stderr.contains("does not exist"),
         "SQL error was not visible enough\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+}
+
+fn assert_mcp_sql_error_fails_closed(repo_root: &std::path::Path, config_dir: &std::path::Path) {
+    let project_config = repo_root.join(".safeselect/project.toml");
+    let config = std::fs::read_to_string(&project_config).unwrap();
+    std::fs::write(&project_config, config.replace("enabled = false", "enabled = true"))
+        .unwrap();
+
+    let mut child = Command::new(postgres::safeselect_bin())
+        .args([
+            "serve",
+            "--project",
+            repo_root.to_str().unwrap(),
+            "--environment",
+            "testing",
+        ])
+        .env("SAFESELECT_CONFIG_DIR", config_dir)
+        .env("SAFESELECT_SECURITY_TEST_PASSWORD", postgres::TEST_PASSWORD)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to start MCP server");
+
+    let mut stdin = child.stdin.take().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let mut reader = BufReader::new(stdout);
+
+    writeln!(
+        stdin,
+        "{}",
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "clientInfo": {
+                    "name": "safeselect-smoke-test"
+                }
+            }
+        })
+    )
+    .unwrap();
+    stdin.flush().unwrap();
+
+    let mut initialize_response = String::new();
+    reader
+        .read_line(&mut initialize_response)
+        .expect("failed to read MCP initialize response");
+    if initialize_response.is_empty() {
+        let mut stderr = String::new();
+        if let Some(mut stream) = child.stderr.take() {
+            let _ = stream.read_to_string(&mut stderr);
+        }
+        panic!("MCP server exited without initialize response, stderr: {stderr}");
+    }
+    assert!(
+        initialize_response.contains("safeselect"),
+        "unexpected MCP initialize response: {initialize_response}"
+    );
+
+    writeln!(
+        stdin,
+        "{}",
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized"
+        })
+    )
+    .unwrap();
+    stdin.flush().unwrap();
+
+    writeln!(
+        stdin,
+        "{}",
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "select",
+                "arguments": {
+                    "sql": "SELECT * FROM public.table_that_does_not_exist"
+                }
+            }
+        })
+    )
+    .unwrap();
+    stdin.flush().unwrap();
+
+    let mut response = String::new();
+    reader
+        .read_line(&mut response)
+        .expect("failed to read MCP response");
+
+    if response.is_empty() {
+        let mut stderr = String::new();
+        if let Some(mut stream) = child.stderr.take() {
+            let _ = stream.read_to_string(&mut stderr);
+        }
+        panic!("MCP server exited without SQL error response, stderr: {stderr}");
+    }
+
+    assert!(
+        response.contains("Query execution failed")
+            && response.contains("SQL execution failed [SQL_ERROR]")
+            && response.contains("does not exist"),
+        "SQL error was not visible enough in MCP response: {response}"
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut status = None;
+    while Instant::now() < deadline {
+        if let Some(exit_status) = child.try_wait().unwrap() {
+            status = Some(exit_status);
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    if status.is_none() {
+        let _ = child.kill();
+    }
+
+    let mut stderr = String::new();
+    if let Some(mut stream) = child.stderr.take() {
+        let _ = stream.read_to_string(&mut stderr);
+    }
+    let status = status.unwrap_or_else(|| child.wait().unwrap());
+
+    assert!(
+        !status.success(),
+        "MCP server should fail closed after SQL error, status: {status}, stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("FAIL-CLOSED: JDBC error"),
+        "MCP server did not report fail-closed after SQL error, stderr: {stderr}"
     );
 }
 
