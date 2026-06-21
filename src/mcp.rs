@@ -3,7 +3,7 @@ use crate::audit::AuditLog;
 use crate::compose;
 use crate::config::{ConfigLoader, EnvironmentConfig, ProjectConfig};
 use crate::diagnostics::{self, DiagnosticCode, DiagnosticStatus};
-use crate::error::Result;
+use crate::error::{Result, SafeselectError};
 use crate::security::SecurityEngine;
 use crate::sidecar::{ResultLimits, SidecarProcess};
 use crate::{is_ssh_ready_for_query, setup_ssh_tunnels, update_generated_by};
@@ -750,6 +750,15 @@ impl McpServer {
                 };
                 self.write_response(&resp)
             }
+            Err(SafeselectError::SqlError(ref msg)) => {
+                let elapsed = start.elapsed();
+                tracing::warn!("Query SQL error after {elapsed:?}: {msg}");
+                self.audit.record("JDBC_ERROR", "error", sql)?;
+                self.write_response(&tool_error_response(
+                    id,
+                    format!("Query execution failed: {msg}"),
+                ))
+            }
             Err(e) => {
                 let elapsed = start.elapsed();
                 tracing::error!("Query failed after {elapsed:?}: {e}");
@@ -838,6 +847,14 @@ impl McpServer {
                 };
                 self.write_response(&resp)
             }
+            Err(SafeselectError::SqlError(ref msg)) => {
+                tracing::warn!("List tables SQL error: {msg}");
+                self.audit.record("JDBC_ERROR", "error", &sql)?;
+                self.write_response(&tool_error_response(
+                    id,
+                    format!("Query failed: {msg}"),
+                ))
+            }
             Err(e) => {
                 self.audit.record("JDBC_ERROR", "error", &sql)?;
                 let _ = self.write_response(&tool_error_response(
@@ -896,6 +913,11 @@ impl McpServer {
                     error: None,
                 };
                 self.write_response(&resp)
+            }
+            Err(SafeselectError::SqlError(ref msg)) => {
+                tracing::warn!("Explain SQL error: {msg}");
+                self.audit.record("JDBC_ERROR", "error", sql)?;
+                self.send_error(id, -32000, format!("Explain failed: {msg}"))
             }
             Err(e) => {
                 self.audit.record("JDBC_ERROR", "error", sql)?;

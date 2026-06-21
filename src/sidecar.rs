@@ -252,6 +252,12 @@ impl SidecarProcess {
         );
 
         if let Some(err) = resp.error {
+            if err.code == "SQL_ERROR" {
+                return Err(SafeselectError::SqlError(format!(
+                    "SQL execution failed [{}]: {}",
+                    err.code, err.message
+                )));
+            }
             return Err(SafeselectError::Sidecar(format!(
                 "SQL execution failed [{}]: {}",
                 err.code, err.message
