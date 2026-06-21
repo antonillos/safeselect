@@ -2276,7 +2276,7 @@ fn cmd_query(
 
     let result = match sidecar.execute(&sql) {
         Ok(result) => result,
-        Err(SafeselectError::Sidecar(message)) => {
+        Err(SafeselectError::SqlError(message)) | Err(SafeselectError::Sidecar(message)) => {
             eprintln!("ERROR: SQL query failed: {message}");
             return Err(SafeselectError::Sidecar(message));
         }
