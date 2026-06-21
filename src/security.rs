@@ -132,15 +132,6 @@ impl SecurityEngine {
     }
 
     fn check_explain_read_only(&self, sql: &str) -> Result<()> {
-        self.check_forbidden_tokens(sql)?;
-
-        let upper = sql.to_uppercase();
-        if upper.contains("ANALYZE") {
-            return Err(SafeselectError::QueryRejected(
-                "Read-only mode: EXPLAIN ANALYZE is not allowed".into(),
-            ));
-        }
-
         let explained_sql = extract_explain_target(sql).ok_or_else(|| {
             SafeselectError::QueryRejected(
                 "Read-only mode: could not validate EXPLAIN target statement".into(),
@@ -181,7 +172,6 @@ impl SecurityEngine {
             "LOCK",
             "VACUUM",
             "REINDEX",
-            "ANALYZE",
         ];
 
         for keyword in forbidden {
@@ -589,10 +579,17 @@ fn extract_explain_target(sql: &str) -> Option<&str> {
                 _ => {}
             }
         }
-        None
-    } else {
-        Some(after_explain)
+        return None;
     }
+
+    let upper_after_explain = after_explain.to_uppercase();
+    for option in ["ANALYZE", "VERBOSE", "BUFFERS", "SETTINGS", "WAL", "TIMING", "SUMMARY"] {
+        if upper_after_explain.starts_with(option) {
+            return after_explain.get(option.len()..).map(str::trim_start);
+        }
+    }
+
+    Some(after_explain)
 }
 
 #[cfg(test)]
@@ -649,7 +646,18 @@ mod tests {
     }
 
     #[test]
-    fn test_read_only_explain_analyze_rejected() {
+    fn test_read_only_explain_analyze_select_allowed() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        assert!(engine
+            .check_read_only("EXPLAIN (ANALYZE, FORMAT JSON) SELECT * FROM users")
+            .is_ok());
+        assert!(engine
+            .check_read_only("EXPLAIN ANALYZE SELECT * FROM users")
+            .is_ok());
+    }
+
+    #[test]
+    fn test_read_only_explain_analyze_delete_rejected() {
         let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
         assert!(engine
             .check_read_only("EXPLAIN ANALYZE DELETE FROM users")
