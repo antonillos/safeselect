@@ -82,7 +82,8 @@ safeselect agent install opencode --environment testing
 | `driver download --vendor postgresql` | Download JDBC driver |
 | `driver add --vendor <v> --path <jar> --class <c>` | Register custom driver |
 | `driver list` | List registered drivers |
-| `agent install <client> --environment <e> [--project <p>] [--name <n>]` | Install MCP entry (name defaults to `<project>-<environment>`) |
+| `agent install <client> --environment <e> [--project <p>] [--name <n>]` | Install MCP entry (name defaults to `safeselect-<project>-<environment>`) |
+| `agent upgrade <client> [--name <n>] [--project <p>] [--environment <e>]` | Upgrade an existing MCP entry, auto-detecting it from the current project when possible |
 | `agent uninstall <client> --name <n>` | Remove MCP entry |
 | `agent detect` | Detect installed MCP clients |
 | `agent status` | Show installation status |

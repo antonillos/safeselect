@@ -31,7 +31,13 @@ Agents should treat SafeSelect as their database boundary:
 safeselect agent detect
 
 # Install in OpenCode
-safeselect agent install opencode --project myapp --environment testing --name myapp-testing
+safeselect agent install opencode --project myapp --environment testing --name safeselect-myapp-testing
+
+# Upgrade from the current project; name auto-detected when unambiguous
+safeselect agent upgrade opencode --environment testing
+
+# Or target a specific existing entry name explicitly
+safeselect agent upgrade opencode --name safeselect-myapp-testing
 
 # Check status
 safeselect agent status
@@ -45,6 +51,13 @@ The installation command:
 5. Writes the new config atomically
 6. Verifies the write
 
+Use `safeselect agent upgrade` when you already have an installed SafeSelect MCP
+entry and want to refresh it after upgrading the SafeSelect binary. By default it
+migrates the entry to the canonical `safeselect-<project>-<environment>` name when
+it can derive the project, and updates the generated MCP config in the same step.
+If `--name` is omitted, SafeSelect resolves the entry from the current project and,
+when needed, the provided `--environment`.
+
 ## Manual MCP Configuration
 
 The installed entry looks like this in your agent's config:
@@ -52,7 +65,7 @@ The installed entry looks like this in your agent's config:
 ```json
 {
   "mcpServers": {
-    "myapp-testing": {
+    "safeselect-myapp-testing": {
       "command": "safeselect",
       "args": ["serve", "--project", "myapp", "--environment", "testing"]
     }

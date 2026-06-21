@@ -74,7 +74,12 @@ safeselect import-compose
 
 safeselect check --environment testing
 safeselect agent install opencode --environment testing
+
+# Later, after upgrading the safeselect binary:
+safeselect agent upgrade opencode --environment testing
 ```
 
 The agent installation writes an MCP stdio entry that runs `safeselect serve` for
 one project and one environment. Agents do not receive raw database passwords.
+`agent upgrade` also migrates older entry names to the canonical
+`safeselect-<project>-<environment>` convention when it can detect the project.

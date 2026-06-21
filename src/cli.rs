@@ -210,10 +210,27 @@ pub enum AgentAction {
         project: Option<PathBuf>,
         #[arg(long)]
         environment: String,
-        /// Entry name (default: <project-dir>-<environment>)
+        /// Entry name (default: safeselect-<project-dir>-<environment>)
         #[arg(long)]
         name: Option<String>,
         /// Install to project-local config instead of global config
+        #[arg(long)]
+        local: bool,
+    },
+    /// Upgrade an existing MCP entry in-place
+    Upgrade {
+        /// Client name (opencode, copilot, cursor, etc.)
+        client: String,
+        /// Existing entry name to upgrade (auto-detected from the current project if omitted)
+        #[arg(long)]
+        name: Option<String>,
+        /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
+        #[arg(long)]
+        project: Option<PathBuf>,
+        /// Environment name to serve (auto-detected from the existing entry if omitted)
+        #[arg(long)]
+        environment: Option<String>,
+        /// Upgrade the project-local config instead of global config
         #[arg(long)]
         local: bool,
     },

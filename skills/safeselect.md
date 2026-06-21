@@ -38,7 +38,10 @@ setup: |
   safeselect driver add --vendor postgresql --path /path/to/postgresql.jar --class org.postgresql.Driver
 
   # Install agent integration
-  safeselect agent install opencode --project myproject --environment testing --name myproject-testing
+  safeselect agent install opencode --project myproject --environment testing --name safeselect-myproject-testing
+
+  # Upgrade from the current project and migrate to the default name
+  safeselect agent upgrade opencode --environment testing
 
   # Import config from DBeaver export or docker-compose
   safeselect import-dbeaver ~/Downloads/dbeaver-export.zip
@@ -58,6 +61,7 @@ commands:
   - safeselect driver add --vendor postgresql --path <jar> --class <class>
   - safeselect agent detect
   - safeselect agent install <client> --project <p> --environment <e> --name <n>
+  - safeselect agent upgrade <client> [--name <n>] [--project <p>] [--environment <e>]
   - safeselect agent uninstall <client> --name <n>
   - safeselect import-dbeaver <path-to-zip>
   - safeselect import-compose --path compose.yml

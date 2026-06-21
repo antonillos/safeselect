@@ -124,6 +124,108 @@ pub fn install_entry(
     Ok(())
 }
 
+pub fn upgrade_entry(
+    client: &str,
+    entry_name: Option<&str>,
+    environment: Option<&str>,
+    repo_root: Option<&Path>,
+    config_dir: Option<&Path>,
+    mcp_timeout_ms: u64,
+    local: bool,
+) -> Result<()> {
+    let (config_path, resolved_entry_name) =
+        resolve_upgrade_target(client, entry_name, environment, repo_root, local)?;
+    let content = std::fs::read_to_string(&config_path)?;
+
+    verify_permissions(&config_path)?;
+
+    let environment = match environment {
+        Some(env) => env.to_string(),
+        None => detect_entry_environment(client, &content, &resolved_entry_name)?.ok_or_else(|| {
+            SafeselectError::Other(format!(
+                "Cannot detect environment for entry '{resolved_entry_name}'; use --environment"
+            ))
+        })?,
+    };
+    let target_entry_name = canonical_entry_name(repo_root, &environment)
+        .unwrap_or_else(|| resolved_entry_name.to_string());
+
+    let backup_path = config_path.with_extension("safeselect.bak");
+    std::fs::copy(&config_path, &backup_path)?;
+
+    let entry = serde_json::json!({
+        "command": "safeselect",
+        "args": ["serve", "--environment", environment],
+        "timeout": mcp_timeout_ms
+    });
+
+    let mut opencode_entry = serde_json::json!({
+        "type": "local",
+        "command": ["safeselect", "serve", "--environment", environment],
+        "timeout": mcp_timeout_ms,
+        "enabled": true
+    });
+
+    if let Some(root) = repo_root {
+        opencode_entry["cwd"] = serde_json::json!(root.to_string_lossy().to_string());
+    }
+
+    if let Some(dir) = config_dir {
+        opencode_entry["environment"] = serde_json::json!({
+            "SAFESELECT_CONFIG_DIR": dir.to_string_lossy().to_string()
+        });
+    }
+
+    let new_content = match client {
+        "opencode" => {
+            replace_opencode_json(
+                &content,
+                &opencode_entry,
+                &resolved_entry_name,
+                &target_entry_name,
+            )?
+        }
+        "cursor" | "windsurf" | "codex" | "claude-code" => {
+            replace_mcp_json(&content, &entry, &resolved_entry_name, &target_entry_name)?
+        }
+        "copilot" | "gemini-cli" => {
+            replace_ini_entry(
+                &content,
+                &resolved_entry_name,
+                &target_entry_name,
+                &environment,
+            )?
+        }
+        _ => return Err(SafeselectError::Other(format!("Unknown client: {client}"))),
+    };
+
+    println!(
+        "--- Config diff for {client} ({}) ---",
+        config_path.display()
+    );
+    show_diff(&content, &new_content);
+    println!("\nBackup saved to: {}", backup_path.display());
+
+    std::fs::write(&config_path, &new_content)?;
+
+    let verify = std::fs::read_to_string(&config_path)?;
+    if verify != new_content {
+        std::fs::write(&config_path, &content)?;
+        return Err(SafeselectError::Other(
+            "Write verification failed, rolled back".into(),
+        ));
+    }
+
+    if target_entry_name == resolved_entry_name {
+        println!("Entry '{resolved_entry_name}' upgraded for {client}");
+    } else {
+        println!(
+            "Entry '{resolved_entry_name}' upgraded and renamed to '{target_entry_name}' for {client}"
+        );
+    }
+    Ok(())
+}
+
 pub fn uninstall_entry(client: &str, entry_name: &str) -> Result<()> {
     let config_path = get_client_config(client)?;
     let content = std::fs::read_to_string(&config_path)?;
@@ -467,6 +569,20 @@ fn append_opencode_json(content: &str, entry: &serde_json::Value, name: &str) ->
     Ok(serde_json::to_string_pretty(&config)?)
 }
 
+fn replace_opencode_json(
+    content: &str,
+    entry: &serde_json::Value,
+    current_name: &str,
+    target_name: &str,
+) -> Result<String> {
+    if !json_config_has_entry(content, "mcp", current_name)? {
+        return Err(SafeselectError::Other(format!(
+            "No SafeSelect entry named '{current_name}' found in opencode config"
+        )));
+    }
+    replace_json_entry(content, "mcp", entry, current_name, target_name)
+}
+
 fn append_mcp_json(content: &str, entry: &serde_json::Value, name: &str) -> Result<String> {
     let mut config: serde_json::Value = parse_json_or_jsonc(content)
         .map_err(|e| SafeselectError::Other(format!("Cannot parse JSON config: {e}")))?;
@@ -487,12 +603,349 @@ fn append_mcp_json(content: &str, entry: &serde_json::Value, name: &str) -> Resu
     Ok(serde_json::to_string_pretty(&config)?)
 }
 
+fn replace_mcp_json(
+    content: &str,
+    entry: &serde_json::Value,
+    current_name: &str,
+    target_name: &str,
+) -> Result<String> {
+    if !json_config_has_entry(content, "mcpServers", current_name)? {
+        return Err(SafeselectError::Other(format!(
+            "No SafeSelect entry named '{current_name}' found in client config"
+        )));
+    }
+    replace_json_entry(content, "mcpServers", entry, current_name, target_name)
+}
+
 fn append_ini_entry(content: &str, name: &str, environment: &str) -> Result<String> {
     Ok(format!(
         "{}\n\n[mcpServers.{}]\ncommand = safeselect\nargs = [\"serve\", \"--environment\", \"{environment}\"]\n",
         content.trim(),
         name,
     ))
+}
+
+fn replace_ini_entry(
+    content: &str,
+    current_name: &str,
+    target_name: &str,
+    environment: &str,
+) -> Result<String> {
+    if !ini_config_has_entry(content, current_name) {
+        return Err(SafeselectError::Other(format!(
+            "No SafeSelect entry named '{current_name}' found in client config"
+        )));
+    }
+
+    let without_entry = remove_ini_entry(content, current_name);
+    append_ini_entry(&without_entry, target_name, environment)
+}
+
+fn replace_json_entry(
+    content: &str,
+    top_level_key: &str,
+    entry: &serde_json::Value,
+    current_name: &str,
+    target_name: &str,
+) -> Result<String> {
+    let mut config: serde_json::Value = parse_json_or_jsonc(content)
+        .map_err(|e| SafeselectError::Other(format!("Cannot parse JSON config: {e}")))?;
+
+    let servers = config
+        .get_mut(top_level_key)
+        .and_then(|value| value.as_object_mut())
+        .ok_or_else(|| SafeselectError::Other(format!("Missing '{top_level_key}' section")))?;
+
+    servers.remove(current_name);
+    servers.insert(target_name.to_string(), entry.clone());
+
+    Ok(serde_json::to_string_pretty(&config)?)
+}
+
+fn resolve_upgrade_target(
+    client: &str,
+    entry_name: Option<&str>,
+    environment: Option<&str>,
+    repo_root: Option<&Path>,
+    local: bool,
+) -> Result<(PathBuf, String)> {
+    if let Some(name) = entry_name {
+        let config_path = resolve_upgrade_config_path_for_name(client, name, repo_root, local)?;
+        return Ok((config_path, name.to_string()));
+    }
+
+    let project_name = repo_root
+        .and_then(|root| root.file_name())
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            SafeselectError::Other(
+                "Cannot infer entry name from PWD; use --project, --environment, or --name"
+                    .into(),
+            )
+        })?;
+
+    let configs = candidate_upgrade_config_paths(client, repo_root, local)?;
+    let mut matches = Vec::new();
+    for config_path in configs {
+        let content = std::fs::read_to_string(&config_path)?;
+        for candidate in candidate_entry_names(client, &content, project_name, environment)? {
+            matches.push((config_path.clone(), candidate));
+        }
+    }
+
+    matches.sort();
+    matches.dedup();
+
+    match matches.len() {
+        0 => Err(SafeselectError::Other(format!(
+            "No SafeSelect entry found for project '{project_name}'; use --name{}",
+            if environment.is_none() {
+                " or --environment"
+            } else {
+                ""
+            }
+        ))),
+        1 => Ok(matches.remove(0)),
+        _ => Err(SafeselectError::Other(format!(
+            "Multiple SafeSelect entries found for project '{project_name}': {}; use --name{}",
+            matches
+                .iter()
+                .map(|(_, name)| name.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+            if environment.is_none() {
+                " or --environment"
+            } else {
+                ""
+            }
+        ))),
+    }
+}
+
+fn resolve_upgrade_config_path_for_name(
+    client: &str,
+    entry_name: &str,
+    repo_root: Option<&Path>,
+    local: bool,
+) -> Result<PathBuf> {
+    if local {
+        let config_path = get_local_client_config(client, repo_root)?;
+        let content = std::fs::read_to_string(&config_path)?;
+        if config_has_entry(client, &content, entry_name)? {
+            return Ok(config_path);
+        }
+        return Err(SafeselectError::Other(format!(
+            "Entry '{entry_name}' not found in local {client} config"
+        )));
+    }
+
+    if let Some(root) = repo_root {
+        if let Some(local_path) = detect_local_client_config(client, root) {
+            let local_content = std::fs::read_to_string(&local_path)?;
+            if config_has_entry(client, &local_content, entry_name)? {
+                return Ok(local_path);
+            }
+        }
+    }
+
+    let global_path = get_client_config(client)?;
+    let global_content = std::fs::read_to_string(&global_path)?;
+    if config_has_entry(client, &global_content, entry_name)? {
+        return Ok(global_path);
+    }
+
+    Err(SafeselectError::Other(format!(
+        "Entry '{entry_name}' not found for {client}"
+    )))
+}
+
+fn candidate_upgrade_config_paths(
+    client: &str,
+    repo_root: Option<&Path>,
+    local: bool,
+) -> Result<Vec<PathBuf>> {
+    if local {
+        return Ok(vec![get_local_client_config(client, repo_root)?]);
+    }
+
+    let mut paths = Vec::new();
+    if let Some(root) = repo_root {
+        if let Some(local_path) = detect_local_client_config(client, root) {
+            paths.push(local_path);
+        }
+    }
+    paths.push(get_client_config(client)?);
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
+fn candidate_entry_names(
+    client: &str,
+    content: &str,
+    project_name: &str,
+    environment: Option<&str>,
+) -> Result<Vec<String>> {
+    let canonical_prefix = format!("safeselect-{project_name}-");
+    let legacy_prefix = format!("{project_name}-");
+
+    let all_names = match client {
+        "opencode" => json_entry_names(content, "mcp")?,
+        "cursor" | "windsurf" | "codex" | "claude-code" => json_entry_names(content, "mcpServers")?,
+        "copilot" | "gemini-cli" => ini_entry_names(content),
+        _ => return Err(SafeselectError::Other(format!("Unknown client: {client}"))),
+    };
+
+    let matches = if let Some(env) = environment {
+        let canonical = format!("safeselect-{project_name}-{env}");
+        let legacy = format!("{project_name}-{env}");
+        all_names
+            .into_iter()
+            .filter(|name| name == &canonical || name == &legacy)
+            .collect()
+    } else {
+        all_names
+            .into_iter()
+            .filter(|name| name.starts_with(&canonical_prefix) || name.starts_with(&legacy_prefix))
+            .collect()
+    };
+
+    Ok(matches)
+}
+
+fn json_entry_names(content: &str, key: &str) -> Result<Vec<String>> {
+    let config: serde_json::Value = parse_json_or_jsonc(content)
+        .map_err(|e| SafeselectError::Other(format!("Cannot parse JSON config: {e}")))?;
+    Ok(config
+        .get(key)
+        .and_then(|v| v.as_object())
+        .map(|map| map.keys().cloned().collect())
+        .unwrap_or_default())
+}
+
+fn ini_entry_names(content: &str) -> Vec<String> {
+    content
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            trimmed
+                .strip_prefix("[mcpServers.")
+                .and_then(|rest| rest.strip_suffix(']'))
+                .map(ToString::to_string)
+        })
+        .collect()
+}
+
+fn config_has_entry(client: &str, content: &str, name: &str) -> Result<bool> {
+    match client {
+        "opencode" => json_config_has_entry(content, "mcp", name),
+        "cursor" | "windsurf" | "codex" | "claude-code" => {
+            json_config_has_entry(content, "mcpServers", name)
+        }
+        "copilot" | "gemini-cli" => Ok(ini_config_has_entry(content, name)),
+        _ => Err(SafeselectError::Other(format!("Unknown client: {client}"))),
+    }
+}
+
+fn json_config_has_entry(content: &str, key: &str, name: &str) -> Result<bool> {
+    let config: serde_json::Value = parse_json_or_jsonc(content)
+        .map_err(|e| SafeselectError::Other(format!("Cannot parse JSON config: {e}")))?;
+    Ok(config
+        .get(key)
+        .and_then(|v| v.as_object())
+        .is_some_and(|map| map.contains_key(name)))
+}
+
+fn detect_entry_environment(client: &str, content: &str, name: &str) -> Result<Option<String>> {
+    match client {
+        "opencode" => detect_json_entry_environment(content, "mcp", name, "command"),
+        "cursor" | "windsurf" | "codex" | "claude-code" => {
+            detect_json_entry_environment(content, "mcpServers", name, "args")
+        }
+        "copilot" | "gemini-cli" => Ok(detect_ini_entry_environment(content, name)),
+        _ => Err(SafeselectError::Other(format!("Unknown client: {client}"))),
+    }
+}
+
+fn detect_json_entry_environment(
+    content: &str,
+    top_level_key: &str,
+    name: &str,
+    command_key: &str,
+) -> Result<Option<String>> {
+    let config: serde_json::Value = parse_json_or_jsonc(content)
+        .map_err(|e| SafeselectError::Other(format!("Cannot parse JSON config: {e}")))?;
+    let command = config
+        .get(top_level_key)
+        .and_then(|v| v.get(name))
+        .and_then(|v| v.get(command_key))
+        .and_then(|v| v.as_array());
+
+    Ok(command.and_then(|args| extract_environment_from_args(args)))
+}
+
+fn canonical_entry_name(repo_root: Option<&Path>, environment: &str) -> Option<String> {
+    let project_name = repo_root
+        .and_then(|root| root.file_name())
+        .and_then(|name| name.to_str())?;
+    Some(format!("safeselect-{project_name}-{environment}"))
+}
+
+fn extract_environment_from_args(args: &[serde_json::Value]) -> Option<String> {
+    args.windows(2).find_map(|window| {
+        if window[0].as_str() == Some("--environment") {
+            window[1].as_str().map(ToString::to_string)
+        } else {
+            None
+        }
+    })
+}
+
+fn ini_config_has_entry(content: &str, name: &str) -> bool {
+    let section = format!("[mcpServers.{name}]");
+    content.lines().any(|line| line.trim() == section)
+}
+
+fn detect_ini_entry_environment(content: &str, name: &str) -> Option<String> {
+    let section = format!("[mcpServers.{name}]");
+    let mut in_section = false;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            in_section = trimmed == section;
+            continue;
+        }
+        if !in_section || !trimmed.starts_with("args") {
+            continue;
+        }
+        if let Some((_, rhs)) = trimmed.split_once('=') {
+            let values: Vec<serde_json::Value> = serde_json::from_str(rhs.trim()).ok()?;
+            return extract_environment_from_args(&values);
+        }
+    }
+    None
+}
+
+fn remove_ini_entry(content: &str, name: &str) -> String {
+    let section = format!("[mcpServers.{name}]");
+    let mut output = Vec::new();
+    let mut in_section = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            in_section = trimmed == section;
+            if !in_section {
+                output.push(line);
+            }
+            continue;
+        }
+        if !in_section {
+            output.push(line);
+        }
+    }
+
+    output.join("\n").trim_end().to_string()
 }
 
 fn remove_mcp_entry(content: &str, name: &str) -> Result<String> {
@@ -514,6 +967,93 @@ fn remove_text_block(content: &str, name: &str) -> String {
         .filter(|line| !line.contains(name) && !line.contains("safeselect"))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_environment_from_opencode_entry() {
+        let content = r#"{
+          "mcp": {
+            "safeselect-demo-pre": {
+              "type": "local",
+              "command": ["safeselect", "serve", "--environment", "pre"]
+            }
+          }
+        }"#;
+
+        let environment = detect_entry_environment("opencode", content, "safeselect-demo-pre")
+            .expect("should parse");
+
+        assert_eq!(environment.as_deref(), Some("pre"));
+    }
+
+    #[test]
+    fn detects_environment_from_ini_entry() {
+        let content = r#"
+[mcpServers.safeselect-demo-pre]
+command = safeselect
+args = ["serve", "--environment", "pre"]
+"#;
+
+        let environment = detect_entry_environment("copilot", content, "safeselect-demo-pre")
+            .expect("should parse");
+
+        assert_eq!(environment.as_deref(), Some("pre"));
+    }
+
+    #[test]
+    fn replaces_ini_entry_in_place() {
+        let content = r#"
+[mcpServers.safeselect-demo-pre]
+command = safeselect
+args = ["serve", "--environment", "old"]
+
+[other]
+value = true
+"#;
+
+        let replaced = replace_ini_entry(
+            content,
+            "safeselect-demo-pre",
+            "safeselect-demo-pre",
+            "pre",
+        )
+            .expect("should replace entry");
+
+        assert!(replaced.contains("args = [\"serve\", \"--environment\", \"pre\"]"));
+        assert!(replaced.contains("[other]"));
+        assert!(!replaced.contains("\"old\""));
+    }
+
+    #[test]
+    fn renames_json_entry_to_canonical_name() {
+        let content = r#"{
+          "mcp": {
+            "legacy-pre": {
+              "type": "local",
+              "command": ["safeselect", "serve", "--environment", "pre"]
+            }
+          }
+        }"#;
+        let entry = serde_json::json!({
+            "type": "local",
+            "command": ["safeselect", "serve", "--environment", "pre"]
+        });
+
+        let replaced = replace_opencode_json(
+            content,
+            &entry,
+            "legacy-pre",
+            "safeselect-demo-pre",
+        )
+        .expect("should rename entry");
+
+        assert!(replaced.contains("safeselect-demo-pre"));
+        assert!(!replaced.contains("legacy-pre"));
+    }
 }
 
 fn show_diff(old: &str, new: &str) {
