@@ -1526,20 +1526,11 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
         // Step 1: Check if the SSH bastion is reachable
         let bastion_up = check_tcp_endpoint(bastion_host, bastion_port, Duration::from_secs(3));
 
-<<<<<<< HEAD
         let tunnel_local_host = ssh.local_host.as_deref().unwrap_or("localhost");
         let tunnel_local_port = ssh.local_port.unwrap_or(15432);
 
         // Step 2: Check PostgreSQL via tunnel endpoint.
         let pg_via_tunnel = check_postgres_endpoint(tunnel_local_host, tunnel_local_port);
-=======
-        // Step 2: Check PostgreSQL via tunnel endpoint (localhost:15432)
-        let tunnel_pg_addr = format!("localhost:15432")
-            .to_socket_addrs()
-            .ok()
-            .and_then(|mut a| a.next());
-        let pg_via_tunnel = tunnel_pg_addr.as_ref().is_some_and(check_postgres);
->>>>>>> origin/main
 
         // Step 3: Check PostgreSQL via original target (if resolvable)
         let pg_via_direct = extract_host_port(&cfg.database.url)
@@ -1626,20 +1617,17 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
         print!("  ● Establishing SSH tunnel ({env_name}) ... ");
         std::io::stdout().flush()?;
 
-<<<<<<< HEAD
         // Use the DBeaver-exported local endpoint when available; otherwise keep the
         // historical SafeSelect default to avoid changing existing behavior.
         let tunnel_local_host = ssh.local_host.as_deref().unwrap_or("localhost");
         let tunnel_local_port = ssh.local_port.unwrap_or(15432);
-=======
+
         let use_password = match &ssh.auth_type {
             Some(at) if at == "PASSWORD" => true,
             _ => false,
         };
 
         // Use a different local port (15432) for forwarding, not the SSH server port
-        let tunnel_local_port = 15432;
->>>>>>> origin/main
         // Build SSH args
         let mut ssh_args: Vec<String> = vec![
             "-o".into(),
@@ -2037,13 +2025,8 @@ fn build_ssh_command(ssh: &config::SshConfig, _db_url: &str) -> Option<String> {
     let forward_host = ssh.forward_host.as_deref()?;
     let forward_port = ssh.forward_port?;
 
-<<<<<<< HEAD
     let local_host = ssh.local_host.as_deref().unwrap_or("localhost");
     let local_port = ssh.local_port.unwrap_or(15432);
-=======
-    // Use 15432 as the local forward port (different from SSH server port)
-    let local_port = 15432;
->>>>>>> origin/main
 
     let mut cmd =
         format!("ssh -L {local_host}:{local_port}:{forward_host}:{forward_port} {user}@{bastion}");
