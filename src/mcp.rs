@@ -1820,29 +1820,9 @@ impl McpServer {
                             format!("Import metadata update failed: {e}"),
                         );
                     }
-                    let names: Vec<&str> = all_connections
-                        .iter()
-                        .map(|c| c.env_name.as_str())
-                        .collect();
-                    if import.created == 0 {
-                        "All environments already exist. Nothing imported.".to_string()
-                    } else {
-                        let mut parts = vec![format!(
-                            "Imported {} connection(s): {}",
-                            names.len(),
-                            names.join(", ")
-                        )];
-                        if !import.no_password.is_empty() {
-                            parts.push(String::new());
-                            for (env, _) in &import.no_password {
-                                parts.push(format!(
-                                    "No password set for '{env}':\n{}",
-                                    compose::secret_setup_hint(project_name, env)
-                                ));
-                            }
-                        }
-                        parts.join("\n")
-                    }
+                    let names: Vec<String> =
+                        all_connections.iter().map(|c| c.env_name.clone()).collect();
+                    compose::build_import_guidance(project_name, &import, &names, true).text
                 }
                 Err(e) => return self.send_error(id, -32000, format!("Import failed: {e}")),
             }
@@ -2450,40 +2430,17 @@ pub fn run_setup_server(repo_root: &Path) -> Result<()> {
                                     );
                                     match result {
                                         Ok(import) => {
-                                            let names: Vec<&str> = all_connections
+                                            let names: Vec<String> = all_connections
                                                 .iter()
-                                                .map(|c| c.env_name.as_str())
+                                                .map(|c| c.env_name.clone())
                                                 .collect();
-                                            let text = if import.created == 0 {
-                                                "All environments already exist. Nothing imported."
-                                                    .to_string()
-                                            } else {
-                                                let mut parts = vec![format!(
-                                                    "Imported {} connection(s): {}",
-                                                    names.len(),
-                                                    names.join(", ")
-                                                )];
-                                                if !import.no_password.is_empty() {
-                                                    parts.push(String::new());
-                                                    for (env, _) in &import.no_password {
-                                                        parts.push(format!(
-                                                            "No password set for '{env}':\n{}",
-                                                            crate::compose::secret_setup_hint(
-                                                                project_name,
-                                                                env
-                                                            )
-                                                        ));
-                                                    }
-                                                }
-                                                parts.push(String::new());
-                                                parts.push("Run the server with:".to_string());
-                                                for env_name in &import.env_names {
-                                                    parts.push(format!(
-                                                        "  safeselect serve --environment {env_name}"
-                                                    ));
-                                                }
-                                                parts.join("\n")
-                                            };
+                                            let text = compose::build_import_guidance(
+                                                project_name,
+                                                &import,
+                                                &names,
+                                                true,
+                                            )
+                                            .text;
                                             let resp = JsonRpcResponse {
                                                 jsonrpc: "2.0",
                                                 id: msg.id,

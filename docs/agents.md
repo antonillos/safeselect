@@ -7,12 +7,19 @@ compatible with any AI agent that supports MCP tools. It is designed for agents
 that need database context while coding, debugging, refactoring, or reviewing SQL
 without giving the agent direct database credentials or write access.
 
+Product direction for agents:
+- Read-only and fail-closed always come first.
+- Prefer convention over configuration whenever the project or environment can be inferred safely.
+- When automation cannot finish setup, SafeSelect should return the exact next safe step.
+- Agent-ready workflows take priority over manual-only ergonomics.
+
 Agents should treat SafeSelect as their database boundary:
 - Use `list_tables` before guessing schema names.
 - Use `select` only for small, targeted read-only queries.
 - Use `explain` to inspect query plans, index usage, and bottlenecks.
 - Use `check` or `reconnect` before retrying after connection or SSH tunnel errors.
 - Never ask the user for database passwords if `config_set_password` or existing config can resolve them.
+- Prefer SafeSelect guidance output over inventing ad-hoc setup steps.
 
 ## Supported Agents
 
@@ -196,8 +203,9 @@ explicit confirmation arguments.
 ### `import_compose`
 
 Import PostgreSQL services discovered in docker-compose files. The MCP importer
-creates `.safeselect/` config and records the SafeSelect version metadata; run
-`check` afterwards to verify driver, secret, SSH, sidecar, and `SELECT 1`.
+creates `.safeselect/` config, records the SafeSelect version metadata, and
+returns explicit next steps for driver setup, password setup, connectivity
+verification, and agent installation.
 
 ### `uninstall`
 

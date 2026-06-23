@@ -28,6 +28,11 @@ pub struct ImportResult {
     pub no_password: Vec<(String, String)>,
 }
 
+pub struct ImportGuidance {
+    pub text: String,
+    pub imported_env_names: Vec<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct ComposeConnection {
     pub name: String,
@@ -54,7 +59,7 @@ struct ComposeService {
     #[serde(default)]
     environment: Option<EnvValue>,
     #[serde(default)]
-    ports: Vec<String>,
+    ports: Vec<PortValue>,
 }
 
 #[derive(serde::Deserialize, Debug)]
@@ -62,6 +67,19 @@ struct ComposeService {
 enum EnvValue {
     Map(HashMap<String, serde_yaml::Value>),
     List(Vec<String>),
+}
+
+#[derive(serde::Deserialize, Debug)]
+#[serde(untagged)]
+enum PortValue {
+    Short(String),
+    Long(ComposePort),
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct ComposePort {
+    published: Option<serde_yaml::Value>,
+    host_ip: Option<String>,
 }
 
 fn is_postgres_image(image: &str) -> bool {
@@ -85,30 +103,113 @@ fn parse_env_list(items: &[String]) -> HashMap<String, String> {
     map
 }
 
-fn resolve_env(env: &Option<EnvValue>) -> HashMap<String, String> {
+fn parse_dotenv(content: &str) -> HashMap<String, String> {
+    let mut vars = HashMap::new();
+    for raw_line in content.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        let line = line.strip_prefix("export ").unwrap_or(line);
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+
+        let key = key.trim();
+        if key.is_empty() {
+            continue;
+        }
+
+        let mut value = value.trim().to_string();
+        if value.len() >= 2 {
+            let quoted = (value.starts_with('"') && value.ends_with('"'))
+                || (value.starts_with('\'') && value.ends_with('\''));
+            if quoted {
+                value = value[1..value.len() - 1].to_string();
+            }
+        }
+        vars.insert(key.to_string(), value);
+    }
+    vars
+}
+
+fn load_dotenv(dir: &Path) -> HashMap<String, String> {
+    let path = dir.join(".env");
+    std::fs::read_to_string(path)
+        .map(|content| parse_dotenv(&content))
+        .unwrap_or_default()
+}
+
+fn resolve_scalar(value: &serde_yaml::Value) -> String {
+    match value {
+        serde_yaml::Value::String(s) => s.clone(),
+        serde_yaml::Value::Number(n) => n.to_string(),
+        serde_yaml::Value::Bool(b) => b.to_string(),
+        other => format!("{other:?}"),
+    }
+}
+
+fn resolve_compose_value(value: &str, dotenv: &HashMap<String, String>) -> String {
+    let trimmed = value.trim();
+    if !(trimmed.starts_with("${") && trimmed.ends_with('}')) {
+        return trimmed.to_string();
+    }
+
+    let inner = &trimmed[2..trimmed.len() - 1];
+    let (key, default) = if let Some((key, default)) = inner.split_once(":-") {
+        (key.trim(), Some(default))
+    } else if let Some((key, default)) = inner.split_once('-') {
+        (key.trim(), Some(default))
+    } else {
+        (inner.trim(), None)
+    };
+
+    dotenv
+        .get(key)
+        .cloned()
+        .or_else(|| std::env::var(key).ok())
+        .or_else(|| default.map(|v| v.to_string()))
+        .unwrap_or_else(|| trimmed.to_string())
+}
+
+fn resolve_env(
+    env: &Option<EnvValue>,
+    dotenv: &HashMap<String, String>,
+) -> HashMap<String, String> {
     match env {
         Some(EnvValue::Map(m)) => m
             .iter()
             .map(|(k, v)| {
-                let s = match v {
-                    serde_yaml::Value::String(s) => s.clone(),
-                    serde_yaml::Value::Number(n) => n.to_string(),
-                    serde_yaml::Value::Bool(b) => b.to_string(),
-                    other => format!("{other:?}"),
-                };
+                let s = resolve_compose_value(&resolve_scalar(v), dotenv);
                 (k.clone(), s)
             })
             .collect(),
-        Some(EnvValue::List(l)) => parse_env_list(l),
+        Some(EnvValue::List(l)) => parse_env_list(l)
+            .into_iter()
+            .map(|(k, v)| (k, resolve_compose_value(&v, dotenv)))
+            .collect(),
         None => HashMap::new(),
     }
 }
 
-fn parse_port(port_str: &str) -> u16 {
+fn parse_port_string(port_str: &str) -> u16 {
     // "5432:5432" or "5432:5432/tcp" or "5432"
     let s = port_str.split('/').next().unwrap_or(port_str);
     let host_part = s.split(':').next().unwrap_or(s);
     host_part.parse().unwrap_or(5432)
+}
+
+fn parse_port(port: &PortValue) -> u16 {
+    match port {
+        PortValue::Short(value) => parse_port_string(value),
+        PortValue::Long(value) => value
+            .published
+            .as_ref()
+            .map(resolve_scalar)
+            .and_then(|v| v.parse::<u16>().ok())
+            .unwrap_or(5432),
+    }
 }
 
 fn is_var_ref(val: &str) -> Option<String> {
@@ -213,6 +314,7 @@ fn find_compose_files(dir: &Path) -> Vec<std::path::PathBuf> {
 
 fn parse_compose_file(path: &Path, content: &str) -> Result<Vec<ComposeConnection>> {
     let compose: ComposeFile = serde_yaml::from_str(content)?;
+    let dotenv = path.parent().map(load_dotenv).unwrap_or_default();
     let mut connections = vec![];
 
     for (service_name, service) in &compose.services {
@@ -225,7 +327,7 @@ fn parse_compose_file(path: &Path, content: &str) -> Result<Vec<ComposeConnectio
             continue;
         }
 
-        let env = resolve_env(&service.environment);
+        let env = resolve_env(&service.environment, &dotenv);
         let database = env
             .get("POSTGRES_DB")
             .or_else(|| env.get("POSTGRES_PASSWORD").map(|_| service_name))
@@ -247,7 +349,7 @@ fn parse_compose_file(path: &Path, content: &str) -> Result<Vec<ComposeConnectio
 
         let password_var = env.get("POSTGRES_PASSWORD").and_then(|p| is_var_ref(p));
 
-        let port = service.ports.first().map(|p| parse_port(p)).unwrap_or(5432);
+        let port = service.ports.first().map(parse_port).unwrap_or(5432);
 
         let env_name = service_name.to_lowercase().replace(' ', "-");
 
@@ -359,6 +461,89 @@ pub fn write_config_files(
     })
 }
 
+pub fn build_import_guidance(
+    project_name: &str,
+    result: &ImportResult,
+    imported_names: &[String],
+    include_agent_step: bool,
+) -> ImportGuidance {
+    let env_names = if result.env_names.is_empty() {
+        imported_names.to_vec()
+    } else {
+        result.env_names.clone()
+    };
+    let no_password_names: Vec<String> =
+        result.no_password.iter().map(|(n, _)| n.clone()).collect();
+
+    build_guidance_from_parts(
+        project_name,
+        &env_names,
+        &no_password_names,
+        include_agent_step,
+    )
+}
+
+pub fn build_guidance_from_parts(
+    project_name: &str,
+    env_names: &[String],
+    no_password_envs: &[String],
+    include_agent_step: bool,
+) -> ImportGuidance {
+    let mut parts = vec![];
+    if env_names.is_empty() {
+        parts.push("All environments already exist. Nothing imported.".to_string());
+    } else {
+        parts.push(format!(
+            "Imported {} connection(s): {}",
+            env_names.len(),
+            env_names.join(", ")
+        ));
+    }
+
+    parts.push(String::new());
+    parts.push("Next steps:".to_string());
+    parts.push("1. Ensure the PostgreSQL JDBC driver is available: safeselect driver download --vendor postgresql".to_string());
+
+    if no_password_envs.is_empty() {
+        parts.push("2. Passwords were imported or are already configured.".to_string());
+    } else {
+        parts.push("2. Configure missing passwords:".to_string());
+        for env_name in no_password_envs {
+            parts.push(format!(
+                "   - {}",
+                secret_setup_hint(project_name, env_name)
+            ));
+        }
+    }
+
+    if env_names.is_empty() {
+        parts.push("3. Run safeselect check --environment <env> after you add one.".to_string());
+    } else {
+        parts.push("3. Verify connectivity:".to_string());
+        for env_name in env_names {
+            parts.push(format!("   - safeselect check --environment {env_name}"));
+        }
+    }
+
+    if include_agent_step {
+        if env_names.is_empty() {
+            parts.push("4. Install the MCP entry after you have an environment: safeselect agent install opencode --environment <env>".to_string());
+        } else {
+            parts.push("4. Install SafeSelect in your AI agent:".to_string());
+            for env_name in env_names {
+                parts.push(format!(
+                    "   - safeselect agent install opencode --environment {env_name}"
+                ));
+            }
+        }
+    }
+
+    ImportGuidance {
+        text: parts.join("\n"),
+        imported_env_names: env_names.to_vec(),
+    }
+}
+
 pub fn read_password_from_keychain(account: &str) -> Result<String> {
     let output = std::process::Command::new("security")
         .args([
@@ -424,4 +609,94 @@ pub fn store_password_in_keychain(account: &str, password: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolves_dotenv_defaults_in_environment() {
+        let env = Some(EnvValue::Map(HashMap::from([
+            (
+                "POSTGRES_PASSWORD".to_string(),
+                serde_yaml::Value::String("${DB_PASSWORD:-fallback}".to_string()),
+            ),
+            (
+                "POSTGRES_USER".to_string(),
+                serde_yaml::Value::String("${DB_USER}".to_string()),
+            ),
+        ])));
+        let dotenv = HashMap::from([
+            ("DB_PASSWORD".to_string(), "from-dotenv".to_string()),
+            ("DB_USER".to_string(), "reader".to_string()),
+        ]);
+
+        let resolved = resolve_env(&env, &dotenv);
+
+        assert_eq!(resolved.get("POSTGRES_PASSWORD").unwrap(), "from-dotenv");
+        assert_eq!(resolved.get("POSTGRES_USER").unwrap(), "reader");
+    }
+
+    #[test]
+    fn parses_short_and_long_ports() {
+        let short = PortValue::Short("15432:5432".to_string());
+        let long = PortValue::Long(ComposePort {
+            published: Some(serde_yaml::Value::Number(15433.into())),
+            host_ip: Some("127.0.0.1".to_string()),
+        });
+
+        assert_eq!(parse_port(&short), 15432);
+        assert_eq!(parse_port(&long), 15433);
+    }
+
+    #[test]
+    fn parses_compose_file_with_long_ports_and_dotenv() {
+        let content = r#"
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: app
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-testpass}
+    ports:
+      - target: 5432
+        published: 15432
+        host_ip: 127.0.0.1
+"#;
+        let temp =
+            std::env::temp_dir().join(format!("safeselect-compose-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).unwrap();
+        std::fs::write(temp.join(".env"), "DB_USER=agent\n").unwrap();
+        let compose_path = temp.join("compose.yaml");
+
+        let parsed = parse_compose_file(&compose_path, content).unwrap();
+
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].port, 15432);
+        assert_eq!(parsed[0].username, "agent");
+        assert_eq!(parsed[0].password_literal.as_deref(), Some("testpass"));
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn builds_agent_ready_import_guidance() {
+        let result = ImportResult {
+            created: 1,
+            env_names: vec!["testing".to_string()],
+            no_password: vec![("testing".to_string(), "project/testing".to_string())],
+        };
+
+        let guidance = build_import_guidance("project", &result, &["testing".to_string()], true);
+
+        assert!(guidance.text.contains("Next steps:"));
+        assert!(guidance
+            .text
+            .contains("safeselect check --environment testing"));
+        assert!(guidance
+            .text
+            .contains("safeselect agent install opencode --environment testing"));
+    }
 }

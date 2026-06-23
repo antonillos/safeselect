@@ -1217,32 +1217,31 @@ fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
         imported_envs.push((env_name.clone(), has_secret, is_new));
     }
 
-    // Step 4: print summary
+    // Step 4: print summary with next steps
+    let env_names: Vec<String> = imported_envs.iter().map(|(n, _, _)| n.clone()).collect();
+    let no_password_envs: Vec<String> = imported_envs
+        .iter()
+        .filter(|(_, has_secret, _)| !has_secret)
+        .map(|(n, _, _)| n.clone())
+        .collect();
+
     let created = imported_envs.iter().filter(|(_, _, new)| *new).count();
-    let updated = imported_envs.len() - created;
-    if created > 0 || updated > 0 {
+    if created > 0 {
         println!();
         println!("── Import Complete ──────────────────────────────");
         println!();
-        if created > 0 {
-            println!("  ✓ {created} environment(s) added");
-        }
-        if updated > 0 {
-            println!("  ✓ {updated} environment(s) updated");
-        }
+        println!("  ✓ {created} environment(s) added");
         check_gitignore(&cwd);
     } else {
-        println!("  ◉ No environments to import.");
+        println!("  ◉ All environments already exist.");
     }
 
+    let guidance =
+        compose::build_guidance_from_parts(&project_name, &env_names, &no_password_envs, true);
+    println!();
+    println!("{}", guidance.text);
+
     // Step 5: shared helpers (driver, passwords, verify)
-    let mut env_names: Vec<String> = imported_envs.iter().map(|(n, _, _)| n.clone()).collect();
-    // Also include already-existing selected environments
-    for (_, name) in &to_import {
-        if !env_names.contains(name) {
-            env_names.push(name.clone());
-        }
-    }
     setup_driver_if_missing()?;
     setup_passwords_for_missing(&cwd, &env_names)?;
     run_checks(&cwd, &env_names)?;
@@ -1334,6 +1333,8 @@ fn cmd_import_compose(path: Option<PathBuf>, non_interactive: bool) -> Result<()
 
     let result = compose::write_config_files(dest_dir, &to_import, &project_name)?;
     update_generated_by(&dest_dir.join(".safeselect"))?;
+    let imported_names: Vec<String> = to_import.iter().map(|c| c.env_name.clone()).collect();
+    let guidance = compose::build_import_guidance(&project_name, &result, &imported_names, true);
 
     if result.created > 0 {
         println!();
@@ -1345,7 +1346,10 @@ fn cmd_import_compose(path: Option<PathBuf>, non_interactive: bool) -> Result<()
         println!("  ◉ All environments already exist.");
     }
 
-    let env_names: Vec<String> = to_import.iter().map(|c| c.env_name.clone()).collect();
+    println!();
+    println!("{}", guidance.text);
+
+    let env_names = guidance.imported_env_names;
     setup_driver_if_missing()?;
     setup_passwords_for_missing(dest_dir, &env_names)?;
     run_checks(dest_dir, &env_names)?;
@@ -1358,6 +1362,8 @@ fn import_selected_connections(connections: &[compose::ComposeConnection]) -> Re
     let name = project_display_name(&cwd);
     let result = compose::write_config_files(&cwd, connections, &name)?;
     update_generated_by(&cwd.join(".safeselect"))?;
+    let imported_names: Vec<String> = connections.iter().map(|c| c.env_name.clone()).collect();
+    let guidance = compose::build_import_guidance(&name, &result, &imported_names, true);
 
     if result.created > 0 {
         println!(
@@ -1369,7 +1375,10 @@ fn import_selected_connections(connections: &[compose::ComposeConnection]) -> Re
         println!("All environments already exist. Nothing to import.");
     }
 
-    let env_names: Vec<String> = connections.iter().map(|c| c.env_name.clone()).collect();
+    println!();
+    println!("{}", guidance.text);
+
+    let env_names = guidance.imported_env_names;
     setup_driver_if_missing()?;
     setup_passwords_for_missing(&cwd, &env_names)?;
     run_checks(&cwd, &env_names)?;

@@ -11,7 +11,7 @@
 [![asdf](https://img.shields.io/badge/asdf-plugin-8A2BE2)](https://github.com/antonillos/asdf-safeselect)
 [![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
 
-SafeSelect is a secure SQL proxy between AI coding agents and your databases. It implements the **Model Context Protocol (MCP)** with a fail-closed security model — any incident terminates the process.
+SafeSelect is a secure read-only SQL boundary between AI coding agents and your databases. It implements the **Model Context Protocol (MCP)** with a fail-closed security model: security first, convention over configuration, and guided next steps when setup or recovery is needed.
 
 ---
 
@@ -66,6 +66,25 @@ a short summary of what changed plus the install instructions.
 - **Password isolation**: passed via stdin, never as CLI args
 - **Result limits**: row count and byte size enforced
 
+## Product Principles
+
+- **Read-only, security first**: SafeSelect exists to keep AI agent database access strictly non-mutating.
+- **Convention over configuration**: prefer inferred project, environment, driver, MCP entry name, and import defaults.
+- **Wizard and next steps**: when setup cannot be fully automated, SafeSelect should guide the user or agent with the exact next safe action.
+- **Agent-ready first**: the MCP experience is a primary surface, not an afterthought.
+- **Developer adoption**: setup, diagnosis, and recovery should reduce friction for everyday development teams.
+
+---
+
+## Read-Only Use Cases
+
+- **Schema discovery**: use `list_tables` and targeted `SELECT` queries on metadata tables before guessing names.
+- **Safe data inspection**: inspect rows, counts, shapes, and join paths without exposing write access.
+- **Performance analysis**: use `explain` and `explain analyze` on read-only queries to inspect plans, buffers, and bottlenecks.
+- **Connectivity diagnosis**: use `check`, `connect`, and `reconnect` to recover from stale JDBC, sidecar, or SSH tunnel state.
+- **Agent onboarding**: install a SafeSelect MCP entry so agents get a constrained, project-scoped, read-only database tool by default.
+- **Project bootstrap**: import from DBeaver or docker-compose, then follow the generated next steps to finish setup.
+
 ---
 
 ## CLI Reference
@@ -91,7 +110,7 @@ a short summary of what changed plus the install instructions.
 | `agent detect` | Detect installed MCP clients |
 | `agent status` | Show installation status |
 | `import-dbeaver <path-to-zip> [--non-interactive]` | Import from DBeaver export (interactive wizard with SSH setup) |
-| `import-compose [--path <yml>] [--non-interactive]` | Import from docker-compose (auto-downloads driver, prompts for passwords) |
+| `import-compose [--path <yml>] [--non-interactive]` | Import from docker-compose with convention-based detection, next steps, and password guidance |
 | `connect --project <p> --environment <e>` | Reconnect to database |
 | `disconnect --project <p> --environment <e>` | Disconnect from database |
 | `uninstall` | Remove SafeSelect entirely |
@@ -158,14 +177,14 @@ Configuration and setup tools available through MCP:
 | `agent_install` | Install a SafeSelect MCP entry | `client`, `environment`, `name` (optional) |
 | `agent_uninstall` | Remove a SafeSelect MCP entry | `client`, `name` |
 | `agent_status` | Show SafeSelect install status for clients | _(none)_ |
-| `import_compose` | Scan docker-compose files and import PostgreSQL services | `scan_path` (optional) |
+| `import_compose` | Scan docker-compose files, import PostgreSQL services, and return guided next steps | `scan_path` (optional) |
 | `uninstall` | Remove SafeSelect binary/config/data/audit/keychain | `confirm: true` |
 
 Setup mode tools (available when no `.safeselect/` is found and `safeselect serve --environment <env>` enters setup mode automatically):
 
 | Tool | Description | Arguments |
 |---|---|---|
-| `import_compose` | Scan docker-compose files and import PostgreSQL services | `scan_path` (optional) |
+| `import_compose` | Scan docker-compose files, import PostgreSQL services, and return guided next steps | `scan_path` (optional) |
 | `delete_environment` | Delete an environment configuration | `name` (required) |
 | `rename_environment` | Rename an environment (migrates secret reference) | `old_name` (required), `new_name` (required) |
 
