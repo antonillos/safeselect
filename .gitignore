@@ -10,3 +10,6 @@
 PLAN.md
 PHASES.md
 Formula/
+*.iml
+*.ipr
+*.iws
