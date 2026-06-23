@@ -24,7 +24,7 @@ jobs:
     name: Unit & Smoke
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Install Rust
         run: rustup toolchain install stable --profile minimal
       - name: Install Java
@@ -61,7 +61,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Install Rust
         run: rustup toolchain install stable --profile minimal
       - name: Install Java
@@ -89,7 +89,7 @@ jobs:
       contains(github.event.pull_request.labels.*.name, 'safe-to-merge')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Install Rust
         run: rustup toolchain install stable --profile minimal
       - name: Install cargo-binstall
