@@ -18,10 +18,7 @@ pub fn run() {
         format!("smoke_{}", std::process::id()),
     );
 
-    let tmp = std::env::temp_dir().join(format!(
-        "safeselect-real-smoke-{}",
-        std::process::id()
-    ));
+    let tmp = std::env::temp_dir().join(format!("safeselect-real-smoke-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);
     let repo_root = tmp.join("repo");
     let config_dir = tmp.join("config");
@@ -56,16 +53,28 @@ fn assert_check_ok(repo_root: &std::path::Path, config_dir: &std::path::Path) {
         config_dir,
         &["check", "--environment", "testing"],
     );
-    assert!(success, "check failed\nstdout:\n{stdout}\nstderr:\n{stderr}");
-    assert!(stdout.contains("All checks passed"), "unexpected check output: {stdout}");
+    assert!(
+        success,
+        "check failed\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("All checks passed"),
+        "unexpected check output: {stdout}"
+    );
 }
 
 fn assert_select_ok(repo_root: &std::path::Path, config_dir: &std::path::Path) {
     let (stdout, stderr, success) =
         postgres::run_safeselect(repo_root, config_dir, "SELECT 1 AS ok");
-    assert!(success, "SELECT failed\nstdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(
+        success,
+        "SELECT failed\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
     assert!(stdout.contains("| 1"), "unexpected SELECT output: {stdout}");
-    assert!(stdout.contains("rows"), "SELECT output should include row count: {stdout}");
+    assert!(
+        stdout.contains("rows"),
+        "SELECT output should include row count: {stdout}"
+    );
 }
 
 fn assert_sql_error_visible(repo_root: &std::path::Path, config_dir: &std::path::Path) {
@@ -74,7 +83,10 @@ fn assert_sql_error_visible(repo_root: &std::path::Path, config_dir: &std::path:
         config_dir,
         "SELECT * FROM public.table_that_does_not_exist",
     );
-    assert!(!success, "missing table query unexpectedly succeeded: {stdout}");
+    assert!(
+        !success,
+        "missing table query unexpectedly succeeded: {stdout}"
+    );
     assert!(
         stderr.contains("ERROR: SQL query failed")
             && stderr.contains("SQL execution failed [SQL_ERROR]")
@@ -86,8 +98,11 @@ fn assert_sql_error_visible(repo_root: &std::path::Path, config_dir: &std::path:
 fn assert_mcp_sql_error_stays_alive(repo_root: &std::path::Path, config_dir: &std::path::Path) {
     let project_config = repo_root.join(".safeselect/project.toml");
     let config = std::fs::read_to_string(&project_config).unwrap();
-    std::fs::write(&project_config, config.replace("enabled = false", "enabled = true"))
-        .unwrap();
+    std::fs::write(
+        &project_config,
+        config.replace("enabled = false", "enabled = true"),
+    )
+    .unwrap();
 
     let mut child = Command::new(postgres::safeselect_bin())
         .args([
@@ -260,8 +275,7 @@ fn assert_timeout_control_visible(repo_root: &std::path::Path, config_dir: &std:
         postgres::run_safeselect(repo_root, config_dir, "SELECT pg_sleep(5)");
     assert!(!success, "pg_sleep unexpectedly succeeded: {stdout}");
     assert!(
-        stderr.contains("Query rejected")
-            && stderr.contains("function PG_SLEEP not allowed"),
+        stderr.contains("Query rejected") && stderr.contains("function PG_SLEEP not allowed"),
         "timeout control rejection was not visible enough\nstdout:\n{stdout}\nstderr:\n{stderr}"
     );
 }

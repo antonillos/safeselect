@@ -28,10 +28,7 @@ pub fn run() {
         format!("reconnect_{}", std::process::id()),
     );
 
-    let tmp = std::env::temp_dir().join(format!(
-        "safeselect-reconnect-{}",
-        std::process::id()
-    ));
+    let tmp = std::env::temp_dir().join(format!("safeselect-reconnect-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);
     let repo_root = tmp.join("repo");
     let config_dir = tmp.join("config");
@@ -66,7 +63,10 @@ fn assert_select_ok(repo_root: &Path, config_dir: &Path, phase: &str) {
         success,
         "SELECT failed {phase}\nstdout:\n{stdout}\nstderr:\n{stderr}"
     );
-    assert!(stdout.contains("| 1"), "unexpected output {phase}: {stdout}");
+    assert!(
+        stdout.contains("| 1"),
+        "unexpected output {phase}: {stdout}"
+    );
 }
 
 fn docker(args: &[&str]) {

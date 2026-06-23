@@ -141,11 +141,13 @@ pub fn upgrade_entry(
 
     let environment = match environment {
         Some(env) => env.to_string(),
-        None => detect_entry_environment(client, &content, &resolved_entry_name)?.ok_or_else(|| {
-            SafeselectError::Other(format!(
+        None => {
+            detect_entry_environment(client, &content, &resolved_entry_name)?.ok_or_else(|| {
+                SafeselectError::Other(format!(
                 "Cannot detect environment for entry '{resolved_entry_name}'; use --environment"
             ))
-        })?,
+            })?
+        }
     };
     let target_entry_name = canonical_entry_name(repo_root, &environment)
         .unwrap_or_else(|| resolved_entry_name.to_string());
@@ -177,25 +179,21 @@ pub fn upgrade_entry(
     }
 
     let new_content = match client {
-        "opencode" => {
-            replace_opencode_json(
-                &content,
-                &opencode_entry,
-                &resolved_entry_name,
-                &target_entry_name,
-            )?
-        }
+        "opencode" => replace_opencode_json(
+            &content,
+            &opencode_entry,
+            &resolved_entry_name,
+            &target_entry_name,
+        )?,
         "cursor" | "windsurf" | "codex" | "claude-code" => {
             replace_mcp_json(&content, &entry, &resolved_entry_name, &target_entry_name)?
         }
-        "copilot" | "gemini-cli" => {
-            replace_ini_entry(
-                &content,
-                &resolved_entry_name,
-                &target_entry_name,
-                &environment,
-            )?
-        }
+        "copilot" | "gemini-cli" => replace_ini_entry(
+            &content,
+            &resolved_entry_name,
+            &target_entry_name,
+            &environment,
+        )?,
         _ => return Err(SafeselectError::Other(format!("Unknown client: {client}"))),
     };
 
@@ -679,8 +677,7 @@ fn resolve_upgrade_target(
         .and_then(|name| name.to_str())
         .ok_or_else(|| {
             SafeselectError::Other(
-                "Cannot infer entry name from PWD; use --project, --environment, or --name"
-                    .into(),
+                "Cannot infer entry name from PWD; use --project, --environment, or --name".into(),
             )
         })?;
 
@@ -1015,13 +1012,9 @@ args = ["serve", "--environment", "old"]
 value = true
 "#;
 
-        let replaced = replace_ini_entry(
-            content,
-            "safeselect-demo-pre",
-            "safeselect-demo-pre",
-            "pre",
-        )
-            .expect("should replace entry");
+        let replaced =
+            replace_ini_entry(content, "safeselect-demo-pre", "safeselect-demo-pre", "pre")
+                .expect("should replace entry");
 
         assert!(replaced.contains("args = [\"serve\", \"--environment\", \"pre\"]"));
         assert!(replaced.contains("[other]"));
@@ -1043,13 +1036,8 @@ value = true
             "command": ["safeselect", "serve", "--environment", "pre"]
         });
 
-        let replaced = replace_opencode_json(
-            content,
-            &entry,
-            "legacy-pre",
-            "safeselect-demo-pre",
-        )
-        .expect("should rename entry");
+        let replaced = replace_opencode_json(content, &entry, "legacy-pre", "safeselect-demo-pre")
+            .expect("should rename entry");
 
         assert!(replaced.contains("safeselect-demo-pre"));
         assert!(!replaced.contains("legacy-pre"));
