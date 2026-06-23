@@ -217,6 +217,61 @@ impl Default for ConfigLoader {
     }
 }
 
+pub fn project_account_prefix(repo_root: &Path) -> String {
+    let project_file = repo_root.join(".safeselect").join("project.toml");
+    if let Ok(content) = std::fs::read_to_string(project_file) {
+        if let Ok(project) = toml::from_str::<ProjectConfig>(&content) {
+            if let Some(name) = project.display_name.as_deref().map(str::trim) {
+                if !name.is_empty() {
+                    return name.to_string();
+                }
+            }
+        }
+    }
+
+    repo_root
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+pub fn preferred_keychain_account(
+    repo_root: &Path,
+    env_name: &str,
+    environment: &EnvironmentConfig,
+) -> String {
+    if let Some(secret) = environment.database.secret.as_ref() {
+        if secret.source == "macos-keychain" {
+            if let Some(account) = secret.account.as_deref().map(str::trim) {
+                if !account.is_empty() {
+                    return account.to_string();
+                }
+            }
+        }
+    }
+
+    format!("{}/{}", project_account_prefix(repo_root), env_name)
+}
+
+pub fn write_keychain_secret_to_env_file(env_file: &Path, account: &str) -> Result<()> {
+    let content = std::fs::read_to_string(env_file)?;
+    let mut environment: EnvironmentConfig = toml::from_str(&content)
+        .map_err(|e| SafeselectError::Config(format!("invalid {}: {e}", env_file.display())))?;
+
+    environment.database.secret = Some(SecretConfig {
+        source: "macos-keychain".to_string(),
+        service: Some("safeselect".to_string()),
+        account: Some(account.to_string()),
+        variable: None,
+    });
+
+    let updated = toml::to_string_pretty(&environment)
+        .map_err(|e| SafeselectError::TomlSer(e.to_string()))?;
+    std::fs::write(env_file, updated)?;
+    Ok(())
+}
+
 fn resolve_keychain(service: &str, account: &str) -> Result<String> {
     let output = std::process::Command::new("security")
         .args(["find-generic-password", "-a", account, "-s", service, "-w"])

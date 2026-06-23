@@ -201,7 +201,8 @@ fn parse_data_sources(content: &str) -> Result<Vec<DBeaverConnection>> {
                     let slh = props
                         .and_then(|p| p.get("#localHost").or_else(|| p.get("localHost")))
                         .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty());
                     let slp = props
                         .and_then(|p| p.get("#localPort").or_else(|| p.get("localPort")))
                         .and_then(|v| v.as_f64())

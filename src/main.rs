@@ -138,10 +138,7 @@ fn resolve_project_dir(loader: &ConfigLoader, cli_project: Option<PathBuf>) -> R
 }
 
 fn project_display_name(dir: &std::path::Path) -> String {
-    dir.file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("unknown")
-        .to_string()
+    config::project_account_prefix(dir)
 }
 
 fn default_agent_entry_name(project_name: &str, environment: &str) -> String {
@@ -486,31 +483,24 @@ fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
                 ));
             }
 
-            let project_name = project_display_name(&dir);
-            let account = format!("{project_name}/{environment}");
+            let content = std::fs::read_to_string(&env_file)?;
+            let env_config: config::EnvironmentConfig = toml::from_str(&content).map_err(|e| {
+                SafeselectError::Config(format!("invalid {}: {e}", env_file.display()))
+            })?;
+            let account = config::preferred_keychain_account(&dir, &environment, &env_config);
 
-            let pw =
-                match password {
-                    Some(p) => p,
-                    None => inquire::Password::new(&format!(
-                        "Password for '{project_name}/{environment}'"
-                    ))
+            let pw = match password {
+                Some(p) => p,
+                None => inquire::Password::new(&format!("Password for '{account}'"))
                     .without_confirmation()
                     .prompt()
                     .map_err(|e| SafeselectError::Other(format!("Failed to read password: {e}")))?,
-                };
+            };
 
             compose::store_password_in_keychain(&account, &pw)?;
             println!("  ✓ Password stored in Keychain ({account})");
 
-            let mut content = std::fs::read_to_string(&env_file)?;
-            if content.trim().ends_with("]") {
-                content.push('\n');
-            }
-            content.push_str(&format!(
-                "\n[database.secret]\nsource = \"macos-keychain\"\nservice = \"safeselect\"\naccount = \"{account}\"\n"
-            ));
-            std::fs::write(&env_file, content)?;
+            config::write_keychain_secret_to_env_file(&env_file, &account)?;
             println!("  ✓ Updated {}", env_file.display());
             println!("\nDone. Run: safeselect check --environment {environment}");
             Ok(())
@@ -968,7 +958,12 @@ fn prompt_ssh_config(
             username: conn.ssh_user.clone(),
             identity_file: conn.ssh_key_file.clone(),
             known_hosts: None,
-            local_host: conn.ssh_local_host.clone(),
+            local_host: conn
+                .ssh_local_host
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
             local_port: conn.ssh_local_port,
             forward_host: Some(conn.host.clone()),
             forward_port: Some(conn.port),
@@ -1038,7 +1033,12 @@ fn prompt_ssh_config(
         username: Some(user),
         identity_file: key_file,
         known_hosts: None,
-        local_host: conn.ssh_local_host.clone(),
+        local_host: conn
+            .ssh_local_host
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
         local_port: conn.ssh_local_port,
         forward_host: Some(conn.host.clone()),
         forward_port: Some(conn.port),
@@ -1473,9 +1473,8 @@ fn setup_passwords_for_missing(repo_root: &std::path::Path, env_names: &[String]
         println!("── Database Password ───────────────────────────");
         println!();
 
-        let repo_name = project_display_name(repo_root);
-        let account = format!("{repo_name}/{env_name}");
-        let pw = rpassword::prompt_password(format!("  Password for '{repo_name}/{env_name}': "))?;
+        let account = config::preferred_keychain_account(repo_root, env_name, &config);
+        let pw = rpassword::prompt_password(format!("  Password for '{account}': "))?;
         let pw = pw.trim().to_string();
         if pw.is_empty() {
             println!("  ⚠ Skipped (empty password).");

@@ -1396,7 +1396,19 @@ impl McpServer {
             return self.send_error(id, -32000, format!("Environment '{environment}' not found"));
         }
 
-        let account = format!("{}/{environment}", self.project_name);
+        let content = std::fs::read_to_string(&env_file).unwrap_or_default();
+        let env_config: EnvironmentConfig = match toml::from_str(&content) {
+            Ok(c) => c,
+            Err(e) => {
+                return self.send_error(
+                    id,
+                    -32000,
+                    format!("Invalid environment config {}: {e}", env_file.display()),
+                );
+            }
+        };
+        let account =
+            crate::config::preferred_keychain_account(&self.repo_root, environment, &env_config);
 
         if let Err(e) = compose::store_password_in_keychain(&account, password) {
             return self.send_error(
@@ -1406,16 +1418,7 @@ impl McpServer {
             );
         }
 
-        let secret_section = format!(
-            "\n[database.secret]\nsource = \"macos-keychain\"\nservice = \"safeselect\"\naccount = \"{account}\"\n"
-        );
-
-        let mut content = std::fs::read_to_string(&env_file).unwrap_or_default();
-        if content.trim().ends_with("]") {
-            content.push('\n');
-        }
-        content.push_str(&secret_section);
-        if let Err(e) = std::fs::write(&env_file, &content) {
+        if let Err(e) = crate::config::write_keychain_secret_to_env_file(&env_file, &account) {
             return self.send_error(
                 id,
                 -32000,
