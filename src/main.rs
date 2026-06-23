@@ -949,6 +949,10 @@ fn prompt_ssh_config(
     println!();
     println!("── SSH Configuration ({env_name}) ───────────────────");
     println!();
+    if let Some(warning) = dbeaver_shared_tunnel_warning(conn) {
+        println!("  ⚠ {warning}");
+        println!();
+    }
 
     let ans = inquire::Confirm::new("Configure SSH tunnel now?")
         .with_default(true)
@@ -1040,6 +1044,30 @@ fn prompt_ssh_config(
         forward_port: Some(conn.port),
         auth_type,
     })
+}
+
+fn dbeaver_shared_tunnel_warning(conn: &dbeaver::DBeaverConnection) -> Option<String> {
+    let host = conn.ssh_host.as_deref()?.trim();
+    let user = conn.ssh_user.as_deref().unwrap_or("").trim();
+    let auth = conn.ssh_auth_type.as_deref().unwrap_or("").trim();
+    let local_host = conn.ssh_local_host.as_deref().unwrap_or("").trim();
+    let local_port = conn.ssh_local_port.unwrap_or(0);
+
+    let looks_like_local_shared_tunnel =
+        host.eq_ignore_ascii_case("localhost") || host.eq_ignore_ascii_case("127.0.0.1");
+    let missing_identity = user.is_empty();
+    let no_forward_target = local_host.is_empty() && local_port == 0;
+    let password_tunnel = auth.eq_ignore_ascii_case("PASSWORD");
+
+    if looks_like_local_shared_tunnel && missing_identity && no_forward_target && password_tunnel {
+        return Some(
+            "DBeaver exported a local shared tunnel placeholder (for example localhost:2222) \
+instead of the real bastion/user. Enter the real SSH bastion and username manually."
+                .to_string(),
+        );
+    }
+
+    None
 }
 
 fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
@@ -2576,4 +2604,48 @@ fn cmd_uninstall(force: bool) -> Result<()> {
 
     println!("  Uninstall complete.");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_dbeaver_connection() -> dbeaver::DBeaverConnection {
+        dbeaver::DBeaverConnection {
+            name: "sample".to_string(),
+            host: "db.example.com".to_string(),
+            port: 5432,
+            database: "app".to_string(),
+            driver: "postgresql".to_string(),
+            username: "postgres".to_string(),
+            password: None,
+            ssh_host: Some("localhost".to_string()),
+            ssh_port: Some(2222),
+            ssh_user: None,
+            ssh_local_host: None,
+            ssh_local_port: None,
+            ssh_key_file: None,
+            ssh_auth_type: Some("PASSWORD".to_string()),
+        }
+    }
+
+    #[test]
+    fn warns_when_dbeaver_export_looks_like_shared_local_tunnel() {
+        let conn = sample_dbeaver_connection();
+
+        let warning = dbeaver_shared_tunnel_warning(&conn);
+
+        assert!(warning.is_some());
+        assert!(warning.unwrap().contains("localhost:2222"));
+    }
+
+    #[test]
+    fn does_not_warn_when_real_ssh_user_is_present() {
+        let mut conn = sample_dbeaver_connection();
+        conn.ssh_user = Some("antonio".to_string());
+
+        let warning = dbeaver_shared_tunnel_warning(&conn);
+
+        assert!(warning.is_none());
+    }
 }
