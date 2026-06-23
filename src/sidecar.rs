@@ -1,8 +1,11 @@
 use crate::error::{Result, SafeselectError};
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::mpsc;
+use std::time::Duration;
 
 #[derive(Serialize)]
 struct Request {
@@ -34,6 +37,13 @@ pub struct SidecarProcess {
     writer: BufWriter<ChildStdin>,
     reader: BufReader<ChildStdout>,
     next_id: u64,
+    statement_timeout_ms: u64,
+}
+
+#[derive(Clone, Copy)]
+pub struct ResultLimits {
+    pub max_rows: u64,
+    pub max_result_bytes: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -42,6 +52,30 @@ pub struct QueryResult {
     pub rows: Vec<Vec<serde_json::Value>>,
     pub row_count: u64,
     pub byte_count: u64,
+    #[serde(default)]
+    pub elapsed_ms: u64,
+    #[serde(default)]
+    pub elapsed: String,
+}
+
+pub fn format_elapsed(elapsed_ms: u64) -> String {
+    if elapsed_ms < 1_000 {
+        return format!("{elapsed_ms}ms");
+    }
+
+    let seconds = elapsed_ms as f64 / 1_000.0;
+    if elapsed_ms < 60_000 {
+        return format!("{seconds:.1}s");
+    }
+
+    let total_seconds = elapsed_ms / 1_000;
+    let minutes = total_seconds / 60;
+    let seconds_remainder = total_seconds % 60;
+    if seconds_remainder == 0 {
+        format!("{minutes}m")
+    } else {
+        format!("{minutes}m {seconds_remainder}s")
+    }
 }
 
 impl SidecarProcess {
@@ -52,7 +86,20 @@ impl SidecarProcess {
         username: &str,
         password: &str,
     ) -> Result<Self> {
-        Self::start_with_timeout(driver_path, driver_class, jdbc_url, username, password, 0)
+        Self::start_with_timeout(
+            driver_path,
+            driver_class,
+            jdbc_url,
+            username,
+            password,
+            0,
+            0,
+            ResultLimits {
+                max_rows: u64::MAX,
+                max_result_bytes: u64::MAX,
+            },
+            false,
+        )
     }
 
     pub fn start_with_timeout(
@@ -62,6 +109,9 @@ impl SidecarProcess {
         username: &str,
         password: &str,
         idle_timeout_seconds: u64,
+        statement_timeout_ms: u64,
+        result_limits: ResultLimits,
+        verbose: bool,
     ) -> Result<Self> {
         let jar_path = Self::ensure_sidecar_jar()?;
         let cp = format!("{}:{}", jar_path.display(), driver_path);
@@ -82,6 +132,21 @@ impl SidecarProcess {
             args.push("--idle-timeout-seconds");
             args.push(Box::leak(idle_timeout_seconds.to_string().into_boxed_str()));
         }
+        if statement_timeout_ms > 0 {
+            args.push("--statement-timeout-ms");
+            args.push(Box::leak(statement_timeout_ms.to_string().into_boxed_str()));
+        }
+        args.push("--max-rows");
+        args.push(Box::leak(
+            result_limits.max_rows.to_string().into_boxed_str(),
+        ));
+        args.push("--max-result-bytes");
+        args.push(Box::leak(
+            result_limits.max_result_bytes.to_string().into_boxed_str(),
+        ));
+        if verbose {
+            args.push("--verbose");
+        }
 
         let mut child = Command::new("java")
             .args(&args)
@@ -91,18 +156,21 @@ impl SidecarProcess {
             .spawn()
             .map_err(|e| SafeselectError::Sidecar(format!("failed to start Java: {e}")))?;
 
-        let stdin = child.stdin.take().ok_or_else(|| {
-            SafeselectError::Sidecar("failed to capture stdin".into())
-        })?;
-        let stdout = child.stdout.take().ok_or_else(|| {
-            SafeselectError::Sidecar("failed to capture stdout".into())
-        })?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| SafeselectError::Sidecar("failed to capture stdin".into()))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| SafeselectError::Sidecar("failed to capture stdout".into()))?;
 
         let mut proc = Self {
             writer: BufWriter::new(stdin),
             reader: BufReader::new(stdout),
             child,
             next_id: 0,
+            statement_timeout_ms,
         };
 
         proc.send_password(password)?;
@@ -115,6 +183,11 @@ impl SidecarProcess {
         self.writer.flush()?;
         let mut ack = String::new();
         self.reader.read_line(&mut ack)?;
+        if ack.is_empty() {
+            return Err(SafeselectError::Sidecar(
+                "sidecar process terminated during startup — JDBC connection failed".into(),
+            ));
+        }
         let ack = ack.trim();
         if ack != "ready" {
             return Err(SafeselectError::Sidecar(format!(
@@ -125,6 +198,17 @@ impl SidecarProcess {
     }
 
     fn ensure_sidecar_jar() -> Result<PathBuf> {
+        // First, try to use the JAR from the build directory (for development)
+        let build_jar = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("sidecar")
+            .join("target")
+            .join("safeselect-sidecar.jar");
+
+        if build_jar.exists() {
+            return Ok(build_jar);
+        }
+
+        // Fallback to embedded JAR (for production)
         let data_dir = dirs::data_dir()
             .unwrap_or_else(|| PathBuf::from("~/.local/share"))
             .join("safeselect")
@@ -158,12 +242,26 @@ impl SidecarProcess {
     }
 
     pub fn execute(&mut self, sql: &str) -> Result<QueryResult> {
+        let start = std::time::Instant::now();
+        tracing::debug!("Sidecar execute started");
+
         let params = serde_json::json!({"sql": sql});
         let resp = self.send_request("execute", Some(params))?;
 
+        tracing::debug!(
+            "Sidecar execute send_request completed ({:?})",
+            start.elapsed()
+        );
+
         if let Some(err) = resp.error {
+            if err.code == "SQL_ERROR" {
+                return Err(SafeselectError::SqlError(format!(
+                    "SQL execution failed [{}]: {}",
+                    err.code, err.message
+                )));
+            }
             return Err(SafeselectError::Sidecar(format!(
-                "JDBC error [{}]: {}",
+                "SQL execution failed [{}]: {}",
                 err.code, err.message
             )));
         }
@@ -171,13 +269,20 @@ impl SidecarProcess {
         match resp.ok {
             Some(val) => {
                 let result: QueryResult = serde_json::from_value(val)?;
+                tracing::debug!("Sidecar execute completed ({:?})", start.elapsed());
                 Ok(result)
             }
-            None => Err(SafeselectError::Sidecar("empty response from sidecar".into())),
+            None => Err(SafeselectError::Sidecar(
+                "empty response from sidecar".into(),
+            )),
         }
     }
 
-    fn send_request(&mut self, method: &str, params: Option<serde_json::Value>) -> Result<Response> {
+    fn send_request(
+        &mut self,
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> Result<Response> {
         let id = self.next_id;
         self.next_id += 1;
 
@@ -191,12 +296,77 @@ impl SidecarProcess {
         writeln!(self.writer, "{line}")?;
         self.writer.flush()?;
 
+        let fd = self.reader.get_ref().as_raw_fd();
+        // Wait for statement timeout + 1s buffer, with a short minimum so broken
+        // tunnels fail fast instead of looking stuck to MCP clients.
+        // The 1s buffer allows PostgreSQL to cancel the query via statement_timeout
+        // before we kill the sidecar process
+        let timeout_ms = if self.statement_timeout_ms > 0 {
+            let t = (self.statement_timeout_ms + 1_000u64).max(5_000u64);
+            if t > i32::MAX as u64 {
+                i32::MAX
+            } else {
+                t as i32
+            }
+        } else {
+            30_000i32
+        };
+
         loop {
-            let mut response_line = String::new();
-            self.reader.read_line(&mut response_line)?;
+            let mut pollfd = libc::pollfd {
+                fd,
+                events: libc::POLLIN | libc::POLLERR | libc::POLLHUP,
+                revents: 0,
+            };
+            let ret = unsafe { libc::poll(&mut pollfd, 1, timeout_ms) };
+            match ret {
+                -1 => {
+                    let err = std::io::Error::last_os_error();
+                    // EINTR = interrupted by signal, retry
+                    if err.kind() == std::io::ErrorKind::Interrupted {
+                        continue;
+                    }
+                    return Err(SafeselectError::Sidecar(format!("poll error: {err}")));
+                }
+                0 => {
+                    return Err(SafeselectError::Sidecar(format!(
+                        "sidecar did not respond within {timeout_ms}ms — restarting"
+                    )));
+                }
+                _ => {}
+            }
+
+            if (pollfd.revents & (libc::POLLERR | libc::POLLHUP)) != 0 {
+                return Err(SafeselectError::Sidecar(
+                    "sidecar process became unavailable while waiting for a response".into(),
+                ));
+            }
+
+            let (tx, rx) = mpsc::channel();
+            let response_line = std::thread::scope(|scope| {
+                let reader = &mut self.reader;
+                scope.spawn(move || {
+                    let mut response_line = String::new();
+                    let result = reader.read_line(&mut response_line);
+                    let _ = tx.send((result, response_line));
+                });
+
+                match rx.recv_timeout(Duration::from_millis(timeout_ms as u64)) {
+                    Ok((Ok(_), response_line)) => Ok(response_line),
+                    Ok((Err(err), _)) => Err(SafeselectError::Io(err)),
+                    Err(mpsc::RecvTimeoutError::Timeout) => Err(SafeselectError::Sidecar(format!(
+                        "sidecar returned partial or stalled output for more than {timeout_ms}ms"
+                    ))),
+                    Err(mpsc::RecvTimeoutError::Disconnected) => Err(SafeselectError::Sidecar(
+                        "sidecar response reader stopped unexpectedly".into(),
+                    )),
+                }
+            })?;
 
             if response_line.is_empty() {
-                return Err(SafeselectError::Sidecar("sidecar process terminated".into()));
+                return Err(SafeselectError::Sidecar(
+                    "sidecar process terminated".into(),
+                ));
             }
 
             let resp: Response = serde_json::from_str(&response_line)?;
@@ -234,6 +404,23 @@ impl SidecarProcess {
         let _ = self.send_request("shutdown", None);
         let _ = self.child.wait();
         Ok(())
+    }
+
+    /// Force kill the sidecar without trying to send a shutdown request.
+    /// Use this when the sidecar is hung or unresponsive.
+    pub fn force_kill(mut self) -> Result<()> {
+        tracing::warn!("Force killing sidecar process (PID: {})", self.child.id());
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        Ok(())
+    }
+
+    /// Force kill the sidecar without consuming self.
+    /// Use this when restarting after a timeout.
+    pub fn force_kill_ref(&mut self) {
+        tracing::warn!("Force killing sidecar process (PID: {})", self.child.id());
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 

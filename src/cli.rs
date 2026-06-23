@@ -63,6 +63,14 @@ pub enum Command {
         #[arg(long)]
         environment: String,
     },
+    /// Diagnose configuration, SSH, sidecar, JDBC, and SELECT 1 connectivity
+    Doctor {
+        /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
+        #[arg(long)]
+        project: Option<PathBuf>,
+        #[arg(long)]
+        environment: String,
+    },
     /// Execute a SQL query and display results
     Query {
         /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
@@ -73,6 +81,9 @@ pub enum Command {
         /// SQL query to execute (reads from stdin if omitted)
         #[arg(long)]
         sql: Option<String>,
+        /// Enable verbose logging (sidecar debug output)
+        #[arg(long, default_value_t = false)]
+        verbose: bool,
     },
     /// Disconnect from the database (MCP tool — callable by AI agents)
     Disconnect {
@@ -84,6 +95,14 @@ pub enum Command {
     },
     /// Reconnect to the database (MCP tool — callable by AI agents)
     Connect {
+        /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
+        #[arg(long)]
+        project: Option<PathBuf>,
+        #[arg(long)]
+        environment: String,
+    },
+    /// Restart sidecar and verify the database connection with a test query
+    Reconnect {
         /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
         #[arg(long)]
         project: Option<PathBuf>,
@@ -191,9 +210,29 @@ pub enum AgentAction {
         project: Option<PathBuf>,
         #[arg(long)]
         environment: String,
-        /// Entry name (default: <project-dir>-<environment>)
+        /// Entry name (default: safeselect-<project-dir>-<environment>)
         #[arg(long)]
         name: Option<String>,
+        /// Install to project-local config instead of global config
+        #[arg(long)]
+        local: bool,
+    },
+    /// Upgrade an existing MCP entry in-place
+    Upgrade {
+        /// Client name (opencode, copilot, cursor, etc.)
+        client: String,
+        /// Existing entry name to upgrade (auto-detected from the current project if omitted)
+        #[arg(long)]
+        name: Option<String>,
+        /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
+        #[arg(long)]
+        project: Option<PathBuf>,
+        /// Environment name to serve (auto-detected from the existing entry if omitted)
+        #[arg(long)]
+        environment: Option<String>,
+        /// Upgrade the project-local config instead of global config
+        #[arg(long)]
+        local: bool,
     },
     /// Uninstall MCP entry
     Uninstall {

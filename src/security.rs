@@ -13,6 +13,10 @@ impl SecurityEngine {
         Self { policy, limits }
     }
 
+    pub fn limits(&self) -> &LimitsConfig {
+        &self.limits
+    }
+
     pub fn allowed_schemas(&self) -> &[String] {
         &self.policy.allowed_schemas
     }
@@ -89,20 +93,56 @@ impl SecurityEngine {
         Ok(())
     }
 
-    fn check_read_only(&self, sql: &str) -> Result<()> {
-        let upper = sql.trim().to_uppercase();
+    fn strip_sql_comments(sql: &str) -> String {
+        let mut result = String::with_capacity(sql.len());
+        let mut chars = sql.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if ch == '-' && chars.peek() == Some(&'-') {
+                // Line comment: skip until newline
+                for c in chars.by_ref() {
+                    if c == '\n' {
+                        result.push('\n');
+                        break;
+                    }
+                }
+            } else if ch == '/' && chars.peek() == Some(&'*') {
+                // Block comment: skip until */
+                chars.next(); // consume '*'
+                let mut prev = ' ';
+                for c in chars.by_ref() {
+                    if prev == '*' && c == '/' {
+                        break;
+                    }
+                    prev = c;
+                }
+            } else {
+                result.push(ch);
+            }
+        }
+        result
+    }
 
-        if upper.starts_with("SELECT")
-            || upper.starts_with("EXPLAIN")
-            || upper.starts_with("WITH")
-        {
+    fn check_read_only(&self, sql: &str) -> Result<()> {
+        let stripped = Self::strip_sql_comments(sql);
+        let trimmed = stripped.trim();
+        let upper = trimmed.to_uppercase();
+
+        if upper.starts_with("WITH") {
+            return self.check_with_read_only(trimmed);
+        }
+
+        if upper.starts_with("EXPLAIN") {
+            return self.check_explain_read_only(trimmed);
+        }
+
+        if upper.starts_with("SELECT") {
+            self.check_forbidden_tokens(trimmed, false)?;
             return Ok(());
         }
 
         let disallowed = [
-            "INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER",
-            "TRUNCATE", "COPY", "SET ", "PREPARE", "EXECUTE",
-            "CALL", "MERGE", "REPLACE", "GRANT", "REVOKE",
+            "INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER", "TRUNCATE", "COPY", "SET ",
+            "PREPARE", "EXECUTE", "CALL", "MERGE", "REPLACE", "GRANT", "REVOKE",
         ];
 
         for kw in &disallowed {
@@ -117,6 +157,115 @@ impl SecurityEngine {
         Err(SafeselectError::QueryRejected(
             "Read-only mode: unrecognized statement type".into(),
         ))
+    }
+
+    fn check_explain_read_only(&self, sql: &str) -> Result<()> {
+        let explained_sql = extract_explain_target(sql).ok_or_else(|| {
+            SafeselectError::QueryRejected(
+                "Read-only mode: could not validate EXPLAIN target statement".into(),
+            )
+        })?;
+
+        self.check_select_like_read_only(explained_sql)
+            .map_err(|_| {
+                SafeselectError::QueryRejected(
+                    "Read-only mode: EXPLAIN is only allowed for SELECT statements".into(),
+                )
+            })
+    }
+
+    fn check_with_read_only(&self, sql: &str) -> Result<()> {
+        self.check_select_like_read_only(sql)
+    }
+
+    fn check_select_like_read_only(&self, sql: &str) -> Result<()> {
+        let trimmed = sql.trim_start();
+        let upper = trimmed.to_uppercase();
+
+        if upper.starts_with("SELECT") {
+            self.check_forbidden_tokens(trimmed, false)?;
+            return Ok(());
+        }
+
+        if upper.starts_with("WITH") {
+            let body = extract_with_query_body(trimmed).ok_or_else(|| {
+                SafeselectError::QueryRejected(
+                    "Read-only mode: could not validate WITH query".into(),
+                )
+            })?;
+
+            if !body.trim_start().to_uppercase().starts_with("SELECT") {
+                return Err(SafeselectError::QueryRejected(
+                    "Read-only mode: WITH queries must end in SELECT".into(),
+                ));
+            }
+
+            self.check_forbidden_tokens(trimmed, true)?;
+            return Ok(());
+        }
+
+        Err(SafeselectError::QueryRejected(
+            "Read-only mode: unrecognized statement type".into(),
+        ))
+    }
+
+    fn check_forbidden_tokens(&self, sql: &str, allow_with_keyword: bool) -> Result<()> {
+        let compact = sanitize_for_keyword_scan(sql);
+        let forbidden = [
+            "INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER", "TRUNCATE", "COPY", "PREPARE",
+            "EXECUTE", "CALL", "MERGE", "REPLACE", "GRANT", "REVOKE", "WITH", "DO", "DECLARE",
+            "LOCK", "VACUUM", "REINDEX",
+        ];
+
+        for keyword in forbidden {
+            if keyword == "WITH" && allow_with_keyword {
+                continue;
+            }
+            if keyword == "WITH" && contains_with_ordinality_only(&compact) {
+                continue;
+            }
+            if contains_keyword(&compact, keyword) {
+                return Err(SafeselectError::QueryRejected(format!(
+                    "Read-only mode: {keyword} not allowed"
+                )));
+            }
+        }
+
+        let forbidden_functions = [
+            "SET_CONFIG",
+            "PG_SLEEP",
+            "PG_ADVISORY_LOCK",
+            "PG_ADVISORY_XACT_LOCK",
+            "PG_CREATE_PHYSICAL_REPLICATION_SLOT",
+            "PG_CREATE_LOGICAL_REPLICATION_SLOT",
+            "PG_DROP_REPLICATION_SLOT",
+            "PG_TERMINATE_BACKEND",
+            "PG_CANCEL_BACKEND",
+            "PG_RELOAD_CONF",
+            "PG_ROTATE_LOGFILE",
+            "PG_START_BACKUP",
+            "PG_STOP_BACKUP",
+            "LO_IMPORT",
+            "LO_EXPORT",
+            "LO_UNLINK",
+            "NEXTVAL",
+        ];
+
+        for function in forbidden_functions {
+            if compact.contains(function) {
+                return Err(SafeselectError::QueryRejected(format!(
+                    "Read-only mode: function {function} not allowed"
+                )));
+            }
+        }
+
+        if contains_keyword(&compact, "SET") || compact.contains("SETROLE") {
+            return Err(SafeselectError::QueryRejected(
+                "Read-only mode: session changes are not allowed".into(),
+            ));
+        }
+
+        Ok(())
     }
 
     fn check_allowed_schemas(&self, sql: &str) -> Result<()> {
@@ -189,7 +338,9 @@ fn has_schema_reference(sql_lower: &str, allowed_patterns: &[String]) -> bool {
             let schema = &sql_lower[start..end];
             let schemaname = schema.trim_end_matches('.');
             if !schemaname.is_empty()
-                && schemaname.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                && schemaname
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_')
                 && !is_sql_keyword(schemaname)
                 && !allowed_patterns.iter().any(|p| p.starts_with(schemaname))
             {
@@ -203,17 +354,70 @@ fn has_schema_reference(sql_lower: &str, allowed_patterns: &[String]) -> bool {
 fn is_sql_keyword(word: &str) -> bool {
     matches!(
         word,
-        "select" | "from" | "where" | "and" | "or" | "not" | "in" | "on" | "as"
-            | "join" | "left" | "right" | "inner" | "outer" | "cross" | "full"
-            | "order" | "group" | "by" | "having" | "limit" | "offset"
-            | "insert" | "update" | "delete" | "into" | "values" | "set"
-            | "create" | "alter" | "drop" | "table" | "index" | "view"
-            | "distinct" | "count" | "sum" | "avg" | "min" | "max" | "exists"
-            | "true" | "false" | "null" | "is" | "like" | "between"
-            | "union" | "all" | "any" | "some" | "case" | "when" | "then" | "else" | "end"
-            | "cast" | "coalesce" | "nullif"
-            | "begin" | "commit" | "rollback"
-            | "grant" | "revoke"
+        "select"
+            | "from"
+            | "where"
+            | "and"
+            | "or"
+            | "not"
+            | "in"
+            | "on"
+            | "as"
+            | "join"
+            | "left"
+            | "right"
+            | "inner"
+            | "outer"
+            | "cross"
+            | "full"
+            | "order"
+            | "group"
+            | "by"
+            | "having"
+            | "limit"
+            | "offset"
+            | "insert"
+            | "update"
+            | "delete"
+            | "into"
+            | "values"
+            | "set"
+            | "create"
+            | "alter"
+            | "drop"
+            | "table"
+            | "index"
+            | "view"
+            | "distinct"
+            | "count"
+            | "sum"
+            | "avg"
+            | "min"
+            | "max"
+            | "exists"
+            | "true"
+            | "false"
+            | "null"
+            | "is"
+            | "like"
+            | "between"
+            | "union"
+            | "all"
+            | "any"
+            | "some"
+            | "case"
+            | "when"
+            | "then"
+            | "else"
+            | "end"
+            | "cast"
+            | "coalesce"
+            | "nullif"
+            | "begin"
+            | "commit"
+            | "rollback"
+            | "grant"
+            | "revoke"
     )
 }
 
@@ -308,6 +512,368 @@ fn count_statements(sql: &str) -> usize {
     count + 1
 }
 
+fn sanitize_for_keyword_scan(sql: &str) -> String {
+    let mut out = String::with_capacity(sql.len());
+    let chars: Vec<char> = sql.chars().collect();
+    let mut i = 0;
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut in_line_comment = false;
+    let mut in_block_comment = false;
+
+    while i < chars.len() {
+        let c = chars[i];
+
+        if in_line_comment {
+            if c == '\n' {
+                in_line_comment = false;
+                out.push(' ');
+            }
+            i += 1;
+            continue;
+        }
+
+        if in_block_comment {
+            if c == '*' && i + 1 < chars.len() && chars[i + 1] == '/' {
+                in_block_comment = false;
+                i += 2;
+                out.push(' ');
+                continue;
+            }
+            i += 1;
+            continue;
+        }
+
+        if in_single {
+            if c == '\'' {
+                if i + 1 < chars.len() && chars[i + 1] == '\'' {
+                    i += 2;
+                    continue;
+                }
+                in_single = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        if in_double {
+            if c == '"' {
+                in_double = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        if c == '-' && i + 1 < chars.len() && chars[i + 1] == '-' {
+            in_line_comment = true;
+            i += 2;
+            continue;
+        }
+
+        if c == '/' && i + 1 < chars.len() && chars[i + 1] == '*' {
+            in_block_comment = true;
+            i += 2;
+            continue;
+        }
+
+        if c == '\'' {
+            in_single = true;
+            out.push(' ');
+            i += 1;
+            continue;
+        }
+
+        if c == '"' {
+            in_double = true;
+            out.push(' ');
+            i += 1;
+            continue;
+        }
+
+        if c.is_ascii_alphanumeric() || c == '_' {
+            out.push(c.to_ascii_uppercase());
+        } else {
+            out.push(' ');
+        }
+
+        i += 1;
+    }
+
+    out
+}
+
+fn contains_keyword(sql: &str, keyword: &str) -> bool {
+    sql.split_whitespace().any(|token| token == keyword)
+}
+
+fn contains_with_ordinality_only(sql: &str) -> bool {
+    let mut saw_with = false;
+    let mut tokens = sql.split_whitespace().peekable();
+
+    while let Some(token) = tokens.next() {
+        if token != "WITH" {
+            continue;
+        }
+
+        saw_with = true;
+        if tokens.next() != Some("ORDINALITY") {
+            return false;
+        }
+    }
+
+    saw_with
+}
+
+fn extract_with_query_body(sql: &str) -> Option<&str> {
+    let upper = sql.to_uppercase();
+    if !upper.starts_with("WITH") {
+        return None;
+    }
+
+    let mut i = 4;
+    i = skip_sql_whitespace(sql, i);
+
+    if starts_with_keyword_at(sql, i, "RECURSIVE") {
+        i += "RECURSIVE".len();
+        i = skip_sql_whitespace(sql, i);
+    }
+
+    loop {
+        let as_index = find_top_level_keyword(sql, i, "AS")?;
+        i = skip_sql_whitespace(sql, as_index + 2);
+
+        if starts_with_keyword_at(sql, i, "NOT") {
+            i += 3;
+            i = skip_sql_whitespace(sql, i);
+        }
+        if starts_with_keyword_at(sql, i, "MATERIALIZED") {
+            i += "MATERIALIZED".len();
+            i = skip_sql_whitespace(sql, i);
+        }
+
+        if sql.get(i..=i)? != "(" {
+            return None;
+        }
+
+        i = skip_balanced_parentheses(sql, i)?;
+        i = skip_sql_whitespace(sql, i);
+
+        if sql.get(i..=i) == Some(",") {
+            i += 1;
+            i = skip_sql_whitespace(sql, i);
+            continue;
+        }
+
+        return sql.get(i..);
+    }
+}
+
+fn skip_sql_whitespace(sql: &str, mut index: usize) -> usize {
+    while let Some(ch) = sql[index..].chars().next() {
+        if !ch.is_whitespace() {
+            break;
+        }
+        index += ch.len_utf8();
+    }
+    index
+}
+
+fn starts_with_keyword_at(sql: &str, index: usize, keyword: &str) -> bool {
+    let end = index + keyword.len();
+    let Some(candidate) = sql.get(index..end) else {
+        return false;
+    };
+    if !candidate.eq_ignore_ascii_case(keyword) {
+        return false;
+    }
+
+    let prev_ok = index == 0
+        || sql[..index]
+            .chars()
+            .next_back()
+            .is_none_or(|ch| !matches!(ch, 'A'..='Z' | 'a'..='z' | '0'..='9' | '_'));
+    let next_ok = sql[end..]
+        .chars()
+        .next()
+        .is_none_or(|ch| !matches!(ch, 'A'..='Z' | 'a'..='z' | '0'..='9' | '_'));
+
+    prev_ok && next_ok
+}
+
+fn find_top_level_keyword(sql: &str, start: usize, keyword: &str) -> Option<usize> {
+    let chars: Vec<(usize, char)> = sql.char_indices().collect();
+    let mut pos = chars.iter().position(|(idx, _)| *idx >= start)?;
+    let mut depth = 0usize;
+    let mut in_single = false;
+    let mut in_double = false;
+
+    while pos < chars.len() {
+        let (byte_idx, ch) = chars[pos];
+
+        if in_single {
+            if ch == '\'' {
+                if pos + 1 < chars.len() && chars[pos + 1].1 == '\'' {
+                    pos += 2;
+                    continue;
+                }
+                in_single = false;
+            }
+            pos += 1;
+            continue;
+        }
+
+        if in_double {
+            if ch == '"' {
+                in_double = false;
+            }
+            pos += 1;
+            continue;
+        }
+
+        if ch == '\'' {
+            in_single = true;
+            pos += 1;
+            continue;
+        }
+
+        if ch == '"' {
+            in_double = true;
+            pos += 1;
+            continue;
+        }
+
+        if ch == '-' && pos + 1 < chars.len() && chars[pos + 1].1 == '-' {
+            pos += 2;
+            while pos < chars.len() && chars[pos].1 != '\n' {
+                pos += 1;
+            }
+            continue;
+        }
+
+        if ch == '/' && pos + 1 < chars.len() && chars[pos + 1].1 == '*' {
+            pos += 2;
+            while pos + 1 < chars.len() && !(chars[pos].1 == '*' && chars[pos + 1].1 == '/') {
+                pos += 1;
+            }
+            pos = (pos + 2).min(chars.len());
+            continue;
+        }
+
+        match ch {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+
+        if depth == 0 && starts_with_keyword_at(sql, byte_idx, keyword) {
+            return Some(byte_idx);
+        }
+
+        pos += 1;
+    }
+
+    None
+}
+
+fn skip_balanced_parentheses(sql: &str, start: usize) -> Option<usize> {
+    let chars: Vec<(usize, char)> = sql.char_indices().collect();
+    let mut pos = chars.iter().position(|(idx, _)| *idx == start)?;
+    let mut depth = 0usize;
+    let mut in_single = false;
+    let mut in_double = false;
+
+    while pos < chars.len() {
+        let (_, ch) = chars[pos];
+
+        if in_single {
+            if ch == '\'' {
+                if pos + 1 < chars.len() && chars[pos + 1].1 == '\'' {
+                    pos += 2;
+                    continue;
+                }
+                in_single = false;
+            }
+            pos += 1;
+            continue;
+        }
+
+        if in_double {
+            if ch == '"' {
+                in_double = false;
+            }
+            pos += 1;
+            continue;
+        }
+
+        if ch == '\'' {
+            in_single = true;
+            pos += 1;
+            continue;
+        }
+
+        if ch == '"' {
+            in_double = true;
+            pos += 1;
+            continue;
+        }
+
+        if ch == '(' {
+            depth += 1;
+        } else if ch == ')' {
+            depth = depth.saturating_sub(1);
+            if depth == 0 {
+                let next = pos + 1;
+                return Some(if next < chars.len() {
+                    chars[next].0
+                } else {
+                    sql.len()
+                });
+            }
+        }
+
+        pos += 1;
+    }
+
+    None
+}
+
+fn extract_explain_target(sql: &str) -> Option<&str> {
+    let trimmed = sql.trim_start();
+    let upper = trimmed.to_uppercase();
+    if !upper.starts_with("EXPLAIN") {
+        return None;
+    }
+
+    let after_explain = trimmed.get(7..)?.trim_start();
+    if after_explain.starts_with('(') {
+        let mut depth = 0usize;
+        for (idx, ch) in after_explain.char_indices() {
+            match ch {
+                '(' => depth += 1,
+                ')' => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return after_explain.get(idx + 1..).map(str::trim_start);
+                    }
+                }
+                _ => {}
+            }
+        }
+        return None;
+    }
+
+    let upper_after_explain = after_explain.to_uppercase();
+    for option in [
+        "ANALYZE", "VERBOSE", "BUFFERS", "SETTINGS", "WAL", "TIMING", "SUMMARY",
+    ] {
+        if upper_after_explain.starts_with(option) {
+            return after_explain.get(option.len()..).map(str::trim_start);
+        }
+    }
+
+    Some(after_explain)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -347,10 +913,101 @@ mod tests {
     }
 
     #[test]
+    fn test_read_only_with_select_allowed() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        let sql = "WITH x AS (SELECT 1 AS id) SELECT * FROM x";
+        assert!(engine.check_read_only(sql).is_ok());
+    }
+
+    #[test]
     fn test_read_only_explain() {
         let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
         let sql = "EXPLAIN SELECT * FROM users";
         assert!(engine.check_read_only(sql).is_ok());
+    }
+
+    #[test]
+    fn test_read_only_with_rejected() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        assert!(engine
+            .check_read_only("WITH x AS (SELECT 1) SELECT * FROM x")
+            .is_ok());
+    }
+
+    #[test]
+    fn test_read_only_select_with_ordinality_allowed() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        assert!(engine
+            .check_read_only("SELECT * FROM unnest(ARRAY[10, 20]) WITH ORDINALITY AS t(value, ord)")
+            .is_ok());
+    }
+
+    #[test]
+    fn test_read_only_explain_analyze_select_allowed() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        assert!(engine
+            .check_read_only("EXPLAIN (ANALYZE, FORMAT JSON) SELECT * FROM users")
+            .is_ok());
+        assert!(engine
+            .check_read_only("EXPLAIN ANALYZE SELECT * FROM users")
+            .is_ok());
+        assert!(engine
+            .check_read_only("EXPLAIN WITH x AS (SELECT 1) SELECT * FROM x")
+            .is_ok());
+    }
+
+    #[test]
+    fn test_read_only_with_delete_rejected() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        assert!(engine
+            .check_read_only(
+                "WITH deleted AS (DELETE FROM users RETURNING id) SELECT * FROM deleted"
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn test_read_only_with_non_select_tail_rejected() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        assert!(engine
+            .check_read_only("WITH x AS (SELECT 1) DELETE FROM users")
+            .is_err());
+    }
+
+    #[test]
+    fn test_read_only_explain_analyze_delete_rejected() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        assert!(engine
+            .check_read_only("EXPLAIN ANALYZE DELETE FROM users")
+            .is_err());
+    }
+
+    #[test]
+    fn test_read_only_explain_delete_rejected() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        assert!(engine.check_read_only("EXPLAIN DELETE FROM users").is_err());
+    }
+
+    #[test]
+    fn test_read_only_select_with_delete_in_string_allowed() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        assert!(engine
+            .check_read_only("SELECT 'DELETE FROM users' AS sample")
+            .is_ok());
+    }
+
+    #[test]
+    fn test_read_only_rejects_session_change_function() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        assert!(engine
+            .check_read_only("SELECT set_config('role', 'postgres', false)")
+            .is_err());
+    }
+
+    #[test]
+    fn test_read_only_rejects_sleep_function() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        assert!(engine.check_read_only("SELECT pg_sleep(5)").is_err());
     }
 
     #[test]
@@ -368,6 +1025,27 @@ mod tests {
     }
 
     #[test]
+    fn test_read_only_select_with_leading_line_comment() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        let sql = "-- Valid sampleId for timing tests\nSELECT id FROM users LIMIT 1";
+        assert!(engine.check_read_only(sql).is_ok());
+    }
+
+    #[test]
+    fn test_read_only_select_with_block_comment() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        let sql = "/* get sample */ SELECT id FROM users";
+        assert!(engine.check_read_only(sql).is_ok());
+    }
+
+    #[test]
+    fn test_read_only_dml_hidden_behind_comment_rejected() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        let sql = "-- comment\nDELETE FROM users";
+        assert!(engine.check_read_only(sql).is_err());
+    }
+
+    #[test]
     fn test_with_trailing_semicolon() {
         let sql = strip_trailing_semicolons("WITH x AS (SELECT 1) SELECT * FROM x;");
         assert_eq!(count_statements(sql), 1);
@@ -377,12 +1055,6 @@ mod tests {
     fn test_with_cte() {
         let sql = "WITH x AS (SELECT 1) SELECT * FROM x";
         assert_eq!(count_statements(sql), 1);
-    }
-
-    #[test]
-    fn test_read_only_with_cte() {
-        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
-        assert!(engine.check_read_only("WITH x AS (SELECT 1) SELECT * FROM x").is_ok());
     }
 
     #[test]
@@ -405,6 +1077,8 @@ mod tests {
         let mut policy = SecurityPolicy::default();
         policy.denied_relations = vec!["public.users_credentials".into()];
         let engine = SecurityEngine::new(policy, LimitsConfig::default());
-        assert!(engine.validate("SELECT * FROM public.users_credentials").is_err());
+        assert!(engine
+            .validate("SELECT * FROM public.users_credentials")
+            .is_err());
     }
 }

@@ -3,9 +3,7 @@ mod environment;
 mod project;
 
 pub use driver::DriverConfig;
-pub use environment::{
-    DatabaseConfig, EnvironmentConfig, LimitsOverride, SecretConfig, SshConfig,
-};
+pub use environment::{DatabaseConfig, EnvironmentConfig, LimitsOverride, SecretConfig, SshConfig};
 pub use project::{AuditConfig, LimitsConfig, ProjectConfig, SecurityPolicy};
 
 use crate::error::{Result, SafeselectError};
@@ -81,22 +79,19 @@ impl ConfigLoader {
     pub fn resolve_secret(&self, secret: &SecretConfig) -> Result<String> {
         match secret.source.as_str() {
             "macos-keychain" => {
-                let account = secret
-                    .account
-                    .as_deref()
-                    .ok_or_else(|| SafeselectError::Secret("account required for keychain".into()))?;
-                let service = secret
-                    .service
-                    .as_deref()
-                    .ok_or_else(|| SafeselectError::Secret("service required for keychain".into()))?;
+                let account = secret.account.as_deref().ok_or_else(|| {
+                    SafeselectError::Secret("account required for keychain".into())
+                })?;
+                let service = secret.service.as_deref().ok_or_else(|| {
+                    SafeselectError::Secret("service required for keychain".into())
+                })?;
                 resolve_keychain(service, account)
             }
             "env" => {
                 let var = secret.variable.as_deref().ok_or_else(|| {
                     SafeselectError::Secret("variable name required for env source".into())
                 })?;
-                std::env::var(var)
-                    .map_err(|_| SafeselectError::EnvVarNotSet(var.to_string()))
+                std::env::var(var).map_err(|_| SafeselectError::EnvVarNotSet(var.to_string()))
             }
             other => Err(SafeselectError::Secret(format!(
                 "unknown secret source: {other}"
@@ -126,7 +121,9 @@ impl ConfigLoader {
         hasher.update(&buf);
         let actual = hex::encode(hasher.finalize());
         if actual != config.sha256 {
-            return Err(SafeselectError::DriverChecksumMismatch(config.vendor.clone()));
+            return Err(SafeselectError::DriverChecksumMismatch(
+                config.vendor.clone(),
+            ));
         }
         Ok(())
     }
@@ -148,7 +145,9 @@ impl ConfigLoader {
     pub fn resolve_local(&self, repo_root: &Path, env_name: &str) -> Result<ResolvedConfig> {
         let safeselect_dir = repo_root.join(".safeselect");
         if !safeselect_dir.is_dir() {
-            return Err(SafeselectError::LocalProjectNotFound(repo_root.to_path_buf()));
+            return Err(SafeselectError::LocalProjectNotFound(
+                repo_root.to_path_buf(),
+            ));
         }
 
         let project_file = safeselect_dir.join("project.toml");
@@ -159,7 +158,9 @@ impl ConfigLoader {
             ProjectConfig::default()
         };
 
-        let env_file = safeselect_dir.join("environments").join(format!("{env_name}.toml"));
+        let env_file = safeselect_dir
+            .join("environments")
+            .join(format!("{env_name}.toml"));
         if !env_file.exists() {
             return Err(SafeselectError::EnvironmentNotFound(
                 env_name.to_string(),
@@ -218,14 +219,7 @@ impl Default for ConfigLoader {
 
 fn resolve_keychain(service: &str, account: &str) -> Result<String> {
     let output = std::process::Command::new("security")
-        .args([
-            "find-generic-password",
-            "-a",
-            account,
-            "-s",
-            service,
-            "-w",
-        ])
+        .args(["find-generic-password", "-a", account, "-s", service, "-w"])
         .output()
         .map_err(|e| SafeselectError::Secret(format!("security command failed: {e}")))?;
 

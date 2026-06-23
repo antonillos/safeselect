@@ -44,7 +44,7 @@ impl AuditLog {
         let audit_dir = PathBuf::from(&dir).join(project).join(environment);
         std::fs::create_dir_all(&audit_dir)?;
 
-        let filename = format!("{}.jsonl", Utc::now().format("%Y%m%d-%H%M%S"));
+        let filename = format!("{}.jsonl", Utc::now().format("%Y%m%d-%H%M%S-%f"));
         let path = audit_dir.join(&filename);
         let file = std::fs::File::create_new(&path).map_err(|e| {
             SafeselectError::Audit(format!("cannot create audit file {}: {e}", path.display()))
@@ -63,12 +63,7 @@ impl AuditLog {
         })
     }
 
-    pub fn record(
-        &mut self,
-        category: &str,
-        decision: &str,
-        sql: &str,
-    ) -> Result<()> {
+    pub fn record(&mut self, category: &str, decision: &str, sql: &str) -> Result<()> {
         let query_hash = self.hash_sql(sql);
         let entry = AuditEntry {
             timestamp: Utc::now().to_rfc3339(),
@@ -97,11 +92,10 @@ impl AuditLog {
     fn rotate(&mut self) -> Result<()> {
         self.writer.flush()?;
         let dir = self.current_path.parent().unwrap().to_path_buf();
-        let filename = format!("{}.jsonl", Utc::now().format("%Y%m%d-%H%M%S"));
+        let filename = format!("{}.jsonl", Utc::now().format("%Y%m%d-%H%M%S-%f"));
         let path = dir.join(&filename);
-        let file = std::fs::File::create_new(&path).map_err(|e| {
-            SafeselectError::Audit(format!("cannot rotate audit file: {e}"))
-        })?;
+        let file = std::fs::File::create_new(&path)
+            .map_err(|e| SafeselectError::Audit(format!("cannot rotate audit file: {e}")))?;
         self.writer = std::io::BufWriter::new(file);
         self.current_path = path;
         self.bytes_written = 0;

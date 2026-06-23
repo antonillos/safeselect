@@ -8,6 +8,25 @@ tools:
   - select
   - list_tables
   - explain
+  - connect
+  - disconnect
+  - reconnect
+  - check
+  - config_validate
+  - config_show
+  - config_set_password
+  - config_rename_environment
+  - config_delete_environment
+  - config_reset
+  - driver_list
+  - driver_add
+  - driver_download
+  - agent_detect
+  - agent_install
+  - agent_uninstall
+  - agent_status
+  - import_compose
+  - uninstall
 setup: |
   # Install
   brew install antonillos/tap/safeselect
@@ -19,7 +38,10 @@ setup: |
   safeselect driver add --vendor postgresql --path /path/to/postgresql.jar --class org.postgresql.Driver
 
   # Install agent integration
-  safeselect agent install opencode --project myproject --environment testing --name myproject-testing
+  safeselect agent install opencode --project myproject --environment testing --name safeselect-myproject-testing
+
+  # Upgrade from the current project and migrate to the default name
+  safeselect agent upgrade opencode --environment testing
 
   # Import config from DBeaver export or docker-compose
   safeselect import-dbeaver ~/Downloads/dbeaver-export.zip
@@ -39,6 +61,7 @@ commands:
   - safeselect driver add --vendor postgresql --path <jar> --class <class>
   - safeselect agent detect
   - safeselect agent install <client> --project <p> --environment <e> --name <n>
+  - safeselect agent upgrade <client> [--name <n>] [--project <p>] [--environment <e>]
   - safeselect agent uninstall <client> --name <n>
   - safeselect import-dbeaver <path-to-zip>
   - safeselect import-compose --path compose.yml
@@ -58,11 +81,17 @@ config:
         └── production.toml
 security:
   - Fail-closed: any security incident terminates the process
-  - AST-level SQL validation (PostgreSQL parser)
+  - Read-only SQL validation for SELECT, EXPLAIN, and WITH
   - Read-only enforcement per project policy
   - Secrets via macOS Keychain or env vars (never in config files)
   - SHA-256 driver validation on every connection
   - No credentials in JDBC URLs
+agent_guidance:
+  - Use list_tables before guessing schema names
+  - Use explain with FORMAT JSON by default for agent parsing
+  - Use explain analyze + buffers + explain_verbose for index and bottleneck analysis
+  - Use format text only when the plan is meant for a human
+  - Use check then reconnect to recover stale sidecar/JDBC/SSH tunnel failures
 audit:
   - JSON audit log with query hashes (never full SQL)
   - Audit location: ~/.local/state/safeselect/audit/

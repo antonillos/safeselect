@@ -3,6 +3,7 @@
 *.jar
 *.bak
 .makevn/
+.opencode/
 *.swp
 *.swo
 .DS_Store

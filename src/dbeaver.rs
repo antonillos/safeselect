@@ -129,16 +129,21 @@ fn normalize_driver(driver: &str) -> String {
 fn parse_data_sources(content: &str) -> Result<Vec<DBeaverConnection>> {
     let config: DBeaverConfig = serde_json::from_str(content)?;
 
-    let sources = config.connections.into_vec();
+    let mut sources = config.connections.into_vec();
+    sources.extend(config.data_sources.into_vec());
 
     let mut connections = vec![];
 
     for src in sources {
         let cfg = src.configuration.as_ref();
 
+        let jdbc_url = src.url.clone().or_else(|| cfg.and_then(|c| c.url.clone()));
+        let parsed_url = jdbc_url.as_deref().and_then(parse_postgres_jdbc_url);
+
         let host = src
             .host
             .or_else(|| cfg.and_then(|c| c.host.clone()))
+            .or_else(|| parsed_url.as_ref().map(|p| p.host.clone()))
             .unwrap_or_default();
 
         if host.is_empty() {
@@ -148,6 +153,7 @@ fn parse_data_sources(content: &str) -> Result<Vec<DBeaverConnection>> {
         let port_str = src
             .port
             .or_else(|| cfg.and_then(|c| c.port.clone()))
+            .or_else(|| parsed_url.as_ref().map(|p| p.port.to_string()))
             .unwrap_or_else(|| "5432".into());
 
         let port = port_str.parse::<u16>().unwrap_or(5432);
@@ -155,6 +161,7 @@ fn parse_data_sources(content: &str) -> Result<Vec<DBeaverConnection>> {
         let database = src
             .database
             .or_else(|| cfg.and_then(|c| c.database.clone()))
+            .or_else(|| parsed_url.as_ref().map(|p| p.database.clone()))
             .unwrap_or_default();
 
         let username = src
@@ -166,18 +173,47 @@ fn parse_data_sources(content: &str) -> Result<Vec<DBeaverConnection>> {
 
         let password = src.password.clone();
 
-        let (ssh_host, ssh_port, ssh_user, ssh_local_host, ssh_local_port, ssh_key_file, ssh_auth_type) = if let Some(handlers) = cfg.and_then(|c| c.handlers.as_ref()) {
+        let (
+            ssh_host,
+            ssh_port,
+            ssh_user,
+            ssh_local_host,
+            ssh_local_port,
+            ssh_key_file,
+            ssh_auth_type,
+        ) = if let Some(handlers) = cfg.and_then(|c| c.handlers.as_ref()) {
             if let Some(tunnel) = handlers.get("ssh_tunnel") {
                 let enabled = tunnel.enabled.unwrap_or(false);
                 if enabled {
                     let props = tunnel.properties.as_ref();
-                    let sh = props.and_then(|p| p.get("#host").or_else(|| p.get("host"))).and_then(|v| v.as_str()).map(|s| s.to_string());
-                    let sp = props.and_then(|p| p.get("#port").or_else(|| p.get("port"))).and_then(|v| v.as_f64()).map(|n| n as u16);
-                    let su = props.and_then(|p| p.get("#user").or_else(|| p.get("userName"))).and_then(|v| v.as_str()).map(|s| s.to_string());
-                    let slh = props.and_then(|p| p.get("#localHost").or_else(|| p.get("localHost"))).and_then(|v| v.as_str()).map(|s| s.to_string());
-                    let slp = props.and_then(|p| p.get("#localPort").or_else(|| p.get("localPort"))).and_then(|v| v.as_f64()).map(|n| n as u16);
-                    let skf = props.and_then(|p| p.get("#keyFile").or_else(|| p.get("keyFile"))).and_then(|v| v.as_str()).map(|s| s.to_string());
-                    let sat = props.and_then(|p| p.get("#authType").or_else(|| p.get("authType"))).and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let sh = props
+                        .and_then(|p| p.get("#host").or_else(|| p.get("host")))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    let sp = props
+                        .and_then(|p| p.get("#port").or_else(|| p.get("port")))
+                        .and_then(|v| v.as_f64())
+                        .map(|n| n as u16);
+                    let su = props
+                        .and_then(|p| p.get("#user").or_else(|| p.get("userName")))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    let slh = props
+                        .and_then(|p| p.get("#localHost").or_else(|| p.get("localHost")))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    let slp = props
+                        .and_then(|p| p.get("#localPort").or_else(|| p.get("localPort")))
+                        .and_then(|v| v.as_f64())
+                        .map(|n| n as u16);
+                    let skf = props
+                        .and_then(|p| p.get("#keyFile").or_else(|| p.get("keyFile")))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    let sat = props
+                        .and_then(|p| p.get("#authType").or_else(|| p.get("authType")))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
                     (sh, sp, su, slh, slp, skf, sat)
                 } else {
                     (None, None, None, None, None, None, None)
@@ -194,7 +230,11 @@ fn parse_data_sources(content: &str) -> Result<Vec<DBeaverConnection>> {
             host,
             port,
             database,
-            driver: src.driver.as_deref().map(normalize_driver).unwrap_or_default(),
+            driver: src
+                .driver
+                .as_deref()
+                .map(normalize_driver)
+                .unwrap_or_default(),
             username,
             password,
             ssh_host,
@@ -208,4 +248,30 @@ fn parse_data_sources(content: &str) -> Result<Vec<DBeaverConnection>> {
     }
 
     Ok(connections)
+}
+
+struct ParsedJdbcUrl {
+    host: String,
+    port: u16,
+    database: String,
+}
+
+fn parse_postgres_jdbc_url(url: &str) -> Option<ParsedJdbcUrl> {
+    let without_prefix = url.strip_prefix("jdbc:postgresql://")?;
+    let (host_port, rest) = without_prefix.split_once('/')?;
+    let database = rest.split('?').next().unwrap_or(rest).to_string();
+    let (host, port) = match host_port.rsplit_once(':') {
+        Some((host, port)) => (host.to_string(), port.parse::<u16>().unwrap_or(5432)),
+        None => (host_port.to_string(), 5432),
+    };
+
+    if host.is_empty() || database.is_empty() {
+        return None;
+    }
+
+    Some(ParsedJdbcUrl {
+        host,
+        port,
+        database,
+    })
 }

@@ -89,10 +89,15 @@ jobs:
             printf 'exists=false\n' >> "$GITHUB_OUTPUT"
           fi
 
-  create-release:
+  integration-tests:
     if: needs.validate-version.outputs.exists != 'true'
-    runs-on: ubuntu-latest
     needs: validate-version
+    uses: ./.github/workflows/integration-tests.yml
+
+  create-release:
+    if: needs.validate-version.outputs.exists != 'true' && needs.integration-tests.result == 'success'
+    runs-on: ubuntu-latest
+    needs: [validate-version, integration-tests]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -153,7 +158,7 @@ jobs:
           gh release create "${args[@]}"
 
   build:
-    needs: [validate-version, create-release]
+    needs: [validate-version, create-release, integration-tests]
     if: needs.validate-version.outputs.exists != 'true'
     strategy:
       fail-fast: false
@@ -217,9 +222,9 @@ jobs:
             --clobber
 
   publish-package-managers:
-    if: needs.validate-version.outputs.exists != 'true' && needs.validate-version.outputs.prerelease != 'true' && needs.validate-version.outputs.draft != 'true'
+    if: needs.validate-version.outputs.exists != 'true' && needs.validate-version.outputs.prerelease != 'true' && needs.validate-version.outputs.draft != 'true' && needs.integration-tests.result == 'success'
     runs-on: ubuntu-latest
-    needs: [validate-version, build]
+    needs: [validate-version, build, integration-tests]
     steps:
       - uses: actions/checkout@v6
         with:

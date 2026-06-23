@@ -157,7 +157,10 @@ fn project_label(compose_path: &Path, scan_root: &Path) -> String {
                 format!(
                     "{}/{}",
                     relative.display(),
-                    compose_path.file_name().and_then(|n| n.to_str()).unwrap_or("")
+                    compose_path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("")
                 )
             }
         } else {
@@ -242,15 +245,9 @@ fn parse_compose_file(path: &Path, content: &str) -> Result<Vec<ComposeConnectio
             }
         });
 
-        let password_var = env
-            .get("POSTGRES_PASSWORD")
-            .and_then(|p| is_var_ref(p));
+        let password_var = env.get("POSTGRES_PASSWORD").and_then(|p| is_var_ref(p));
 
-        let port = service
-            .ports
-            .first()
-            .map(|p| parse_port(p))
-            .unwrap_or(5432);
+        let port = service.ports.first().map(|p| parse_port(p)).unwrap_or(5432);
 
         let env_name = service_name.to_lowercase().replace(' ', "-");
 
@@ -373,9 +370,7 @@ pub fn read_password_from_keychain(account: &str) -> Result<String> {
             "-w",
         ])
         .output()
-        .map_err(|e| {
-            crate::error::SafeselectError::Secret(format!("security find failed: {e}"))
-        })?;
+        .map_err(|e| crate::error::SafeselectError::Secret(format!("security find failed: {e}")))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -392,13 +387,7 @@ pub fn read_password_from_keychain(account: &str) -> Result<String> {
 
 pub fn delete_password_from_keychain(account: &str) -> Result<()> {
     let output = std::process::Command::new("security")
-        .args([
-            "delete-generic-password",
-            "-a",
-            account,
-            "-s",
-            "safeselect",
-        ])
+        .args(["delete-generic-password", "-a", account, "-s", "safeselect"])
         .output()
         .map_err(|e| {
             crate::error::SafeselectError::Secret(format!("security delete failed: {e}"))

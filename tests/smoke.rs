@@ -40,6 +40,11 @@ fn run(args: &[&str]) -> (String, String, bool) {
     (strip_ansi(&stdout), strip_ansi(&stderr), success)
 }
 
+fn repo_file(path: &str) -> String {
+    std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(path))
+        .unwrap_or_else(|e| panic!("failed to read {path}: {e}"))
+}
+
 #[test]
 fn test_help() {
     let (stdout, _, success) = &run(&["--help"]);
@@ -82,9 +87,7 @@ fn test_config_validate_missing_project() {
 #[test]
 fn test_driver_list_empty() {
     let (stdout, _stderr, _success) = &run(&["driver", "list"]);
-    assert!(
-        stdout.contains("postgresql") || stdout.contains("drivers")
-    );
+    assert!(stdout.contains("postgresql") || stdout.contains("drivers"));
 }
 
 #[test]
@@ -112,6 +115,37 @@ fn test_serve_missing_project() {
     ]);
     assert!(!success);
     assert!(stderr.contains("does not exist") || stderr.contains("not found"));
+}
+
+#[test]
+fn test_setup_mode_documentation_matches_cli() {
+    let readme = repo_file("README.md");
+    assert!(
+        readme.contains("enters setup mode automatically"),
+        "README should document implicit setup mode"
+    );
+    assert!(
+        !readme.contains("safeselect serve --setup"),
+        "README must not document a non-existent serve --setup flag"
+    );
+
+    let (_stdout, stderr, success) = run(&["serve", "--help"]);
+    assert!(success, "serve --help failed: {stderr}");
+    assert!(
+        !stderr.contains("--setup"),
+        "CLI help unexpectedly exposes --setup"
+    );
+}
+
+#[test]
+fn test_homebrew_formula_tracks_current_release_shape() {
+    let formula = repo_file("packaging/homebrew/safeselect.rb");
+    assert!(formula.contains("version \"0.3.0\""));
+    assert!(formula.contains("openjdk@17"));
+    assert!(formula.contains("safeselect-v#{version}-aarch64-apple-darwin.tar.gz"));
+    assert!(formula.contains("safeselect-v#{version}-x86_64-apple-darwin.tar.gz"));
+    assert!(!formula.contains("v0.1.0"));
+    assert!(!formula.contains("PLACEHOLDER_"));
 }
 
 #[test]
