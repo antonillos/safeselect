@@ -830,7 +830,12 @@ fn cmd_agent(action: AgentAction) -> Result<()> {
                 local,
             )
         }
-        AgentAction::Uninstall { client, name } => agents::uninstall_entry(&client, &name),
+        AgentAction::Uninstall { client, name } => {
+            let loader = ConfigLoader::new();
+            let cwd = std::env::current_dir()?;
+            let repo_root = loader.find_local_project(&cwd);
+            agents::uninstall_entry(&client, &name, repo_root.as_deref())
+        }
         AgentAction::Status => {
             let clients = agents::detect_clients()?;
             println!("Agent integration status:");

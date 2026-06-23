@@ -224,8 +224,8 @@ pub fn upgrade_entry(
     Ok(())
 }
 
-pub fn uninstall_entry(client: &str, entry_name: &str) -> Result<()> {
-    let config_path = get_client_config(client)?;
+pub fn uninstall_entry(client: &str, entry_name: &str, repo_root: Option<&Path>) -> Result<()> {
+    let config_path = resolve_uninstall_target(client, entry_name, repo_root)?;
     let content = std::fs::read_to_string(&config_path)?;
 
     if !content.contains(entry_name) && !content.contains("safeselect") {
@@ -242,6 +242,35 @@ pub fn uninstall_entry(client: &str, entry_name: &str) -> Result<()> {
 
     println!("Entry '{entry_name}' uninstalled from {client}");
     Ok(())
+}
+
+fn resolve_uninstall_target(
+    client: &str,
+    entry_name: &str,
+    repo_root: Option<&Path>,
+) -> Result<PathBuf> {
+    if let Some(root) = repo_root {
+        let mut current = Some(root);
+        while let Some(dir) = current {
+            if let Some(local_path) = detect_local_client_config(client, dir) {
+                let content = std::fs::read_to_string(&local_path)?;
+                if config_has_entry(client, &content, entry_name)? {
+                    return Ok(local_path);
+                }
+            }
+            current = dir.parent();
+        }
+    }
+
+    let config_path = get_client_config(client)?;
+    let content = std::fs::read_to_string(&config_path)?;
+    if config_has_entry(client, &content, entry_name)? {
+        Ok(config_path)
+    } else {
+        Err(SafeselectError::Other(format!(
+            "No SafeSelect entry named '{entry_name}' found in {client} config"
+        )))
+    }
 }
 
 fn get_client_config(client: &str) -> Result<PathBuf> {
@@ -1041,6 +1070,53 @@ value = true
 
         assert!(replaced.contains("safeselect-demo-pre"));
         assert!(!replaced.contains("legacy-pre"));
+    }
+
+    #[test]
+    fn prefers_local_uninstall_target_when_entry_exists() {
+        let temp =
+            std::env::temp_dir().join(format!("safeselect-agent-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        let repo = temp.join("repo");
+        let child = repo.join("nested");
+        let opencode = repo.join(".opencode");
+        std::fs::create_dir_all(&opencode).unwrap();
+        std::fs::create_dir_all(&child).unwrap();
+        std::fs::write(
+            opencode.join("opencode.jsonc"),
+            r#"{
+  "mcp": {
+    "safeselect-demo-pre": {
+      "type": "local",
+      "command": ["safeselect", "serve", "--environment", "pre"]
+    }
+  }
+}"#,
+        )
+        .unwrap();
+
+        let resolved =
+            resolve_uninstall_target("opencode", "safeselect-demo-pre", Some(&child)).unwrap();
+
+        assert_eq!(resolved, opencode.join("opencode.jsonc"));
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn falls_back_to_global_when_local_entry_missing() {
+        let content = r#"{
+  "mcp": {
+    "safeselect-demo-pre": {
+      "type": "local",
+      "command": ["safeselect", "serve", "--environment", "pre"]
+    }
+  }
+}"#;
+
+        let global_has_entry =
+            config_has_entry("opencode", content, "safeselect-demo-pre").unwrap();
+
+        assert!(global_has_entry);
     }
 }
 

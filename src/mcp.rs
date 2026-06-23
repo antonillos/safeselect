@@ -1755,7 +1755,7 @@ impl McpServer {
             None => return self.send_error(id, -32602, "Missing 'name' argument"),
         };
 
-        match agents::uninstall_entry(client, name) {
+        match agents::uninstall_entry(client, name, Some(&self.repo_root)) {
             Ok(()) => {
                 let text = format!("Entry '{name}' uninstalled from {client}");
                 let resp = ok_text_response(id, text);
