@@ -34,6 +34,7 @@ fn run_with_config(args: &[&str], config_dir: &str) -> (String, String, bool) {
         .args(args)
         .env("SAFESELECT_CONFIG_DIR", config_dir)
         .env("SAFESELECT_INT_TEST_PASSWORD", "testpass")
+        .env("NO_COLOR", "1")
         .output()
         .expect("failed to run safeselect");
 
@@ -42,6 +43,12 @@ fn run_with_config(args: &[&str], config_dir: &str) -> (String, String, bool) {
     let success = output.status.success();
 
     (strip_ansi(&stdout), strip_ansi(&stderr), success)
+}
+
+fn cleanup_keychain_account(account: &str) {
+    let _ = Command::new("security")
+        .args(["delete-generic-password", "-a", account, "-s", "safeselect"])
+        .output();
 }
 
 fn setup_test_config() -> PathBuf {
@@ -146,4 +153,92 @@ fn test_integration_check() {
     );
 
     let _ = std::fs::remove_dir_all(repo_root.parent().unwrap());
+}
+
+#[test]
+fn test_integration_import_compose_non_interactive() {
+    if std::env::var("SAFESELECT_INTEGRATION_TEST").is_err() {
+        eprintln!("Skipping: set SAFESELECT_INTEGRATION_TEST=1 to run");
+        return;
+    }
+
+    let tmp = std::env::temp_dir().join(format!(
+        "safeselect-import-compose-int-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).unwrap();
+
+    let repo_root = tmp.join("compose-int-repo");
+    std::fs::create_dir_all(&repo_root).unwrap();
+    std::fs::write(
+        repo_root.join(".env"),
+        "DB_USER=postgres\nDB_PASSWORD=testpass\n",
+    )
+    .unwrap();
+    std::fs::write(
+        repo_root.join("compose.yaml"),
+        r#"
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: testdb
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    ports:
+      - target: 5432
+        published: 25432
+"#,
+    )
+    .unwrap();
+
+    let account = "compose-int-repo/db";
+    cleanup_keychain_account(account);
+
+    let dl = Command::new(safeselect_bin())
+        .args(["driver", "download", "--vendor", "postgresql"])
+        .env("SAFESELECT_CONFIG_DIR", &tmp)
+        .env("NO_COLOR", "1")
+        .output()
+        .expect("driver download failed");
+    assert!(
+        dl.status.success(),
+        "driver download failed: {}",
+        String::from_utf8_lossy(&dl.stderr)
+    );
+
+    let (stdout, stderr, success) = run_with_config(
+        &[
+            "import-compose",
+            "--path",
+            repo_root.to_str().unwrap(),
+            "--non-interactive",
+        ],
+        tmp.to_str().unwrap(),
+    );
+
+    if !success {
+        eprintln!("stdout: {stdout}");
+        eprintln!("stderr: {stderr}");
+    }
+
+    assert!(
+        success,
+        "import-compose failed:\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(stdout.contains("Import Complete"));
+    assert!(stdout.contains("Imported 1 connection(s): db"));
+    assert!(stdout.contains("Passwords were imported or are already configured."));
+    assert!(stdout.contains("safeselect check --environment db"));
+    assert!(stdout.contains("safeselect agent install opencode --environment db"));
+    assert!(stdout.contains("All checks passed"));
+
+    let env_toml = std::fs::read_to_string(repo_root.join(".safeselect/environments/db.toml"))
+        .expect("expected imported environment config");
+    assert!(env_toml.contains("jdbc:postgresql://localhost:25432/testdb"));
+    assert!(env_toml.contains("username = \"postgres\""));
+
+    cleanup_keychain_account(account);
+    let _ = std::fs::remove_dir_all(&tmp);
 }

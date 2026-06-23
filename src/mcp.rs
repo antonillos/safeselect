@@ -1811,19 +1811,8 @@ impl McpServer {
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("project");
-            match compose::write_config_files(scan_path, &all_connections, project_name) {
-                Ok(import) => {
-                    if let Err(e) = update_generated_by(&scan_path.join(".safeselect")) {
-                        return self.send_error(
-                            id,
-                            -32000,
-                            format!("Import metadata update failed: {e}"),
-                        );
-                    }
-                    let names: Vec<String> =
-                        all_connections.iter().map(|c| c.env_name.clone()).collect();
-                    compose::build_import_guidance(project_name, &import, &names, true).text
-                }
+            match import_compose_guidance_text(scan_path, project_name, &all_connections) {
+                Ok(text) => text,
                 Err(e) => return self.send_error(id, -32000, format!("Import failed: {e}")),
             }
         };
@@ -2208,6 +2197,17 @@ fn ok_text_response(id: Option<serde_json::Value>, text: String) -> JsonRpcRespo
     }
 }
 
+fn import_compose_guidance_text(
+    scan_path: &Path,
+    project_name: &str,
+    all_connections: &[compose::ComposeConnection],
+) -> Result<String> {
+    let import = compose::write_config_files(scan_path, all_connections, project_name)?;
+    update_generated_by(&scan_path.join(".safeselect"))?;
+    let names: Vec<String> = all_connections.iter().map(|c| c.env_name.clone()).collect();
+    Ok(compose::build_import_guidance(project_name, &import, &names, true).text)
+}
+
 fn tool_error_response(id: Option<serde_json::Value>, text: String) -> JsonRpcResponse {
     JsonRpcResponse {
         jsonrpc: "2.0",
@@ -2423,24 +2423,13 @@ pub fn run_setup_server(repo_root: &Path) -> Result<()> {
                                         .file_name()
                                         .and_then(|n| n.to_str())
                                         .unwrap_or("project");
-                                    let result = compose::write_config_files(
+                                    let result = import_compose_guidance_text(
                                         scan_path,
-                                        &all_connections,
                                         project_name,
+                                        &all_connections,
                                     );
                                     match result {
-                                        Ok(import) => {
-                                            let names: Vec<String> = all_connections
-                                                .iter()
-                                                .map(|c| c.env_name.clone())
-                                                .collect();
-                                            let text = compose::build_import_guidance(
-                                                project_name,
-                                                &import,
-                                                &names,
-                                                true,
-                                            )
-                                            .text;
+                                        Ok(text) => {
                                             let resp = JsonRpcResponse {
                                                 jsonrpc: "2.0",
                                                 id: msg.id,
@@ -2835,5 +2824,44 @@ mod tests {
         let sql = build_explain_sql("SELECT * FROM users", &args).unwrap();
 
         assert_eq!(sql, "EXPLAIN (ANALYZE, FORMAT JSON) SELECT * FROM users");
+    }
+
+    #[test]
+    fn import_compose_guidance_returns_next_steps_in_setup_mode() {
+        let temp =
+            std::env::temp_dir().join(format!("safeselect-mcp-import-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).unwrap();
+        std::fs::write(temp.join(".env"), "DB_USER=agent\n").unwrap();
+        std::fs::write(
+            temp.join("compose.yaml"),
+            r#"
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: app
+      POSTGRES_USER: ${DB_USER}
+    ports:
+      - target: 5432
+        published: 15432
+"#,
+        )
+        .unwrap();
+
+        let groups = compose::scan_all(&temp).unwrap();
+        let all_connections: Vec<compose::ComposeConnection> =
+            groups.into_iter().flat_map(|(_, cs)| cs).collect();
+
+        let text =
+            import_compose_guidance_text(&temp, "mcp-import-test", &all_connections).unwrap();
+
+        assert!(text.contains("Imported 1 connection(s): db"));
+        assert!(text.contains("Next steps:"));
+        assert!(text.contains("Configure missing passwords"));
+        assert!(text.contains("safeselect check --environment db"));
+        assert!(text.contains("safeselect agent install opencode --environment db"));
+
+        let _ = std::fs::remove_dir_all(&temp);
     }
 }
