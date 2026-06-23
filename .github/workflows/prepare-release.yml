@@ -15,6 +15,10 @@ on:
       version:
         description: Exact version (without v prefix, optional)
         required: false
+      source_branch:
+        description: Branch to create the release from
+        required: true
+        default: develop
       base_branch:
         description: Branch to open the release PR against
         required: true
@@ -34,7 +38,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.base_branch }}
+          ref: ${{ inputs.source_branch }}
           fetch-depth: 0
       - name: Install Rust
         shell: bash
