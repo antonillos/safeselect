@@ -105,36 +105,40 @@ jobs:
       - name: Generate release notes
         shell: bash
         run: |
-          cat > release-notes.md <<RELEASE
-          # SafeSelect ${{ needs.validate-version.outputs.version }}
+          version="${{ needs.validate-version.outputs.version }}"
+          changelog_entry="$(awk -v version="${version}" '
+            $0 ~ "^## \\[" version "\\] - " { in_section=1 }
+            in_section && /^## \[/ && $0 !~ "^## \\[" version "\\] - " { exit }
+            in_section { print }
+          ' CHANGELOG.md)"
 
-          ## Install
+          if [[ -z "${changelog_entry}" ]]; then
+            printf 'Error: missing changelog entry for %s\n' "${version}" >&2
+            exit 1
+          fi
 
-          Homebrew:
-
-          \`\`\`bash
-          brew install antonillos/tap/safeselect
-          \`\`\`
-
-          asdf:
-
-          \`\`\`bash
-          asdf plugin add safeselect https://github.com/antonillos/asdf-safeselect.git
-          asdf install safeselect latest
-          asdf set -u safeselect latest
-          \`\`\`
-
-          Fallback installer:
-
-          \`\`\`bash
-          curl -fsSL https://raw.githubusercontent.com/antonillos/safeselect/main/packaging/install/install-release.sh | sh
-          \`\`\`
-
-          ## Assets
-
-          - Runtime archives for Linux \`x86_64\`, macOS \`x86_64\`, and macOS \`arm64\`
-          - SHA-256 checksum files for each archive
-          RELEASE
+          {
+            printf '# SafeSelect %s\n\n' "${version}"
+            printf '%s\n\n' "${changelog_entry}"
+            printf '## Install\n\n'
+            printf 'Homebrew:\n\n'
+            printf '```bash\n'
+            printf 'brew install antonillos/tap/safeselect\n'
+            printf '```\n\n'
+            printf 'asdf:\n\n'
+            printf '```bash\n'
+            printf 'asdf plugin add safeselect https://github.com/antonillos/asdf-safeselect.git\n'
+            printf 'asdf install safeselect latest\n'
+            printf 'asdf set -u safeselect latest\n'
+            printf '```\n\n'
+            printf 'Fallback installer:\n\n'
+            printf '```bash\n'
+            printf 'curl -fsSL https://raw.githubusercontent.com/antonillos/safeselect/main/packaging/install/install-release.sh | sh\n'
+            printf '```\n\n'
+            printf '## Assets\n\n'
+            printf -- '- Runtime archives for Linux `x86_64`, macOS `x86_64`, and macOS `arm64`\n'
+            printf -- '- SHA-256 checksum files for each archive\n'
+          } > release-notes.md
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}

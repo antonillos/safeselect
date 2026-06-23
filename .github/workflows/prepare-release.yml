@@ -98,6 +98,84 @@ jobs:
         env:
           CURRENT_VERSION: ${{ steps.version.outputs.current }}
           NEXT_VERSION: ${{ steps.version.outputs.next }}
+      - name: Update changelog
+        shell: bash
+        run: |
+          set -euo pipefail
+          version_tag="${{ steps.version.outputs.tag }}"
+          release_date="$(date +%F)"
+          previous_tag="$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)"
+          range="HEAD"
+
+          if [[ -n "${previous_tag}" ]]; then
+            range="${previous_tag}..HEAD"
+          fi
+
+          tmp_features="$(mktemp)"
+          tmp_fixes="$(mktemp)"
+          tmp_docs="$(mktemp)"
+          tmp_ci="$(mktemp)"
+          tmp_other="$(mktemp)"
+          tmp_changelog="$(mktemp)"
+
+          tmp_changes="$(mktemp)"
+          git log ${range} --no-merges --reverse --pretty='- %s' > "${tmp_changes}"
+
+          if [[ ! -s "${tmp_changes}" ]]; then
+            printf '%s\n' '- Maintenance release.' > "${tmp_changes}"
+          fi
+
+          : > "${tmp_features}"
+          : > "${tmp_fixes}"
+          : > "${tmp_docs}"
+          : > "${tmp_ci}"
+          : > "${tmp_other}"
+
+          while IFS= read -r line; do
+            case "${line}" in
+              "- feat:"*|"- perf:"*) printf '%s\n' "${line}" >> "${tmp_features}" ;;
+              "- fix:"*) printf '%s\n' "${line}" >> "${tmp_fixes}" ;;
+              "- docs:"*) printf '%s\n' "${line}" >> "${tmp_docs}" ;;
+              "- ci:"*|"- build:"*|"- chore:"*) printf '%s\n' "${line}" >> "${tmp_ci}" ;;
+              *) printf '%s\n' "${line}" >> "${tmp_other}" ;;
+            esac
+          done < "${tmp_changes}"
+
+          {
+            printf '# Changelog\n\n'
+            printf 'All notable changes to this project are documented in this file.\n\n'
+            printf '## [%s] - %s\n\n' "${version_tag}" "${release_date}"
+            if [[ -s "${tmp_features}" ]]; then
+              printf '### Added\n\n'
+              cat "${tmp_features}"
+              printf '\n'
+            fi
+            if [[ -s "${tmp_fixes}" ]]; then
+              printf '### Fixed\n\n'
+              cat "${tmp_fixes}"
+              printf '\n'
+            fi
+            if [[ -s "${tmp_docs}" ]]; then
+              printf '### Documentation\n\n'
+              cat "${tmp_docs}"
+              printf '\n'
+            fi
+            if [[ -s "${tmp_ci}" ]]; then
+              printf '### Build And CI\n\n'
+              cat "${tmp_ci}"
+              printf '\n'
+            fi
+            if [[ -s "${tmp_other}" ]]; then
+              printf '### Other\n\n'
+              cat "${tmp_other}"
+              printf '\n'
+            fi
+            if [[ -f CHANGELOG.md ]]; then
+              tail -n +5 CHANGELOG.md
+            fi
+          } > "${tmp_changelog}"
+
+          mv "${tmp_changelog}" CHANGELOG.md
       - name: Build sidecar
         run: mvn -f sidecar/pom.xml package -DskipTests
       - name: Copy sidecar JAR
@@ -114,7 +192,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "${branch}"
-          git add Cargo.toml Cargo.lock sidecar/pom.xml sidecar/pom.xml
+          git add CHANGELOG.md Cargo.toml Cargo.lock sidecar/pom.xml
           git commit -m "release: bump to ${{ steps.version.outputs.next }}"
           git push --force-with-lease origin "${branch}"
       - name: Open release PR
