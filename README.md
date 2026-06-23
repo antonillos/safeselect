@@ -46,9 +46,12 @@ safeselect import-dbeaver ~/Downloads/dbeaver-export.zip
 # 3. Verify connectivity (auto-establishes SSH tunnel if needed)
 safeselect check --environment testing
 
-# 4. Connect your AI agent (name auto-generates as <project>-testing)
+# 4. Connect your AI agent (name auto-generates as safeselect-<project>-testing)
 safeselect agent install opencode --environment testing
 ```
+
+Release notes are published from `CHANGELOG.md`, so each GitHub release includes
+a short summary of what changed plus the install instructions.
 
 ---
 
@@ -82,7 +85,7 @@ safeselect agent install opencode --environment testing
 | `driver download --vendor postgresql` | Download JDBC driver |
 | `driver add --vendor <v> --path <jar> --class <c>` | Register custom driver |
 | `driver list` | List registered drivers |
-| `agent install <client> --environment <e> [--project <p>] [--name <n>]` | Install MCP entry (name defaults to `safeselect-<project>-<environment>`) |
+| `agent install <client> --environment <e> [--project <p>] [--name <n>]` | Install MCP entry (name defaults to `safeselect-<project-dir>-<environment>`) |
 | `agent upgrade <client> [--name <n>] [--project <p>] [--environment <e>]` | Upgrade an existing MCP entry, auto-detecting it from the current project when possible |
 | `agent uninstall <client> --name <n>` | Remove MCP entry |
 | `agent detect` | Detect installed MCP clients |
@@ -121,8 +124,8 @@ MCP query responses include execution metadata for agent decisions:
 - `elapsed` for human-readable timing such as `842ms`, `1.3s`, or `2m 4s`
 
 Sidecar pipe timeouts and MCP reconnect behavior respect the configured
-`statement_timeout_ms`, so agents should prefer `check` and `reconnect` over
-manual retry loops after stale SSH/JDBC connections.
+`statement_timeout_ms`, so agents should prefer `check`, `connect`, and `reconnect`
+over manual retry loops after stale SSH/JDBC connections.
 
 ---
 
@@ -247,6 +250,9 @@ brew install <your-tap>/sshpass
 SafeSelect forwards local port `15432` to the database through the SSH tunnel
 and uses `sslmode=require` for Azure PostgreSQL compatibility.
 
+When a release is prepared, SafeSelect also updates `CHANGELOG.md` and uses the
+matching version entry as the GitHub Release notes body.
+
 Tunnel health is verified in two steps:
 1. **Bastion reachability**: TCP check to the SSH server endpoint
 2. **PostgreSQL protocol check**: SSLRequest to verify the target responds as PostgreSQL
@@ -283,6 +289,7 @@ variable = "SAFESELECT_PASSWORD_TESTING"
 ```
 
 Then export the variable before running `safeselect`.
+
 ---
 
 ## Detected AI Agents
@@ -303,7 +310,7 @@ To build from source:
 
 ```bash
 ./install.sh                    # builds sidecar + Rust binary, installs to ~/.local/bin
-safeselect --version            # shows e.g. "safeselect 0.2.0 (2026.06.17.21.30)"
+safeselect --version            # shows e.g. "safeselect 0.4.0 (2026.06.23.21.30)"
 ```
 
 ---
@@ -314,6 +321,7 @@ safeselect --version            # shows e.g. "safeselect 0.2.0 (2026.06.17.21.30
 - [AI agent integration](docs/agents.md)
 - [Security model](docs/security.md)
 - [Distribution](docs/distribution.md)
+- [Changelog](CHANGELOG.md)
 
 ---
 
