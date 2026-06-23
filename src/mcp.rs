@@ -128,15 +128,15 @@ impl McpServer {
             &self.driver_class,
             &self.db_url,
             &self.db_username,
-                &self.db_password,
-                self.idle_timeout_seconds,
-                self.security.limits().statement_timeout_ms,
-                ResultLimits {
-                    max_rows: self.security.limits().max_rows,
-                    max_result_bytes: self.security.limits().max_result_bytes,
-                },
-                self.verbose_sidecar,
-            )?;
+            &self.db_password,
+            self.idle_timeout_seconds,
+            self.security.limits().statement_timeout_ms,
+            ResultLimits {
+                max_rows: self.security.limits().max_rows,
+                max_result_bytes: self.security.limits().max_result_bytes,
+            },
+            self.verbose_sidecar,
+        )?;
         tracing::info!("Sidecar ready");
         self.sidecar = Some(sidecar);
         self.sidecar_mut()
@@ -846,17 +846,11 @@ impl McpServer {
             Err(SafeselectError::SqlError(ref msg)) => {
                 tracing::warn!("List tables SQL error: {msg}");
                 self.audit.record("JDBC_ERROR", "error", &sql)?;
-                self.write_response(&tool_error_response(
-                    id,
-                    format!("Query failed: {msg}"),
-                ))
+                self.write_response(&tool_error_response(id, format!("Query failed: {msg}")))
             }
             Err(e) => {
                 self.audit.record("JDBC_ERROR", "error", &sql)?;
-                self.write_response(&tool_error_response(
-                    id,
-                    format!("Query failed: {e}"),
-                ))
+                self.write_response(&tool_error_response(id, format!("Query failed: {e}")))
             }
         }
     }

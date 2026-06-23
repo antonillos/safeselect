@@ -137,7 +137,9 @@ impl SidecarProcess {
             args.push(Box::leak(statement_timeout_ms.to_string().into_boxed_str()));
         }
         args.push("--max-rows");
-        args.push(Box::leak(result_limits.max_rows.to_string().into_boxed_str()));
+        args.push(Box::leak(
+            result_limits.max_rows.to_string().into_boxed_str(),
+        ));
         args.push("--max-result-bytes");
         args.push(Box::leak(
             result_limits.max_result_bytes.to_string().into_boxed_str(),
