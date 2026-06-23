@@ -128,9 +128,7 @@ impl SecurityEngine {
         let upper = trimmed.to_uppercase();
 
         if upper.starts_with("WITH") {
-            return Err(SafeselectError::QueryRejected(
-                "Read-only mode: WITH queries are not allowed".into(),
-            ));
+            return self.check_with_read_only(trimmed);
         }
 
         if upper.starts_with("EXPLAIN") {
@@ -138,7 +136,7 @@ impl SecurityEngine {
         }
 
         if upper.starts_with("SELECT") {
-            self.check_forbidden_tokens(trimmed)?;
+            self.check_forbidden_tokens(trimmed, false)?;
             return Ok(());
         }
 
@@ -168,43 +166,64 @@ impl SecurityEngine {
             )
         })?;
 
-        let explained_upper = explained_sql.trim_start().to_uppercase();
-        if !explained_upper.starts_with("SELECT") {
-            return Err(SafeselectError::QueryRejected(
-                "Read-only mode: EXPLAIN is only allowed for SELECT statements".into(),
-            ));
-        }
-
-        self.check_forbidden_tokens(explained_sql)
+        self.check_select_like_read_only(explained_sql)
+            .map_err(|_| {
+                SafeselectError::QueryRejected(
+                    "Read-only mode: EXPLAIN is only allowed for SELECT statements".into(),
+                )
+            })
     }
 
-    fn check_forbidden_tokens(&self, sql: &str) -> Result<()> {
+    fn check_with_read_only(&self, sql: &str) -> Result<()> {
+        self.check_select_like_read_only(sql)
+    }
+
+    fn check_select_like_read_only(&self, sql: &str) -> Result<()> {
+        let trimmed = sql.trim_start();
+        let upper = trimmed.to_uppercase();
+
+        if upper.starts_with("SELECT") {
+            self.check_forbidden_tokens(trimmed, false)?;
+            return Ok(());
+        }
+
+        if upper.starts_with("WITH") {
+            let body = extract_with_query_body(trimmed).ok_or_else(|| {
+                SafeselectError::QueryRejected(
+                    "Read-only mode: could not validate WITH query".into(),
+                )
+            })?;
+
+            if !body.trim_start().to_uppercase().starts_with("SELECT") {
+                return Err(SafeselectError::QueryRejected(
+                    "Read-only mode: WITH queries must end in SELECT".into(),
+                ));
+            }
+
+            self.check_forbidden_tokens(trimmed, true)?;
+            return Ok(());
+        }
+
+        Err(SafeselectError::QueryRejected(
+            "Read-only mode: unrecognized statement type".into(),
+        ))
+    }
+
+    fn check_forbidden_tokens(&self, sql: &str, allow_with_keyword: bool) -> Result<()> {
         let compact = sanitize_for_keyword_scan(sql);
         let forbidden = [
-            "INSERT",
-            "UPDATE",
-            "DELETE",
-            "DROP",
-            "CREATE",
-            "ALTER",
-            "TRUNCATE",
-            "COPY",
-            "PREPARE",
-            "EXECUTE",
-            "CALL",
-            "MERGE",
-            "REPLACE",
-            "GRANT",
-            "REVOKE",
-            "WITH",
-            "DO",
-            "DECLARE",
-            "LOCK",
-            "VACUUM",
-            "REINDEX",
+            "INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER", "TRUNCATE", "COPY", "PREPARE",
+            "EXECUTE", "CALL", "MERGE", "REPLACE", "GRANT", "REVOKE", "WITH", "DO", "DECLARE",
+            "LOCK", "VACUUM", "REINDEX",
         ];
 
         for keyword in forbidden {
+            if keyword == "WITH" && allow_with_keyword {
+                continue;
+            }
+            if keyword == "WITH" && contains_with_ordinality_only(&compact) {
+                continue;
+            }
             if contains_keyword(&compact, keyword) {
                 return Err(SafeselectError::QueryRejected(format!(
                     "Read-only mode: {keyword} not allowed"
@@ -587,6 +606,237 @@ fn contains_keyword(sql: &str, keyword: &str) -> bool {
     sql.split_whitespace().any(|token| token == keyword)
 }
 
+fn contains_with_ordinality_only(sql: &str) -> bool {
+    let mut saw_with = false;
+    let mut tokens = sql.split_whitespace().peekable();
+
+    while let Some(token) = tokens.next() {
+        if token != "WITH" {
+            continue;
+        }
+
+        saw_with = true;
+        if tokens.next() != Some("ORDINALITY") {
+            return false;
+        }
+    }
+
+    saw_with
+}
+
+fn extract_with_query_body(sql: &str) -> Option<&str> {
+    let upper = sql.to_uppercase();
+    if !upper.starts_with("WITH") {
+        return None;
+    }
+
+    let mut i = 4;
+    i = skip_sql_whitespace(sql, i);
+
+    if starts_with_keyword_at(sql, i, "RECURSIVE") {
+        i += "RECURSIVE".len();
+        i = skip_sql_whitespace(sql, i);
+    }
+
+    loop {
+        let as_index = find_top_level_keyword(sql, i, "AS")?;
+        i = skip_sql_whitespace(sql, as_index + 2);
+
+        if starts_with_keyword_at(sql, i, "NOT") {
+            i += 3;
+            i = skip_sql_whitespace(sql, i);
+        }
+        if starts_with_keyword_at(sql, i, "MATERIALIZED") {
+            i += "MATERIALIZED".len();
+            i = skip_sql_whitespace(sql, i);
+        }
+
+        if sql.get(i..=i)? != "(" {
+            return None;
+        }
+
+        i = skip_balanced_parentheses(sql, i)?;
+        i = skip_sql_whitespace(sql, i);
+
+        if sql.get(i..=i) == Some(",") {
+            i += 1;
+            i = skip_sql_whitespace(sql, i);
+            continue;
+        }
+
+        return sql.get(i..);
+    }
+}
+
+fn skip_sql_whitespace(sql: &str, mut index: usize) -> usize {
+    while let Some(ch) = sql[index..].chars().next() {
+        if !ch.is_whitespace() {
+            break;
+        }
+        index += ch.len_utf8();
+    }
+    index
+}
+
+fn starts_with_keyword_at(sql: &str, index: usize, keyword: &str) -> bool {
+    let end = index + keyword.len();
+    let Some(candidate) = sql.get(index..end) else {
+        return false;
+    };
+    if !candidate.eq_ignore_ascii_case(keyword) {
+        return false;
+    }
+
+    let prev_ok = index == 0
+        || sql[..index]
+            .chars()
+            .next_back()
+            .is_none_or(|ch| !matches!(ch, 'A'..='Z' | 'a'..='z' | '0'..='9' | '_'));
+    let next_ok = sql[end..]
+        .chars()
+        .next()
+        .is_none_or(|ch| !matches!(ch, 'A'..='Z' | 'a'..='z' | '0'..='9' | '_'));
+
+    prev_ok && next_ok
+}
+
+fn find_top_level_keyword(sql: &str, start: usize, keyword: &str) -> Option<usize> {
+    let chars: Vec<(usize, char)> = sql.char_indices().collect();
+    let mut pos = chars.iter().position(|(idx, _)| *idx >= start)?;
+    let mut depth = 0usize;
+    let mut in_single = false;
+    let mut in_double = false;
+
+    while pos < chars.len() {
+        let (byte_idx, ch) = chars[pos];
+
+        if in_single {
+            if ch == '\'' {
+                if pos + 1 < chars.len() && chars[pos + 1].1 == '\'' {
+                    pos += 2;
+                    continue;
+                }
+                in_single = false;
+            }
+            pos += 1;
+            continue;
+        }
+
+        if in_double {
+            if ch == '"' {
+                in_double = false;
+            }
+            pos += 1;
+            continue;
+        }
+
+        if ch == '\'' {
+            in_single = true;
+            pos += 1;
+            continue;
+        }
+
+        if ch == '"' {
+            in_double = true;
+            pos += 1;
+            continue;
+        }
+
+        if ch == '-' && pos + 1 < chars.len() && chars[pos + 1].1 == '-' {
+            pos += 2;
+            while pos < chars.len() && chars[pos].1 != '\n' {
+                pos += 1;
+            }
+            continue;
+        }
+
+        if ch == '/' && pos + 1 < chars.len() && chars[pos + 1].1 == '*' {
+            pos += 2;
+            while pos + 1 < chars.len() && !(chars[pos].1 == '*' && chars[pos + 1].1 == '/') {
+                pos += 1;
+            }
+            pos = (pos + 2).min(chars.len());
+            continue;
+        }
+
+        match ch {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+
+        if depth == 0 && starts_with_keyword_at(sql, byte_idx, keyword) {
+            return Some(byte_idx);
+        }
+
+        pos += 1;
+    }
+
+    None
+}
+
+fn skip_balanced_parentheses(sql: &str, start: usize) -> Option<usize> {
+    let chars: Vec<(usize, char)> = sql.char_indices().collect();
+    let mut pos = chars.iter().position(|(idx, _)| *idx == start)?;
+    let mut depth = 0usize;
+    let mut in_single = false;
+    let mut in_double = false;
+
+    while pos < chars.len() {
+        let (_, ch) = chars[pos];
+
+        if in_single {
+            if ch == '\'' {
+                if pos + 1 < chars.len() && chars[pos + 1].1 == '\'' {
+                    pos += 2;
+                    continue;
+                }
+                in_single = false;
+            }
+            pos += 1;
+            continue;
+        }
+
+        if in_double {
+            if ch == '"' {
+                in_double = false;
+            }
+            pos += 1;
+            continue;
+        }
+
+        if ch == '\'' {
+            in_single = true;
+            pos += 1;
+            continue;
+        }
+
+        if ch == '"' {
+            in_double = true;
+            pos += 1;
+            continue;
+        }
+
+        if ch == '(' {
+            depth += 1;
+        } else if ch == ')' {
+            depth = depth.saturating_sub(1);
+            if depth == 0 {
+                let next = pos + 1;
+                return Some(if next < chars.len() {
+                    chars[next].0
+                } else {
+                    sql.len()
+                });
+            }
+        }
+
+        pos += 1;
+    }
+
+    None
+}
+
 fn extract_explain_target(sql: &str) -> Option<&str> {
     let trimmed = sql.trim_start();
     let upper = trimmed.to_uppercase();
@@ -613,7 +863,9 @@ fn extract_explain_target(sql: &str) -> Option<&str> {
     }
 
     let upper_after_explain = after_explain.to_uppercase();
-    for option in ["ANALYZE", "VERBOSE", "BUFFERS", "SETTINGS", "WAL", "TIMING", "SUMMARY"] {
+    for option in [
+        "ANALYZE", "VERBOSE", "BUFFERS", "SETTINGS", "WAL", "TIMING", "SUMMARY",
+    ] {
         if upper_after_explain.starts_with(option) {
             return after_explain.get(option.len()..).map(str::trim_start);
         }
@@ -661,6 +913,13 @@ mod tests {
     }
 
     #[test]
+    fn test_read_only_with_select_allowed() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        let sql = "WITH x AS (SELECT 1 AS id) SELECT * FROM x";
+        assert!(engine.check_read_only(sql).is_ok());
+    }
+
+    #[test]
     fn test_read_only_explain() {
         let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
         let sql = "EXPLAIN SELECT * FROM users";
@@ -672,7 +931,15 @@ mod tests {
         let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
         assert!(engine
             .check_read_only("WITH x AS (SELECT 1) SELECT * FROM x")
-            .is_err());
+            .is_ok());
+    }
+
+    #[test]
+    fn test_read_only_select_with_ordinality_allowed() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        assert!(engine
+            .check_read_only("SELECT * FROM unnest(ARRAY[10, 20]) WITH ORDINALITY AS t(value, ord)")
+            .is_ok());
     }
 
     #[test]
@@ -684,6 +951,27 @@ mod tests {
         assert!(engine
             .check_read_only("EXPLAIN ANALYZE SELECT * FROM users")
             .is_ok());
+        assert!(engine
+            .check_read_only("EXPLAIN WITH x AS (SELECT 1) SELECT * FROM x")
+            .is_ok());
+    }
+
+    #[test]
+    fn test_read_only_with_delete_rejected() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        assert!(engine
+            .check_read_only(
+                "WITH deleted AS (DELETE FROM users RETURNING id) SELECT * FROM deleted"
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn test_read_only_with_non_select_tail_rejected() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        assert!(engine
+            .check_read_only("WITH x AS (SELECT 1) DELETE FROM users")
+            .is_err());
     }
 
     #[test]
@@ -697,9 +985,7 @@ mod tests {
     #[test]
     fn test_read_only_explain_delete_rejected() {
         let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
-        assert!(engine
-            .check_read_only("EXPLAIN DELETE FROM users")
-            .is_err());
+        assert!(engine.check_read_only("EXPLAIN DELETE FROM users").is_err());
     }
 
     #[test]

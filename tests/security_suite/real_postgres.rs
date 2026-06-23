@@ -13,10 +13,7 @@ pub fn run() {
         format!("security_{}", std::process::id()),
     );
 
-    let tmp = std::env::temp_dir().join(format!(
-        "safeselect-security-{}",
-        std::process::id()
-    ));
+    let tmp = std::env::temp_dir().join(format!("safeselect-security-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);
     let repo_root = tmp.join("repo");
     let config_dir = tmp.join("config");
@@ -30,7 +27,10 @@ pub fn run() {
     let result = std::panic::catch_unwind(|| {
         let (stdout, stderr, success) =
             postgres::run_safeselect(&repo_root, &config_dir, "SELECT 1 AS ok");
-        assert!(success, "SELECT failed\nstdout:\n{stdout}\nstderr:\n{stderr}");
+        assert!(
+            success,
+            "SELECT failed\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        );
         assert!(stdout.contains("| 1"), "unexpected SELECT output: {stdout}");
 
         let (stdout, stderr, success) = postgres::run_safeselect(
@@ -49,17 +49,57 @@ pub fn run() {
             "unexpected EXPLAIN output: {stdout}"
         );
 
+        let (stdout, stderr, success) = postgres::run_safeselect(
+            &repo_root,
+            &config_dir,
+            "SELECT * FROM unnest(ARRAY[10, 20]) WITH ORDINALITY AS t(value, ord)",
+        );
+        assert!(
+            success,
+            "WITH ORDINALITY SELECT failed\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        );
+        assert!(
+            stdout.contains("| 10    | 1") || stdout.contains("| 10 | 1   |"),
+            "unexpected WITH ORDINALITY output: {stdout}"
+        );
+
+        let (stdout, stderr, success) = postgres::run_safeselect(
+                &repo_root,
+                &config_dir,
+                "WITH filtered AS (SELECT id, name FROM public.safe_table WHERE id <= 2) SELECT * FROM filtered ORDER BY id",
+            );
+        assert!(
+            success,
+            "WITH SELECT failed\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        );
+        assert!(
+            stdout.contains("alpha") && stdout.contains("beta"),
+            "unexpected WITH SELECT output: {stdout}"
+        );
+
         for (name, sql) in [
             ("DELETE", "DELETE FROM public.safe_table WHERE id = 1"),
-            ("UPDATE", "UPDATE public.safe_table SET name = 'changed' WHERE id = 1"),
-            ("INSERT", "INSERT INTO public.safe_table VALUES (4, 'delta', 'd')"),
+            (
+                "UPDATE",
+                "UPDATE public.safe_table SET name = 'changed' WHERE id = 1",
+            ),
+            (
+                "INSERT",
+                "INSERT INTO public.safe_table VALUES (4, 'delta', 'd')",
+            ),
             ("DROP", "DROP TABLE public.safe_table"),
-            ("WITH select", "WITH x AS (SELECT 1) SELECT * FROM x"),
             (
                 "WITH delete",
                 "WITH deleted AS (DELETE FROM public.safe_table RETURNING *) SELECT * FROM deleted",
             ),
-            ("EXPLAIN DELETE", "EXPLAIN DELETE FROM public.safe_table WHERE id = 1"),
+            (
+                "WITH final delete",
+                "WITH x AS (SELECT 1) DELETE FROM public.safe_table",
+            ),
+            (
+                "EXPLAIN DELETE",
+                "EXPLAIN DELETE FROM public.safe_table WHERE id = 1",
+            ),
             (
                 "EXPLAIN ANALYZE SELECT",
                 "EXPLAIN ANALYZE SELECT * FROM public.safe_table",
@@ -96,7 +136,10 @@ pub fn run() {
             "SELECT count(*) || ':' || string_agg(name, ',' ORDER BY id) FROM public.safe_table;",
         );
         assert_eq!(counts, "3:alpha,beta,gamma");
-        let secret_count = postgres::psql(&postgres::test_db(), "SELECT count(*) FROM public.secret_table;");
+        let secret_count = postgres::psql(
+            &postgres::test_db(),
+            "SELECT count(*) FROM public.secret_table;",
+        );
         assert_eq!(secret_count, "1");
     });
 
