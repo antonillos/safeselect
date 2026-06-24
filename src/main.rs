@@ -931,10 +931,111 @@ fn check_version_and_maybe_reset(repo_root: &Path) -> Result<()> {
 }
 
 /// Prompt user to verify/complete SSH configuration from a DBeaver connection.
+fn load_reusable_ssh_configs(
+    repo_root: &Path,
+    current_env_name: &str,
+) -> Result<Vec<(String, config::SshConfig)>> {
+    let env_dir = repo_root.join(".safeselect").join("environments");
+    let mut reusable = Vec::new();
+    let entries = match std::fs::read_dir(env_dir) {
+        Ok(entries) => entries,
+        Err(_) => return Ok(reusable),
+    };
+
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("toml") {
+            continue;
+        }
+
+        let Some(name) = path.file_stem().and_then(|stem| stem.to_str()) else {
+            continue;
+        };
+        if name == current_env_name {
+            continue;
+        }
+
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(environment) = toml::from_str::<config::EnvironmentConfig>(&content) else {
+            continue;
+        };
+        let Some(ssh) = environment.ssh else {
+            continue;
+        };
+        if !ssh.enabled {
+            continue;
+        }
+        if ssh.host.as_deref().is_none_or(str::is_empty) {
+            continue;
+        }
+
+        reusable.push((name.to_string(), ssh));
+    }
+
+    reusable.sort_by(|left, right| left.0.cmp(&right.0));
+    Ok(reusable)
+}
+
+fn select_reusable_ssh_config(
+    repo_root: &Path,
+    env_name: &str,
+    conn: &dbeaver::DBeaverConnection,
+) -> Result<Option<config::SshConfig>> {
+    let reusable = load_reusable_ssh_configs(repo_root, env_name)?;
+    if reusable.is_empty() {
+        return Ok(None);
+    }
+
+    let reuse = inquire::Confirm::new("Reuse bastion configuration from an existing environment?")
+        .with_default(true)
+        .prompt()
+        .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?;
+    if !reuse {
+        return Ok(None);
+    }
+
+    let options: Vec<String> = reusable
+        .iter()
+        .map(|(name, ssh)| {
+            let host = ssh.host.as_deref().unwrap_or("unknown");
+            let port = ssh.port.unwrap_or(22);
+            let user = ssh.username.as_deref().unwrap_or("unknown");
+            format!("{name} ({user}@{host}:{port})")
+        })
+        .collect();
+
+    let selected = inquire::Select::new("  Reuse bastion from:", options)
+        .prompt()
+        .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?;
+    let selected_index = reusable
+        .iter()
+        .position(|(name, ssh)| {
+            let host = ssh.host.as_deref().unwrap_or("unknown");
+            let port = ssh.port.unwrap_or(22);
+            let user = ssh.username.as_deref().unwrap_or("unknown");
+            format!("{name} ({user}@{host}:{port})") == selected
+        })
+        .ok_or_else(|| SafeselectError::Other("selected bastion not found".to_string()))?;
+
+    let (_, mut ssh) = reusable[selected_index].clone();
+    ssh.enabled = true;
+    ssh.forward_host = Some(conn.host.clone());
+    ssh.forward_port = Some(conn.port);
+    ssh.local_port = None;
+    if ssh.local_host.as_deref().is_none_or(str::is_empty) {
+        ssh.local_host = Some("localhost".to_string());
+    }
+    Ok(Some(ssh))
+}
+
 fn prompt_ssh_config(
     conn: &dbeaver::DBeaverConnection,
     project_name: &str,
     env_name: &str,
+    repo_root: &Path,
 ) -> Result<config::SshConfig> {
     let default_host = conn.ssh_host.as_deref().unwrap_or("");
     let default_user = conn.ssh_user.as_deref().unwrap_or("");
@@ -947,6 +1048,11 @@ fn prompt_ssh_config(
     if let Some(warning) = dbeaver_shared_tunnel_warning(conn) {
         println!("  ⚠ {warning}");
         println!();
+    }
+
+    if let Some(ssh) = select_reusable_ssh_config(repo_root, env_name, conn)? {
+        println!("  ✓ Reusing bastion configuration");
+        return Ok(ssh);
     }
 
     let ans = inquire::Confirm::new("Configure SSH tunnel now?")
@@ -1237,7 +1343,7 @@ fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
         let has_ssh = conn.ssh_host.is_some();
 
         let ssh = if has_ssh {
-            let mut ssh = prompt_ssh_config(conn, &project_name, env_name)?;
+            let mut ssh = prompt_ssh_config(conn, &project_name, env_name, &cwd)?;
             let local_port = ssh
                 .local_port
                 .filter(|port| !used_ssh_local_ports.contains(port))
@@ -2774,6 +2880,60 @@ auth_type = "PASSWORD"
 
         assert!(used.contains(&DEFAULT_SSH_LOCAL_PORT));
         assert_eq!(next, DEFAULT_SSH_LOCAL_PORT + 1);
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn loads_reusable_ssh_configs_from_other_environments() {
+        let temp =
+            std::env::temp_dir().join(format!("safeselect-ssh-reuse-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        let env_dir = temp.join(".safeselect").join("environments");
+        std::fs::create_dir_all(&env_dir).unwrap();
+
+        std::fs::write(
+            env_dir.join("pre.toml"),
+            r#"
+version = 1
+
+[database]
+driver = "postgresql"
+url = "jdbc:postgresql://localhost:15432/app?sslmode=require"
+username = "usr_app"
+
+[ssh]
+enabled = true
+host = "bastion.example.com"
+port = 2222
+username = "jumpboxdev"
+local_host = "localhost"
+local_port = 15432
+forward_host = "db.example.com"
+forward_port = 5432
+auth_type = "PASSWORD"
+"#,
+        )
+        .unwrap();
+
+        std::fs::write(
+            env_dir.join("local.toml"),
+            r#"
+version = 1
+
+[database]
+driver = "postgresql"
+url = "jdbc:postgresql://db.example.com:5432/app?sslmode=require"
+username = "usr_app"
+"#,
+        )
+        .unwrap();
+
+        let reusable = load_reusable_ssh_configs(&temp, "new-env").unwrap();
+
+        assert_eq!(reusable.len(), 1);
+        assert_eq!(reusable[0].0, "pre");
+        assert_eq!(reusable[0].1.host.as_deref(), Some("bastion.example.com"));
 
         let _ = std::fs::remove_dir_all(&temp);
     }
