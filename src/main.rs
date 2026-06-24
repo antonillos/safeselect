@@ -2739,4 +2739,42 @@ mod tests {
         assert_eq!(first, DEFAULT_SSH_LOCAL_PORT);
         assert_eq!(second, DEFAULT_SSH_LOCAL_PORT + 1);
     }
+
+    #[test]
+    fn detects_used_ports_from_legacy_environment_urls() {
+        let temp =
+            std::env::temp_dir().join(format!("safeselect-ssh-port-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        let env_dir = temp.join(".safeselect").join("environments");
+        std::fs::create_dir_all(&env_dir).unwrap();
+        std::fs::write(
+            env_dir.join("pre.toml"),
+            r#"
+version = 1
+
+[database]
+driver = "postgresql"
+url = "jdbc:postgresql://localhost:15432/app?sslmode=require"
+username = "usr_app"
+
+[ssh]
+enabled = true
+host = "localhost"
+port = 2222
+username = "jumpboxdev"
+forward_host = "db.example.com"
+forward_port = 5432
+auth_type = "PASSWORD"
+"#,
+        )
+        .unwrap();
+
+        let used = collect_used_ssh_local_ports(&temp);
+        let next = next_available_ssh_local_port(&used).unwrap();
+
+        assert!(used.contains(&DEFAULT_SSH_LOCAL_PORT));
+        assert_eq!(next, DEFAULT_SSH_LOCAL_PORT + 1);
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
 }
