@@ -1075,6 +1075,64 @@ instead of the real bastion/user. Enter the real SSH bastion and username manual
     None
 }
 
+const DEFAULT_SSH_LOCAL_PORT: u16 = 15432;
+
+fn ssh_local_port_from_config(config: &config::EnvironmentConfig) -> Option<u16> {
+    let ssh = config.ssh.as_ref()?;
+    if !ssh.enabled {
+        return None;
+    }
+
+    ssh.local_port.or_else(|| {
+        extract_host_port(&config.database.url).and_then(|(host, port)| {
+            if host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" {
+                Some(port)
+            } else {
+                None
+            }
+        })
+    })
+}
+
+fn collect_used_ssh_local_ports(repo_root: &Path) -> std::collections::HashSet<u16> {
+    let mut used = std::collections::HashSet::new();
+    let env_dir = repo_root.join(".safeselect").join("environments");
+    let entries = match std::fs::read_dir(env_dir) {
+        Ok(entries) => entries,
+        Err(_) => return used,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("toml") {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(config) = toml::from_str::<config::EnvironmentConfig>(&content) else {
+            continue;
+        };
+        if let Some(port) = ssh_local_port_from_config(&config) {
+            used.insert(port);
+        }
+    }
+
+    used
+}
+
+fn next_available_ssh_local_port(used_ports: &std::collections::HashSet<u16>) -> Result<u16> {
+    for port in DEFAULT_SSH_LOCAL_PORT..=u16::MAX {
+        if !used_ports.contains(&port) {
+            return Ok(port);
+        }
+    }
+
+    Err(SafeselectError::Other(
+        "no available SSH local port found".to_string(),
+    ))
+}
+
 fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
     let cwd = std::env::current_dir()?;
     check_version_and_maybe_reset(&cwd)?;
@@ -1171,6 +1229,7 @@ fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
 
     let project_name = project_display_name(&cwd);
     let mut imported_envs: Vec<(String, bool, bool)> = vec![];
+    let mut used_ssh_local_ports = collect_used_ssh_local_ports(&cwd);
 
     for (idx, env_name) in &to_import {
         let conn = &connections[*idx];
@@ -1178,16 +1237,25 @@ fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
         let has_ssh = conn.ssh_host.is_some();
 
         let ssh = if has_ssh {
-            Some(prompt_ssh_config(conn, &project_name, env_name)?)
+            let mut ssh = prompt_ssh_config(conn, &project_name, env_name)?;
+            let local_port = ssh
+                .local_port
+                .filter(|port| !used_ssh_local_ports.contains(port))
+                .unwrap_or(next_available_ssh_local_port(&used_ssh_local_ports)?);
+            ssh.local_port = Some(local_port);
+            if ssh.local_host.as_deref().is_none_or(str::is_empty) {
+                ssh.local_host = Some("localhost".to_string());
+            }
+            used_ssh_local_ports.insert(local_port);
+            Some(ssh)
         } else {
             None
         };
 
         // URL points through the SSH tunnel when one is configured
-        // Azure PostgreSQL requires SSL at protocol level
-        // Use 15432 as local forward port (different from SSH server port 2222)
-        let url = if has_ssh {
-            let local_forward_port = 15432;
+        // Azure PostgreSQL requires SSL at protocol level.
+        let url = if let Some(ref ssh) = ssh {
+            let local_forward_port = ssh.local_port.unwrap_or(DEFAULT_SSH_LOCAL_PORT);
             format!(
                 "jdbc:postgresql://localhost:{}/{}?sslmode=require",
                 local_forward_port, conn.database
@@ -2651,5 +2719,24 @@ mod tests {
         let warning = dbeaver_shared_tunnel_warning(&conn);
 
         assert!(warning.is_none());
+    }
+
+    #[test]
+    fn falls_back_to_legacy_default_port_when_no_ports_are_used() {
+        let port = next_available_ssh_local_port(&std::collections::HashSet::new()).unwrap();
+
+        assert_eq!(port, DEFAULT_SSH_LOCAL_PORT);
+    }
+
+    #[test]
+    fn allocates_distinct_ports_for_multiple_ssh_environments() {
+        let mut used = std::collections::HashSet::new();
+
+        let first = next_available_ssh_local_port(&used).unwrap();
+        used.insert(first);
+        let second = next_available_ssh_local_port(&used).unwrap();
+
+        assert_eq!(first, DEFAULT_SSH_LOCAL_PORT);
+        assert_eq!(second, DEFAULT_SSH_LOCAL_PORT + 1);
     }
 }
