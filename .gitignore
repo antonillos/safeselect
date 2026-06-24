@@ -1,5 +1,6 @@
 /target/
 /sidecar/target/
+/sidecar/dependency-reduced-pom.xml
 *.jar
 *.bak
 .makevn/
