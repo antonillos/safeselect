@@ -2,6 +2,13 @@ use crate::error::Result;
 use std::collections::HashMap;
 use std::path::Path;
 
+fn secret_env_var(env_name: &str) -> String {
+    format!(
+        "SAFESELECT_PASSWORD_{}",
+        env_name.to_uppercase().replace('-', "_")
+    )
+}
+
 /// Returns a platform-appropriate hint for configuring a database secret.
 pub fn secret_setup_hint(project_name: &str, env_name: &str) -> String {
     if cfg!(target_os = "macos") {
@@ -9,10 +16,7 @@ pub fn secret_setup_hint(project_name: &str, env_name: &str) -> String {
             "security add-generic-password -a \"{project_name}/{env_name}\" -s \"safeselect\" -w \"<password>\""
         )
     } else {
-        let var = format!(
-            "SAFESELECT_PASSWORD_{}",
-            env_name.to_uppercase().replace('-', "_")
-        );
+        let var = secret_env_var(env_name);
         format!(
             "export {var}=\"<password>\"  # then edit .safeselect/environments/{env_name}.toml:\n  \
              [database.secret]\n  source = \"env\"\n  variable = \"{var}\""
@@ -410,14 +414,23 @@ pub fn write_config_files(
                 variable: Some(var.clone()),
             })
         } else if let Some(ref literal) = conn.password_literal {
-            let account = format!("{}/{}", project_name, conn.env_name);
-            store_password_in_keychain(&account, literal)?;
-            Some(config::SecretConfig {
-                source: "macos-keychain".to_string(),
-                service: Some("safeselect".to_string()),
-                account: Some(account),
-                variable: None,
-            })
+            if cfg!(target_os = "macos") {
+                let account = format!("{}/{}", project_name, conn.env_name);
+                store_password_in_keychain(&account, literal)?;
+                Some(config::SecretConfig {
+                    source: "macos-keychain".to_string(),
+                    service: Some("safeselect".to_string()),
+                    account: Some(account),
+                    variable: None,
+                })
+            } else {
+                Some(config::SecretConfig {
+                    source: "env".to_string(),
+                    service: None,
+                    account: None,
+                    variable: Some(secret_env_var(&conn.env_name)),
+                })
+            }
         } else {
             None
         };

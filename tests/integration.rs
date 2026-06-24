@@ -34,6 +34,7 @@ fn run_with_config(args: &[&str], config_dir: &str) -> (String, String, bool) {
         .args(args)
         .env("SAFESELECT_CONFIG_DIR", config_dir)
         .env("SAFESELECT_INT_TEST_PASSWORD", "testpass")
+        .env("SAFESELECT_PASSWORD_DB", "testpass")
         .env("NO_COLOR", "1")
         .output()
         .expect("failed to run safeselect");
