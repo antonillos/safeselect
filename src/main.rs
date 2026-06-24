@@ -562,14 +562,16 @@ fn reset_project_config(repo_root: &Path) -> Result<()> {
     let safeselect_dir = repo_root.join(".safeselect");
     let env_dir = safeselect_dir.join("environments");
     let project_name = project_display_name(repo_root);
-
-    if !env_dir.is_dir() {
-        println!("  ◉ No environments to reset.");
+    let has_env_dir = env_dir.is_dir();
+    let project_file = safeselect_dir.join("project.toml");
+    let has_project_file = project_file.exists();
+    if !has_env_dir && !has_project_file {
+        println!("  ◉ No environments or project config to reset.");
         return Ok(());
     }
 
     let ans = inquire::Confirm::new(
-        "This will remove all environments and their keychain entries. Continue?",
+        "This will remove all environments, shared SSH bastions, and related keychain entries. Continue?",
     )
     .with_default(true)
     .prompt()
@@ -581,29 +583,31 @@ fn reset_project_config(repo_root: &Path) -> Result<()> {
     }
 
     let mut removed = 0u32;
-    if let Ok(entries) = std::fs::read_dir(&env_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().map_or(false, |ext| ext == "toml") {
-                if let Ok(content) = std::fs::read_to_string(&path) {
-                    if let Ok(env_cfg) = toml::from_str::<config::EnvironmentConfig>(&content) {
-                        if let Some(ref secret) = env_cfg.database.secret {
-                            if secret.source == "macos-keychain" {
-                                if let Some(ref acct) = secret.account {
-                                    let _ = compose::delete_password_from_keychain(acct);
+    if has_env_dir {
+        if let Ok(entries) = std::fs::read_dir(&env_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().map_or(false, |ext| ext == "toml") {
+                    if let Ok(content) = std::fs::read_to_string(&path) {
+                        if let Ok(env_cfg) = toml::from_str::<config::EnvironmentConfig>(&content) {
+                            if let Some(ref secret) = env_cfg.database.secret {
+                                if secret.source == "macos-keychain" {
+                                    if let Some(ref acct) = secret.account {
+                                        let _ = compose::delete_password_from_keychain(acct);
+                                    }
+                                }
+                            }
+                            if let Some(ref ssh) = env_cfg.ssh {
+                                if let Some(ref bastion) = ssh.bastion {
+                                    let ssh_account = format!("{project_name}/{bastion}/ssh");
+                                    let _ = compose::delete_password_from_keychain(&ssh_account);
                                 }
                             }
                         }
-                        if let Some(ref ssh) = env_cfg.ssh {
-                            if let Some(ref bastion) = ssh.bastion {
-                                let ssh_account = format!("{project_name}/{bastion}/ssh");
-                                let _ = compose::delete_password_from_keychain(&ssh_account);
-                            }
-                        }
                     }
+                    let _ = std::fs::remove_file(&path);
+                    removed += 1;
                 }
-                let _ = std::fs::remove_file(&path);
-                removed += 1;
             }
         }
     }
@@ -613,7 +617,6 @@ fn reset_project_config(repo_root: &Path) -> Result<()> {
     }
 
     // Reset generated_by in project.toml
-    let project_file = safeselect_dir.join("project.toml");
     if project_file.exists() {
         if let Ok(content) = std::fs::read_to_string(&project_file) {
             if let Ok(mut proj) = toml::from_str::<config::ProjectConfig>(&content) {
@@ -630,6 +633,8 @@ fn reset_project_config(repo_root: &Path) -> Result<()> {
         println!("\nReset complete. Re-import with:");
         println!("  safeselect import-dbeaver <export.zip>");
         println!("  safeselect import-compose");
+    } else if has_project_file {
+        println!("  ✓ Cleared shared SSH bastions from project config");
     } else {
         println!("  ◉ No environment files found.");
     }
@@ -783,17 +788,46 @@ fn cmd_agent(action: AgentAction) -> Result<()> {
                     (found.clone(), found)
                 }
             };
-            let entry_name = match name {
-                Some(n) => n,
+            let environments = match environment {
+                Some(environment) => vec![environment],
                 None => {
-                    let root = project_dir.ok_or_else(|| {
+                    let root = project_dir.as_ref().ok_or_else(|| {
                         SafeselectError::Other(
-                            "no .safeselect/ found; use --project or --name to specify".into(),
+                            "no .safeselect/ found; use --project or --environment".into(),
                         )
                     })?;
-                    default_agent_entry_name(&project_display_name(&root), &environment)
+                    let environments = list_environment_names(root)?;
+                    match environments.len() {
+                        0 => {
+                            return Err(SafeselectError::Other(
+                                "no environments found; import or create one first".into(),
+                            ));
+                        }
+                        1 => vec![environments[0].clone()],
+                        _ => {
+                            let selected = inquire::MultiSelect::new(
+                                "Select environments to install (Space to toggle, Enter to confirm):",
+                                environments,
+                            )
+                            .with_page_size(20)
+                            .prompt()
+                            .map_err(|e| {
+                                SafeselectError::Other(format!("Cancelled: {e}"))
+                            })?;
+                            if selected.is_empty() {
+                                println!("No environments selected. Nothing to install.");
+                                return Ok(());
+                            }
+                            selected
+                        }
+                    }
                 }
             };
+            if environments.len() > 1 && name.is_some() {
+                return Err(SafeselectError::Other(
+                    "--name cannot be used when installing multiple environments".into(),
+                ));
+            }
 
             // Calculate MCP client timeout based on project's statement_timeout_ms
             let mcp_timeout_ms = if let Some(ref root) = repo_root {
@@ -816,15 +850,28 @@ fn cmd_agent(action: AgentAction) -> Result<()> {
                 120_000 // Default 2 minutes if no repo_root
             };
 
-            agents::install_entry(
-                &client,
-                &environment,
-                &entry_name,
-                repo_root.as_deref(),
-                Some(loader.config_dir()),
-                mcp_timeout_ms,
-                local,
-            )
+            let root = project_dir.ok_or_else(|| {
+                SafeselectError::Other(
+                    "no .safeselect/ found; use --project or run from a project directory".into(),
+                )
+            })?;
+            for environment in environments {
+                let entry_name = match &name {
+                    Some(name) => name.clone(),
+                    None => default_agent_entry_name(&project_display_name(&root), &environment),
+                };
+
+                agents::install_entry(
+                    &client,
+                    &environment,
+                    &entry_name,
+                    repo_root.as_deref(),
+                    Some(loader.config_dir()),
+                    mcp_timeout_ms,
+                    local,
+                )?;
+            }
+            Ok(())
         }
         AgentAction::Upgrade {
             client,
@@ -880,7 +927,25 @@ fn cmd_agent(action: AgentAction) -> Result<()> {
             let loader = ConfigLoader::new();
             let cwd = std::env::current_dir()?;
             let repo_root = loader.find_local_project(&cwd);
-            agents::uninstall_entry(&client, &name, repo_root.as_deref())
+            let entry_name = match name {
+                Some(name) => name,
+                None => {
+                    let (_config_path, detected_name) =
+                        agents::detect_uninstall_target(&client, repo_root.as_deref())?;
+                    let confirm = inquire::Confirm::new(&format!(
+                        "Uninstall '{detected_name}' from {client}?"
+                    ))
+                    .with_default(true)
+                    .prompt()
+                    .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?;
+                    if !confirm {
+                        println!("Cancelled.");
+                        return Ok(());
+                    }
+                    detected_name
+                }
+            };
+            agents::uninstall_entry(&client, &entry_name, repo_root.as_deref())
         }
         AgentAction::Status => {
             let clients = agents::detect_clients()?;
@@ -2220,66 +2285,6 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
 /// Run `safeselect check` for each environment and report results.
 fn run_checks(repo_root: &std::path::Path, env_names: &[String], verbose: bool) -> Result<()> {
     use std::io::Write;
-
-    // Try to auto-establish SSH tunnels
-    if let Err(e) = setup_ssh_tunnels(repo_root, env_names) {
-        println!("  ⚠  {e}");
-    }
-
-    // Pre-scan for SSH bastions (only warn if still not active)
-    let ssh_envs: Vec<&String> = env_names
-        .iter()
-        .filter(|env| {
-            load_environment_config(repo_root, env)
-                .ok()
-                .and_then(|cfg| cfg.ssh)
-                .map(|s| s.enabled)
-                .unwrap_or(false)
-        })
-        .collect();
-
-    if !ssh_envs.is_empty() {
-        use std::net::ToSocketAddrs;
-        let mut still_down = vec![];
-        for env in &ssh_envs {
-            let active = load_environment_config(repo_root, env)
-                .ok()
-                .and_then(|cfg| extract_host_port(&cfg.database.url))
-                .map(|(h, p)| {
-                    format!("{h}:{p}")
-                        .to_socket_addrs()
-                        .ok()
-                        .and_then(|mut a| a.next())
-                        .map(|a| check_postgres(&a))
-                        .unwrap_or(false)
-                })
-                .unwrap_or(false);
-            if !active {
-                still_down.push(env.as_str());
-            }
-        }
-
-        if !still_down.is_empty() {
-            println!();
-            println!("── SSH Bastions ─────────────────────────────────");
-            println!();
-            for env_name in &still_down {
-                if let Ok(cfg) = load_environment_config(repo_root, env_name) {
-                    if let Some(ref ssh) = cfg.ssh {
-                        if ssh.enabled {
-                            let host = ssh.host.as_deref().unwrap_or("unknown");
-                            let port = ssh.port.unwrap_or(22);
-                            println!("  ⚠  '{env_name}' requires SSH tunnel ({host}:{port})");
-                            let cmd = build_ssh_command(ssh, &cfg.database.url)
-                                .unwrap_or_else(|| "ssh command unavailable".to_string());
-                            println!("     {cmd}");
-                        }
-                    }
-                }
-            }
-            println!();
-        }
-    }
 
     println!("── Verification ──────────────────────────────────");
     println!();

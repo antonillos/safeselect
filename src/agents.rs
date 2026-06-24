@@ -44,18 +44,18 @@ pub fn install_entry(
     let config_path = if local {
         get_local_client_config(client, repo_root)?
     } else {
-        // Auto-detect local config and ask user
+        // Prefer local project config when available; fall back to global only by confirmation.
         if let Some(root) = repo_root {
             if let Some(local_path) = detect_local_client_config(client, root) {
                 println!("Found local config: {}", local_path.display());
-                println!("Install to local project config instead of global? [y/N] ");
+                println!("Install to global config instead of local? [y/N] ");
                 let mut input = String::new();
                 std::io::stdin().read_line(&mut input)?;
                 if input.trim().eq_ignore_ascii_case("y") {
+                    get_client_config(client)?
+                } else {
                     println!("Installing to local config...");
                     local_path
-                } else {
-                    get_client_config(client)?
                 }
             } else {
                 get_client_config(client)?
@@ -242,6 +242,13 @@ pub fn uninstall_entry(client: &str, entry_name: &str, repo_root: Option<&Path>)
 
     println!("Entry '{entry_name}' uninstalled from {client}");
     Ok(())
+}
+
+pub fn detect_uninstall_target(
+    client: &str,
+    repo_root: Option<&Path>,
+) -> Result<(PathBuf, String)> {
+    resolve_upgrade_target(client, None, None, repo_root, false)
 }
 
 fn resolve_uninstall_target(

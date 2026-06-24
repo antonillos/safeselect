@@ -211,7 +211,7 @@ pub enum AgentAction {
         #[arg(long)]
         project: Option<PathBuf>,
         #[arg(long)]
-        environment: String,
+        environment: Option<String>,
         /// Entry name (default: safeselect-<project-dir>-<environment>)
         #[arg(long)]
         name: Option<String>,
@@ -241,7 +241,7 @@ pub enum AgentAction {
         /// Client name
         client: String,
         #[arg(long)]
-        name: String,
+        name: Option<String>,
     },
     /// Show installation status
     Status,
