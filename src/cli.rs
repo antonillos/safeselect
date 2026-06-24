@@ -61,7 +61,9 @@ pub enum Command {
         #[arg(long)]
         project: Option<PathBuf>,
         #[arg(long)]
-        environment: String,
+        environment: Option<String>,
+        #[arg(long, default_value_t = false)]
+        verbose: bool,
     },
     /// Diagnose configuration, SSH, sidecar, JDBC, and SELECT 1 connectivity
     Doctor {

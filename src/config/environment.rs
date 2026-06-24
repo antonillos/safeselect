@@ -38,9 +38,13 @@ pub struct TlsConfig {
 pub struct SshConfig {
     #[serde(default)]
     pub enabled: bool,
+    #[serde(default)]
+    pub bastion: Option<String>,
     pub host: Option<String>,
     pub port: Option<u16>,
     pub username: Option<String>,
+    #[serde(default)]
+    pub secret_account: Option<String>,
     pub identity_file: Option<String>,
     pub known_hosts: Option<String>,
     #[serde(default)]

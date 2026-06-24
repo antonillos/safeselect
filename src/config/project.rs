@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -8,6 +9,8 @@ pub struct ProjectConfig {
     pub display_name: Option<String>,
     #[serde(default)]
     pub generated_by: Option<String>,
+    #[serde(default)]
+    pub ssh_bastions: BTreeMap<String, SharedSshConfig>,
     #[serde(default)]
     pub security: SecurityPolicy,
     #[serde(default)]
@@ -22,11 +25,24 @@ impl Default for ProjectConfig {
             version: 1,
             display_name: None,
             generated_by: Some(CURRENT_VERSION.to_string()),
+            ssh_bastions: BTreeMap::new(),
             security: SecurityPolicy::default(),
             limits: LimitsConfig::default(),
             audit: AuditConfig::default(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SharedSshConfig {
+    pub host: Option<String>,
+    pub port: Option<u16>,
+    pub username: Option<String>,
+    #[serde(default)]
+    pub secret_account: Option<String>,
+    pub identity_file: Option<String>,
+    pub known_hosts: Option<String>,
+    pub auth_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

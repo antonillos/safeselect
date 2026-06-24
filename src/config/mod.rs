@@ -4,7 +4,7 @@ mod project;
 
 pub use driver::DriverConfig;
 pub use environment::{DatabaseConfig, EnvironmentConfig, LimitsOverride, SecretConfig, SshConfig};
-pub use project::{AuditConfig, LimitsConfig, ProjectConfig, SecurityPolicy};
+pub use project::{AuditConfig, LimitsConfig, ProjectConfig, SecurityPolicy, SharedSshConfig};
 
 use crate::error::{Result, SafeselectError};
 use std::path::{Path, PathBuf};
@@ -178,6 +178,7 @@ impl ConfigLoader {
             );
             SafeselectError::Config(msg)
         })?;
+        merge_project_ssh(&project, &mut environment)?;
 
         let driver = self.load_driver(&environment.database.driver)?;
         self.validate_driver_file(&driver)?;
@@ -209,6 +210,47 @@ impl ConfigLoader {
             }
         }
     }
+}
+
+pub fn merge_project_ssh(
+    project: &ProjectConfig,
+    environment: &mut EnvironmentConfig,
+) -> Result<()> {
+    let Some(ssh) = environment.ssh.as_mut() else {
+        return Ok(());
+    };
+    let Some(bastion_name) = ssh.bastion.as_deref() else {
+        return Ok(());
+    };
+    let Some(shared) = project.ssh_bastions.get(bastion_name) else {
+        return Err(SafeselectError::Config(format!(
+            "ssh bastion '{bastion_name}' not found in project.toml"
+        )));
+    };
+
+    if ssh.host.is_none() {
+        ssh.host = shared.host.clone();
+    }
+    if ssh.port.is_none() {
+        ssh.port = shared.port;
+    }
+    if ssh.username.is_none() {
+        ssh.username = shared.username.clone();
+    }
+    if ssh.secret_account.is_none() {
+        ssh.secret_account = shared.secret_account.clone();
+    }
+    if ssh.identity_file.is_none() {
+        ssh.identity_file = shared.identity_file.clone();
+    }
+    if ssh.known_hosts.is_none() {
+        ssh.known_hosts = shared.known_hosts.clone();
+    }
+    if ssh.auth_type.is_none() {
+        ssh.auth_type = shared.auth_type.clone();
+    }
+
+    Ok(())
 }
 
 impl Default for ConfigLoader {
