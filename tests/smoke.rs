@@ -27,11 +27,16 @@ fn strip_ansi(s: &str) -> String {
 }
 
 fn run(args: &[&str]) -> (String, String, bool) {
-    let output = Command::new(safeselect_bin())
-        .args(args)
-        .env("NO_COLOR", "1")
-        .output()
-        .expect("failed to run safeselect");
+    run_in_dir(args, None)
+}
+
+fn run_in_dir(args: &[&str], current_dir: Option<&std::path::Path>) -> (String, String, bool) {
+    let mut command = Command::new(safeselect_bin());
+    command.args(args).env("NO_COLOR", "1");
+    if let Some(dir) = current_dir {
+        command.current_dir(dir);
+    }
+    let output = command.output().expect("failed to run safeselect");
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -67,9 +72,18 @@ fn test_version() {
 
 #[test]
 fn test_config_validate_no_project() {
-    let (stdout, _stderr, success) = &run(&["config", "validate"]);
+    let temp_dir = std::env::temp_dir().join(format!(
+        "safeselect-smoke-no-project-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(&temp_dir).unwrap();
+
+    let (stdout, _stderr, success) = &run_in_dir(&["config", "validate"], Some(&temp_dir));
     assert!(success);
-    assert!(stdout.contains("No .safeselect/"));
+    assert!(stdout.contains("No .safeselect/ directory found"));
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
 }
 
 #[test]

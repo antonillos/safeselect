@@ -175,6 +175,12 @@ pub enum ConfigAction {
         #[arg(long)]
         project: Option<PathBuf>,
     },
+    /// Uninstall project config without uninstalling the SafeSelect CLI
+    Uninstall {
+        /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
+        #[arg(long)]
+        project: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]

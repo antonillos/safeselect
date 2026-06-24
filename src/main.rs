@@ -555,10 +555,22 @@ fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
             };
             reset_project_config(&dir)
         }
+        ConfigAction::Uninstall { project } => {
+            let dir = match project {
+                Some(d) => d,
+                None => {
+                    let cwd = std::env::current_dir()?;
+                    loader
+                        .find_local_project(&cwd)
+                        .ok_or_else(|| SafeselectError::LocalProjectNotFound(cwd))?
+                }
+            };
+            uninstall_project_config(&dir)
+        }
     }
 }
 
-fn reset_project_config(repo_root: &Path) -> Result<()> {
+fn clear_project_config(repo_root: &Path, delete_dir: bool) -> Result<()> {
     let safeselect_dir = repo_root.join(".safeselect");
     let env_dir = safeselect_dir.join("environments");
     let project_name = project_display_name(repo_root);
@@ -566,16 +578,19 @@ fn reset_project_config(repo_root: &Path) -> Result<()> {
     let project_file = safeselect_dir.join("project.toml");
     let has_project_file = project_file.exists();
     if !has_env_dir && !has_project_file {
-        println!("  ◉ No environments or project config to reset.");
+        println!("  ◉ No environments or project config to clear.");
         return Ok(());
     }
 
-    let ans = inquire::Confirm::new(
-        "This will remove all environments, shared SSH bastions, and related keychain entries. Continue?",
-    )
-    .with_default(true)
-    .prompt()
-    .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?;
+    let prompt = if delete_dir {
+        "This will remove the entire .safeselect directory and related keychain entries. Continue?"
+    } else {
+        "This will remove all environments, shared SSH bastions, and related keychain entries. Continue?"
+    };
+    let ans = inquire::Confirm::new(prompt)
+        .with_default(true)
+        .prompt()
+        .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?;
 
     if !ans {
         println!("Cancelled.");
@@ -622,14 +637,21 @@ fn reset_project_config(repo_root: &Path) -> Result<()> {
             if let Ok(mut proj) = toml::from_str::<config::ProjectConfig>(&content) {
                 proj.generated_by = Some(env!("CARGO_PKG_VERSION").to_string());
                 proj.ssh_bastions.clear();
-                if let Ok(new_content) = toml::to_string_pretty(&proj) {
-                    let _ = std::fs::write(&project_file, new_content);
+                if !delete_dir {
+                    if let Ok(new_content) = toml::to_string_pretty(&proj) {
+                        let _ = std::fs::write(&project_file, new_content);
+                    }
                 }
             }
         }
     }
 
-    if removed > 0 {
+    if delete_dir {
+        if safeselect_dir.exists() {
+            std::fs::remove_dir_all(&safeselect_dir)?;
+            println!("  ✓ Removed {}", safeselect_dir.display());
+        }
+    } else if removed > 0 {
         println!("\nReset complete. Re-import with:");
         println!("  safeselect import-dbeaver <export.zip>");
         println!("  safeselect import-compose");
@@ -640,6 +662,14 @@ fn reset_project_config(repo_root: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn reset_project_config(repo_root: &Path) -> Result<()> {
+    clear_project_config(repo_root, false)
+}
+
+fn uninstall_project_config(repo_root: &Path) -> Result<()> {
+    clear_project_config(repo_root, true)
 }
 
 fn cmd_driver(loader: &ConfigLoader, action: DriverAction) -> Result<()> {
