@@ -39,6 +39,7 @@ pub struct SidecarProcess {
     reader: BufReader<ChildStdout>,
     next_id: u64,
     statement_timeout_ms: u64,
+    request_timeout_ms: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -232,6 +233,13 @@ impl SidecarProcess {
             child,
             next_id: 0,
             statement_timeout_ms,
+            request_timeout_ms: if statement_timeout_ms > 0 {
+                statement_timeout_ms + 1_000
+            } else if backend == "mongodb" {
+                35_000
+            } else {
+                30_000
+            },
         };
 
         proc.send_password(password)?;
@@ -430,14 +438,14 @@ impl SidecarProcess {
         // The 1s buffer allows PostgreSQL to cancel the query via statement_timeout
         // before we kill the sidecar process
         let timeout_ms = if self.statement_timeout_ms > 0 {
-            let t = (self.statement_timeout_ms + 1_000u64).max(5_000u64);
+            let t = self.request_timeout_ms.max(5_000u64);
             if t > i32::MAX as u64 {
                 i32::MAX
             } else {
                 t as i32
             }
         } else {
-            30_000i32
+            self.request_timeout_ms.min(i32::MAX as u64) as i32
         };
 
         loop {
