@@ -2080,7 +2080,35 @@ fn cmd_import_compass(path: Option<PathBuf>, non_interactive: bool) -> Result<()
         } else {
             conn.url.clone()
         };
-        let (url, username, secret) = prepare_mongodb_url(&project_name, &env_name, &raw_url)?;
+        let (mut url, username, mut secret) =
+            prepare_mongodb_url(&project_name, &env_name, &raw_url)?;
+        if secret.is_none() && !username.is_empty() {
+            if non_interactive {
+                warnings.push(format!(
+                    "{}: Compass did not export a database password; configure it with `safeselect config set-password --environment {}` after import.",
+                    conn.name, env_name
+                ));
+            } else {
+                println!();
+                println!("── Database Password ({env_name}) ──────────────────");
+                println!();
+                let account = format!("{project_name}/{env_name}");
+                let pw = rpassword::prompt_password(format!(
+                    "  Password for '{account}' (leave empty to skip): "
+                ))?;
+                let pw = pw.trim().to_string();
+                if !pw.is_empty() {
+                    compose::store_password_in_keychain(&account, &pw)?;
+                    url = inject_mongodb_password_placeholder(&raw_url, &username);
+                    secret = Some(config::SecretConfig {
+                        source: "macos-keychain".to_string(),
+                        service: Some("safeselect".to_string()),
+                        account: Some(account),
+                        variable: None,
+                    });
+                }
+            }
+        }
         let env_config = config::EnvironmentConfig {
             version: 1,
             database: config::DatabaseConfig {
@@ -2436,13 +2464,15 @@ fn rewrite_mongodb_url_for_local_endpoint(
     let authority = &url[authority_start..path_start];
     let credentials_end = authority.rfind('@').map(|idx| idx + 1).unwrap_or(0);
     let credentials = &authority[..credentials_end];
+    let suffix = &url[path_start..];
+    let rewritten_suffix = if suffix.is_empty() || suffix == "/" {
+        "/".to_string()
+    } else {
+        suffix.to_string()
+    };
     Some(format!(
-        "{}{}{}:{}{}",
-        &url[..authority_start],
-        credentials,
-        local_host,
-        local_port,
-        &url[path_start..]
+        "mongodb://{}{}:{}{}",
+        credentials, local_host, local_port, rewritten_suffix
     ))
 }
 
@@ -2518,6 +2548,24 @@ fn prepare_mongodb_url(
             variable: None,
         }),
     ))
+}
+
+fn inject_mongodb_password_placeholder(url: &str, username: &str) -> String {
+    let Some(scheme_end) = url.find("://") else {
+        return url.to_string();
+    };
+    let authority_start = scheme_end + 3;
+    let Some(relative_at) = url[authority_start..].find('@') else {
+        return url.to_string();
+    };
+    let at = authority_start + relative_at;
+    format!(
+        "{}{}:{}{}",
+        &url[..authority_start],
+        username,
+        "__SAFESELECT_PASSWORD__",
+        &url[at..]
+    )
 }
 
 fn display_database_target(url: &str) -> String {
@@ -4099,6 +4147,31 @@ username = "usr_app"
         assert_eq!(
             result,
             Some(("cluster.example.mongodb.net".to_string(), 27017))
+        );
+    }
+
+    #[test]
+    fn rewrite_mongodb_srv_url_for_local_endpoint_uses_mongodb_scheme() {
+        let result = rewrite_mongodb_url_for_local_endpoint(
+            "mongodb+srv://user@cluster.example.mongodb.net/?retryWrites=true",
+            "localhost",
+            2222,
+        );
+        assert_eq!(
+            result.as_deref(),
+            Some("mongodb://user@localhost:2222/?retryWrites=true")
+        );
+    }
+
+    #[test]
+    fn inject_mongodb_password_placeholder_adds_placeholder() {
+        let result = inject_mongodb_password_placeholder(
+            "mongodb://user@localhost:2222/app?retryWrites=true",
+            "user",
+        );
+        assert_eq!(
+            result,
+            "mongodb://user:__SAFESELECT_PASSWORD__@localhost:2222/app?retryWrites=true"
         );
     }
 }
