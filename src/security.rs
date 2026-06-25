@@ -1,3 +1,4 @@
+use crate::backend::DocumentFindRequest;
 use crate::config::{LimitsConfig, SecurityPolicy};
 use crate::error::{Result, SafeselectError};
 
@@ -19,6 +20,135 @@ impl SecurityEngine {
 
     pub fn allowed_schemas(&self) -> &[String] {
         &self.policy.allowed_schemas
+    }
+
+    pub fn filter_document_databases(&self, databases: Vec<String>) -> Vec<String> {
+        if self.policy.allowed_databases.is_empty() {
+            return databases;
+        }
+        databases
+            .into_iter()
+            .filter(|database| self.policy.allowed_databases.iter().any(|d| d == database))
+            .collect()
+    }
+
+    pub fn filter_document_collections(
+        &self,
+        database: &str,
+        collections: Vec<String>,
+    ) -> Vec<String> {
+        let namespace = |collection: &str| format!("{database}.{collection}");
+        collections
+            .into_iter()
+            .filter(|collection| {
+                let ns = namespace(collection);
+                let allowed = self.policy.allowed_collections.is_empty()
+                    || self
+                        .policy
+                        .allowed_collections
+                        .iter()
+                        .any(|allowed| allowed == collection || allowed == &ns);
+                let denied = self
+                    .policy
+                    .denied_collections
+                    .iter()
+                    .any(|denied| denied == collection || denied == &ns);
+                allowed && !denied
+            })
+            .collect()
+    }
+
+    pub fn validate_document_find(&self, request: &DocumentFindRequest) -> Result<()> {
+        self.validate_document_database(&request.database)?;
+        self.check_document_name("collection", &request.collection)?;
+
+        if !request.filter.is_object() {
+            return Err(SafeselectError::QueryRejected(
+                "Document filter must be a JSON object".into(),
+            ));
+        }
+        if request
+            .projection
+            .as_ref()
+            .is_some_and(|projection| !projection.is_object())
+        {
+            return Err(SafeselectError::QueryRejected(
+                "Document projection must be a JSON object".into(),
+            ));
+        }
+        if request.sort.as_ref().is_some_and(|sort| !sort.is_object()) {
+            return Err(SafeselectError::QueryRejected(
+                "Document sort must be a JSON object".into(),
+            ));
+        }
+        if request.limit == 0 || request.limit > self.limits.max_rows {
+            return Err(SafeselectError::QueryRejected(format!(
+                "Document limit must be between 1 and {}",
+                self.limits.max_rows
+            )));
+        }
+
+        if !self.policy.allowed_databases.is_empty()
+            && !self
+                .policy
+                .allowed_databases
+                .iter()
+                .any(|database| database == &request.database)
+        {
+            return Err(SafeselectError::QueryRejected(format!(
+                "Database '{}' is not in the allowed databases list ({})",
+                request.database,
+                self.policy.allowed_databases.join(", ")
+            )));
+        }
+
+        let namespace = format!("{}.{}", request.database, request.collection);
+        if !self.policy.allowed_collections.is_empty()
+            && !self
+                .policy
+                .allowed_collections
+                .iter()
+                .any(|collection| collection == &request.collection || collection == &namespace)
+        {
+            return Err(SafeselectError::QueryRejected(format!(
+                "Collection '{}' is not in the allowed collections list ({})",
+                namespace,
+                self.policy.allowed_collections.join(", ")
+            )));
+        }
+
+        if self
+            .policy
+            .denied_collections
+            .iter()
+            .any(|collection| collection == &request.collection || collection == &namespace)
+        {
+            return Err(SafeselectError::QueryRejected(format!(
+                "Collection '{namespace}' is denied"
+            )));
+        }
+
+        Ok(())
+    }
+
+    pub fn validate_document_database(&self, database: &str) -> Result<()> {
+        self.check_document_name("database", database)?;
+
+        if !self.policy.allowed_databases.is_empty()
+            && !self
+                .policy
+                .allowed_databases
+                .iter()
+                .any(|allowed| allowed == database)
+        {
+            return Err(SafeselectError::QueryRejected(format!(
+                "Database '{}' is not in the allowed databases list ({})",
+                database,
+                self.policy.allowed_databases.join(", ")
+            )));
+        }
+
+        Ok(())
     }
 
     pub fn validate(&self, sql: &str) -> Result<()> {
@@ -305,6 +435,23 @@ impl SecurityEngine {
                     "Query references denied relation: {relation}"
                 )));
             }
+        }
+        Ok(())
+    }
+
+    fn check_document_name(&self, kind: &str, name: &str) -> Result<()> {
+        if name.is_empty()
+            || name.len() > 255
+            || name.starts_with("system.")
+            || name.contains('\0')
+            || name.contains('$')
+            || name.contains('/')
+            || name.contains('\\')
+            || name.contains(' ')
+        {
+            return Err(SafeselectError::QueryRejected(format!(
+                "Invalid document {kind} name: {name}"
+            )));
         }
         Ok(())
     }
@@ -1080,5 +1227,63 @@ mod tests {
         assert!(engine
             .validate("SELECT * FROM public.users_credentials")
             .is_err());
+    }
+
+    #[test]
+    fn test_document_find_valid() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        let request = DocumentFindRequest {
+            database: "app".into(),
+            collection: "users".into(),
+            filter: serde_json::json!({"active": true}),
+            projection: None,
+            sort: None,
+            limit: 10,
+        };
+        assert!(engine.validate_document_find(&request).is_ok());
+    }
+
+    #[test]
+    fn test_document_find_denied_collection() {
+        let policy = SecurityPolicy {
+            denied_collections: vec!["app.secrets".into()],
+            ..Default::default()
+        };
+        let engine = SecurityEngine::new(policy, LimitsConfig::default());
+        let request = DocumentFindRequest {
+            database: "app".into(),
+            collection: "secrets".into(),
+            filter: serde_json::json!({}),
+            projection: None,
+            sort: None,
+            limit: 10,
+        };
+        assert!(engine.validate_document_find(&request).is_err());
+    }
+
+    #[test]
+    fn test_document_find_rejects_invalid_filter() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        let request = DocumentFindRequest {
+            database: "app".into(),
+            collection: "users".into(),
+            filter: serde_json::json!("not an object"),
+            projection: None,
+            sort: None,
+            limit: 10,
+        };
+        assert!(engine.validate_document_find(&request).is_err());
+    }
+
+    #[test]
+    fn test_document_collection_filter_hides_denied_collection() {
+        let policy = SecurityPolicy {
+            denied_collections: vec!["app.secrets".into()],
+            ..Default::default()
+        };
+        let engine = SecurityEngine::new(policy, LimitsConfig::default());
+        let collections =
+            engine.filter_document_collections("app", vec!["users".into(), "secrets".into()]);
+        assert_eq!(collections, vec!["users"]);
     }
 }

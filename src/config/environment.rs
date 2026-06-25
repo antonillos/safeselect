@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::backend::{BackendDescriptor, BackendKind};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnvironmentConfig {
     pub version: u32,
@@ -12,10 +14,30 @@ pub struct EnvironmentConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatabaseConfig {
-    pub driver: String,
+    #[serde(default)]
+    pub kind: BackendKind,
+    pub vendor: Option<String>,
+    pub driver: Option<String>,
     pub url: String,
+    #[serde(default)]
     pub username: String,
     pub secret: Option<SecretConfig>,
+}
+
+impl DatabaseConfig {
+    pub fn vendor(&self) -> &str {
+        self.vendor
+            .as_deref()
+            .or(self.driver.as_deref())
+            .unwrap_or("unknown")
+    }
+
+    pub fn backend(&self) -> BackendDescriptor {
+        match self.kind {
+            BackendKind::Jdbc => BackendDescriptor::jdbc(self.vendor()),
+            BackendKind::Document => BackendDescriptor::document(self.vendor()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

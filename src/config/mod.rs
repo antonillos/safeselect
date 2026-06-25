@@ -19,7 +19,7 @@ pub struct ConfigLoader {
 pub struct ResolvedConfig {
     pub project: ProjectConfig,
     pub environment: EnvironmentConfig,
-    pub driver: DriverConfig,
+    pub driver: Option<DriverConfig>,
     pub password: String,
     pub repo_root: PathBuf,
 }
@@ -180,26 +180,40 @@ impl ConfigLoader {
         })?;
         merge_project_ssh(&project, &mut environment)?;
 
-        let driver = self.load_driver(&environment.database.driver)?;
-        self.validate_driver_file(&driver)?;
+        let driver = match environment.database.kind {
+            crate::backend::BackendKind::Jdbc => {
+                let vendor = environment.database.driver.as_deref().ok_or_else(|| {
+                    SafeselectError::Config(format!(
+                        "database.driver is required for JDBC environment '{}'",
+                        env_name
+                    ))
+                })?;
+                let driver = self.load_driver(vendor)?;
+                self.validate_driver_file(&driver)?;
+                Some(driver)
+            }
+            crate::backend::BackendKind::Document => None,
+        };
 
-        if let Some(ref secret) = environment.database.secret {
-            let password = self.resolve_secret(secret)?;
-            self.apply_limits(&project, &mut environment);
-            Ok(ResolvedConfig {
-                project,
-                environment,
-                driver,
-                password,
-                repo_root: repo_root.to_path_buf(),
-            })
+        let password = if let Some(ref secret) = environment.database.secret {
+            self.resolve_secret(secret)?
+        } else if environment.database.kind == crate::backend::BackendKind::Document {
+            String::new()
         } else {
-            Err(SafeselectError::Config(format!(
+            return Err(SafeselectError::Config(format!(
                 "no secret configured in {}\n\
                  Run:\n  safeselect config set-password --environment {env_name}",
                 env_file.display()
-            )))
-        }
+            )));
+        };
+        self.apply_limits(&project, &mut environment);
+        Ok(ResolvedConfig {
+            project,
+            environment,
+            driver,
+            password,
+            repo_root: repo_root.to_path_buf(),
+        })
     }
 
     fn apply_limits(&self, project: &ProjectConfig, env: &mut EnvironmentConfig) {

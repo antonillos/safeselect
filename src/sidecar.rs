@@ -1,3 +1,4 @@
+use crate::backend::{DocumentFindRequest, DocumentResult};
 use crate::error::{Result, SafeselectError};
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -102,6 +103,7 @@ impl SidecarProcess {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn start_with_timeout(
         driver_path: &str,
         driver_class: &str,
@@ -113,21 +115,80 @@ impl SidecarProcess {
         result_limits: ResultLimits,
         verbose: bool,
     ) -> Result<Self> {
+        Self::start_backend_with_timeout(
+            "jdbc",
+            Some(driver_path),
+            Some(driver_class),
+            jdbc_url,
+            username,
+            password,
+            idle_timeout_seconds,
+            statement_timeout_ms,
+            result_limits,
+            verbose,
+        )
+    }
+
+    pub fn start_document_with_timeout(
+        vendor: &str,
+        url: &str,
+        username: &str,
+        password: &str,
+        idle_timeout_seconds: u64,
+        result_limits: ResultLimits,
+        verbose: bool,
+    ) -> Result<Self> {
+        Self::start_backend_with_timeout(
+            vendor,
+            None,
+            None,
+            url,
+            username,
+            password,
+            idle_timeout_seconds,
+            0,
+            result_limits,
+            verbose,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn start_backend_with_timeout(
+        backend: &str,
+        driver_path: Option<&str>,
+        driver_class: Option<&str>,
+        url: &str,
+        username: &str,
+        password: &str,
+        idle_timeout_seconds: u64,
+        statement_timeout_ms: u64,
+        result_limits: ResultLimits,
+        verbose: bool,
+    ) -> Result<Self> {
         let jar_path = Self::ensure_sidecar_jar()?;
-        let cp = format!("{}:{}", jar_path.display(), driver_path);
+        let cp = match driver_path {
+            Some(driver_path) if !driver_path.is_empty() => {
+                format!("{}:{}", jar_path.display(), driver_path)
+            }
+            _ => jar_path.display().to_string(),
+        };
 
         let mut args = vec![
             "-cp",
             cp.as_str(),
             "com.safeselect.Main",
-            "--driver",
-            driver_class,
+            "--backend",
+            backend,
             "--url",
-            jdbc_url,
+            url,
             "--user",
             username,
             "--password-stdin",
         ];
+        if let Some(driver_class) = driver_class {
+            args.push("--driver");
+            args.push(driver_class);
+        }
         if idle_timeout_seconds > 0 {
             args.push("--idle-timeout-seconds");
             args.push(Box::leak(idle_timeout_seconds.to_string().into_boxed_str()));
@@ -272,6 +333,57 @@ impl SidecarProcess {
                 tracing::debug!("Sidecar execute completed ({:?})", start.elapsed());
                 Ok(result)
             }
+            None => Err(SafeselectError::Sidecar(
+                "empty response from sidecar".into(),
+            )),
+        }
+    }
+
+    pub fn list_databases(&mut self) -> Result<Vec<String>> {
+        let resp = self.send_request("list_databases", None)?;
+        if let Some(err) = resp.error {
+            return Err(SafeselectError::Sidecar(format!(
+                "list_databases failed [{}]: {}",
+                err.code, err.message
+            )));
+        }
+        match resp.ok {
+            Some(val) => Ok(serde_json::from_value(val)?),
+            None => Err(SafeselectError::Sidecar(
+                "empty response from sidecar".into(),
+            )),
+        }
+    }
+
+    pub fn list_collections(&mut self, database: &str) -> Result<Vec<String>> {
+        let resp = self.send_request(
+            "list_collections",
+            Some(serde_json::json!({ "database": database })),
+        )?;
+        if let Some(err) = resp.error {
+            return Err(SafeselectError::Sidecar(format!(
+                "list_collections failed [{}]: {}",
+                err.code, err.message
+            )));
+        }
+        match resp.ok {
+            Some(val) => Ok(serde_json::from_value(val)?),
+            None => Err(SafeselectError::Sidecar(
+                "empty response from sidecar".into(),
+            )),
+        }
+    }
+
+    pub fn find_documents(&mut self, request: &DocumentFindRequest) -> Result<DocumentResult> {
+        let resp = self.send_request("find_documents", Some(serde_json::to_value(request)?))?;
+        if let Some(err) = resp.error {
+            return Err(SafeselectError::Sidecar(format!(
+                "find_documents failed [{}]: {}",
+                err.code, err.message
+            )));
+        }
+        match resp.ok {
+            Some(val) => Ok(serde_json::from_value(val)?),
             None => Err(SafeselectError::Sidecar(
                 "empty response from sidecar".into(),
             )),

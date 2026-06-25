@@ -2,7 +2,9 @@
 
 mod agents;
 mod audit;
+mod backend;
 mod cli;
+mod compass;
 mod compose;
 mod config;
 mod dbeaver;
@@ -71,6 +73,10 @@ fn run(cli: Cli) -> Result<()> {
             path,
             non_interactive,
         } => cmd_import_compose(path, non_interactive),
+        Command::ImportCompass {
+            path,
+            non_interactive,
+        } => cmd_import_compass(path, non_interactive),
         Command::Check {
             project,
             environment,
@@ -201,8 +207,16 @@ fn cmd_serve(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
     let db_url = resolved.environment.database.url.clone();
     let db_username = resolved.environment.database.username.clone();
     let db_password = resolved.password.clone();
-    let driver_path = resolved.driver.path.clone();
-    let driver_class = resolved.driver.class.clone();
+    let driver_path = resolved
+        .driver
+        .as_ref()
+        .map(|driver| driver.path.clone())
+        .unwrap_or_default();
+    let driver_class = resolved
+        .driver
+        .as_ref()
+        .map(|driver| driver.class.clone())
+        .unwrap_or_default();
 
     let mut server = mcp::McpServer::new(
         resolved.project,
@@ -311,11 +325,14 @@ fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
             let name = project_display_name(&dir);
             println!("Project: {name}");
             println!("Environment: {environment}");
-            println!(
-                "Driver: {} ({})",
-                resolved.driver.vendor, resolved.driver.class
-            );
-            println!("JDBC URL: {}", resolved.environment.database.url);
+            println!("Backend: {:?}", resolved.environment.database.kind);
+            println!("Vendor: {}", resolved.environment.database.vendor());
+            if let Some(driver) = resolved.driver.as_ref() {
+                println!("Driver: {} ({})", driver.vendor, driver.class);
+                println!("JDBC URL: {}", resolved.environment.database.url);
+            } else {
+                println!("URL: {}", resolved.environment.database.url);
+            }
             println!("Username: {}", resolved.environment.database.username);
             println!("Password: [redacted]");
             println!();
@@ -1738,7 +1755,9 @@ fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
         let env_config = config::EnvironmentConfig {
             version: 1,
             database: config::DatabaseConfig {
-                driver: conn.driver.clone(),
+                kind: crate::backend::BackendKind::Jdbc,
+                vendor: Some(conn.driver.clone()),
+                driver: Some(conn.driver.clone()),
                 url,
                 username: db_username,
                 secret,
@@ -1923,6 +1942,178 @@ fn import_selected_connections(connections: &[compose::ComposeConnection]) -> Re
     run_checks(&cwd, &env_names, false)?;
 
     Ok(())
+}
+
+fn cmd_import_compass(path: Option<PathBuf>, non_interactive: bool) -> Result<()> {
+    let cwd = std::env::current_dir()?;
+    check_version_and_maybe_reset(&cwd)?;
+
+    let import_path = path.unwrap_or_else(default_compass_path);
+    if !import_path.exists() {
+        return Err(SafeselectError::Other(format!(
+            "Compass path does not exist: {}",
+            import_path.display()
+        )));
+    }
+
+    let connections = compass::import_path(&import_path)?;
+    if connections.is_empty() {
+        println!(
+            "No MongoDB Compass connections found in {}",
+            import_path.display()
+        );
+        return Ok(());
+    }
+
+    let selected_indices: Vec<usize> = if non_interactive {
+        (0..connections.len()).collect()
+    } else {
+        struct ConnLabel(usize, String);
+        impl std::fmt::Display for ConnLabel {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{}", self.1)
+            }
+        }
+
+        let options: Vec<ConnLabel> = connections
+            .iter()
+            .enumerate()
+            .map(|(i, conn)| ConnLabel(i, format!("{:<30}  {}", conn.name, conn.url)))
+            .collect();
+        let selected = inquire::MultiSelect::new(
+            "Select MongoDB Compass connections to import (Space to toggle, Enter to confirm):",
+            options,
+        )
+        .with_page_size(20)
+        .prompt()
+        .map_err(|e| SafeselectError::Other(format!("Selection cancelled: {e}")))?;
+        selected.iter().map(|l| l.0).collect()
+    };
+
+    if selected_indices.is_empty() {
+        println!("No connections selected. Nothing to import.");
+        return Ok(());
+    }
+
+    let safeselect_dir = cwd.join(".safeselect");
+    let env_dir = safeselect_dir.join("environments");
+    std::fs::create_dir_all(&env_dir)?;
+    update_generated_by(&safeselect_dir)?;
+
+    let project_name = project_display_name(&cwd);
+    let mut imported = vec![];
+    for idx in selected_indices {
+        let conn = &connections[idx];
+        let default_env = slug_env_name(&conn.name);
+        let env_name = if non_interactive {
+            unique_env_name(&env_dir, &default_env)
+        } else {
+            let prompt = format!("Environment name for '{}':", conn.name);
+            let requested = inquire::Text::new(&prompt)
+                .with_default(&default_env)
+                .prompt()
+                .map_err(|e| SafeselectError::Other(format!("Input cancelled: {e}")))?;
+            unique_env_name(&env_dir, &slug_env_name(&requested))
+        };
+
+        let (url, username, secret) = prepare_mongodb_url(&project_name, &env_name, &conn.url)?;
+        let env_config = config::EnvironmentConfig {
+            version: 1,
+            database: config::DatabaseConfig {
+                kind: crate::backend::BackendKind::Document,
+                vendor: Some("mongodb".to_string()),
+                driver: None,
+                url,
+                username,
+                secret,
+            },
+            tls: None,
+            ssh: None,
+            limits: config::LimitsOverride::default(),
+        };
+        let env_toml = toml::to_string_pretty(&env_config)
+            .map_err(|e| SafeselectError::TomlSer(e.to_string()))?;
+        std::fs::write(env_dir.join(format!("{env_name}.toml")), env_toml)?;
+        imported.push(env_name);
+    }
+
+    println!("Imported MongoDB environments: {}", imported.join(", "));
+    println!("Next: safeselect serve --environment <name>");
+    Ok(())
+}
+
+fn default_compass_path() -> PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("MongoDB Compass")
+}
+
+fn slug_env_name(name: &str) -> String {
+    let slug = name
+        .trim()
+        .to_lowercase()
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    slug.split('-')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+fn unique_env_name(env_dir: &Path, base: &str) -> String {
+    let base = if base.is_empty() { "mongodb" } else { base };
+    let mut candidate = base.to_string();
+    let mut n = 2;
+    while env_dir.join(format!("{candidate}.toml")).exists() {
+        candidate = format!("{base}-{n}");
+        n += 1;
+    }
+    candidate
+}
+
+fn prepare_mongodb_url(
+    project_name: &str,
+    env_name: &str,
+    url: &str,
+) -> Result<(String, String, Option<config::SecretConfig>)> {
+    let Some(scheme_end) = url.find("://") else {
+        return Ok((url.to_string(), String::new(), None));
+    };
+    let authority_start = scheme_end + 3;
+    let Some(relative_at) = url[authority_start..].find('@') else {
+        return Ok((url.to_string(), String::new(), None));
+    };
+    let at = authority_start + relative_at;
+    let credentials = &url[authority_start..at];
+    let Some((username, password)) = credentials.split_once(':') else {
+        return Ok((url.to_string(), credentials.to_string(), None));
+    };
+    let account = format!("{project_name}/{env_name}");
+    compose::store_password_in_keychain(&account, password)?;
+    let sanitized = format!(
+        "{}{}:{}{}",
+        &url[..authority_start],
+        username,
+        "__SAFESELECT_PASSWORD__",
+        &url[at..]
+    );
+    Ok((
+        sanitized,
+        username.to_string(),
+        Some(config::SecretConfig {
+            source: "macos-keychain".to_string(),
+            service: Some("safeselect".to_string()),
+            account: Some(account),
+            variable: None,
+        }),
+    ))
 }
 
 fn setup_driver_if_missing() -> Result<()> {
@@ -2394,6 +2585,23 @@ pub(crate) fn extract_host_port(url: &str) -> Option<(String, u16)> {
     Some((host.to_string(), port))
 }
 
+pub(crate) fn extract_tcp_host_port(url: &str) -> Option<(String, u16)> {
+    if let Some((host, port)) = extract_host_port(url) {
+        return Some((host, port));
+    }
+
+    let without_prefix = url
+        .strip_prefix("mongodb://")
+        .or_else(|| url.strip_prefix("mongodb+srv://"))?;
+    let authority = without_prefix.split('/').next()?.rsplit('@').next()?;
+    let first_host = authority.split(',').next()?;
+    match first_host.split_once(':') {
+        Some((host, port)) => Some((host.to_string(), port.parse().ok()?)),
+        None if url.starts_with("mongodb://") => Some((first_host.to_string(), 27017)),
+        None => None,
+    }
+}
+
 pub(crate) fn check_tcp_endpoint(host: &str, port: u16, timeout: std::time::Duration) -> bool {
     use std::net::ToSocketAddrs;
 
@@ -2568,11 +2776,13 @@ fn cmd_check(
         DiagnosticCode::ConfigResolved,
         "Config resolved",
     );
-    diagnostics::print(
-        DiagnosticStatus::Ok,
-        DiagnosticCode::DriverVerified,
-        format!("Driver '{}' found and checksum OK", resolved.driver.vendor),
-    );
+    if let Some(driver) = resolved.driver.as_ref() {
+        diagnostics::print(
+            DiagnosticStatus::Ok,
+            DiagnosticCode::DriverVerified,
+            format!("Driver '{}' found and checksum OK", driver.vendor),
+        );
+    }
     diagnostics::print(
         DiagnosticStatus::Ok,
         DiagnosticCode::SecretResolved,
@@ -2700,9 +2910,12 @@ fn cmd_check(
             .unwrap_or("?")
     );
 
+    let driver = resolved.driver.as_ref().ok_or_else(|| {
+        SafeselectError::Config("check currently supports only JDBC environments".into())
+    })?;
     let mut sidecar = SidecarProcess::start_with_timeout(
-        &resolved.driver.path,
-        &resolved.driver.class,
+        &driver.path,
+        &driver.class,
         &resolved.environment.database.url,
         &resolved.environment.database.username,
         &resolved.password,
@@ -2782,9 +2995,12 @@ fn cmd_query(
         setup_ssh_tunnels(repo_root, &[environment.to_string()])?;
     }
 
+    let driver = resolved.driver.as_ref().ok_or_else(|| {
+        SafeselectError::Config("query currently supports only JDBC environments".into())
+    })?;
     let mut sidecar = SidecarProcess::start_with_timeout(
-        &resolved.driver.path,
-        &resolved.driver.class,
+        &driver.path,
+        &driver.class,
         &resolved.environment.database.url,
         &resolved.environment.database.username,
         &resolved.password,
@@ -2898,9 +3114,14 @@ fn cmd_connectivity_action(
     let name = project_display_name(repo_root);
     let resolved = loader.resolve_local(repo_root, environment)?;
 
+    let driver = resolved.driver.as_ref().ok_or_else(|| {
+        SafeselectError::Config(
+            "connectivity actions currently support only JDBC environments".into(),
+        )
+    })?;
     let mut sidecar = SidecarProcess::start_with_timeout(
-        &resolved.driver.path,
-        &resolved.driver.class,
+        &driver.path,
+        &driver.class,
         &resolved.environment.database.url,
         &resolved.environment.database.username,
         &resolved.password,
@@ -2948,9 +3169,12 @@ fn cmd_reconnect(
         }
     }
 
+    let driver = resolved.driver.as_ref().ok_or_else(|| {
+        SafeselectError::Config("reconnect currently supports only JDBC environments".into())
+    })?;
     let mut sidecar = SidecarProcess::start_with_timeout(
-        &resolved.driver.path,
-        &resolved.driver.class,
+        &driver.path,
+        &driver.class,
         &resolved.environment.database.url,
         &resolved.environment.database.username,
         &resolved.password,
@@ -3299,7 +3523,9 @@ username = "usr_app"
         let mut environment = config::EnvironmentConfig {
             version: 1,
             database: config::DatabaseConfig {
-                driver: "postgresql".to_string(),
+                kind: crate::backend::BackendKind::Jdbc,
+                vendor: Some("postgresql".to_string()),
+                driver: Some("postgresql".to_string()),
                 url: "jdbc:postgresql://localhost:15433/app?sslmode=require".to_string(),
                 username: "usr_app".to_string(),
                 secret: None,

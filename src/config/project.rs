@@ -51,6 +51,12 @@ pub struct SecurityPolicy {
     pub allowed_schemas: Vec<String>,
     #[serde(default)]
     pub denied_relations: Vec<String>,
+    #[serde(default)]
+    pub allowed_databases: Vec<String>,
+    #[serde(default)]
+    pub allowed_collections: Vec<String>,
+    #[serde(default)]
+    pub denied_collections: Vec<String>,
     #[serde(default = "default_true")]
     pub require_single_statement: bool,
     #[serde(default)]
@@ -88,6 +94,9 @@ impl Default for SecurityPolicy {
         Self {
             allowed_schemas: vec![],
             denied_relations: vec![],
+            allowed_databases: vec![],
+            allowed_collections: vec![],
+            denied_collections: vec![],
             require_single_statement: true,
             allow_volatile_functions: false,
             allow_set_role: false,
