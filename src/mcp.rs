@@ -1,5 +1,6 @@
 use crate::agents;
 use crate::audit::AuditLog;
+use crate::backend::{BackendCapability, BackendDescriptor, DocumentFindRequest};
 use crate::compose;
 use crate::config::{ConfigLoader, EnvironmentConfig, ProjectConfig};
 use crate::diagnostics::{self, DiagnosticCode, DiagnosticStatus};
@@ -65,6 +66,7 @@ pub struct McpServer {
     repo_root: PathBuf,
     config_dir: PathBuf,
     verbose_sidecar: bool,
+    backend: BackendDescriptor,
 }
 
 impl McpServer {
@@ -88,6 +90,7 @@ impl McpServer {
         );
 
         let idle_timeout_seconds = env_config.limits.idle_timeout_seconds.unwrap_or(0);
+        let backend = env_config.database.backend();
 
         let audit = AuditLog::open(&project_config.audit, project_name, env_name, "unknown")?;
 
@@ -107,6 +110,7 @@ impl McpServer {
             repo_root: repo_root.to_path_buf(),
             config_dir: config_dir.to_path_buf(),
             verbose_sidecar: false,
+            backend,
         })
     }
 
@@ -122,21 +126,9 @@ impl McpServer {
         if self.sidecar.is_some() {
             return self.sidecar_mut();
         }
+        self.ensure_ssh_ready_for_query()?;
         tracing::info!("Lazy-starting sidecar");
-        let sidecar = SidecarProcess::start_with_timeout(
-            &self.driver_path,
-            &self.driver_class,
-            &self.db_url,
-            &self.db_username,
-            &self.db_password,
-            self.idle_timeout_seconds,
-            self.security.limits().statement_timeout_ms,
-            ResultLimits {
-                max_rows: self.security.limits().max_rows,
-                max_result_bytes: self.security.limits().max_result_bytes,
-            },
-            self.verbose_sidecar,
-        )?;
+        let sidecar = self.start_sidecar()?;
         tracing::info!("Sidecar ready");
         self.sidecar = Some(sidecar);
         self.sidecar_mut()
@@ -269,8 +261,17 @@ impl McpServer {
     }
 
     fn handle_tools_list(&mut self, msg: &JsonRpcMessage) -> Result<()> {
-        let tools = vec![
-            ToolDefinition {
+        let mut tools = vec![ToolDefinition {
+            name: "database_info".into(),
+            description: self.tool_description("show active database backend and capabilities"),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {}
+            }),
+        }];
+
+        if self.backend.has(BackendCapability::SqlQuery) {
+            tools.push(ToolDefinition {
                 name: "select".into(),
                 description: self
                     .tool_description("execute a read-only SELECT query on the target database"),
@@ -288,8 +289,11 @@ impl McpServer {
                     },
                     "required": ["sql"]
                 }),
-            },
-            ToolDefinition {
+            });
+        }
+
+        if self.backend.has(BackendCapability::TableDiscovery) {
+            tools.push(ToolDefinition {
                 name: "list_tables".into(),
                 description: self
                     .tool_description("list database tables, optionally filtered by schema"),
@@ -302,7 +306,11 @@ impl McpServer {
                         }
                     }
                 }),
-            },
+            });
+        }
+
+        if self.backend.has(BackendCapability::SqlExplain) {
+            tools.push(
             ToolDefinition {
                 name: "explain".into(),
                 description: self
@@ -338,7 +346,75 @@ impl McpServer {
                     },
                     "required": ["sql"]
                 }),
-            },
+            });
+        }
+
+        if self.backend.has(BackendCapability::DatabaseDiscovery) {
+            tools.push(ToolDefinition {
+                name: "list_databases".into(),
+                description: self.tool_description("list document databases"),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }),
+            });
+        }
+
+        if self.backend.has(BackendCapability::CollectionDiscovery) {
+            tools.push(ToolDefinition {
+                name: "list_collections".into(),
+                description: self.tool_description("list document collections"),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "database": {
+                            "type": "string",
+                            "description": "Database name"
+                        }
+                    },
+                    "required": ["database"]
+                }),
+            });
+        }
+
+        if self.backend.has(BackendCapability::DocumentFind) {
+            tools.push(ToolDefinition {
+                name: "find_documents".into(),
+                description: self.tool_description("find documents in a collection"),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "database": {
+                            "type": "string",
+                            "description": "Database name"
+                        },
+                        "collection": {
+                            "type": "string",
+                            "description": "Collection name"
+                        },
+                        "filter": {
+                            "type": "object",
+                            "description": "Document filter"
+                        },
+                        "projection": {
+                            "type": "object",
+                            "description": "Projection document"
+                        },
+                        "sort": {
+                            "type": "object",
+                            "description": "Sort document"
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum number of documents to return"
+                        }
+                    },
+                    "required": ["database", "collection", "filter"]
+                }),
+            });
+        }
+
+        tools.extend([
             ToolDefinition {
                 name: "disconnect".into(),
                 description: self
@@ -622,7 +698,7 @@ impl McpServer {
                     "properties": {}
                 }),
             },
-        ];
+        ]);
 
         let resp = JsonRpcResponse {
             jsonrpc: "2.0",
@@ -652,9 +728,13 @@ impl McpServer {
             .unwrap_or(serde_json::json!({}));
 
         match tool_name {
+            "database_info" => self.handle_database_info(msg.id.clone()),
             "select" => self.handle_select(msg.id.clone(), &args),
             "list_tables" => self.handle_list_tables(msg.id.clone(), &args),
             "explain" => self.handle_explain(msg.id.clone(), &args),
+            "list_databases" => self.handle_list_databases(msg.id.clone()),
+            "list_collections" => self.handle_list_collections(msg.id.clone(), &args),
+            "find_documents" => self.handle_find_documents(msg.id.clone(), &args),
             "disconnect" => self.handle_disconnect(msg.id.clone()),
             "connect" => self.handle_connect(msg.id.clone()),
             "config_validate" => self.handle_config_validate(msg.id.clone(), &args),
@@ -679,6 +759,126 @@ impl McpServer {
             "uninstall" => self.handle_uninstall(msg.id.clone(), &args),
             "reconnect" => self.handle_reconnect(msg.id.clone()),
             _ => self.send_error(msg.id.clone(), -32602, format!("Unknown tool: {tool_name}")),
+        }
+    }
+
+    fn handle_database_info(&mut self, id: Option<serde_json::Value>) -> Result<()> {
+        let capabilities: Vec<&str> = self
+            .backend
+            .capabilities
+            .iter()
+            .map(|capability| match capability {
+                BackendCapability::SqlQuery => "sql_query",
+                BackendCapability::SqlExplain => "sql_explain",
+                BackendCapability::TableDiscovery => "table_discovery",
+                BackendCapability::DatabaseDiscovery => "database_discovery",
+                BackendCapability::CollectionDiscovery => "collection_discovery",
+                BackendCapability::DocumentFind => "document_find",
+            })
+            .collect();
+
+        let resp = JsonRpcResponse {
+            jsonrpc: "2.0",
+            id,
+            result: Some(serde_json::json!({
+                "content": [{
+                    "type": "text",
+                    "text": serde_json::to_string(&serde_json::json!({
+                        "kind": self.backend.kind,
+                        "vendor": self.backend.vendor,
+                        "capabilities": capabilities
+                    }))?
+                }]
+            })),
+            error: None,
+        };
+        self.write_response(&resp)
+    }
+
+    fn handle_list_databases(&mut self, id: Option<serde_json::Value>) -> Result<()> {
+        match self.ensure_sidecar()?.list_databases() {
+            Ok(databases) => {
+                let databases = self.security.filter_document_databases(databases);
+                self.write_response(&json_text_response(id, &databases)?)
+            }
+            Err(e) => self.send_error(id, -32000, format!("List databases failed: {e}")),
+        }
+    }
+
+    fn handle_list_collections(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        let database = match args.get("database").and_then(|v| v.as_str()) {
+            Some(database) => database,
+            None => return self.send_error(id, -32602, "Missing 'database' argument"),
+        };
+        if let Err(e) = self.security.validate_document_database(database) {
+            return self.send_error(id, -32000, format!("Request rejected: {e}"));
+        }
+        match self.ensure_sidecar()?.list_collections(database) {
+            Ok(collections) => {
+                let collections = self
+                    .security
+                    .filter_document_collections(database, collections);
+                self.write_response(&json_text_response(id, &collections)?)
+            }
+            Err(e) => self.send_error(id, -32000, format!("List collections failed: {e}")),
+        }
+    }
+
+    fn handle_find_documents(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        let database = match args.get("database").and_then(|v| v.as_str()) {
+            Some(database) => database.to_string(),
+            None => return self.send_error(id, -32602, "Missing 'database' argument"),
+        };
+        let collection = match args.get("collection").and_then(|v| v.as_str()) {
+            Some(collection) => collection.to_string(),
+            None => return self.send_error(id, -32602, "Missing 'collection' argument"),
+        };
+        let filter = args
+            .get("filter")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({}));
+        let limit = args
+            .get("limit")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(self.security.limits().max_rows.min(100));
+        let request = DocumentFindRequest {
+            database,
+            collection,
+            filter,
+            projection: args.get("projection").cloned(),
+            sort: args.get("sort").cloned(),
+            limit,
+        };
+
+        if let Err(e) = self.security.validate_document_find(&request) {
+            self.audit.record("REJECT", "reject", "find_documents")?;
+            return self.send_error(id, -32000, format!("Request rejected: {e}"));
+        }
+
+        match self.ensure_sidecar()?.find_documents(&request) {
+            Ok(result) => {
+                self.audit.record("PASS", "allow", "find_documents")?;
+                if let Err(e) = self
+                    .security
+                    .check_result_size(result.document_count, result.byte_count)
+                {
+                    return self.send_error(id, -32000, format!("{e}"));
+                }
+                self.write_response(&json_text_response(id, &result)?)
+            }
+            Err(e) => {
+                self.audit
+                    .record("DOCUMENT_ERROR", "error", "find_documents")?;
+                self.send_error(id, -32000, format!("Find documents failed: {e}"))
+            }
         }
     }
 
@@ -1015,7 +1215,7 @@ impl McpServer {
             "{}: attempting SSH tunnel recovery",
             DiagnosticCode::SshTunnelRecoveryAttempt.as_str()
         );
-        if let Err(e) = setup_ssh_tunnels(&self.repo_root, &[self.env_name.clone()]) {
+        if let Err(e) = setup_ssh_tunnels(&self.repo_root, std::slice::from_ref(&self.env_name)) {
             tracing::warn!("SSH tunnel recovery attempt failed: {e}");
         }
 
@@ -1087,7 +1287,7 @@ impl McpServer {
             _ => return Ok(false),
         };
 
-        if is_ssh_ready_for_query(ssh, &resolved.environment.database.url) {
+        if self.is_backend_ready_for_query(ssh, &resolved.environment.database.url) {
             return Ok(false);
         }
 
@@ -1095,19 +1295,41 @@ impl McpServer {
             "{}: SSH preflight failed before query; preparing tunnel",
             DiagnosticCode::SshTunnelRecoveryAttempt.as_str()
         );
-        setup_ssh_tunnels(&self.repo_root, &[self.env_name.clone()])?;
+        setup_ssh_tunnels(&self.repo_root, std::slice::from_ref(&self.env_name))?;
 
         let resolved = loader.resolve_local(&self.repo_root, &self.env_name)?;
         match resolved.environment.ssh.as_ref() {
             Some(ssh)
                 if ssh.enabled
-                    && is_ssh_ready_for_query(ssh, &resolved.environment.database.url) =>
+                    && self.is_backend_ready_for_query(ssh, &resolved.environment.database.url) =>
             {
                 Ok(true)
             }
             _ => Err(crate::error::SafeselectError::Other(
                 "SSH tunnel is not ready for query execution".into(),
             )),
+        }
+    }
+
+    fn is_backend_ready_for_query(&self, ssh: &crate::config::SshConfig, url: &str) -> bool {
+        match self.backend.kind {
+            crate::backend::BackendKind::Jdbc => is_ssh_ready_for_query(ssh, url),
+            crate::backend::BackendKind::Document => {
+                let bastion_host = ssh.host.as_deref().unwrap_or("");
+                let bastion_port = ssh.port.unwrap_or(22);
+                if !crate::check_tcp_endpoint(
+                    bastion_host,
+                    bastion_port,
+                    std::time::Duration::from_secs(3),
+                ) {
+                    return false;
+                }
+                crate::extract_tcp_host_port(url)
+                    .map(|(host, port)| {
+                        crate::check_tcp_endpoint(&host, port, std::time::Duration::from_secs(3))
+                    })
+                    .unwrap_or(false)
+            }
         }
     }
 
@@ -1121,23 +1343,39 @@ impl McpServer {
         // This prevents zombie queries and connection state issues
         std::thread::sleep(std::time::Duration::from_secs(2));
 
-        let sidecar = SidecarProcess::start_with_timeout(
-            &self.driver_path,
-            &self.driver_class,
-            &self.db_url,
-            &self.db_username,
-            &self.db_password,
-            self.idle_timeout_seconds,
-            self.security.limits().statement_timeout_ms,
-            ResultLimits {
-                max_rows: self.security.limits().max_rows,
-                max_result_bytes: self.security.limits().max_result_bytes,
-            },
-            self.verbose_sidecar,
-        )?;
+        let sidecar = self.start_sidecar()?;
         tracing::info!("Sidecar restarted successfully");
         self.sidecar = Some(sidecar);
         Ok(())
+    }
+
+    fn start_sidecar(&self) -> Result<SidecarProcess> {
+        let limits = ResultLimits {
+            max_rows: self.security.limits().max_rows,
+            max_result_bytes: self.security.limits().max_result_bytes,
+        };
+        match self.backend.kind {
+            crate::backend::BackendKind::Jdbc => SidecarProcess::start_with_timeout(
+                &self.driver_path,
+                &self.driver_class,
+                &self.db_url,
+                &self.db_username,
+                &self.db_password,
+                self.idle_timeout_seconds,
+                self.security.limits().statement_timeout_ms,
+                limits,
+                self.verbose_sidecar,
+            ),
+            crate::backend::BackendKind::Document => SidecarProcess::start_document_with_timeout(
+                &self.backend.vendor,
+                &self.db_url,
+                &self.db_username,
+                &self.db_password,
+                self.idle_timeout_seconds,
+                limits,
+                self.verbose_sidecar,
+            ),
+        }
     }
 
     fn handle_config_validate(
@@ -1188,14 +1426,19 @@ impl McpServer {
             Err(e) => return self.send_error(id, -32000, format!("Config resolution failed: {e}")),
         };
 
-        let lines = vec![
+        let mut lines = vec![
             format!("Project: {}", self.project_name),
             format!("Environment: {environment}"),
-            format!(
-                "Driver: {} ({})",
-                resolved.driver.vendor, resolved.driver.class
-            ),
-            format!("JDBC URL: {}", resolved.environment.database.url),
+            format!("Backend: {:?}", resolved.environment.database.kind),
+            format!("Vendor: {}", resolved.environment.database.vendor()),
+        ];
+        if let Some(driver) = resolved.driver.as_ref() {
+            lines.push(format!("Driver: {} ({})", driver.vendor, driver.class));
+            lines.push(format!("JDBC URL: {}", resolved.environment.database.url));
+        } else {
+            lines.push(format!("URL: {}", resolved.environment.database.url));
+        }
+        lines.extend([
             format!("Username: {}", resolved.environment.database.username),
             "Password: [redacted]".into(),
             String::new(),
@@ -1236,7 +1479,7 @@ impl McpServer {
                 Some(ref ssh) => format!("Enabled: {}", ssh.enabled),
                 None => "SSH: not configured".into(),
             },
-        ];
+        ]);
 
         let resp = ok_text_response(id, lines.join("\n"));
         self.write_response(&resp)
@@ -1280,7 +1523,9 @@ impl McpServer {
             Err(_) => EnvironmentConfig {
                 version: 1,
                 database: crate::config::DatabaseConfig {
-                    driver: String::new(),
+                    kind: crate::backend::BackendKind::Jdbc,
+                    vendor: None,
+                    driver: Some(String::new()),
                     url: String::new(),
                     username: String::new(),
                     secret: None,
@@ -1843,11 +2088,13 @@ impl McpServer {
             ),
         ];
 
-        lines.push(diagnostics::line(
-            DiagnosticStatus::Ok,
-            DiagnosticCode::DriverVerified,
-            format!("Driver '{}' found and checksum OK", resolved.driver.vendor),
-        ));
+        if let Some(driver) = resolved.driver.as_ref() {
+            lines.push(diagnostics::line(
+                DiagnosticStatus::Ok,
+                DiagnosticCode::DriverVerified,
+                format!("Driver '{}' found and checksum OK", driver.vendor),
+            ));
+        }
         lines.push(diagnostics::line(
             DiagnosticStatus::Ok,
             DiagnosticCode::SecretResolved,
@@ -2198,6 +2445,13 @@ fn ok_text_response(id: Option<serde_json::Value>, text: String) -> JsonRpcRespo
         })),
         error: None,
     }
+}
+
+fn json_text_response<T: Serialize>(
+    id: Option<serde_json::Value>,
+    value: &T,
+) -> Result<JsonRpcResponse> {
+    Ok(ok_text_response(id, serde_json::to_string(value)?))
 }
 
 fn import_compose_guidance_text(
