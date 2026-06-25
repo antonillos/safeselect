@@ -355,6 +355,22 @@ impl SidecarProcess {
         }
     }
 
+    pub fn verify_document_connection(&mut self) -> Result<()> {
+        let resp = self.send_request("verify_document_connection", None)?;
+        if let Some(err) = resp.error {
+            return Err(SafeselectError::Sidecar(format!(
+                "verify_document_connection failed [{}]: {}",
+                err.code, err.message
+            )));
+        }
+        match resp.ok {
+            Some(_) => Ok(()),
+            None => Err(SafeselectError::Sidecar(
+                "empty response from sidecar".into(),
+            )),
+        }
+    }
+
     pub fn list_collections(&mut self, database: &str) -> Result<Vec<String>> {
         let resp = self.send_request(
             "list_collections",

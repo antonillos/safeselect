@@ -7,6 +7,7 @@ import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoCursor;
 import com.mongodb.client.MongoDatabase;
+import com.mongodb.ReadPreference;
 import org.bson.Document;
 
 import java.io.*;
@@ -166,6 +167,10 @@ public class Main {
                         case "list_databases" -> {
                             touchActivity();
                             handleListDatabases(writer, id);
+                        }
+                        case "verify_document_connection" -> {
+                            touchActivity();
+                            handleVerifyDocumentConnection(writer, id);
                         }
                         case "list_collections" -> {
                             touchActivity();
@@ -420,6 +425,18 @@ public class Main {
             databases.add(name);
         }
         sendResponse(writer, id, databases, null);
+    }
+
+    private static void handleVerifyDocumentConnection(PrintWriter writer, Object id) throws Exception {
+        try {
+            ensureMongoConnected(writer, id);
+        } catch (IllegalStateException e) {
+            return;
+        }
+        final var result = mongoClient
+                .getDatabase("admin")
+                .runCommand(new Document("ping", 1), ReadPreference.secondaryPreferred());
+        sendResponse(writer, id, result, null);
     }
 
     @SuppressWarnings("unchecked")

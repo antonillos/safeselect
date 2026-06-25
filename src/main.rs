@@ -3450,14 +3450,11 @@ fn cmd_check(
                 "Sidecar document connection OK",
             );
 
-            let databases = sidecar.list_databases()?;
+            sidecar.verify_document_connection()?;
             diagnostics::print(
                 DiagnosticStatus::Ok,
                 DiagnosticCode::BackendVerificationOk,
-                format!(
-                    "Connection verified: list_databases returned {} database(s)",
-                    databases.len()
-                ),
+                "Connection verified: MongoDB ping succeeded",
             );
             sidecar.shutdown()?;
         }
