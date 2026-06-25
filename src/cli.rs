@@ -55,6 +55,15 @@ pub enum Command {
         #[arg(long, default_value_t = false)]
         non_interactive: bool,
     },
+    /// Import MongoDB Compass connections into .safeselect/
+    ImportCompass {
+        /// File or directory containing MongoDB Compass connection JSON
+        #[arg(long)]
+        path: Option<PathBuf>,
+        /// Non-interactive mode — import all without prompting
+        #[arg(long, default_value_t = false)]
+        non_interactive: bool,
+    },
     /// Test connectivity
     Check {
         /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)

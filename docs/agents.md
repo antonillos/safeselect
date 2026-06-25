@@ -82,6 +82,8 @@ The installed entry looks like this in your agent's config:
 
 ## Primary Query Tools
 
+Use `database_info` first when the environment may not be SQL. It returns the active backend, vendor, and capabilities.
+
 ### `select`
 
 Execute a read-only query and return JSON-serialized rows. The query is validated before execution:
@@ -123,6 +125,35 @@ Use `format: "text"` when the output is mainly for a human.
 
 Arguments:
 - `sql` (required): query to explain
+
+### `list_databases`
+
+List document databases for document-store backends.
+
+Arguments: none
+
+### `list_collections`
+
+List document collections in a database.
+
+Arguments:
+- `database` (required): database name
+
+### `find_documents`
+
+Find documents in a collection. The request is validated before execution:
+- Must target an allowed database/collection when allowlists are configured
+- Must not target denied collections
+- `filter`, `projection`, and `sort` must be JSON objects
+- Result document count and byte limits are enforced
+
+Arguments:
+- `database` (required): database name
+- `collection` (required): collection name
+- `filter` (required): JSON object filter
+- `projection` (optional): JSON object projection
+- `sort` (optional): JSON object sort
+- `limit` (optional): maximum number of documents to return
 - `analyze` (optional): add `ANALYZE` and execute the SELECT to collect actual runtime statistics
 - `buffers` (optional): add `BUFFERS` to show cache/disk page activity
 - `explain_verbose` (optional): add PostgreSQL `VERBOSE` planner output

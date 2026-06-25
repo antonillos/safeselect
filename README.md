@@ -1,6 +1,6 @@
 # SafeSelect
 
-**MCP SQL Fail-Closed for AI Agents**
+**MCP database fail-closed access for AI Agents**
 
 [![CI](https://github.com/antonillos/safeselect/actions/workflows/verify.yml/badge.svg)](https://github.com/antonillos/safeselect/actions/workflows/verify.yml)
 [![Security](https://img.shields.io/badge/Security-fail--closed-success?logo=trustpilot&logoColor=white)]()
@@ -11,7 +11,7 @@
 [![asdf](https://img.shields.io/badge/asdf-plugin-8A2BE2)](https://github.com/antonillos/asdf-safeselect)
 [![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
 
-SafeSelect is a secure read-only SQL boundary between AI coding agents and your databases. It implements the **Model Context Protocol (MCP)** with a fail-closed security model: security first, convention over configuration, and guided next steps when setup or recovery is needed.
+SafeSelect is a secure read-only boundary between AI coding agents and your databases. It supports SQL/JDBC backends and document-store backends through the **Model Context Protocol (MCP)** with a fail-closed security model: security first, convention over configuration, and guided next steps when setup or recovery is needed.
 
 ---
 
@@ -36,6 +36,8 @@ brew install antonillos/tap/safeselect
 safeselect import-dbeaver ~/Downloads/dbeaver-export.zip
 #    Or from docker-compose:
 #    safeselect import-compose
+#    Or from MongoDB Compass:
+#    safeselect import-compass --path "$HOME/.config/MongoDB Compass"
 
 #    During import, you will be prompted for:
 #    - Environment names (one per connection)
@@ -58,9 +60,9 @@ a short summary of what changed plus the install instructions.
 ## Security Model
 
 - **Fail-closed**: any security violation kills the MCP process immediately
-- **Read-only**: only `SELECT`, `EXPLAIN`, and `WITH` queries allowed
+- **Read-only**: SQL allows only `SELECT`, `EXPLAIN`, and `WITH`; document backends allow discovery and `find_documents`
 - **Single statement**: multi-statement SQL rejected
-- **Schema control**: allow/deny specific schemas and relations
+- **Scope control**: allow/deny SQL schemas/relations and document databases/collections
 - **SHA-256 drivers**: JDBC JAR checksummed on every use
 - **macOS Keychain**: secrets never stored in config files
 - **Password isolation**: passed via stdin, never as CLI args
@@ -78,12 +80,12 @@ a short summary of what changed plus the install instructions.
 
 ## Read-Only Use Cases
 
-- **Schema discovery**: use `list_tables` and targeted `SELECT` queries on metadata tables before guessing names.
+- **Schema discovery**: use `list_tables` for SQL, or `list_databases`/`list_collections` for document stores, before guessing names.
 - **Safe data inspection**: inspect rows, counts, shapes, and join paths without exposing write access.
 - **Performance analysis**: use `explain` and `explain analyze` on read-only queries to inspect plans, buffers, and bottlenecks.
 - **Connectivity diagnosis**: use `check`, `connect`, and `reconnect` to recover from stale JDBC, sidecar, or SSH tunnel state.
 - **Agent onboarding**: install a SafeSelect MCP entry so agents get a constrained, project-scoped, read-only database tool by default.
-- **Project bootstrap**: import from DBeaver or docker-compose, then follow the generated next steps to finish setup.
+- **Project bootstrap**: import from DBeaver, docker-compose, or MongoDB Compass, then follow the generated next steps to finish setup.
 
 ---
 
@@ -104,6 +106,7 @@ a short summary of what changed plus the install instructions.
 | `driver download --vendor postgresql` | Download JDBC driver |
 | `driver add --vendor <v> --path <jar> --class <c>` | Register custom driver |
 | `driver list` | List registered drivers |
+| `import-compass [--path <p>]` | Import MongoDB Compass connections |
 | `agent install <client> --environment <e> [--project <p>] [--name <n>]` | Install MCP entry (name defaults to `safeselect-<project-dir>-<environment>`) |
 | `agent upgrade <client> [--name <n>] [--project <p>] [--environment <e>]` | Upgrade an existing MCP entry, auto-detecting it from the current project when possible |
 | `agent uninstall <client> --name <n>` | Remove MCP entry |
@@ -152,9 +155,13 @@ over manual retry loops after stale SSH/JDBC connections.
 
 | Tool | Description | Arguments |
 |---|---|---|
+| `database_info` | Show active backend, vendor, and capabilities | _(none)_ |
 | `select` | Execute a SELECT query | `sql` (required), `verbose` |
 | `list_tables` | List database tables | `schema` (optional) |
 | `explain` | Show execution plan | `sql` (required), `analyze`, `buffers`, `explain_verbose`, `format` (`json` default, `text`) |
+| `list_databases` | List document databases | _(none)_ |
+| `list_collections` | List document collections | `database` |
+| `find_documents` | Find documents in a collection | `database`, `collection`, `filter`, `projection`, `sort`, `limit` |
 | `connect` | Reconnect to the database after connection loss | _(none)_ |
 | `disconnect` | Close the database connection | _(none)_ |
 | `reconnect` | Restart the sidecar and verify the database connection | _(none)_ |
