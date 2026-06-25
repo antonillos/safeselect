@@ -192,7 +192,6 @@ public class Main {
                     }
                 } catch (Exception e) {
                     error("Error processing request: " + summarizeException(e));
-                    e.printStackTrace(System.err);
                     try {
                         @SuppressWarnings("unchecked")
                         final var failedRequest = (Map<String, Object>) MAPPER.readValue(line, Map.class);
@@ -215,8 +214,7 @@ public class Main {
                 mongoClient.close();
             }
         } catch (Exception e) {
-            error("Fatal error: " + e.getMessage());
-            e.printStackTrace(System.err);
+            error("Fatal error: " + summarizeException(e));
             System.exit(1);
         }
     }
