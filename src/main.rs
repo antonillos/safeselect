@@ -2013,6 +2013,7 @@ fn cmd_import_compass(path: Option<PathBuf>, non_interactive: bool) -> Result<()
     let project_name = project_display_name(&cwd);
     let mut imported = vec![];
     let mut used_ssh_local_ports = collect_used_ssh_local_ports(&cwd);
+    let mut reusable_ssh_configs: Vec<(String, config::SshConfig)> = Vec::new();
     let mut warnings = vec![];
     for idx in selected_indices {
         let conn = &connections[idx];
@@ -2028,10 +2029,22 @@ fn cmd_import_compass(path: Option<PathBuf>, non_interactive: bool) -> Result<()
             unique_env_name(&env_dir, &slug_env_name(&requested))
         };
 
-        if let Some(warning) = compass_shared_tunnel_warning(conn) {
-            warnings.push(format!("{}: {warning}", conn.name));
-        }
-        let ssh = compass_ssh_config(conn);
+        let ssh = if non_interactive {
+            if let Some(warning) = compass_shared_tunnel_warning(conn) {
+                warnings.push(format!("{}: {warning}", conn.name));
+            }
+            compass_ssh_config(conn)
+        } else if conn.ssh_host.is_some() {
+            Some(prompt_compass_ssh_config(
+                conn,
+                &project_name,
+                &env_name,
+                &cwd,
+                &reusable_ssh_configs,
+            )?)
+        } else {
+            None
+        };
         let ssh = if let Some(mut ssh) = ssh {
             let local_port = ssh
                 .local_port
@@ -2048,7 +2061,11 @@ fn cmd_import_compass(path: Option<PathBuf>, non_interactive: bool) -> Result<()
             project_config
                 .ssh_bastions
                 .insert(bastion_name.clone(), project_ssh_bastion_from_env(&ssh));
-            Some(environment_ssh_from_bastion(bastion_name, &ssh))
+            let env_ssh = environment_ssh_from_bastion(bastion_name.clone(), &ssh);
+            let mut reusable_ssh = ssh.clone();
+            reusable_ssh.bastion = Some(bastion_name.clone());
+            reusable_ssh_configs.push((bastion_name, reusable_ssh));
+            Some(env_ssh)
         } else {
             None
         };
@@ -2087,6 +2104,214 @@ fn cmd_import_compass(path: Option<PathBuf>, non_interactive: bool) -> Result<()
     }
     println!("Next: safeselect serve --environment <name>");
     Ok(())
+}
+
+fn prompt_compass_ssh_config(
+    conn: &crate::compass::CompassConnection,
+    project_name: &str,
+    env_name: &str,
+    repo_root: &Path,
+    current_batch: &[(String, config::SshConfig)],
+) -> Result<config::SshConfig> {
+    let placeholder_warning = compass_shared_tunnel_warning(conn);
+    let default_host = if placeholder_warning.is_some() {
+        ""
+    } else {
+        conn.ssh_host.as_deref().unwrap_or("")
+    };
+    let default_user = conn.ssh_user.as_deref().unwrap_or("");
+    let default_key = conn.ssh_key_file.as_deref().unwrap_or("");
+    let default_auth = conn.ssh_auth_type.as_deref().unwrap_or("KEY");
+
+    println!();
+    println!("── SSH Configuration ({env_name}) ───────────────────");
+    println!();
+    if let Some(warning) = placeholder_warning.as_deref() {
+        println!("  ⚠ {warning}");
+        println!();
+    }
+
+    if let Some(ssh) = select_reusable_compass_ssh_config(repo_root, env_name, conn, current_batch)?
+    {
+        println!("  ✓ Reusing bastion configuration");
+        return Ok(ssh);
+    }
+
+    let ans = inquire::Confirm::new("Configure SSH tunnel now?")
+        .with_default(true)
+        .prompt()
+        .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?;
+
+    if !ans {
+        return Err(SafeselectError::Other(
+            "Compass SSH placeholder requires real bastion details to be configured".into(),
+        ));
+    }
+
+    let host = inquire::Text::new("  SSH bastion host:")
+        .with_default(default_host)
+        .prompt()
+        .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?
+        .trim()
+        .to_string();
+
+    let port = inquire::Text::new("  SSH port:")
+        .with_default(&conn.ssh_port.map_or("22".into(), |p| p.to_string()))
+        .prompt()
+        .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?
+        .trim()
+        .parse::<u16>()
+        .unwrap_or(22);
+
+    let user = inquire::Text::new("  SSH user:")
+        .with_default(default_user)
+        .prompt()
+        .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?
+        .trim()
+        .to_string();
+
+    let (default_forward_host, default_forward_port) =
+        compass_forward_target(conn).unwrap_or((String::new(), 27017));
+    let forward_host = inquire::Text::new("  Database target host through bastion:")
+        .with_default(&default_forward_host)
+        .prompt()
+        .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?
+        .trim()
+        .to_string();
+    let forward_port = inquire::Text::new("  Database target port through bastion:")
+        .with_default(&default_forward_port.to_string())
+        .prompt()
+        .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?
+        .trim()
+        .parse::<u16>()
+        .unwrap_or(default_forward_port);
+
+    let auth_method =
+        inquire::Select::new("  Authentication method:", vec!["Key file", "Password"])
+            .with_starting_cursor(if default_auth == "PASSWORD" { 1 } else { 0 })
+            .prompt()
+            .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?;
+
+    let (key_file, auth_type) = match auth_method {
+        "Key file" => {
+            let kf = inquire::Text::new("  SSH key file path:")
+                .with_default(default_key)
+                .prompt()
+                .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?
+                .trim()
+                .to_string();
+            (
+                if kf.is_empty() { None } else { Some(kf) },
+                Some("KEY".into()),
+            )
+        }
+        _ => {
+            let ssh_acct = format!("{project_name}/{env_name}/ssh");
+            let pw = inquire::Password::new("  SSH password:")
+                .without_confirmation()
+                .prompt()
+                .map_err(|e| SafeselectError::Other(format!("Failed to read SSH password: {e}")))?;
+            if !pw.is_empty() {
+                compose::store_password_in_keychain(&ssh_acct, &pw)?;
+                println!("  ✓ SSH password stored in Keychain");
+            }
+            (None, Some("PASSWORD".into()))
+        }
+    };
+
+    Ok(config::SshConfig {
+        enabled: true,
+        bastion: None,
+        host: Some(host),
+        port: Some(port),
+        username: Some(user),
+        secret_account: if auth_type.as_deref() == Some("PASSWORD") {
+            Some(format!("{project_name}/{env_name}/ssh"))
+        } else {
+            None
+        },
+        identity_file: key_file,
+        known_hosts: None,
+        local_host: conn
+            .ssh_local_host
+            .clone()
+            .or_else(|| Some("localhost".to_string())),
+        local_port: conn.ssh_local_port,
+        forward_host: Some(forward_host),
+        forward_port: Some(forward_port),
+        auth_type,
+    })
+}
+
+fn select_reusable_compass_ssh_config(
+    repo_root: &Path,
+    env_name: &str,
+    conn: &crate::compass::CompassConnection,
+    current_batch: &[(String, config::SshConfig)],
+) -> Result<Option<config::SshConfig>> {
+    let reusable = collect_reusable_ssh_configs(repo_root, env_name, current_batch)?;
+    if reusable.is_empty() {
+        return Ok(None);
+    }
+
+    let reuse = inquire::Confirm::new("Reuse an existing bastion configuration?")
+        .with_default(true)
+        .prompt()
+        .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?;
+    if !reuse {
+        return Ok(None);
+    }
+
+    let options: Vec<String> = reusable
+        .iter()
+        .map(|(name, ssh)| {
+            let host = ssh.host.as_deref().unwrap_or("unknown");
+            let port = ssh.port.unwrap_or(22);
+            let user = ssh.username.as_deref().unwrap_or("unknown");
+            format!("{name} ({user}@{host}:{port})")
+        })
+        .collect();
+
+    let selected = inquire::Select::new("  Reuse bastion:", options)
+        .prompt()
+        .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?;
+    let selected_index = reusable
+        .iter()
+        .position(|(name, ssh)| {
+            let host = ssh.host.as_deref().unwrap_or("unknown");
+            let port = ssh.port.unwrap_or(22);
+            let user = ssh.username.as_deref().unwrap_or("unknown");
+            format!("{name} ({user}@{host}:{port})") == selected
+        })
+        .ok_or_else(|| SafeselectError::Other("selected bastion not found".to_string()))?;
+
+    let (bastion_name, mut ssh) = reusable[selected_index].clone();
+    ssh.enabled = true;
+    ssh.bastion = Some(bastion_name);
+    if let Some((forward_host, forward_port)) = compass_forward_target(conn) {
+        ssh.forward_host = Some(forward_host);
+        ssh.forward_port = Some(forward_port);
+    } else {
+        let forward_host = inquire::Text::new("  Database target host through bastion:")
+            .prompt()
+            .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?
+            .trim()
+            .to_string();
+        let forward_port = inquire::Text::new("  Database target port through bastion:")
+            .with_default("27017")
+            .prompt()
+            .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?
+            .trim()
+            .parse::<u16>()
+            .unwrap_or(27017);
+        ssh.forward_host = Some(forward_host);
+        ssh.forward_port = Some(forward_port);
+    }
+    ssh.local_port = None;
+    if ssh.local_host.as_deref().is_none_or(str::is_empty) {
+        ssh.local_host = Some("localhost".to_string());
+    }
+    Ok(Some(ssh))
 }
 
 fn compass_ssh_config(conn: &compass::CompassConnection) -> Option<config::SshConfig> {
@@ -2136,6 +2361,10 @@ SSH was not imported; configure the real bastion and target manually."
     }
 
     None
+}
+
+fn compass_forward_target(conn: &crate::compass::CompassConnection) -> Option<(String, u16)> {
+    crate::extract_tcp_host_port(&conn.url)
 }
 
 fn rewrite_mongodb_url_for_ssh(url: &str, local_port: u16) -> Option<String> {
