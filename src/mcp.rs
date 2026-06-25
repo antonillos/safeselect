@@ -2219,7 +2219,10 @@ impl McpServer {
                 lines.push(diagnostics::line(
                     DiagnosticStatus::Ok,
                     DiagnosticCode::SidecarBackendOk,
-                    "Sidecar JDBC connection OK",
+                    match self.backend.kind {
+                        crate::backend::BackendKind::Jdbc => "Sidecar JDBC connection OK",
+                        crate::backend::BackendKind::Document => "Sidecar document connection OK",
+                    },
                 ));
             }
             Err(e) => {
@@ -2232,40 +2235,63 @@ impl McpServer {
             }
         }
 
-        // Execute verification query
-        match self
-            .sidecar
-            .as_mut()
-            .unwrap()
-            .execute("SELECT 1 AS connection_test")
-        {
-            Ok(result) => {
-                lines.push(diagnostics::line(
-                    DiagnosticStatus::Ok,
-                    DiagnosticCode::BackendVerificationOk,
-                    format!(
-                        "Connection verified: SELECT 1 returned {} row(s)",
-                        result.row_count
-                    ),
-                ));
-                lines.push(diagnostics::line(
-                    DiagnosticStatus::Ok,
-                    DiagnosticCode::AllChecksPassed,
-                    format!(
-                        "All checks passed for {}/{}",
-                        self.project_name, self.env_name
-                    ),
-                ));
-            }
-            Err(e) => {
-                lines.push(diagnostics::line(
-                    DiagnosticStatus::Fail,
-                    DiagnosticCode::BackendVerificationFailed,
-                    format!("Verification query failed: {e}"),
-                ));
-                return self.send_error(id, -32000, lines.join("\n"));
+        match self.backend.kind {
+            crate::backend::BackendKind::Jdbc => match self
+                .sidecar
+                .as_mut()
+                .unwrap()
+                .execute("SELECT 1 AS connection_test")
+            {
+                Ok(result) => {
+                    lines.push(diagnostics::line(
+                        DiagnosticStatus::Ok,
+                        DiagnosticCode::BackendVerificationOk,
+                        format!(
+                            "Connection verified: SELECT 1 returned {} row(s)",
+                            result.row_count
+                        ),
+                    ));
+                }
+                Err(e) => {
+                    lines.push(diagnostics::line(
+                        DiagnosticStatus::Fail,
+                        DiagnosticCode::BackendVerificationFailed,
+                        format!("Verification query failed: {e}"),
+                    ));
+                    return self.send_error(id, -32000, lines.join("\n"));
+                }
+            },
+            crate::backend::BackendKind::Document => {
+                match self
+                    .sidecar
+                    .as_mut()
+                    .unwrap()
+                    .verify_document_connection()
+                {
+                    Ok(()) => {
+                        lines.push(diagnostics::line(
+                            DiagnosticStatus::Ok,
+                            DiagnosticCode::BackendVerificationOk,
+                            "Connection verified: MongoDB ping succeeded",
+                        ));
+                    }
+                    Err(e) => {
+                        lines.push(diagnostics::line(
+                            DiagnosticStatus::Fail,
+                            DiagnosticCode::BackendVerificationFailed,
+                            format!("Verification ping failed: {e}"),
+                        ));
+                        return self.send_error(id, -32000, lines.join("\n"));
+                    }
+                }
             }
         }
+
+        lines.push(diagnostics::line(
+            DiagnosticStatus::Ok,
+            DiagnosticCode::AllChecksPassed,
+            format!("All checks passed for {}/{}", self.project_name, self.env_name),
+        ));
 
         let resp = ok_text_response(id, lines.join("\n"));
         self.write_response(&resp)
