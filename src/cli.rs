@@ -178,6 +178,17 @@ pub enum ConfigAction {
         #[arg(long)]
         project: Option<PathBuf>,
     },
+    /// Store an SSH password in the Keychain and update the environment SSH config
+    SetSshPassword {
+        #[arg(long)]
+        environment: String,
+        /// SSH password value (prompts securely if omitted)
+        #[arg(long)]
+        password: Option<String>,
+        /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
+        #[arg(long)]
+        project: Option<PathBuf>,
+    },
     /// Reset project config (removes all environments and keychain entries)
     Reset {
         /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)

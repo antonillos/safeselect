@@ -2262,12 +2262,7 @@ impl McpServer {
                 }
             },
             crate::backend::BackendKind::Document => {
-                match self
-                    .sidecar
-                    .as_mut()
-                    .unwrap()
-                    .verify_document_connection()
-                {
+                match self.sidecar.as_mut().unwrap().verify_document_connection() {
                     Ok(()) => {
                         lines.push(diagnostics::line(
                             DiagnosticStatus::Ok,
@@ -2290,7 +2285,10 @@ impl McpServer {
         lines.push(diagnostics::line(
             DiagnosticStatus::Ok,
             DiagnosticCode::AllChecksPassed,
-            format!("All checks passed for {}/{}", self.project_name, self.env_name),
+            format!(
+                "All checks passed for {}/{}",
+                self.project_name, self.env_name
+            ),
         ));
 
         let resp = ok_text_response(id, lines.join("\n"));

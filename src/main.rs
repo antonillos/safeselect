@@ -560,6 +560,70 @@ fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
             println!("\nDone. Run: safeselect check --environment {environment}");
             Ok(())
         }
+        ConfigAction::SetSshPassword {
+            environment,
+            password,
+            project,
+        } => {
+            let dir = match project {
+                Some(d) => d,
+                None => {
+                    let cwd = std::env::current_dir()?;
+                    loader
+                        .find_local_project(&cwd)
+                        .ok_or_else(|| SafeselectError::LocalProjectNotFound(cwd))?
+                }
+            };
+
+            let env_file = dir
+                .join(".safeselect")
+                .join("environments")
+                .join(format!("{environment}.toml"));
+            if !env_file.exists() {
+                return Err(SafeselectError::EnvironmentNotFound(
+                    environment.clone(),
+                    env_file.display().to_string(),
+                ));
+            }
+
+            let content = std::fs::read_to_string(&env_file)?;
+            let mut env_config: config::EnvironmentConfig =
+                toml::from_str(&content).map_err(|e| {
+                    SafeselectError::Config(format!("invalid {}: {e}", env_file.display()))
+                })?;
+            let Some(ssh) = env_config.ssh.as_mut() else {
+                return Err(SafeselectError::Config(format!(
+                    "environment '{environment}' has no SSH configuration"
+                )));
+            };
+
+            let account = ssh
+                .secret_account
+                .clone()
+                .unwrap_or_else(|| format!("{}/{environment}/ssh", project_display_name(&dir)));
+            let pw = match password {
+                Some(p) => p,
+                None => inquire::Password::new(&format!("SSH password for '{account}'"))
+                    .without_confirmation()
+                    .prompt()
+                    .map_err(|e| {
+                        SafeselectError::Other(format!("Failed to read SSH password: {e}"))
+                    })?,
+            };
+
+            compose::store_password_in_keychain(&account, &pw)?;
+            ssh.secret_account = Some(account.clone());
+            ssh.auth_type = Some("PASSWORD".to_string());
+            ssh.identity_file = None;
+
+            let env_toml = toml::to_string_pretty(&env_config)
+                .map_err(|e| SafeselectError::TomlSer(e.to_string()))?;
+            std::fs::write(&env_file, env_toml)?;
+            println!("  ✓ SSH password stored in Keychain ({account})");
+            println!("  ✓ Updated {}", env_file.display());
+            println!("\nDone. Run: safeselect check --environment {environment}");
+            Ok(())
+        }
         ConfigAction::Reset { project } => {
             let dir = match project {
                 Some(d) => d,
@@ -2187,24 +2251,60 @@ fn prompt_compass_ssh_config(
                 .prompt()
                 .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?;
         if use_existing {
+            let (forward_host, forward_port) =
+                compass_forward_target(conn).unwrap_or((String::new(), 27017));
+            let auth_method =
+                inquire::Select::new("  Authentication method:", vec!["Key file", "Password"])
+                    .with_starting_cursor(if default_auth == "PASSWORD" { 1 } else { 0 })
+                    .prompt()
+                    .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?;
+            let (key_file, auth_type, secret_account) = match auth_method {
+                "Key file" => {
+                    let kf = inquire::Text::new("  SSH key file path:")
+                        .with_default(default_key)
+                        .prompt()
+                        .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?
+                        .trim()
+                        .to_string();
+                    (
+                        if kf.is_empty() { None } else { Some(kf) },
+                        Some("KEY".into()),
+                        None,
+                    )
+                }
+                _ => {
+                    let ssh_acct = format!("{project_name}/{env_name}/ssh");
+                    let pw = inquire::Password::new("  SSH password:")
+                        .without_confirmation()
+                        .prompt()
+                        .map_err(|e| {
+                            SafeselectError::Other(format!("Failed to read SSH password: {e}"))
+                        })?;
+                    if !pw.is_empty() {
+                        compose::store_password_in_keychain(&ssh_acct, &pw)?;
+                        println!("  ✓ SSH password stored in Keychain");
+                    }
+                    (None, Some("PASSWORD".into()), Some(ssh_acct))
+                }
+            };
             return Ok(config::SshConfig {
                 enabled: true,
                 bastion: None,
                 host: conn.ssh_host.clone(),
                 port: Some(conn.ssh_port.unwrap_or(22)),
                 username: conn.ssh_user.clone(),
-                secret_account: None,
-                identity_file: conn.ssh_key_file.clone(),
+                secret_account,
+                identity_file: key_file,
                 known_hosts: None,
-                local_host: Some(
-                    conn.ssh_host
-                        .clone()
-                        .unwrap_or_else(|| "localhost".to_string()),
-                ),
-                local_port: Some(conn.ssh_port.unwrap_or(DEFAULT_SSH_LOCAL_PORT)),
-                forward_host: None,
-                forward_port: None,
-                auth_type: conn.ssh_auth_type.as_deref().map(normalize_ssh_auth_type),
+                local_host: Some("localhost".to_string()),
+                local_port: None,
+                forward_host: if forward_host.is_empty() {
+                    None
+                } else {
+                    Some(forward_host)
+                },
+                forward_port: Some(forward_port),
+                auth_type,
             });
         }
     }
@@ -2382,6 +2482,10 @@ fn select_reusable_compass_ssh_config(
 
 fn compass_ssh_config(conn: &compass::CompassConnection) -> Option<config::SshConfig> {
     let host = conn.ssh_host.clone()?;
+    let auth_type = conn.ssh_auth_type.as_deref().map(normalize_ssh_auth_type);
+    let (forward_host, forward_port) = crate::extract_tcp_host_port(&conn.url)
+        .map(|(host, port)| (Some(host), Some(port)))
+        .unwrap_or((None, None));
     if compass_uses_local_tunnel_endpoint(conn) {
         return Some(config::SshConfig {
             enabled: true,
@@ -2392,17 +2496,13 @@ fn compass_ssh_config(conn: &compass::CompassConnection) -> Option<config::SshCo
             secret_account: None,
             identity_file: conn.ssh_key_file.clone(),
             known_hosts: None,
-            local_host: Some(host),
-            local_port: Some(conn.ssh_port.unwrap_or(DEFAULT_SSH_LOCAL_PORT)),
-            forward_host: None,
-            forward_port: None,
-            auth_type: conn.ssh_auth_type.as_deref().map(normalize_ssh_auth_type),
+            local_host: Some("localhost".to_string()),
+            local_port: None,
+            forward_host,
+            forward_port,
+            auth_type,
         });
     }
-    let auth_type = conn.ssh_auth_type.as_deref().map(normalize_ssh_auth_type);
-    let (forward_host, forward_port) = crate::extract_tcp_host_port(&conn.url)
-        .map(|(host, port)| (Some(host), Some(port)))
-        .unwrap_or((None, None));
 
     Some(config::SshConfig {
         enabled: true,
@@ -2744,22 +2844,31 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
         let tunnel_local_host = ssh.local_host.as_deref().unwrap_or("localhost");
         let tunnel_local_port = ssh.local_port.unwrap_or(15432);
 
-        // Step 2: Check PostgreSQL via tunnel endpoint.
-        let pg_via_tunnel = check_postgres_endpoint(tunnel_local_host, tunnel_local_port);
+        let backend_via_tunnel = match cfg.database.kind {
+            crate::backend::BackendKind::Jdbc => {
+                check_postgres_endpoint(tunnel_local_host, tunnel_local_port)
+            }
+            crate::backend::BackendKind::Document => {
+                check_tcp_endpoint(tunnel_local_host, tunnel_local_port, Duration::from_secs(2))
+            }
+        };
+        let backend_via_direct = match cfg.database.kind {
+            crate::backend::BackendKind::Jdbc => extract_host_port(&cfg.database.url)
+                .map(|(host, port)| check_postgres_endpoint(&host, port))
+                .unwrap_or(false),
+            crate::backend::BackendKind::Document => extract_tcp_host_port(&cfg.database.url)
+                .map(|(host, port)| check_tcp_endpoint(&host, port, Duration::from_secs(2)))
+                .unwrap_or(false),
+        };
 
-        // Step 3: Check PostgreSQL via original target (if resolvable)
-        let pg_via_direct = extract_host_port(&cfg.database.url)
-            .map(|(host, port)| check_postgres_endpoint(&host, port))
-            .unwrap_or(false);
-
-        if pg_via_direct || pg_via_tunnel {
-            print!("  ◉ PostgreSQL reachable ({env_name})");
+        if backend_via_direct || backend_via_tunnel {
+            print!("  ◉ Database reachable ({env_name})");
             std::io::stdout().flush()?;
             continue;
         }
 
         if bastion_up {
-            print!("  ◇ Bastion reachable but PostgreSQL not responding ({env_name})");
+            print!("  ◇ Bastion reachable but database not responding ({env_name})");
             std::io::stdout().flush()?;
         }
 
@@ -2942,18 +3051,30 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
         // Wait briefly: if the bastion/tunnel is down, fail fast like JDBC clients do.
         let tunnel_wait = Duration::from_secs(5);
         let deadline = std::time::Instant::now() + tunnel_wait;
-        let mut pg_ok = false;
+        let mut backend_ok = false;
         while std::time::Instant::now() < deadline {
-            pg_ok = check_postgres_endpoint(tunnel_local_host, tunnel_local_port)
-                || extract_host_port(&cfg.database.url)
-                    .map(|(host, port)| check_postgres_endpoint(&host, port))
-                    .unwrap_or(false);
-            if pg_ok {
+            backend_ok = match cfg.database.kind {
+                crate::backend::BackendKind::Jdbc => {
+                    check_postgres_endpoint(tunnel_local_host, tunnel_local_port)
+                        || extract_host_port(&cfg.database.url)
+                            .map(|(host, port)| check_postgres_endpoint(&host, port))
+                            .unwrap_or(false)
+                }
+                crate::backend::BackendKind::Document => {
+                    check_tcp_endpoint(tunnel_local_host, tunnel_local_port, Duration::from_secs(2))
+                        || extract_tcp_host_port(&cfg.database.url)
+                            .map(|(host, port)| {
+                                check_tcp_endpoint(&host, port, Duration::from_secs(2))
+                            })
+                            .unwrap_or(false)
+                }
+            };
+            if backend_ok {
                 break;
             }
             std::thread::sleep(Duration::from_secs(2));
         }
-        if pg_ok {
+        if backend_ok {
             println!("OK");
             // Detach child so it survives after we exit
             let _ = std::thread::spawn(move || {
@@ -2964,7 +3085,7 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
             let _ = child.wait();
             println!("FAILED");
             println!(
-                "  PostgreSQL not reachable through SSH tunnel (polled for up to {}s)",
+                "  Database not reachable through SSH tunnel (polled for up to {}s)",
                 tunnel_wait.as_secs()
             );
             println!("  Possible causes:");
@@ -2975,7 +3096,7 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
                 .unwrap_or_else(|| "ssh command unavailable".to_string());
             println!("  Establish tunnel manually for debug:\n    {cmd}");
             failures.push(format!(
-                "{env_name}: PostgreSQL not reachable through SSH tunnel after {}s",
+                "{env_name}: database not reachable through SSH tunnel after {}s",
                 tunnel_wait.as_secs()
             ));
         }
@@ -3376,6 +3497,42 @@ fn cmd_check(
                             format!("Cannot reach PostgreSQL at {host}:{port} through SSH tunnel (read timed out after 2s).")
                         ));
                     }
+                }
+            }
+
+            if resolved.environment.database.kind == crate::backend::BackendKind::Document {
+                let Some((host, port)) = extract_tcp_host_port(&resolved.environment.database.url)
+                else {
+                    return Err(SafeselectError::Other(
+                        "Cannot determine document database endpoint from URL".into(),
+                    ));
+                };
+                let document_reachable =
+                    check_tcp_endpoint(&host, port, std::time::Duration::from_secs(3));
+                let document_reachable = if document_reachable {
+                    true
+                } else {
+                    diagnostics::print(
+                        DiagnosticStatus::Info,
+                        DiagnosticCode::SshTunnelAttempt,
+                        "Establishing SSH tunnel...",
+                    );
+                    let _ = setup_ssh_tunnels(repo_root, &[environment.to_string()]);
+                    check_tcp_endpoint(&host, port, std::time::Duration::from_secs(3))
+                };
+                if !document_reachable {
+                    diagnostics::print(
+                        DiagnosticStatus::Fail,
+                        DiagnosticCode::SshTunnelFailed,
+                        format!("Document database tunnel not reachable at {host}:{port}"),
+                    );
+                    let cmd = build_ssh_command(ssh, &resolved.environment.database.url);
+                    if let Some(c) = cmd {
+                        println!("  To establish tunnel: {c}");
+                    }
+                    return Err(SafeselectError::Other(format!(
+                        "Cannot reach document database at {host}:{port} through SSH tunnel."
+                    )));
                 }
             }
         }
@@ -4154,7 +4311,9 @@ username = "usr_app"
         assert_eq!(ssh.port, Some(2222));
         assert_eq!(ssh.username.as_deref(), Some("jumpboxdev"));
         assert_eq!(ssh.local_host.as_deref(), Some("localhost"));
-        assert_eq!(ssh.local_port, Some(2222));
+        assert_eq!(ssh.local_port, None);
+        assert_eq!(ssh.forward_host.as_deref(), Some("cluster.mongodb.net"));
+        assert_eq!(ssh.forward_port, Some(27017));
         let warning = compass_shared_tunnel_warning(&conn);
         assert!(warning.is_some());
         assert!(warning.unwrap().contains("Azure Bastion tunnel"));
