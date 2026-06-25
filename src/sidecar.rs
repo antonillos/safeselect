@@ -442,7 +442,7 @@ impl SidecarProcess {
                 }
                 0 => {
                     return Err(SafeselectError::Sidecar(format!(
-                        "sidecar did not respond within {timeout_ms}ms — restarting"
+                        "sidecar did not respond to '{method}' within {timeout_ms}ms — restarting"
                     )));
                 }
                 _ => {}
@@ -467,7 +467,7 @@ impl SidecarProcess {
                     Ok((Ok(_), response_line)) => Ok(response_line),
                     Ok((Err(err), _)) => Err(SafeselectError::Io(err)),
                     Err(mpsc::RecvTimeoutError::Timeout) => Err(SafeselectError::Sidecar(format!(
-                        "sidecar returned partial or stalled output for more than {timeout_ms}ms"
+                        "sidecar returned partial or stalled output for '{method}' for more than {timeout_ms}ms"
                     ))),
                     Err(mpsc::RecvTimeoutError::Disconnected) => Err(SafeselectError::Sidecar(
                         "sidecar response reader stopped unexpectedly".into(),

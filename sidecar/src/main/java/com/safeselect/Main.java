@@ -80,6 +80,19 @@ public class Main {
         }
     }
 
+    private static String summarizeException(Throwable throwable) {
+        Throwable current = throwable;
+        while (current.getCause() != null && current.getCause() != current) {
+            current = current.getCause();
+        }
+        final var type = current.getClass().getSimpleName();
+        final var message = current.getMessage();
+        if (message == null || message.isBlank()) {
+            return type;
+        }
+        return type + ": " + message;
+    }
+
     public static void main(String[] args) throws Exception {
         backend = "jdbc";
         driverClass = null;
@@ -178,8 +191,20 @@ public class Main {
                                 Map.of("code", "UNKNOWN_METHOD", "message", "Unknown method: " + method));
                     }
                 } catch (Exception e) {
-                    error("Error processing request: " + e.getMessage());
+                    error("Error processing request: " + summarizeException(e));
                     e.printStackTrace(System.err);
+                    try {
+                        @SuppressWarnings("unchecked")
+                        final var failedRequest = (Map<String, Object>) MAPPER.readValue(line, Map.class);
+                        final var id = failedRequest.get("id");
+                        final var method = String.valueOf(failedRequest.get("method"));
+                        sendResponse(writer, id, null, Map.of(
+                                "code", "REQUEST_FAILED",
+                                "message", method + " failed: " + summarizeException(e)
+                        ));
+                    } catch (Exception responseError) {
+                        error("Failed to send error response: " + summarizeException(responseError));
+                    }
                 }
             }
 
