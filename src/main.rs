@@ -2483,7 +2483,7 @@ fn select_reusable_compass_ssh_config(
 fn compass_ssh_config(conn: &compass::CompassConnection) -> Option<config::SshConfig> {
     let host = conn.ssh_host.clone()?;
     let auth_type = conn.ssh_auth_type.as_deref().map(normalize_ssh_auth_type);
-    let (forward_host, forward_port) = crate::extract_tcp_host_port(&conn.url)
+    let (forward_host, forward_port) = compass_forward_target(conn)
         .map(|(host, port)| (Some(host), Some(port)))
         .unwrap_or((None, None));
     if compass_uses_local_tunnel_endpoint(conn) {
