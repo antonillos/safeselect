@@ -2114,11 +2114,7 @@ fn prompt_compass_ssh_config(
     current_batch: &[(String, config::SshConfig)],
 ) -> Result<config::SshConfig> {
     let placeholder_warning = compass_shared_tunnel_warning(conn);
-    let default_host = if placeholder_warning.is_some() {
-        ""
-    } else {
-        conn.ssh_host.as_deref().unwrap_or("")
-    };
+    let default_host = conn.ssh_host.as_deref().unwrap_or("");
     let default_user = conn.ssh_user.as_deref().unwrap_or("");
     let default_key = conn.ssh_key_file.as_deref().unwrap_or("");
     let default_auth = conn.ssh_auth_type.as_deref().unwrap_or("KEY");
@@ -2144,12 +2140,12 @@ fn prompt_compass_ssh_config(
 
     if !ans {
         return Err(SafeselectError::Other(
-            "Compass SSH placeholder requires real bastion details to be configured".into(),
+            "SSH configuration is required".into(),
         ));
     }
 
     let host_prompt = if placeholder_warning.is_some() {
-        "  SSH bastion host (real bastion, not localhost):"
+        "  SSH bastion host or local SSH endpoint:"
     } else {
         "  SSH bastion host:"
     };
@@ -2321,9 +2317,6 @@ fn select_reusable_compass_ssh_config(
 
 fn compass_ssh_config(conn: &compass::CompassConnection) -> Option<config::SshConfig> {
     let host = conn.ssh_host.clone()?;
-    if host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" {
-        return None;
-    }
     let auth_type = conn.ssh_auth_type.as_deref().map(normalize_ssh_auth_type);
     let (forward_host, forward_port) = crate::extract_tcp_host_port(&conn.url)
         .map(|(host, port)| (Some(host), Some(port)))
@@ -2359,8 +2352,8 @@ fn compass_shared_tunnel_warning(conn: &compass::CompassConnection) -> Option<St
         && port > 0
     {
         return Some(
-            "Compass exported a local shared tunnel placeholder instead of a real bastion. \
-SSH was not imported; configure the real bastion and target manually."
+            "Compass exported a local SSH endpoint (for example localhost:2222). \
+Keep it if you open the tunnel yourself first; otherwise replace it with the real bastion."
                 .to_string(),
         );
     }
@@ -3976,7 +3969,7 @@ username = "usr_app"
     }
 
     #[test]
-    fn compass_local_placeholder_tunnel_is_not_imported_as_real_ssh() {
+    fn compass_local_tunnel_endpoint_is_imported_for_reuse() {
         let conn = crate::compass::CompassConnection {
             name: "iopcompclopre002 (pre)".to_string(),
             url: "mongodb+srv://user@cluster.mongodb.net".to_string(),
@@ -3989,10 +3982,13 @@ username = "usr_app"
             ssh_auth_type: None,
         };
 
-        assert!(compass_ssh_config(&conn).is_none());
+        let ssh = compass_ssh_config(&conn).expect("expected ssh config");
+        assert_eq!(ssh.host.as_deref(), Some("localhost"));
+        assert_eq!(ssh.port, Some(2222));
+        assert_eq!(ssh.username.as_deref(), Some("jumpboxdev"));
         let warning = compass_shared_tunnel_warning(&conn);
         assert!(warning.is_some());
-        assert!(warning.unwrap().contains("local shared tunnel placeholder"));
+        assert!(warning.unwrap().contains("open the tunnel yourself first"));
     }
 
     #[test]
