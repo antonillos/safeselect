@@ -33,7 +33,7 @@ done
 cd "${SCRIPT_DIR}"
 
 printf 'Building Java sidecar...\n'
-mvn -f sidecar/pom.xml package -DskipTests -q
+makevn package
 sidecar_jar="$(ls sidecar/target/safeselect-sidecar-*.jar 2>/dev/null | sort -V | tail -1)"
 if [[ -n "$sidecar_jar" ]]; then
   cp "$sidecar_jar" sidecar/target/safeselect-sidecar.jar
