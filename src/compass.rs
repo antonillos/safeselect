@@ -5,6 +5,13 @@ use std::path::{Path, PathBuf};
 pub struct CompassConnection {
     pub name: String,
     pub url: String,
+    pub ssh_host: Option<String>,
+    pub ssh_port: Option<u16>,
+    pub ssh_user: Option<String>,
+    pub ssh_local_host: Option<String>,
+    pub ssh_local_port: Option<u16>,
+    pub ssh_key_file: Option<String>,
+    pub ssh_auth_type: Option<String>,
 }
 
 pub fn import_path(path: &Path) -> Result<Vec<CompassConnection>> {
@@ -57,6 +64,32 @@ fn collect_connections(value: &serde_json::Value, connections: &mut Vec<CompassC
                         connections.push(CompassConnection {
                             name: name.clone(),
                             url: url.to_string(),
+                            ssh_host: find_string(
+                                map,
+                                &["sshTunnelHostname", "sshHost", "hostname"],
+                            ),
+                            ssh_port: find_u16(map, &["sshTunnelPort", "sshPort"]),
+                            ssh_user: find_string(
+                                map,
+                                &["sshTunnelUsername", "sshUsername", "username"],
+                            ),
+                            ssh_local_host: find_string(
+                                map,
+                                &["sshTunnelLocalHost", "sshLocalHost"],
+                            ),
+                            ssh_local_port: find_u16(map, &["sshTunnelLocalPort", "sshLocalPort"]),
+                            ssh_key_file: find_string(
+                                map,
+                                &[
+                                    "sshTunnelIdentityKeyFile",
+                                    "sshIdentityKeyFile",
+                                    "identityKeyFile",
+                                ],
+                            ),
+                            ssh_auth_type: find_string(
+                                map,
+                                &["sshTunnelAuthenticationMethod", "sshAuthType"],
+                            ),
                         });
                     }
                 }
@@ -75,10 +108,82 @@ fn collect_connections(value: &serde_json::Value, connections: &mut Vec<CompassC
             connections.push(CompassConnection {
                 name: "mongodb".to_string(),
                 url: url.to_string(),
+                ssh_host: None,
+                ssh_port: None,
+                ssh_user: None,
+                ssh_local_host: None,
+                ssh_local_port: None,
+                ssh_key_file: None,
+                ssh_auth_type: None,
             });
         }
         _ => {}
     }
+}
+
+fn find_string(map: &serde_json::Map<String, serde_json::Value>, keys: &[&str]) -> Option<String> {
+    for (key, value) in map {
+        if keys
+            .iter()
+            .any(|candidate| key.eq_ignore_ascii_case(candidate))
+        {
+            if let Some(value) = value.as_str().filter(|value| !value.is_empty()) {
+                return Some(value.to_string());
+            }
+        }
+        match value {
+            serde_json::Value::Object(child) => {
+                if let Some(found) = find_string(child, keys) {
+                    return Some(found);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    if let serde_json::Value::Object(child) = item {
+                        if let Some(found) = find_string(child, keys) {
+                            return Some(found);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn find_u16(map: &serde_json::Map<String, serde_json::Value>, keys: &[&str]) -> Option<u16> {
+    for (key, value) in map {
+        if keys
+            .iter()
+            .any(|candidate| key.eq_ignore_ascii_case(candidate))
+        {
+            if let Some(value) = value.as_u64().and_then(|value| u16::try_from(value).ok()) {
+                return Some(value);
+            }
+            if let Some(value) = value.as_str().and_then(|value| value.parse().ok()) {
+                return Some(value);
+            }
+        }
+        match value {
+            serde_json::Value::Object(child) => {
+                if let Some(found) = find_u16(child, keys) {
+                    return Some(found);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    if let serde_json::Value::Object(child) = item {
+                        if let Some(found) = find_u16(child, keys) {
+                            return Some(found);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn is_mongodb_url(value: &str) -> bool {

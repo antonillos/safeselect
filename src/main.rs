@@ -1403,6 +1403,15 @@ instead of the real bastion/user. Enter the real SSH bastion and username manual
     None
 }
 
+fn normalize_ssh_auth_type(auth_type: &str) -> String {
+    let normalized = auth_type.trim().to_ascii_lowercase();
+    if normalized.contains("password") {
+        "PASSWORD".to_string()
+    } else {
+        "KEY".to_string()
+    }
+}
+
 const DEFAULT_SSH_LOCAL_PORT: u16 = 15432;
 
 fn ssh_local_port_from_config(config: &config::EnvironmentConfig) -> Option<u16> {
@@ -1999,9 +2008,11 @@ fn cmd_import_compass(path: Option<PathBuf>, non_interactive: bool) -> Result<()
     let env_dir = safeselect_dir.join("environments");
     std::fs::create_dir_all(&env_dir)?;
     update_generated_by(&safeselect_dir)?;
+    let mut project_config = load_project_config(&safeselect_dir)?;
 
     let project_name = project_display_name(&cwd);
     let mut imported = vec![];
+    let mut used_ssh_local_ports = collect_used_ssh_local_ports(&cwd);
     for idx in selected_indices {
         let conn = &connections[idx];
         let default_env = slug_env_name(&conn.name);
@@ -2016,7 +2027,35 @@ fn cmd_import_compass(path: Option<PathBuf>, non_interactive: bool) -> Result<()
             unique_env_name(&env_dir, &slug_env_name(&requested))
         };
 
-        let (url, username, secret) = prepare_mongodb_url(&project_name, &env_name, &conn.url)?;
+        let ssh = compass_ssh_config(conn);
+        let ssh = if let Some(mut ssh) = ssh {
+            let local_port = ssh
+                .local_port
+                .filter(|port| !used_ssh_local_ports.contains(port))
+                .unwrap_or(next_available_ssh_local_port(&used_ssh_local_ports)?);
+            ssh.local_port = Some(local_port);
+            if ssh.local_host.as_deref().is_none_or(str::is_empty) {
+                ssh.local_host = Some("localhost".to_string());
+            }
+            used_ssh_local_ports.insert(local_port);
+            let bastion_name = find_matching_bastion_name(&project_config, &ssh)
+                .or_else(|| ssh.bastion.clone())
+                .unwrap_or_else(|| default_bastion_name(&ssh));
+            project_config
+                .ssh_bastions
+                .insert(bastion_name.clone(), project_ssh_bastion_from_env(&ssh));
+            Some(environment_ssh_from_bastion(bastion_name, &ssh))
+        } else {
+            None
+        };
+
+        let raw_url = if let Some(ref ssh) = ssh {
+            rewrite_mongodb_url_for_ssh(&conn.url, ssh.local_port.unwrap_or(DEFAULT_SSH_LOCAL_PORT))
+                .unwrap_or_else(|| conn.url.clone())
+        } else {
+            conn.url.clone()
+        };
+        let (url, username, secret) = prepare_mongodb_url(&project_name, &env_name, &raw_url)?;
         let env_config = config::EnvironmentConfig {
             version: 1,
             database: config::DatabaseConfig {
@@ -2028,7 +2067,7 @@ fn cmd_import_compass(path: Option<PathBuf>, non_interactive: bool) -> Result<()
                 secret,
             },
             tls: None,
-            ssh: None,
+            ssh,
             limits: config::LimitsOverride::default(),
         };
         let env_toml = toml::to_string_pretty(&env_config)
@@ -2036,10 +2075,60 @@ fn cmd_import_compass(path: Option<PathBuf>, non_interactive: bool) -> Result<()
         std::fs::write(env_dir.join(format!("{env_name}.toml")), env_toml)?;
         imported.push(env_name);
     }
+    save_project_config(&safeselect_dir, &project_config)?;
 
     println!("Imported MongoDB environments: {}", imported.join(", "));
     println!("Next: safeselect serve --environment <name>");
     Ok(())
+}
+
+fn compass_ssh_config(conn: &compass::CompassConnection) -> Option<config::SshConfig> {
+    let host = conn.ssh_host.clone()?;
+    let auth_type = conn.ssh_auth_type.as_deref().map(normalize_ssh_auth_type);
+    let (forward_host, forward_port) = crate::extract_tcp_host_port(&conn.url)
+        .map(|(host, port)| (Some(host), Some(port)))
+        .unwrap_or((None, None));
+
+    Some(config::SshConfig {
+        enabled: true,
+        bastion: None,
+        host: Some(host),
+        port: Some(conn.ssh_port.unwrap_or(22)),
+        username: conn.ssh_user.clone(),
+        secret_account: None,
+        identity_file: conn.ssh_key_file.clone(),
+        known_hosts: None,
+        local_host: conn
+            .ssh_local_host
+            .clone()
+            .or_else(|| Some("localhost".to_string())),
+        local_port: conn.ssh_local_port,
+        forward_host,
+        forward_port,
+        auth_type,
+    })
+}
+
+fn rewrite_mongodb_url_for_ssh(url: &str, local_port: u16) -> Option<String> {
+    if url.starts_with("mongodb+srv://") {
+        return None;
+    }
+    let scheme_end = url.find("://")?;
+    let authority_start = scheme_end + 3;
+    let path_start = url[authority_start..]
+        .find('/')
+        .map(|idx| authority_start + idx)
+        .unwrap_or(url.len());
+    let authority = &url[authority_start..path_start];
+    let credentials_end = authority.rfind('@').map(|idx| idx + 1).unwrap_or(0);
+    let credentials = &authority[..credentials_end];
+    Some(format!(
+        "{}{}localhost:{}{}",
+        &url[..authority_start],
+        credentials,
+        local_port,
+        &url[path_start..]
+    ))
 }
 
 fn default_compass_path() -> PathBuf {
