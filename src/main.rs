@@ -2148,7 +2148,12 @@ fn prompt_compass_ssh_config(
         ));
     }
 
-    let host = inquire::Text::new("  SSH bastion host:")
+    let host_prompt = if placeholder_warning.is_some() {
+        "  SSH bastion host (real bastion, not localhost):"
+    } else {
+        "  SSH bastion host:"
+    };
+    let host = inquire::Text::new(host_prompt)
         .with_default(default_host)
         .prompt()
         .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?
@@ -2937,6 +2942,7 @@ pub(crate) fn extract_tcp_host_port(url: &str) -> Option<(String, u16)> {
         return Some((host, port));
     }
 
+    let is_srv = url.starts_with("mongodb+srv://");
     let without_prefix = url
         .strip_prefix("mongodb://")
         .or_else(|| url.strip_prefix("mongodb+srv://"))?;
@@ -2944,8 +2950,8 @@ pub(crate) fn extract_tcp_host_port(url: &str) -> Option<(String, u16)> {
     let first_host = authority.split(',').next()?;
     match first_host.split_once(':') {
         Some((host, port)) => Some((host.to_string(), port.parse().ok()?)),
-        None if url.starts_with("mongodb://") => Some((first_host.to_string(), 27017)),
-        None => None,
+        None if !is_srv => Some((first_host.to_string(), 27017)),
+        None => Some((first_host.to_string(), 27017)),
     }
 }
 
@@ -3987,5 +3993,16 @@ username = "usr_app"
         let warning = compass_shared_tunnel_warning(&conn);
         assert!(warning.is_some());
         assert!(warning.unwrap().contains("local shared tunnel placeholder"));
+    }
+
+    #[test]
+    fn extract_tcp_host_port_supports_mongodb_srv() {
+        let result = extract_tcp_host_port(
+            "mongodb+srv://user@cluster.example.mongodb.net/?retryWrites=true",
+        );
+        assert_eq!(
+            result,
+            Some(("cluster.example.mongodb.net".to_string(), 27017))
+        );
     }
 }
