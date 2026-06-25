@@ -2520,6 +2520,18 @@ fn prepare_mongodb_url(
     ))
 }
 
+fn display_database_target(url: &str) -> String {
+    if let Some(database) = url
+        .split('/')
+        .next_back()
+        .and_then(|segment| segment.split('?').next())
+        .filter(|segment| !segment.is_empty())
+    {
+        return database.to_string();
+    }
+    "?".to_string()
+}
+
 fn setup_driver_if_missing() -> Result<()> {
     let loader = config::ConfigLoader::new();
     if !loader.list_drivers().map(|d| d.is_empty()).unwrap_or(true) {
@@ -3306,56 +3318,83 @@ fn cmd_check(
         "    url={} user={} db={}",
         resolved.environment.database.url,
         resolved.environment.database.username,
-        resolved
-            .environment
-            .database
-            .url
-            .split('/')
-            .last()
-            .unwrap_or("?")
+        display_database_target(&resolved.environment.database.url)
     );
 
-    let driver = resolved.driver.as_ref().ok_or_else(|| {
-        SafeselectError::Config("check currently supports only JDBC environments".into())
-    })?;
-    let mut sidecar = SidecarProcess::start_with_timeout(
-        &driver.path,
-        &driver.class,
-        &resolved.environment.database.url,
-        &resolved.environment.database.username,
-        &resolved.password,
-        0,
-        resolved.project.limits.statement_timeout_ms,
-        ResultLimits {
-            max_rows: resolved.project.limits.max_rows,
-            max_result_bytes: resolved.project.limits.max_result_bytes,
-        },
-        false,
-    )?;
+    let limits = ResultLimits {
+        max_rows: resolved.project.limits.max_rows,
+        max_result_bytes: resolved.project.limits.max_result_bytes,
+    };
+    match resolved.environment.database.kind {
+        crate::backend::BackendKind::Jdbc => {
+            let driver = resolved.driver.as_ref().ok_or_else(|| {
+                SafeselectError::Config("missing JDBC driver configuration".into())
+            })?;
+            let mut sidecar = SidecarProcess::start_with_timeout(
+                &driver.path,
+                &driver.class,
+                &resolved.environment.database.url,
+                &resolved.environment.database.username,
+                &resolved.password,
+                0,
+                resolved.project.limits.statement_timeout_ms,
+                limits,
+                false,
+            )?;
 
-    sidecar.ping()?;
-    diagnostics::print(
-        DiagnosticStatus::Ok,
-        DiagnosticCode::SidecarJdbcOk,
-        "Sidecar JDBC connection OK",
-    );
+            sidecar.ping()?;
+            diagnostics::print(
+                DiagnosticStatus::Ok,
+                DiagnosticCode::SidecarJdbcOk,
+                "Sidecar JDBC connection OK",
+            );
 
-    let result = sidecar.execute("SELECT 1 AS connection_test")?;
-    diagnostics::print(
-        DiagnosticStatus::Ok,
-        DiagnosticCode::QuerySelectOneOk,
-        format!(
-            "Connection verified: SELECT 1 returned {} row(s)",
-            result.row_count
-        ),
-    );
+            let result = sidecar.execute("SELECT 1 AS connection_test")?;
+            diagnostics::print(
+                DiagnosticStatus::Ok,
+                DiagnosticCode::QuerySelectOneOk,
+                format!(
+                    "Connection verified: SELECT 1 returned {} row(s)",
+                    result.row_count
+                ),
+            );
+            sidecar.shutdown()?;
+        }
+        crate::backend::BackendKind::Document => {
+            let mut sidecar = SidecarProcess::start_document_with_timeout(
+                resolved.environment.database.vendor(),
+                &resolved.environment.database.url,
+                &resolved.environment.database.username,
+                &resolved.password,
+                0,
+                limits,
+                false,
+            )?;
+
+            sidecar.ping()?;
+            diagnostics::print(
+                DiagnosticStatus::Ok,
+                DiagnosticCode::SidecarJdbcOk,
+                "Sidecar document connection OK",
+            );
+
+            let databases = sidecar.list_databases()?;
+            diagnostics::print(
+                DiagnosticStatus::Ok,
+                DiagnosticCode::QuerySelectOneOk,
+                format!(
+                    "Connection verified: list_databases returned {} database(s)",
+                    databases.len()
+                ),
+            );
+            sidecar.shutdown()?;
+        }
+    }
     diagnostics::print(
         DiagnosticStatus::Ok,
         DiagnosticCode::AllChecksPassed,
         format!("All checks passed for {name}/{environment}"),
     );
-
-    sidecar.shutdown()?;
 
     Ok(())
 }
