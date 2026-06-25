@@ -2468,12 +2468,24 @@ fn rewrite_mongodb_url_for_local_endpoint(
     let rewritten_suffix = if suffix.is_empty() || suffix == "/" {
         "/".to_string()
     } else {
-        suffix.to_string()
+        normalize_mongodb_local_tunnel_suffix(suffix)
     };
     Some(format!(
         "mongodb://{}{}:{}{}",
         credentials, local_host, local_port, rewritten_suffix
     ))
+}
+
+fn normalize_mongodb_local_tunnel_suffix(suffix: &str) -> String {
+    let Some((path, query)) = suffix.split_once('?') else {
+        return suffix.to_string();
+    };
+
+    if query.contains("readPreference=") || !query.contains("readPreferenceTags=") {
+        return suffix.to_string();
+    }
+
+    format!("{path}?readPreference=secondaryPreferred&{query}")
 }
 
 fn default_compass_path() -> PathBuf {
@@ -4160,6 +4172,19 @@ username = "usr_app"
         assert_eq!(
             result.as_deref(),
             Some("mongodb://user@localhost:2222/?retryWrites=true")
+        );
+    }
+
+    #[test]
+    fn rewrite_mongodb_srv_url_adds_read_preference_for_tagged_reads() {
+        let result = rewrite_mongodb_url_for_local_endpoint(
+            "mongodb+srv://user@cluster.example.mongodb.net/?readPreferenceTags=nodeType%3Areadonly",
+            "localhost",
+            2222,
+        );
+        assert_eq!(
+            result.as_deref(),
+            Some("mongodb://user@localhost:2222/?readPreference=secondaryPreferred&readPreferenceTags=nodeType%3Areadonly")
         );
     }
 
