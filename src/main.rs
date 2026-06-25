@@ -3417,14 +3417,14 @@ fn cmd_check(
             sidecar.ping()?;
             diagnostics::print(
                 DiagnosticStatus::Ok,
-                DiagnosticCode::SidecarJdbcOk,
+                DiagnosticCode::SidecarBackendOk,
                 "Sidecar JDBC connection OK",
             );
 
             let result = sidecar.execute("SELECT 1 AS connection_test")?;
             diagnostics::print(
                 DiagnosticStatus::Ok,
-                DiagnosticCode::QuerySelectOneOk,
+                DiagnosticCode::BackendVerificationOk,
                 format!(
                     "Connection verified: SELECT 1 returned {} row(s)",
                     result.row_count
@@ -3446,14 +3446,14 @@ fn cmd_check(
             sidecar.ping()?;
             diagnostics::print(
                 DiagnosticStatus::Ok,
-                DiagnosticCode::SidecarJdbcOk,
+                DiagnosticCode::SidecarBackendOk,
                 "Sidecar document connection OK",
             );
 
             let databases = sidecar.list_databases()?;
             diagnostics::print(
                 DiagnosticStatus::Ok,
-                DiagnosticCode::QuerySelectOneOk,
+                DiagnosticCode::BackendVerificationOk,
                 format!(
                     "Connection verified: list_databases returned {} database(s)",
                     databases.len()

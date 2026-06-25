@@ -206,8 +206,8 @@ execution by restarting the sidecar and retrying once. Agents should still call
 
 Diagnose the configured environment from inside MCP. The response includes
 stable diagnostic codes such as `SAFESELECT_CONFIG_RESOLVED`,
-`SAFESELECT_SSH_BASTION_REACHABLE`, `SAFESELECT_SIDECAR_JDBC_OK`, and
-`SAFESELECT_QUERY_SELECT_ONE_OK` so agents can identify the failing layer before
+`SAFESELECT_SSH_BASTION_REACHABLE`, `SAFESELECT_SIDECAR_BACKEND_OK`, and
+`SAFESELECT_BACKEND_VERIFICATION_OK` so agents can identify the failing layer before
 trying a recovery action.
 
 ## Configuration Tools

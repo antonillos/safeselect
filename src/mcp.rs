@@ -2218,7 +2218,7 @@ impl McpServer {
             Ok(_) => {
                 lines.push(diagnostics::line(
                     DiagnosticStatus::Ok,
-                    DiagnosticCode::SidecarJdbcOk,
+                    DiagnosticCode::SidecarBackendOk,
                     "Sidecar JDBC connection OK",
                 ));
             }
@@ -2242,7 +2242,7 @@ impl McpServer {
             Ok(result) => {
                 lines.push(diagnostics::line(
                     DiagnosticStatus::Ok,
-                    DiagnosticCode::QuerySelectOneOk,
+                    DiagnosticCode::BackendVerificationOk,
                     format!(
                         "Connection verified: SELECT 1 returned {} row(s)",
                         result.row_count
@@ -2260,7 +2260,7 @@ impl McpServer {
             Err(e) => {
                 lines.push(diagnostics::line(
                     DiagnosticStatus::Fail,
-                    DiagnosticCode::QuerySelectOneFailed,
+                    DiagnosticCode::BackendVerificationFailed,
                     format!("Verification query failed: {e}"),
                 ));
                 return self.send_error(id, -32000, lines.join("\n"));
