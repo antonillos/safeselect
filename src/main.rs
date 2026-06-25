@@ -2134,7 +2134,11 @@ fn cmd_import_compass(path: Option<PathBuf>, non_interactive: bool) -> Result<()
     for warning in warnings {
         println!("Warning: {warning}");
     }
-    println!("Next: safeselect serve --environment <name>");
+    if non_interactive {
+        println!("Next: safeselect check --environment <name>");
+    } else {
+        run_checks(&cwd, &imported, false)?;
+    }
     Ok(())
 }
 
@@ -2478,14 +2482,22 @@ fn rewrite_mongodb_url_for_local_endpoint(
 
 fn normalize_mongodb_local_tunnel_suffix(suffix: &str) -> String {
     let Some((path, query)) = suffix.split_once('?') else {
-        return suffix.to_string();
+        return format!("{suffix}?tls=true&directConnection=true");
     };
 
-    if query.contains("readPreference=") || !query.contains("readPreferenceTags=") {
-        return suffix.to_string();
+    let mut params: Vec<String> = query.split('&').map(|part| part.to_string()).collect();
+
+    if !query.contains("readPreference=") && query.contains("readPreferenceTags=") {
+        params.insert(0, "readPreference=secondaryPreferred".to_string());
+    }
+    if !query.contains("tls=") && !query.contains("ssl=") {
+        params.push("tls=true".to_string());
+    }
+    if !query.contains("directConnection=") {
+        params.push("directConnection=true".to_string());
     }
 
-    format!("{path}?readPreference=secondaryPreferred&{query}")
+    format!("{path}?{}", params.join("&"))
 }
 
 fn default_compass_path() -> PathBuf {
@@ -4171,7 +4183,7 @@ username = "usr_app"
         );
         assert_eq!(
             result.as_deref(),
-            Some("mongodb://user@localhost:2222/?retryWrites=true")
+            Some("mongodb://user@localhost:2222/?retryWrites=true&tls=true&directConnection=true")
         );
     }
 
@@ -4184,7 +4196,7 @@ username = "usr_app"
         );
         assert_eq!(
             result.as_deref(),
-            Some("mongodb://user@localhost:2222/?readPreference=secondaryPreferred&readPreferenceTags=nodeType%3Areadonly")
+            Some("mongodb://user@localhost:2222/?readPreference=secondaryPreferred&readPreferenceTags=nodeType%3Areadonly&tls=true&directConnection=true")
         );
     }
 
