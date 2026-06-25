@@ -2544,7 +2544,39 @@ Keep it if you open the Azure Bastion tunnel yourself first; otherwise replace i
 }
 
 fn compass_forward_target(conn: &crate::compass::CompassConnection) -> Option<(String, u16)> {
-    crate::extract_tcp_host_port(&conn.url)
+    mongodb_srv_forward_target(&conn.url).or_else(|| crate::extract_tcp_host_port(&conn.url))
+}
+
+fn mongodb_srv_forward_target(url: &str) -> Option<(String, u16)> {
+    let srv_host = url
+        .strip_prefix("mongodb+srv://")?
+        .split('/')
+        .next()?
+        .rsplit('@')
+        .next()?;
+    let output = std::process::Command::new("dig")
+        .args(["+short", "SRV", &format!("_mongodb._tcp.{srv_host}")])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_mongodb_srv_record(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn parse_mongodb_srv_record(output: &str) -> Option<(String, u16)> {
+    output.lines().find_map(|line| {
+        let mut parts = line.split_whitespace();
+        let _priority = parts.next()?;
+        let _weight = parts.next()?;
+        let port = parts.next()?.parse::<u16>().ok()?;
+        let host = parts.next()?.trim_end_matches('.').to_string();
+        if host.is_empty() {
+            None
+        } else {
+            Some((host, port))
+        }
+    })
 }
 
 fn compass_uses_local_tunnel_endpoint(conn: &crate::compass::CompassConnection) -> bool {
@@ -2592,6 +2624,9 @@ fn normalize_mongodb_local_tunnel_suffix(suffix: &str) -> String {
     }
     if !query.contains("tls=") && !query.contains("ssl=") {
         params.push("tls=true".to_string());
+    }
+    if !query.contains("tlsAllowInvalidHostnames=") {
+        params.push("tlsAllowInvalidHostnames=true".to_string());
     }
     if !query.contains("directConnection=") {
         params.push("directConnection=true".to_string());
@@ -4339,7 +4374,7 @@ username = "usr_app"
         );
         assert_eq!(
             result.as_deref(),
-            Some("mongodb://user@localhost:2222/?retryWrites=true&tls=true&directConnection=true")
+            Some("mongodb://user@localhost:2222/?retryWrites=true&tls=true&tlsAllowInvalidHostnames=true&directConnection=true")
         );
     }
 
@@ -4352,7 +4387,18 @@ username = "usr_app"
         );
         assert_eq!(
             result.as_deref(),
-            Some("mongodb://user@localhost:2222/?readPreference=secondaryPreferred&readPreferenceTags=nodeType%3Areadonly&tls=true&directConnection=true")
+            Some("mongodb://user@localhost:2222/?readPreference=secondaryPreferred&readPreferenceTags=nodeType%3Areadonly&tls=true&tlsAllowInvalidHostnames=true&directConnection=true")
+        );
+    }
+
+    #[test]
+    fn parses_mongodb_srv_record() {
+        let result = parse_mongodb_srv_record(
+            "0 0 1241 pl-0-westeurope-azure.sezph.mongodb.net.\n0 0 1242 other.mongodb.net.\n",
+        );
+        assert_eq!(
+            result,
+            Some(("pl-0-westeurope-azure.sezph.mongodb.net".to_string(), 1241))
         );
     }
 
