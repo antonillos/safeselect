@@ -2013,6 +2013,7 @@ fn cmd_import_compass(path: Option<PathBuf>, non_interactive: bool) -> Result<()
     let project_name = project_display_name(&cwd);
     let mut imported = vec![];
     let mut used_ssh_local_ports = collect_used_ssh_local_ports(&cwd);
+    let mut warnings = vec![];
     for idx in selected_indices {
         let conn = &connections[idx];
         let default_env = slug_env_name(&conn.name);
@@ -2027,6 +2028,9 @@ fn cmd_import_compass(path: Option<PathBuf>, non_interactive: bool) -> Result<()
             unique_env_name(&env_dir, &slug_env_name(&requested))
         };
 
+        if let Some(warning) = compass_shared_tunnel_warning(conn) {
+            warnings.push(format!("{}: {warning}", conn.name));
+        }
         let ssh = compass_ssh_config(conn);
         let ssh = if let Some(mut ssh) = ssh {
             let local_port = ssh
@@ -2078,12 +2082,18 @@ fn cmd_import_compass(path: Option<PathBuf>, non_interactive: bool) -> Result<()
     save_project_config(&safeselect_dir, &project_config)?;
 
     println!("Imported MongoDB environments: {}", imported.join(", "));
+    for warning in warnings {
+        println!("Warning: {warning}");
+    }
     println!("Next: safeselect serve --environment <name>");
     Ok(())
 }
 
 fn compass_ssh_config(conn: &compass::CompassConnection) -> Option<config::SshConfig> {
     let host = conn.ssh_host.clone()?;
+    if host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" {
+        return None;
+    }
     let auth_type = conn.ssh_auth_type.as_deref().map(normalize_ssh_auth_type);
     let (forward_host, forward_port) = crate::extract_tcp_host_port(&conn.url)
         .map(|(host, port)| (Some(host), Some(port)))
@@ -2107,6 +2117,25 @@ fn compass_ssh_config(conn: &compass::CompassConnection) -> Option<config::SshCo
         forward_port,
         auth_type,
     })
+}
+
+fn compass_shared_tunnel_warning(conn: &compass::CompassConnection) -> Option<String> {
+    let host = conn.ssh_host.as_deref()?.trim();
+    let user = conn.ssh_user.as_deref().unwrap_or("").trim();
+    let port = conn.ssh_port.unwrap_or(0);
+
+    if (host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1")
+        && !user.is_empty()
+        && port > 0
+    {
+        return Some(
+            "Compass exported a local shared tunnel placeholder instead of a real bastion. \
+SSH was not imported; configure the real bastion and target manually."
+                .to_string(),
+        );
+    }
+
+    None
 }
 
 fn rewrite_mongodb_url_for_ssh(url: &str, local_port: u16) -> Option<String> {
@@ -3709,5 +3738,25 @@ username = "usr_app"
         };
 
         assert_eq!(default_bastion_name(&ssh), "jumpboxdev-2222");
+    }
+
+    #[test]
+    fn compass_local_placeholder_tunnel_is_not_imported_as_real_ssh() {
+        let conn = crate::compass::CompassConnection {
+            name: "iopcompclopre002 (pre)".to_string(),
+            url: "mongodb+srv://user@cluster.mongodb.net".to_string(),
+            ssh_host: Some("localhost".to_string()),
+            ssh_port: Some(2222),
+            ssh_user: Some("jumpboxdev".to_string()),
+            ssh_local_host: None,
+            ssh_local_port: None,
+            ssh_key_file: None,
+            ssh_auth_type: None,
+        };
+
+        assert!(compass_ssh_config(&conn).is_none());
+        let warning = compass_shared_tunnel_warning(&conn);
+        assert!(warning.is_some());
+        assert!(warning.unwrap().contains("local shared tunnel placeholder"));
     }
 }
