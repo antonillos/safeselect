@@ -2071,8 +2071,12 @@ fn cmd_import_compass(path: Option<PathBuf>, non_interactive: bool) -> Result<()
         };
 
         let raw_url = if let Some(ref ssh) = ssh {
-            rewrite_mongodb_url_for_ssh(&conn.url, ssh.local_port.unwrap_or(DEFAULT_SSH_LOCAL_PORT))
-                .unwrap_or_else(|| conn.url.clone())
+            rewrite_mongodb_url_for_local_endpoint(
+                &conn.url,
+                ssh.local_host.as_deref().unwrap_or("localhost"),
+                ssh.local_port.unwrap_or(DEFAULT_SSH_LOCAL_PORT),
+            )
+            .unwrap_or_else(|| conn.url.clone())
         } else {
             conn.url.clone()
         };
@@ -2142,6 +2146,35 @@ fn prompt_compass_ssh_config(
         return Err(SafeselectError::Other(
             "SSH configuration is required".into(),
         ));
+    }
+
+    if compass_uses_local_tunnel_endpoint(conn) {
+        let use_existing =
+            inquire::Confirm::new("Use the existing local tunnel endpoint from Compass?")
+                .with_default(true)
+                .prompt()
+                .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?;
+        if use_existing {
+            return Ok(config::SshConfig {
+                enabled: true,
+                bastion: None,
+                host: conn.ssh_host.clone(),
+                port: Some(conn.ssh_port.unwrap_or(22)),
+                username: conn.ssh_user.clone(),
+                secret_account: None,
+                identity_file: conn.ssh_key_file.clone(),
+                known_hosts: None,
+                local_host: Some(
+                    conn.ssh_host
+                        .clone()
+                        .unwrap_or_else(|| "localhost".to_string()),
+                ),
+                local_port: Some(conn.ssh_port.unwrap_or(DEFAULT_SSH_LOCAL_PORT)),
+                forward_host: None,
+                forward_port: None,
+                auth_type: conn.ssh_auth_type.as_deref().map(normalize_ssh_auth_type),
+            });
+        }
     }
 
     let host_prompt = if placeholder_warning.is_some() {
@@ -2317,6 +2350,23 @@ fn select_reusable_compass_ssh_config(
 
 fn compass_ssh_config(conn: &compass::CompassConnection) -> Option<config::SshConfig> {
     let host = conn.ssh_host.clone()?;
+    if compass_uses_local_tunnel_endpoint(conn) {
+        return Some(config::SshConfig {
+            enabled: true,
+            bastion: None,
+            host: Some(host.clone()),
+            port: Some(conn.ssh_port.unwrap_or(22)),
+            username: conn.ssh_user.clone(),
+            secret_account: None,
+            identity_file: conn.ssh_key_file.clone(),
+            known_hosts: None,
+            local_host: Some(host),
+            local_port: Some(conn.ssh_port.unwrap_or(DEFAULT_SSH_LOCAL_PORT)),
+            forward_host: None,
+            forward_port: None,
+            auth_type: conn.ssh_auth_type.as_deref().map(normalize_ssh_auth_type),
+        });
+    }
     let auth_type = conn.ssh_auth_type.as_deref().map(normalize_ssh_auth_type);
     let (forward_host, forward_port) = crate::extract_tcp_host_port(&conn.url)
         .map(|(host, port)| (Some(host), Some(port)))
@@ -2353,7 +2403,7 @@ fn compass_shared_tunnel_warning(conn: &compass::CompassConnection) -> Option<St
     {
         return Some(
             "Compass exported a local SSH endpoint (for example localhost:2222). \
-Keep it if you open the tunnel yourself first; otherwise replace it with the real bastion."
+Keep it if you open the Azure Bastion tunnel yourself first; otherwise replace it with the real bastion."
                 .to_string(),
         );
     }
@@ -2365,10 +2415,18 @@ fn compass_forward_target(conn: &crate::compass::CompassConnection) -> Option<(S
     crate::extract_tcp_host_port(&conn.url)
 }
 
-fn rewrite_mongodb_url_for_ssh(url: &str, local_port: u16) -> Option<String> {
-    if url.starts_with("mongodb+srv://") {
-        return None;
-    }
+fn compass_uses_local_tunnel_endpoint(conn: &crate::compass::CompassConnection) -> bool {
+    conn.ssh_host
+        .as_deref()
+        .is_some_and(|host| host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1")
+        && conn.ssh_port.unwrap_or(0) > 0
+}
+
+fn rewrite_mongodb_url_for_local_endpoint(
+    url: &str,
+    local_host: &str,
+    local_port: u16,
+) -> Option<String> {
     let scheme_end = url.find("://")?;
     let authority_start = scheme_end + 3;
     let path_start = url[authority_start..]
@@ -2379,9 +2437,10 @@ fn rewrite_mongodb_url_for_ssh(url: &str, local_port: u16) -> Option<String> {
     let credentials_end = authority.rfind('@').map(|idx| idx + 1).unwrap_or(0);
     let credentials = &authority[..credentials_end];
     Some(format!(
-        "{}{}localhost:{}{}",
+        "{}{}{}:{}{}",
         &url[..authority_start],
         credentials,
+        local_host,
         local_port,
         &url[path_start..]
     ))
@@ -3986,9 +4045,11 @@ username = "usr_app"
         assert_eq!(ssh.host.as_deref(), Some("localhost"));
         assert_eq!(ssh.port, Some(2222));
         assert_eq!(ssh.username.as_deref(), Some("jumpboxdev"));
+        assert_eq!(ssh.local_host.as_deref(), Some("localhost"));
+        assert_eq!(ssh.local_port, Some(2222));
         let warning = compass_shared_tunnel_warning(&conn);
         assert!(warning.is_some());
-        assert!(warning.unwrap().contains("open the tunnel yourself first"));
+        assert!(warning.unwrap().contains("Azure Bastion tunnel"));
     }
 
     #[test]
