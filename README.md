@@ -1,6 +1,6 @@
 # SafeSelect
 
-**MCP SQL Fail-Closed for AI Agents**
+**MCP database fail-closed access for AI Agents**
 
 [![CI](https://github.com/antonillos/safeselect/actions/workflows/verify.yml/badge.svg)](https://github.com/antonillos/safeselect/actions/workflows/verify.yml)
 [![Security](https://img.shields.io/badge/Security-fail--closed-success?logo=trustpilot&logoColor=white)]()
@@ -11,7 +11,7 @@
 [![asdf](https://img.shields.io/badge/asdf-plugin-8A2BE2)](https://github.com/antonillos/asdf-safeselect)
 [![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
 
-SafeSelect is a secure read-only SQL boundary between AI coding agents and your databases. It implements the **Model Context Protocol (MCP)** with a fail-closed security model: security first, convention over configuration, and guided next steps when setup or recovery is needed.
+SafeSelect is a secure read-only boundary between AI coding agents and your databases. It supports SQL/JDBC backends and MongoDB document backends through the **Model Context Protocol (MCP)** with a fail-closed security model: security first, convention over configuration, and guided next steps when setup or recovery is needed.
 
 ---
 
@@ -32,16 +32,18 @@ SafeSelect is a secure read-only SQL boundary between AI coding agents and your 
 # 1. Install
 brew install antonillos/tap/safeselect
 
-# 2. Import — auto-detects driver, passwords, SSH, everything
+# 2. Import
 safeselect import-dbeaver ~/Downloads/dbeaver-export.zip
 #    Or from docker-compose:
 #    safeselect import-compose
+#    Or from MongoDB Compass:
+#    safeselect import-compass --path "$HOME/.config/MongoDB Compass"
 
-#    During import, you will be prompted for:
-#    - Environment names (one per connection)
-#    - SSH tunnel config (if detected from DBeaver)
-#    - Database username (if not found in export)
-#    - Database passwords (stored in macOS Keychain)
+#    Imports can prompt for:
+#    - Environment names
+#    - SSH/bastion config
+#    - Database passwords
+#    - SSH passwords when Compass/DBeaver did not export them
 
 # 3. Verify connectivity (auto-establishes SSH tunnel if needed)
 safeselect check --environment testing
@@ -58,9 +60,9 @@ a short summary of what changed plus the install instructions.
 ## Security Model
 
 - **Fail-closed**: any security violation kills the MCP process immediately
-- **Read-only**: only `SELECT`, `EXPLAIN`, and `WITH` queries allowed
+- **Read-only**: SQL allows only `SELECT`, `EXPLAIN`, and `WITH`; MongoDB backends allow discovery and `find_documents`
 - **Single statement**: multi-statement SQL rejected
-- **Schema control**: allow/deny specific schemas and relations
+- **Scope control**: allow/deny SQL schemas/relations and document databases/collections
 - **SHA-256 drivers**: JDBC JAR checksummed on every use
 - **macOS Keychain**: secrets never stored in config files
 - **Password isolation**: passed via stdin, never as CLI args
@@ -78,12 +80,12 @@ a short summary of what changed plus the install instructions.
 
 ## Read-Only Use Cases
 
-- **Schema discovery**: use `list_tables` and targeted `SELECT` queries on metadata tables before guessing names.
+- **Schema discovery**: use `list_tables` for SQL, or `list_databases`/`list_collections` for document stores, before guessing names.
 - **Safe data inspection**: inspect rows, counts, shapes, and join paths without exposing write access.
 - **Performance analysis**: use `explain` and `explain analyze` on read-only queries to inspect plans, buffers, and bottlenecks.
 - **Connectivity diagnosis**: use `check`, `connect`, and `reconnect` to recover from stale JDBC, sidecar, or SSH tunnel state.
 - **Agent onboarding**: install a SafeSelect MCP entry so agents get a constrained, project-scoped, read-only database tool by default.
-- **Project bootstrap**: import from DBeaver or docker-compose, then follow the generated next steps to finish setup.
+- **Project bootstrap**: import from DBeaver, docker-compose, or MongoDB Compass, then follow the generated next steps to finish setup.
 
 ---
 
@@ -94,16 +96,18 @@ a short summary of what changed plus the install instructions.
 | `serve --project <p> --environment <e>` | Start the MCP server |
 | `query --project <p> --environment <e> --sql <q>` | Execute SQL directly |
 | `check --project <p> --environment <e>` | Test connectivity |
-| `doctor --project <p> --environment <e>` | Diagnose config, SSH, sidecar, JDBC, and `SELECT 1` |
+| `doctor --project <p> --environment <e>` | Diagnose config, SSH tunnel, sidecar, and backend connectivity |
 | `config validate [--project <p>] [--environment <e>]` | Validate config |
 | `config show --project <p> --environment <e>` | Show resolved config |
 | `config rename-environment --old <o> --new <n>` | Rename environment |
 | `config delete-environment --name <n>` | Delete environment |
 | `config set-password --environment <e>` | Store password in Keychain and update config |
+| `config set-ssh-password --environment <e>` | Store SSH password in Keychain and update SSH config |
 | `config reset [--project <p>]` | Remove all environments + keychain entries |
 | `driver download --vendor postgresql` | Download JDBC driver |
 | `driver add --vendor <v> --path <jar> --class <c>` | Register custom driver |
 | `driver list` | List registered drivers |
+| `import-compass [--path <p>]` | Import MongoDB Compass connections |
 | `agent install <client> --environment <e> [--project <p>] [--name <n>]` | Install MCP entry (name defaults to `safeselect-<project-dir>-<environment>`) |
 | `agent upgrade <client> [--name <n>] [--project <p>] [--environment <e>]` | Upgrade an existing MCP entry, auto-detecting it from the current project when possible |
 | `agent uninstall <client> --name <n>` | Remove MCP entry |
@@ -130,8 +134,8 @@ Example phases:
 - `SAFESELECT_SECRET_RESOLVED`
 - `SAFESELECT_SSH_BASTION_REACHABLE`
 - `SAFESELECT_POSTGRES_REACHABLE`
-- `SAFESELECT_SIDECAR_JDBC_OK`
-- `SAFESELECT_QUERY_SELECT_ONE_OK`
+- `SAFESELECT_SIDECAR_BACKEND_OK`
+- `SAFESELECT_BACKEND_VERIFICATION_OK`
 
 Use these codes when reporting issues or asking an agent to recover a broken
 environment.
@@ -143,8 +147,8 @@ MCP query responses include execution metadata for agent decisions:
 - `elapsed` for human-readable timing such as `842ms`, `1.3s`, or `2m 4s`
 
 Sidecar pipe timeouts and MCP reconnect behavior respect the configured
-`statement_timeout_ms`, so agents should prefer `check`, `connect`, and `reconnect`
-over manual retry loops after stale SSH/JDBC connections.
+limits. Agents should prefer `check`, `connect`, and `reconnect`
+over manual retry loops after stale SSH or sidecar connections.
 
 ---
 
@@ -152,9 +156,13 @@ over manual retry loops after stale SSH/JDBC connections.
 
 | Tool | Description | Arguments |
 |---|---|---|
+| `database_info` | Show active backend, vendor, and capabilities | _(none)_ |
 | `select` | Execute a SELECT query | `sql` (required), `verbose` |
 | `list_tables` | List database tables | `schema` (optional) |
 | `explain` | Show execution plan | `sql` (required), `analyze`, `buffers`, `explain_verbose`, `format` (`json` default, `text`) |
+| `list_databases` | List document databases | _(none)_ |
+| `list_collections` | List document collections | `database` |
+| `find_documents` | Find documents in a collection | `database`, `collection`, `filter`, `projection`, `sort`, `limit` |
 | `connect` | Reconnect to the database after connection loss | _(none)_ |
 | `disconnect` | Close the database connection | _(none)_ |
 | `reconnect` | Restart the sidecar and verify the database connection | _(none)_ |
@@ -167,6 +175,7 @@ Configuration and setup tools available through MCP:
 | `config_validate` | Validate `.safeselect/` configuration | `environment` (optional) |
 | `config_show` | Show resolved config with secrets redacted | `environment` (required) |
 | `config_set_password` | Store an environment password in Keychain | `environment`, `password` |
+| `config_set_ssh_password` | Store an SSH password in Keychain | `environment`, `password` |
 | `config_rename_environment` | Rename an environment | `old_name`, `new_name` |
 | `config_delete_environment` | Delete an environment | `name` |
 | `config_reset` | Delete all project environments and keychain entries | `confirm: true` |
@@ -239,9 +248,12 @@ url = "jdbc:postgresql://localhost:15432/myapp?sslmode=require"
 username = "reader"
 ```
 
-When SSH tunneling is configured, the JDBC URL uses `localhost:15432` (forwarding port)
-with `sslmode=require` (Azure PostgreSQL requires SSL at protocol level).
-The SSH server port and forwarding port are intentionally different to avoid conflicts.
+For MongoDB Compass imports, SafeSelect rewrites the URL to a local forwarded endpoint,
+resolves `mongodb+srv` tunnel targets to real TCP hosts/ports, and keeps SSH and MongoDB
+local ports separate.
+
+When SSH tunneling is configured, the database URL uses a local forwarding port such as
+`localhost:15432`. The SSH server port and forwarding port are intentionally different.
 
 The password is configured separately — run this once:
 
@@ -250,6 +262,12 @@ safeselect config set-password --environment testing
 ```
 
 This stores the password in your macOS Keychain and adds the `[database.secret]` section to the toml automatically.
+
+If the bastion uses password auth and the import did not include it:
+
+```bash
+safeselect config set-ssh-password --environment testing
+```
 
 ### SSH tunnels
 

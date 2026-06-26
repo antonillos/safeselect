@@ -438,7 +438,9 @@ pub fn write_config_files(
         let env_config = config::EnvironmentConfig {
             version: 1,
             database: config::DatabaseConfig {
-                driver: "postgresql".to_string(),
+                kind: crate::backend::BackendKind::Jdbc,
+                vendor: Some("postgresql".to_string()),
+                driver: Some("postgresql".to_string()),
                 url,
                 username: conn.username.clone(),
                 secret,

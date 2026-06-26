@@ -1,5 +1,10 @@
 use crate::agents;
 use crate::audit::AuditLog;
+use crate::backend::{
+    BackendCapability, BackendDescriptor, DocumentAggregateRequest, DocumentCountRequest,
+    DocumentDistinctRequest, DocumentExplainRequest, DocumentFieldProfileRequest,
+    DocumentFindRequest, DocumentFixtureRequest, DocumentSchemaRequest,
+};
 use crate::compose;
 use crate::config::{ConfigLoader, EnvironmentConfig, ProjectConfig};
 use crate::diagnostics::{self, DiagnosticCode, DiagnosticStatus};
@@ -49,6 +54,15 @@ struct ToolDefinition {
     input_schema: serde_json::Value,
 }
 
+macro_rules! required_string {
+    ($server:expr, $id:expr, $args:expr, $name:literal) => {
+        match $args.get($name).and_then(|v| v.as_str()) {
+            Some(value) => value,
+            None => return $server.send_error($id, -32602, format!("Missing '{}' argument", $name)),
+        }
+    };
+}
+
 pub struct McpServer {
     sidecar: Option<SidecarProcess>,
     security: SecurityEngine,
@@ -65,6 +79,7 @@ pub struct McpServer {
     repo_root: PathBuf,
     config_dir: PathBuf,
     verbose_sidecar: bool,
+    backend: BackendDescriptor,
 }
 
 impl McpServer {
@@ -88,6 +103,7 @@ impl McpServer {
         );
 
         let idle_timeout_seconds = env_config.limits.idle_timeout_seconds.unwrap_or(0);
+        let backend = env_config.database.backend();
 
         let audit = AuditLog::open(&project_config.audit, project_name, env_name, "unknown")?;
 
@@ -107,6 +123,7 @@ impl McpServer {
             repo_root: repo_root.to_path_buf(),
             config_dir: config_dir.to_path_buf(),
             verbose_sidecar: false,
+            backend,
         })
     }
 
@@ -122,21 +139,9 @@ impl McpServer {
         if self.sidecar.is_some() {
             return self.sidecar_mut();
         }
+        self.ensure_ssh_ready_for_query()?;
         tracing::info!("Lazy-starting sidecar");
-        let sidecar = SidecarProcess::start_with_timeout(
-            &self.driver_path,
-            &self.driver_class,
-            &self.db_url,
-            &self.db_username,
-            &self.db_password,
-            self.idle_timeout_seconds,
-            self.security.limits().statement_timeout_ms,
-            ResultLimits {
-                max_rows: self.security.limits().max_rows,
-                max_result_bytes: self.security.limits().max_result_bytes,
-            },
-            self.verbose_sidecar,
-        )?;
+        let sidecar = self.start_sidecar()?;
         tracing::info!("Sidecar ready");
         self.sidecar = Some(sidecar);
         self.sidecar_mut()
@@ -269,8 +274,17 @@ impl McpServer {
     }
 
     fn handle_tools_list(&mut self, msg: &JsonRpcMessage) -> Result<()> {
-        let tools = vec![
-            ToolDefinition {
+        let mut tools = vec![ToolDefinition {
+            name: "database_info".into(),
+            description: self.tool_description("show active database backend and capabilities"),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {}
+            }),
+        }];
+
+        if self.backend.has(BackendCapability::SqlQuery) {
+            tools.push(ToolDefinition {
                 name: "select".into(),
                 description: self
                     .tool_description("execute a read-only SELECT query on the target database"),
@@ -288,8 +302,11 @@ impl McpServer {
                     },
                     "required": ["sql"]
                 }),
-            },
-            ToolDefinition {
+            });
+        }
+
+        if self.backend.has(BackendCapability::TableDiscovery) {
+            tools.push(ToolDefinition {
                 name: "list_tables".into(),
                 description: self
                     .tool_description("list database tables, optionally filtered by schema"),
@@ -302,7 +319,11 @@ impl McpServer {
                         }
                     }
                 }),
-            },
+            });
+        }
+
+        if self.backend.has(BackendCapability::SqlExplain) {
+            tools.push(
             ToolDefinition {
                 name: "explain".into(),
                 description: self
@@ -338,7 +359,206 @@ impl McpServer {
                     },
                     "required": ["sql"]
                 }),
-            },
+            });
+        }
+
+        if self.backend.has(BackendCapability::DatabaseDiscovery) {
+            tools.push(ToolDefinition {
+                name: "list_databases".into(),
+                description: self.tool_description("list document databases"),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }),
+            });
+        }
+
+        if self.backend.has(BackendCapability::CollectionDiscovery) {
+            tools.push(ToolDefinition {
+                name: "list_collections".into(),
+                description: self.tool_description("list document collections"),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "database": {
+                            "type": "string",
+                            "description": "Database name"
+                        }
+                    },
+                    "required": ["database"]
+                }),
+            });
+        }
+
+        if self.backend.has(BackendCapability::DocumentFind) {
+            tools.push(ToolDefinition {
+                name: "find_documents".into(),
+                description: self.tool_description("find documents in a collection"),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "database": {
+                            "type": "string",
+                            "description": "Database name"
+                        },
+                        "collection": {
+                            "type": "string",
+                            "description": "Collection name"
+                        },
+                        "filter": {
+                            "type": "object",
+                            "description": "Document filter"
+                        },
+                        "projection": {
+                            "type": "object",
+                            "description": "Projection document"
+                        },
+                        "sort": {
+                            "type": "object",
+                            "description": "Sort document"
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum number of documents to return"
+                        }
+                    },
+                    "required": ["database", "collection", "filter"]
+                }),
+            });
+        }
+
+        if self.backend.has(BackendCapability::DocumentAggregate) {
+            tools.push(ToolDefinition {
+                name: "aggregate_documents".into(),
+                description: self.tool_description("run a read-only MongoDB aggregation pipeline"),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "database": {"type": "string"},
+                        "collection": {"type": "string"},
+                        "pipeline": {"type": "array", "description": "Read-only aggregation pipeline; $out and $merge are rejected"},
+                        "limit": {"type": "integer", "description": "Maximum result documents to return"}
+                    },
+                    "required": ["database", "collection", "pipeline"]
+                }),
+            });
+        }
+
+        if self.backend.has(BackendCapability::DocumentDistinct) {
+            tools.push(ToolDefinition {
+                name: "distinct_documents".into(),
+                description: self.tool_description("list distinct values for a MongoDB field"),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "database": {"type": "string"},
+                        "collection": {"type": "string"},
+                        "field": {"type": "string"},
+                        "filter": {"type": "object"},
+                        "limit": {"type": "integer"}
+                    },
+                    "required": ["database", "collection", "field"]
+                }),
+            });
+        }
+
+        if self.backend.has(BackendCapability::DocumentCount) {
+            tools.push(ToolDefinition {
+                name: "count_documents".into(),
+                description: self.tool_description("count MongoDB documents matching a filter"),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "database": {"type": "string"},
+                        "collection": {"type": "string"},
+                        "filter": {"type": "object"}
+                    },
+                    "required": ["database", "collection"]
+                }),
+            });
+        }
+
+        if self.backend.has(BackendCapability::DocumentExplain) {
+            tools.push(ToolDefinition {
+                name: "explain_documents".into(),
+                description: self.tool_description("explain a read-only MongoDB find query"),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "database": {"type": "string"},
+                        "collection": {"type": "string"},
+                        "filter": {"type": "object"},
+                        "projection": {"type": "object"},
+                        "sort": {"type": "object"},
+                        "limit": {"type": "integer"}
+                    },
+                    "required": ["database", "collection"]
+                }),
+            });
+        }
+
+        if self.backend.has(BackendCapability::DocumentProfile) {
+            tools.push(ToolDefinition {
+                name: "profile_document_field".into(),
+                description: self
+                    .tool_description("profile a nested MongoDB field over a bounded sample"),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "database": {"type": "string"},
+                        "collection": {"type": "string"},
+                        "field": {"type": "string"},
+                        "filter": {"type": "object"},
+                        "sample_size": {"type": "integer"},
+                        "examples": {"type": "integer"}
+                    },
+                    "required": ["database", "collection", "field"]
+                }),
+            });
+        }
+
+        if self.backend.has(BackendCapability::DocumentSchema) {
+            tools.push(ToolDefinition {
+                name: "discover_document_schema".into(),
+                description: self.tool_description(
+                    "infer frequent MongoDB fields and types over a bounded sample",
+                ),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "database": {"type": "string"},
+                        "collection": {"type": "string"},
+                        "filter": {"type": "object"},
+                        "sample_size": {"type": "integer"},
+                        "examples": {"type": "integer"}
+                    },
+                    "required": ["database", "collection"]
+                }),
+            });
+        }
+
+        if self.backend.has(BackendCapability::DocumentFixture) {
+            tools.push(ToolDefinition {
+                name: "generate_document_fixture".into(),
+                description: self.tool_description(
+                    "return anonymized MongoDB fixture samples without writing files",
+                ),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "database": {"type": "string"},
+                        "collection": {"type": "string"},
+                        "filter": {"type": "object"},
+                        "projection": {"type": "object"},
+                        "limit": {"type": "integer"},
+                        "redact_fields": {"type": "array", "items": {"type": "string"}}
+                    },
+                    "required": ["database", "collection"]
+                }),
+            });
+        }
+
+        tools.extend([
             ToolDefinition {
                 name: "disconnect".into(),
                 description: self
@@ -622,7 +842,7 @@ impl McpServer {
                     "properties": {}
                 }),
             },
-        ];
+        ]);
 
         let resp = JsonRpcResponse {
             jsonrpc: "2.0",
@@ -652,9 +872,24 @@ impl McpServer {
             .unwrap_or(serde_json::json!({}));
 
         match tool_name {
+            "database_info" => self.handle_database_info(msg.id.clone()),
             "select" => self.handle_select(msg.id.clone(), &args),
             "list_tables" => self.handle_list_tables(msg.id.clone(), &args),
             "explain" => self.handle_explain(msg.id.clone(), &args),
+            "list_databases" => self.handle_list_databases(msg.id.clone()),
+            "list_collections" => self.handle_list_collections(msg.id.clone(), &args),
+            "find_documents" => self.handle_find_documents(msg.id.clone(), &args),
+            "aggregate_documents" => self.handle_aggregate_documents(msg.id.clone(), &args),
+            "distinct_documents" => self.handle_distinct_documents(msg.id.clone(), &args),
+            "count_documents" => self.handle_count_documents(msg.id.clone(), &args),
+            "explain_documents" => self.handle_explain_documents(msg.id.clone(), &args),
+            "profile_document_field" => self.handle_profile_document_field(msg.id.clone(), &args),
+            "discover_document_schema" => {
+                self.handle_discover_document_schema(msg.id.clone(), &args)
+            }
+            "generate_document_fixture" => {
+                self.handle_generate_document_fixture(msg.id.clone(), &args)
+            }
             "disconnect" => self.handle_disconnect(msg.id.clone()),
             "connect" => self.handle_connect(msg.id.clone()),
             "config_validate" => self.handle_config_validate(msg.id.clone(), &args),
@@ -679,6 +914,345 @@ impl McpServer {
             "uninstall" => self.handle_uninstall(msg.id.clone(), &args),
             "reconnect" => self.handle_reconnect(msg.id.clone()),
             _ => self.send_error(msg.id.clone(), -32602, format!("Unknown tool: {tool_name}")),
+        }
+    }
+
+    fn handle_database_info(&mut self, id: Option<serde_json::Value>) -> Result<()> {
+        let capabilities: Vec<&str> = self
+            .backend
+            .capabilities
+            .iter()
+            .map(|capability| match capability {
+                BackendCapability::SqlQuery => "sql_query",
+                BackendCapability::SqlExplain => "sql_explain",
+                BackendCapability::TableDiscovery => "table_discovery",
+                BackendCapability::DatabaseDiscovery => "database_discovery",
+                BackendCapability::CollectionDiscovery => "collection_discovery",
+                BackendCapability::DocumentFind => "document_find",
+                BackendCapability::DocumentAggregate => "document_aggregate",
+                BackendCapability::DocumentDistinct => "document_distinct",
+                BackendCapability::DocumentCount => "document_count",
+                BackendCapability::DocumentExplain => "document_explain",
+                BackendCapability::DocumentProfile => "document_profile",
+                BackendCapability::DocumentSchema => "document_schema",
+                BackendCapability::DocumentFixture => "document_fixture",
+            })
+            .collect();
+
+        let resp = JsonRpcResponse {
+            jsonrpc: "2.0",
+            id,
+            result: Some(serde_json::json!({
+                "content": [{
+                    "type": "text",
+                    "text": serde_json::to_string(&serde_json::json!({
+                        "kind": self.backend.kind,
+                        "vendor": self.backend.vendor,
+                        "capabilities": capabilities
+                    }))?
+                }]
+            })),
+            error: None,
+        };
+        self.write_response(&resp)
+    }
+
+    fn handle_list_databases(&mut self, id: Option<serde_json::Value>) -> Result<()> {
+        match self.ensure_sidecar()?.list_databases() {
+            Ok(databases) => {
+                let databases = self.security.filter_document_databases(databases);
+                self.write_response(&json_text_response(id, &databases)?)
+            }
+            Err(e) => self.send_error(id, -32000, format!("List databases failed: {e}")),
+        }
+    }
+
+    fn handle_list_collections(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        let database = match args.get("database").and_then(|v| v.as_str()) {
+            Some(database) => database,
+            None => return self.send_error(id, -32602, "Missing 'database' argument"),
+        };
+        if let Err(e) = self.security.validate_document_database(database) {
+            return self.send_error(id, -32000, format!("Request rejected: {e}"));
+        }
+        match self.ensure_sidecar()?.list_collections(database) {
+            Ok(collections) => {
+                let collections = self
+                    .security
+                    .filter_document_collections(database, collections);
+                self.write_response(&json_text_response(id, &collections)?)
+            }
+            Err(e) => self.send_error(id, -32000, format!("List collections failed: {e}")),
+        }
+    }
+
+    fn handle_find_documents(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        let database = match args.get("database").and_then(|v| v.as_str()) {
+            Some(database) => database.to_string(),
+            None => return self.send_error(id, -32602, "Missing 'database' argument"),
+        };
+        let collection = match args.get("collection").and_then(|v| v.as_str()) {
+            Some(collection) => collection.to_string(),
+            None => return self.send_error(id, -32602, "Missing 'collection' argument"),
+        };
+        let filter = args
+            .get("filter")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({}));
+        let limit = args
+            .get("limit")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(self.security.limits().max_rows.min(100));
+        let request = DocumentFindRequest {
+            database,
+            collection,
+            filter,
+            projection: args.get("projection").cloned(),
+            sort: args.get("sort").cloned(),
+            limit,
+        };
+
+        if let Err(e) = self.security.validate_document_find(&request) {
+            self.audit.record("REJECT", "reject", "find_documents")?;
+            return self.send_error(id, -32000, format!("Request rejected: {e}"));
+        }
+
+        match self.ensure_sidecar()?.find_documents(&request) {
+            Ok(result) => {
+                self.audit.record("PASS", "allow", "find_documents")?;
+                if let Err(e) = self
+                    .security
+                    .check_result_size(result.document_count, result.byte_count)
+                {
+                    return self.send_error(id, -32000, format!("{e}"));
+                }
+                self.write_response(&json_text_response(id, &result)?)
+            }
+            Err(e) => {
+                self.audit
+                    .record("DOCUMENT_ERROR", "error", "find_documents")?;
+                self.send_error(id, -32000, format!("Find documents failed: {e}"))
+            }
+        }
+    }
+
+    fn handle_aggregate_documents(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        let request = DocumentAggregateRequest {
+            database: required_string!(self, id, args, "database").to_string(),
+            collection: required_string!(self, id, args, "collection").to_string(),
+            pipeline: args
+                .get("pipeline")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!([])),
+            limit: args
+                .get("limit")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(self.security.limits().max_rows.min(100)),
+        };
+        self.handle_document_value(
+            id,
+            "aggregate_documents",
+            |security| security.validate_document_aggregate(&request),
+            |sidecar| sidecar.aggregate_documents(&request),
+        )
+    }
+
+    fn handle_distinct_documents(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        let request = DocumentDistinctRequest {
+            database: required_string!(self, id, args, "database").to_string(),
+            collection: required_string!(self, id, args, "collection").to_string(),
+            field: required_string!(self, id, args, "field").to_string(),
+            filter: args
+                .get("filter")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({})),
+            limit: args
+                .get("limit")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(self.security.limits().max_rows.min(100)),
+        };
+        self.handle_document_value(
+            id,
+            "distinct_documents",
+            |security| security.validate_document_distinct(&request),
+            |sidecar| sidecar.distinct_documents(&request),
+        )
+    }
+
+    fn handle_count_documents(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        let request = DocumentCountRequest {
+            database: required_string!(self, id, args, "database").to_string(),
+            collection: required_string!(self, id, args, "collection").to_string(),
+            filter: args
+                .get("filter")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({})),
+        };
+        self.handle_document_value(
+            id,
+            "count_documents",
+            |security| security.validate_document_count(&request),
+            |sidecar| sidecar.count_documents(&request),
+        )
+    }
+
+    fn handle_explain_documents(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        let request = DocumentExplainRequest {
+            database: required_string!(self, id, args, "database").to_string(),
+            collection: required_string!(self, id, args, "collection").to_string(),
+            filter: args
+                .get("filter")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({})),
+            projection: args.get("projection").cloned(),
+            sort: args.get("sort").cloned(),
+            limit: args.get("limit").and_then(|v| v.as_u64()),
+        };
+        self.handle_document_value(
+            id,
+            "explain_documents",
+            |security| security.validate_document_explain(&request),
+            |sidecar| sidecar.explain_documents(&request),
+        )
+    }
+
+    fn handle_profile_document_field(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        let request = DocumentFieldProfileRequest {
+            database: required_string!(self, id, args, "database").to_string(),
+            collection: required_string!(self, id, args, "collection").to_string(),
+            field: required_string!(self, id, args, "field").to_string(),
+            filter: args
+                .get("filter")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({})),
+            sample_size: args
+                .get("sample_size")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(self.security.limits().max_rows.min(1000)),
+            examples: args.get("examples").and_then(|v| v.as_u64()).unwrap_or(5),
+        };
+        self.handle_document_value(
+            id,
+            "profile_document_field",
+            |security| security.validate_document_field_profile(&request),
+            |sidecar| sidecar.profile_document_field(&request),
+        )
+    }
+
+    fn handle_discover_document_schema(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        let request = DocumentSchemaRequest {
+            database: required_string!(self, id, args, "database").to_string(),
+            collection: required_string!(self, id, args, "collection").to_string(),
+            filter: args
+                .get("filter")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({})),
+            sample_size: args
+                .get("sample_size")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(self.security.limits().max_rows.min(1000)),
+            examples: args.get("examples").and_then(|v| v.as_u64()).unwrap_or(3),
+        };
+        self.handle_document_value(
+            id,
+            "discover_document_schema",
+            |security| security.validate_document_schema(&request),
+            |sidecar| sidecar.discover_document_schema(&request),
+        )
+    }
+
+    fn handle_generate_document_fixture(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        let request = DocumentFixtureRequest {
+            database: required_string!(self, id, args, "database").to_string(),
+            collection: required_string!(self, id, args, "collection").to_string(),
+            filter: args
+                .get("filter")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({})),
+            projection: args.get("projection").cloned(),
+            limit: args
+                .get("limit")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(self.security.limits().max_rows.min(20)),
+            redact_fields: args
+                .get("redact_fields")
+                .and_then(|v| v.as_array())
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(|value| value.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default(),
+        };
+        self.handle_document_value(
+            id,
+            "generate_document_fixture",
+            |security| security.validate_document_fixture(&request),
+            |sidecar| sidecar.generate_document_fixture(&request),
+        )
+    }
+
+    fn handle_document_value<V, E>(
+        &mut self,
+        id: Option<serde_json::Value>,
+        operation: &str,
+        validate: V,
+        execute: E,
+    ) -> Result<()>
+    where
+        V: FnOnce(&SecurityEngine) -> Result<()>,
+        E: FnOnce(&mut SidecarProcess) -> Result<serde_json::Value>,
+    {
+        if let Err(e) = validate(&self.security) {
+            self.audit.record("REJECT", "reject", operation)?;
+            return self.send_error(id, -32000, format!("Request rejected: {e}"));
+        }
+        match execute(self.ensure_sidecar()?) {
+            Ok(result) => {
+                self.audit.record("PASS", "allow", operation)?;
+                self.write_response(&json_text_response(id, &result)?)
+            }
+            Err(e) => {
+                self.audit.record("DOCUMENT_ERROR", "error", operation)?;
+                self.send_error(id, -32000, format!("{operation} failed: {e}"))
+            }
         }
     }
 
@@ -1015,7 +1589,7 @@ impl McpServer {
             "{}: attempting SSH tunnel recovery",
             DiagnosticCode::SshTunnelRecoveryAttempt.as_str()
         );
-        if let Err(e) = setup_ssh_tunnels(&self.repo_root, &[self.env_name.clone()]) {
+        if let Err(e) = setup_ssh_tunnels(&self.repo_root, std::slice::from_ref(&self.env_name)) {
             tracing::warn!("SSH tunnel recovery attempt failed: {e}");
         }
 
@@ -1087,7 +1661,7 @@ impl McpServer {
             _ => return Ok(false),
         };
 
-        if is_ssh_ready_for_query(ssh, &resolved.environment.database.url) {
+        if self.is_backend_ready_for_query(ssh, &resolved.environment.database.url) {
             return Ok(false);
         }
 
@@ -1095,19 +1669,41 @@ impl McpServer {
             "{}: SSH preflight failed before query; preparing tunnel",
             DiagnosticCode::SshTunnelRecoveryAttempt.as_str()
         );
-        setup_ssh_tunnels(&self.repo_root, &[self.env_name.clone()])?;
+        setup_ssh_tunnels(&self.repo_root, std::slice::from_ref(&self.env_name))?;
 
         let resolved = loader.resolve_local(&self.repo_root, &self.env_name)?;
         match resolved.environment.ssh.as_ref() {
             Some(ssh)
                 if ssh.enabled
-                    && is_ssh_ready_for_query(ssh, &resolved.environment.database.url) =>
+                    && self.is_backend_ready_for_query(ssh, &resolved.environment.database.url) =>
             {
                 Ok(true)
             }
             _ => Err(crate::error::SafeselectError::Other(
                 "SSH tunnel is not ready for query execution".into(),
             )),
+        }
+    }
+
+    fn is_backend_ready_for_query(&self, ssh: &crate::config::SshConfig, url: &str) -> bool {
+        match self.backend.kind {
+            crate::backend::BackendKind::Jdbc => is_ssh_ready_for_query(ssh, url),
+            crate::backend::BackendKind::Document => {
+                let bastion_host = ssh.host.as_deref().unwrap_or("");
+                let bastion_port = ssh.port.unwrap_or(22);
+                if !crate::check_tcp_endpoint(
+                    bastion_host,
+                    bastion_port,
+                    std::time::Duration::from_secs(3),
+                ) {
+                    return false;
+                }
+                crate::extract_tcp_host_port(url)
+                    .map(|(host, port)| {
+                        crate::check_tcp_endpoint(&host, port, std::time::Duration::from_secs(3))
+                    })
+                    .unwrap_or(false)
+            }
         }
     }
 
@@ -1121,23 +1717,40 @@ impl McpServer {
         // This prevents zombie queries and connection state issues
         std::thread::sleep(std::time::Duration::from_secs(2));
 
-        let sidecar = SidecarProcess::start_with_timeout(
-            &self.driver_path,
-            &self.driver_class,
-            &self.db_url,
-            &self.db_username,
-            &self.db_password,
-            self.idle_timeout_seconds,
-            self.security.limits().statement_timeout_ms,
-            ResultLimits {
-                max_rows: self.security.limits().max_rows,
-                max_result_bytes: self.security.limits().max_result_bytes,
-            },
-            self.verbose_sidecar,
-        )?;
+        let sidecar = self.start_sidecar()?;
         tracing::info!("Sidecar restarted successfully");
         self.sidecar = Some(sidecar);
         Ok(())
+    }
+
+    fn start_sidecar(&self) -> Result<SidecarProcess> {
+        let limits = ResultLimits {
+            max_rows: self.security.limits().max_rows,
+            max_result_bytes: self.security.limits().max_result_bytes,
+        };
+        match self.backend.kind {
+            crate::backend::BackendKind::Jdbc => SidecarProcess::start_with_timeout(
+                &self.driver_path,
+                &self.driver_class,
+                &self.db_url,
+                &self.db_username,
+                &self.db_password,
+                self.idle_timeout_seconds,
+                self.security.limits().statement_timeout_ms,
+                limits,
+                self.verbose_sidecar,
+            ),
+            crate::backend::BackendKind::Document => SidecarProcess::start_document_with_timeout(
+                &self.backend.vendor,
+                &self.db_url,
+                &self.db_username,
+                &self.db_password,
+                self.idle_timeout_seconds,
+                self.security.limits().statement_timeout_ms,
+                limits,
+                self.verbose_sidecar,
+            ),
+        }
     }
 
     fn handle_config_validate(
@@ -1188,14 +1801,19 @@ impl McpServer {
             Err(e) => return self.send_error(id, -32000, format!("Config resolution failed: {e}")),
         };
 
-        let lines = vec![
+        let mut lines = vec![
             format!("Project: {}", self.project_name),
             format!("Environment: {environment}"),
-            format!(
-                "Driver: {} ({})",
-                resolved.driver.vendor, resolved.driver.class
-            ),
-            format!("JDBC URL: {}", resolved.environment.database.url),
+            format!("Backend: {:?}", resolved.environment.database.kind),
+            format!("Vendor: {}", resolved.environment.database.vendor()),
+        ];
+        if let Some(driver) = resolved.driver.as_ref() {
+            lines.push(format!("Driver: {} ({})", driver.vendor, driver.class));
+            lines.push(format!("JDBC URL: {}", resolved.environment.database.url));
+        } else {
+            lines.push(format!("URL: {}", resolved.environment.database.url));
+        }
+        lines.extend([
             format!("Username: {}", resolved.environment.database.username),
             "Password: [redacted]".into(),
             String::new(),
@@ -1236,7 +1854,7 @@ impl McpServer {
                 Some(ref ssh) => format!("Enabled: {}", ssh.enabled),
                 None => "SSH: not configured".into(),
             },
-        ];
+        ]);
 
         let resp = ok_text_response(id, lines.join("\n"));
         self.write_response(&resp)
@@ -1280,7 +1898,9 @@ impl McpServer {
             Err(_) => EnvironmentConfig {
                 version: 1,
                 database: crate::config::DatabaseConfig {
-                    driver: String::new(),
+                    kind: crate::backend::BackendKind::Jdbc,
+                    vendor: None,
+                    driver: Some(String::new()),
                     url: String::new(),
                     username: String::new(),
                     secret: None,
@@ -1843,11 +2463,13 @@ impl McpServer {
             ),
         ];
 
-        lines.push(diagnostics::line(
-            DiagnosticStatus::Ok,
-            DiagnosticCode::DriverVerified,
-            format!("Driver '{}' found and checksum OK", resolved.driver.vendor),
-        ));
+        if let Some(driver) = resolved.driver.as_ref() {
+            lines.push(diagnostics::line(
+                DiagnosticStatus::Ok,
+                DiagnosticCode::DriverVerified,
+                format!("Driver '{}' found and checksum OK", driver.vendor),
+            ));
+        }
         lines.push(diagnostics::line(
             DiagnosticStatus::Ok,
             DiagnosticCode::SecretResolved,
@@ -1971,8 +2593,11 @@ impl McpServer {
             Ok(_) => {
                 lines.push(diagnostics::line(
                     DiagnosticStatus::Ok,
-                    DiagnosticCode::SidecarJdbcOk,
-                    "Sidecar JDBC connection OK",
+                    DiagnosticCode::SidecarBackendOk,
+                    match self.backend.kind {
+                        crate::backend::BackendKind::Jdbc => "Sidecar JDBC connection OK",
+                        crate::backend::BackendKind::Document => "Sidecar document connection OK",
+                    },
                 ));
             }
             Err(e) => {
@@ -1985,40 +2610,61 @@ impl McpServer {
             }
         }
 
-        // Execute verification query
-        match self
-            .sidecar
-            .as_mut()
-            .unwrap()
-            .execute("SELECT 1 AS connection_test")
-        {
-            Ok(result) => {
-                lines.push(diagnostics::line(
-                    DiagnosticStatus::Ok,
-                    DiagnosticCode::QuerySelectOneOk,
-                    format!(
-                        "Connection verified: SELECT 1 returned {} row(s)",
-                        result.row_count
-                    ),
-                ));
-                lines.push(diagnostics::line(
-                    DiagnosticStatus::Ok,
-                    DiagnosticCode::AllChecksPassed,
-                    format!(
-                        "All checks passed for {}/{}",
-                        self.project_name, self.env_name
-                    ),
-                ));
-            }
-            Err(e) => {
-                lines.push(diagnostics::line(
-                    DiagnosticStatus::Fail,
-                    DiagnosticCode::QuerySelectOneFailed,
-                    format!("Verification query failed: {e}"),
-                ));
-                return self.send_error(id, -32000, lines.join("\n"));
+        match self.backend.kind {
+            crate::backend::BackendKind::Jdbc => match self
+                .sidecar
+                .as_mut()
+                .unwrap()
+                .execute("SELECT 1 AS connection_test")
+            {
+                Ok(result) => {
+                    lines.push(diagnostics::line(
+                        DiagnosticStatus::Ok,
+                        DiagnosticCode::BackendVerificationOk,
+                        format!(
+                            "Connection verified: SELECT 1 returned {} row(s)",
+                            result.row_count
+                        ),
+                    ));
+                }
+                Err(e) => {
+                    lines.push(diagnostics::line(
+                        DiagnosticStatus::Fail,
+                        DiagnosticCode::BackendVerificationFailed,
+                        format!("Verification query failed: {e}"),
+                    ));
+                    return self.send_error(id, -32000, lines.join("\n"));
+                }
+            },
+            crate::backend::BackendKind::Document => {
+                match self.sidecar.as_mut().unwrap().verify_document_connection() {
+                    Ok(()) => {
+                        lines.push(diagnostics::line(
+                            DiagnosticStatus::Ok,
+                            DiagnosticCode::BackendVerificationOk,
+                            "Connection verified: MongoDB ping succeeded",
+                        ));
+                    }
+                    Err(e) => {
+                        lines.push(diagnostics::line(
+                            DiagnosticStatus::Fail,
+                            DiagnosticCode::BackendVerificationFailed,
+                            format!("Verification ping failed: {e}"),
+                        ));
+                        return self.send_error(id, -32000, lines.join("\n"));
+                    }
+                }
             }
         }
+
+        lines.push(diagnostics::line(
+            DiagnosticStatus::Ok,
+            DiagnosticCode::AllChecksPassed,
+            format!(
+                "All checks passed for {}/{}",
+                self.project_name, self.env_name
+            ),
+        ));
 
         let resp = ok_text_response(id, lines.join("\n"));
         self.write_response(&resp)
@@ -2198,6 +2844,13 @@ fn ok_text_response(id: Option<serde_json::Value>, text: String) -> JsonRpcRespo
         })),
         error: None,
     }
+}
+
+fn json_text_response<T: Serialize>(
+    id: Option<serde_json::Value>,
+    value: &T,
+) -> Result<JsonRpcResponse> {
+    Ok(ok_text_response(id, serde_json::to_string(value)?))
 }
 
 fn import_compose_guidance_text(

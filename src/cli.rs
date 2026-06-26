@@ -55,6 +55,15 @@ pub enum Command {
         #[arg(long, default_value_t = false)]
         non_interactive: bool,
     },
+    /// Import MongoDB Compass connections into .safeselect/
+    ImportCompass {
+        /// File or directory containing MongoDB Compass connection JSON
+        #[arg(long)]
+        path: Option<PathBuf>,
+        /// Non-interactive mode — import all without prompting
+        #[arg(long, default_value_t = false)]
+        non_interactive: bool,
+    },
     /// Test connectivity
     Check {
         /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
@@ -163,6 +172,17 @@ pub enum ConfigAction {
         #[arg(long)]
         environment: String,
         /// Password value (prompts securely if omitted)
+        #[arg(long)]
+        password: Option<String>,
+        /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
+        #[arg(long)]
+        project: Option<PathBuf>,
+    },
+    /// Store an SSH password in the Keychain and update the environment SSH config
+    SetSshPassword {
+        #[arg(long)]
+        environment: String,
+        /// SSH password value (prompts securely if omitted)
         #[arg(long)]
         password: Option<String>,
         /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)

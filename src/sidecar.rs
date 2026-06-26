@@ -1,3 +1,8 @@
+use crate::backend::{
+    DocumentAggregateRequest, DocumentCountRequest, DocumentDistinctRequest,
+    DocumentExplainRequest, DocumentFieldProfileRequest, DocumentFindRequest,
+    DocumentFixtureRequest, DocumentResult, DocumentSchemaRequest,
+};
 use crate::error::{Result, SafeselectError};
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -38,6 +43,7 @@ pub struct SidecarProcess {
     reader: BufReader<ChildStdout>,
     next_id: u64,
     statement_timeout_ms: u64,
+    request_timeout_ms: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -102,6 +108,7 @@ impl SidecarProcess {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn start_with_timeout(
         driver_path: &str,
         driver_class: &str,
@@ -113,21 +120,81 @@ impl SidecarProcess {
         result_limits: ResultLimits,
         verbose: bool,
     ) -> Result<Self> {
+        Self::start_backend_with_timeout(
+            "jdbc",
+            Some(driver_path),
+            Some(driver_class),
+            jdbc_url,
+            username,
+            password,
+            idle_timeout_seconds,
+            statement_timeout_ms,
+            result_limits,
+            verbose,
+        )
+    }
+
+    pub fn start_document_with_timeout(
+        vendor: &str,
+        url: &str,
+        username: &str,
+        password: &str,
+        idle_timeout_seconds: u64,
+        statement_timeout_ms: u64,
+        result_limits: ResultLimits,
+        verbose: bool,
+    ) -> Result<Self> {
+        Self::start_backend_with_timeout(
+            vendor,
+            None,
+            None,
+            url,
+            username,
+            password,
+            idle_timeout_seconds,
+            statement_timeout_ms,
+            result_limits,
+            verbose,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn start_backend_with_timeout(
+        backend: &str,
+        driver_path: Option<&str>,
+        driver_class: Option<&str>,
+        url: &str,
+        username: &str,
+        password: &str,
+        idle_timeout_seconds: u64,
+        statement_timeout_ms: u64,
+        result_limits: ResultLimits,
+        verbose: bool,
+    ) -> Result<Self> {
         let jar_path = Self::ensure_sidecar_jar()?;
-        let cp = format!("{}:{}", jar_path.display(), driver_path);
+        let cp = match driver_path {
+            Some(driver_path) if !driver_path.is_empty() => {
+                format!("{}:{}", jar_path.display(), driver_path)
+            }
+            _ => jar_path.display().to_string(),
+        };
 
         let mut args = vec![
             "-cp",
             cp.as_str(),
             "com.safeselect.Main",
-            "--driver",
-            driver_class,
+            "--backend",
+            backend,
             "--url",
-            jdbc_url,
+            url,
             "--user",
             username,
             "--password-stdin",
         ];
+        if let Some(driver_class) = driver_class {
+            args.push("--driver");
+            args.push(driver_class);
+        }
         if idle_timeout_seconds > 0 {
             args.push("--idle-timeout-seconds");
             args.push(Box::leak(idle_timeout_seconds.to_string().into_boxed_str()));
@@ -171,6 +238,13 @@ impl SidecarProcess {
             child,
             next_id: 0,
             statement_timeout_ms,
+            request_timeout_ms: if statement_timeout_ms > 0 {
+                statement_timeout_ms + 1_000
+            } else if backend == "mongodb" {
+                35_000
+            } else {
+                30_000
+            },
         };
 
         proc.send_password(password)?;
@@ -278,6 +352,135 @@ impl SidecarProcess {
         }
     }
 
+    pub fn list_databases(&mut self) -> Result<Vec<String>> {
+        let resp = self.send_request("list_databases", None)?;
+        if let Some(err) = resp.error {
+            return Err(SafeselectError::Sidecar(format!(
+                "list_databases failed [{}]: {}",
+                err.code, err.message
+            )));
+        }
+        match resp.ok {
+            Some(val) => Ok(serde_json::from_value(val)?),
+            None => Err(SafeselectError::Sidecar(
+                "empty response from sidecar".into(),
+            )),
+        }
+    }
+
+    pub fn verify_document_connection(&mut self) -> Result<()> {
+        let resp = self.send_request("verify_document_connection", None)?;
+        if let Some(err) = resp.error {
+            return Err(SafeselectError::Sidecar(format!(
+                "verify_document_connection failed [{}]: {}",
+                err.code, err.message
+            )));
+        }
+        match resp.ok {
+            Some(_) => Ok(()),
+            None => Err(SafeselectError::Sidecar(
+                "empty response from sidecar".into(),
+            )),
+        }
+    }
+
+    pub fn list_collections(&mut self, database: &str) -> Result<Vec<String>> {
+        let resp = self.send_request(
+            "list_collections",
+            Some(serde_json::json!({ "database": database })),
+        )?;
+        if let Some(err) = resp.error {
+            return Err(SafeselectError::Sidecar(format!(
+                "list_collections failed [{}]: {}",
+                err.code, err.message
+            )));
+        }
+        match resp.ok {
+            Some(val) => Ok(serde_json::from_value(val)?),
+            None => Err(SafeselectError::Sidecar(
+                "empty response from sidecar".into(),
+            )),
+        }
+    }
+
+    pub fn find_documents(&mut self, request: &DocumentFindRequest) -> Result<DocumentResult> {
+        let resp = self.send_request("find_documents", Some(serde_json::to_value(request)?))?;
+        if let Some(err) = resp.error {
+            return Err(SafeselectError::Sidecar(format!(
+                "find_documents failed [{}]: {}",
+                err.code, err.message
+            )));
+        }
+        match resp.ok {
+            Some(val) => Ok(serde_json::from_value(val)?),
+            None => Err(SafeselectError::Sidecar(
+                "empty response from sidecar".into(),
+            )),
+        }
+    }
+
+    pub fn aggregate_documents(
+        &mut self,
+        request: &DocumentAggregateRequest,
+    ) -> Result<serde_json::Value> {
+        self.document_value_request("aggregate_documents", serde_json::to_value(request)?)
+    }
+
+    pub fn distinct_documents(
+        &mut self,
+        request: &DocumentDistinctRequest,
+    ) -> Result<serde_json::Value> {
+        self.document_value_request("distinct_documents", serde_json::to_value(request)?)
+    }
+
+    pub fn count_documents(&mut self, request: &DocumentCountRequest) -> Result<serde_json::Value> {
+        self.document_value_request("count_documents", serde_json::to_value(request)?)
+    }
+
+    pub fn explain_documents(
+        &mut self,
+        request: &DocumentExplainRequest,
+    ) -> Result<serde_json::Value> {
+        self.document_value_request("explain_documents", serde_json::to_value(request)?)
+    }
+
+    pub fn profile_document_field(
+        &mut self,
+        request: &DocumentFieldProfileRequest,
+    ) -> Result<serde_json::Value> {
+        self.document_value_request("profile_document_field", serde_json::to_value(request)?)
+    }
+
+    pub fn discover_document_schema(
+        &mut self,
+        request: &DocumentSchemaRequest,
+    ) -> Result<serde_json::Value> {
+        self.document_value_request("discover_document_schema", serde_json::to_value(request)?)
+    }
+
+    pub fn generate_document_fixture(
+        &mut self,
+        request: &DocumentFixtureRequest,
+    ) -> Result<serde_json::Value> {
+        self.document_value_request("generate_document_fixture", serde_json::to_value(request)?)
+    }
+
+    fn document_value_request(
+        &mut self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let resp = self.send_request(method, Some(params))?;
+        if let Some(err) = resp.error {
+            return Err(SafeselectError::Sidecar(format!(
+                "{method} failed [{}]: {}",
+                err.code, err.message
+            )));
+        }
+        resp.ok
+            .ok_or_else(|| SafeselectError::Sidecar("empty response from sidecar".into()))
+    }
+
     fn send_request(
         &mut self,
         method: &str,
@@ -302,14 +505,14 @@ impl SidecarProcess {
         // The 1s buffer allows PostgreSQL to cancel the query via statement_timeout
         // before we kill the sidecar process
         let timeout_ms = if self.statement_timeout_ms > 0 {
-            let t = (self.statement_timeout_ms + 1_000u64).max(5_000u64);
+            let t = self.request_timeout_ms.max(5_000u64);
             if t > i32::MAX as u64 {
                 i32::MAX
             } else {
                 t as i32
             }
         } else {
-            30_000i32
+            self.request_timeout_ms.min(i32::MAX as u64) as i32
         };
 
         loop {
@@ -330,7 +533,7 @@ impl SidecarProcess {
                 }
                 0 => {
                     return Err(SafeselectError::Sidecar(format!(
-                        "sidecar did not respond within {timeout_ms}ms — restarting"
+                        "sidecar did not respond to '{method}' within {timeout_ms}ms — restarting"
                     )));
                 }
                 _ => {}
@@ -355,7 +558,7 @@ impl SidecarProcess {
                     Ok((Ok(_), response_line)) => Ok(response_line),
                     Ok((Err(err), _)) => Err(SafeselectError::Io(err)),
                     Err(mpsc::RecvTimeoutError::Timeout) => Err(SafeselectError::Sidecar(format!(
-                        "sidecar returned partial or stalled output for more than {timeout_ms}ms"
+                        "sidecar returned partial or stalled output for '{method}' for more than {timeout_ms}ms"
                     ))),
                     Err(mpsc::RecvTimeoutError::Disconnected) => Err(SafeselectError::Sidecar(
                         "sidecar response reader stopped unexpectedly".into(),
