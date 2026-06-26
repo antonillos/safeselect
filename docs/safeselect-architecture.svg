@@ -1,128 +1,97 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 520" font-family="'SF Mono','Menlo','Monaco','Courier New',monospace">
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
-      <path d="M 0 0 L 10 5 L 0 10 z" fill="#888"/>
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#9aa3ad"/>
     </marker>
-    <marker id="arrow-bi" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
-      <path d="M 0 0 L 10 5 L 0 10 z" fill="#aaa"/>
-    </marker>
-    <marker id="arrow-dashed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
-      <path d="M 0 0 L 10 5 L 0 10 z" fill="#666"/>
-    </marker>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#1a1a2e"/>
-      <stop offset="100%" stop-color="#16213e"/>
-    </linearGradient>
-    <linearGradient id="rust" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#dea584"/>
-      <stop offset="100%" stop-color="#c97a5a"/>
-    </linearGradient>
-    <linearGradient id="java" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#5382a1"/>
-      <stop offset="100%" stop-color="#326480"/>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#101820"/>
+      <stop offset="100%" stop-color="#1d2430"/>
     </linearGradient>
     <linearGradient id="agent" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0%" stop-color="#7b68ee"/>
-      <stop offset="100%" stop-color="#5a4bd1"/>
+      <stop offset="100%" stop-color="#5545c8"/>
     </linearGradient>
-    <linearGradient id="db" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#336791"/>
-      <stop offset="100%" stop-color="#1b4d6b"/>
+    <linearGradient id="rust" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#dea584"/>
+      <stop offset="100%" stop-color="#b66f4d"/>
     </linearGradient>
-    <linearGradient id="security" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#e04848"/>
-      <stop offset="100%" stop-color="#b02020"/>
+    <linearGradient id="java" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#5382a1"/>
+      <stop offset="100%" stop-color="#2f607c"/>
     </linearGradient>
-    <filter id="shadow" x="-5%" y="-5%" width="115%" height="115%">
-      <feDropShadow dx="0" dy="2" stdDeviation="4" flood-color="#000" flood-opacity="0.4"/>
+    <linearGradient id="doc" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#42a66b"/>
+      <stop offset="100%" stop-color="#227a47"/>
+    </linearGradient>
+    <filter id="shadow" x="-8%" y="-8%" width="116%" height="116%">
+      <feDropShadow dx="0" dy="2" stdDeviation="4" flood-color="#000" flood-opacity="0.35"/>
     </filter>
   </defs>
 
-  <!-- Background -->
   <rect width="900" height="520" rx="12" fill="url(#bg)"/>
+  <text x="450" y="36" text-anchor="middle" font-size="17" font-weight="700" fill="#f1f5f9">SafeSelect Architecture</text>
+  <text x="450" y="58" text-anchor="middle" font-size="10" fill="#a8b3c2">Read-only SQL and NoSQL tools for AI agents</text>
 
-  <!-- Title -->
-  <text x="450" y="32" text-anchor="middle" font-size="16" font-weight="bold" fill="#e0e0e0">SafeSelect Architecture</text>
+  <rect x="50" y="115" width="200" height="110" rx="10" fill="url(#agent)" filter="url(#shadow)"/>
+  <text x="150" y="150" text-anchor="middle" font-size="14" font-weight="700" fill="#fff">AI Agent</text>
+  <text x="150" y="172" text-anchor="middle" font-size="10" fill="#e6e1ff">OpenCode / Copilot / Cursor</text>
+  <text x="150" y="191" text-anchor="middle" font-size="10" fill="#d8d1ff">MCP stdio client</text>
 
-  <!-- Layer 1: AI Agent -->
-  <rect x="60" y="60" width="180" height="80" rx="10" fill="url(#agent)" filter="url(#shadow)"/>
-  <text x="150" y="95" text-anchor="middle" font-size="13" font-weight="bold" fill="#fff">AI Agent</text>
-  <text x="150" y="115" text-anchor="middle" font-size="10" fill="#ddd">OpenCode / Copilot / Cursor</text>
-  <text x="150" y="130" text-anchor="middle" font-size="9" fill="#bbb">MCP Client</text>
+  <rect x="335" y="90" width="250" height="235" rx="12" fill="#151b25" stroke="#dea584" stroke-width="2" filter="url(#shadow)"/>
+  <rect x="335" y="90" width="250" height="36" rx="12" fill="url(#rust)"/>
+  <rect x="335" y="112" width="250" height="14" fill="url(#rust)"/>
+  <text x="460" y="114" text-anchor="middle" font-size="13" font-weight="700" fill="#101820">safeselect (Rust)</text>
 
-  <!-- Layer 2: Rust CLI -->
-  <rect x="340" y="50" width="240" height="250" rx="12" fill="#1e1e2f" stroke="#dea584" stroke-width="2" filter="url(#shadow)"/>
-  <rect x="340" y="50" width="240" height="32" rx="12" fill="url(#rust)"/>
-  <rect x="340" y="70" width="240" height="12" fill="url(#rust)"/>
-  <text x="460" y="70" text-anchor="middle" font-size="13" font-weight="bold" fill="#1a1a2e">safeselect (Rust)</text>
+  <rect x="360" y="146" width="200" height="32" rx="6" fill="#331a1a" stroke="#ef6b6b" stroke-width="1.5"/>
+  <text x="460" y="166" text-anchor="middle" font-size="10" font-weight="700" fill="#ff9a9a">Policy engine</text>
 
-  <!-- Security Engine -->
-  <rect x="360" y="95" width="200" height="36" rx="6" fill="#3d1a1a" stroke="#e04848" stroke-width="1.5"/>
-  <text x="460" y="113" text-anchor="middle" font-size="11" font-weight="bold" fill="#ff8a80">Security Engine</text>
-  <text x="460" y="125" text-anchor="middle" font-size="8" fill="#999">read-only · schema control · limits</text>
+  <rect x="360" y="190" width="200" height="32" rx="6" fill="#142436" stroke="#59a8f7" stroke-width="1.5"/>
+  <text x="460" y="210" text-anchor="middle" font-size="10" font-weight="700" fill="#86c5ff">MCP tools</text>
 
-  <!-- Audit Log -->
-  <rect x="360" y="140" width="200" height="36" rx="6" fill="#3d3500" stroke="#ffc107" stroke-width="1.5"/>
-  <text x="460" y="158" text-anchor="middle" font-size="11" font-weight="bold" fill="#ffd54f">Audit Log</text>
-  <text x="460" y="170" text-anchor="middle" font-size="8" fill="#999">SHA-256 hashed queries</text>
+  <rect x="360" y="234" width="200" height="32" rx="6" fill="#2a2039" stroke="#c79af0" stroke-width="1.5"/>
+  <text x="460" y="254" text-anchor="middle" font-size="10" font-weight="700" fill="#d9b5ff">Config + secrets</text>
 
-  <!-- MCP Server -->
-  <rect x="360" y="185" width="200" height="36" rx="6" fill="#0d2137" stroke="#42a5f5" stroke-width="1.5"/>
-  <text x="460" y="203" text-anchor="middle" font-size="11" font-weight="bold" fill="#64b5f6">MCP Server</text>
-  <text x="460" y="215" text-anchor="middle" font-size="8" fill="#999">JSON-RPC 2.0 · stdin/stdout</text>
+  <rect x="360" y="278" width="200" height="28" rx="6" fill="#d74747"/>
+  <text x="460" y="296" text-anchor="middle" font-size="9" font-weight="700" fill="#fff">FAIL CLOSED ON VIOLATION</text>
 
-  <!-- Config -->
-  <rect x="360" y="230" width="200" height="36" rx="6" fill="#2a1030" stroke="#ce93d8" stroke-width="1.5"/>
-  <text x="460" y="248" text-anchor="middle" font-size="11" font-weight="bold" fill="#ce93d8">Config Loader</text>
-  <text x="460" y="260" text-anchor="middle" font-size="8" fill="#999">TOML · Keychain · env vars</text>
+  <rect x="340" y="370" width="240" height="72" rx="10" fill="url(#java)" filter="url(#shadow)"/>
+  <text x="460" y="401" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">Embedded Java sidecar</text>
+  <text x="460" y="421" text-anchor="middle" font-size="10" fill="#d7ecff">JDBC + MongoDB driver</text>
 
-  <!-- Fail-closed -->
-  <rect x="360" y="275" width="200" height="18" rx="4" fill="#e04848"/>
-  <text x="460" y="288" text-anchor="middle" font-size="9" font-weight="bold" fill="#fff">FAIL CLOSED: std::process::exit(1)</text>
+  <rect x="665" y="115" width="185" height="86" rx="10" fill="#223248" stroke="#6ba7db" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="758" y="150" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">SQL databases</text>
+  <text x="758" y="171" text-anchor="middle" font-size="10" fill="#cde8ff">PostgreSQL now</text>
 
-  <!-- Layer 3: Java Sidecar -->
-  <rect x="340" y="340" width="240" height="80" rx="10" fill="url(#java)" filter="url(#shadow)"/>
-  <text x="460" y="372" text-anchor="middle" font-size="13" font-weight="bold" fill="#fff">Sidecar (Java)</text>
-  <text x="460" y="392" text-anchor="middle" font-size="10" fill="#cce5ff">JDBC Proxy</text>
-  <text x="460" y="408" text-anchor="middle" font-size="9" fill="#88aacc">JSON-lines stdin/stdout</text>
+  <rect x="665" y="250" width="185" height="86" rx="10" fill="url(#doc)" filter="url(#shadow)"/>
+  <text x="758" y="285" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">NoSQL databases</text>
+  <text x="758" y="306" text-anchor="middle" font-size="10" fill="#d7ffe6">MongoDB now</text>
 
-  <!-- Layer 4: Database -->
-  <rect x="640" y="350" width="200" height="60" rx="30" fill="url(#db)" filter="url(#shadow)"/>
-  <text x="740" y="382" text-anchor="middle" font-size="13" font-weight="bold" fill="#fff">PostgreSQL</text>
-  <text x="740" y="398" text-anchor="middle" font-size="9" fill="#cce5ff">JDBC</text>
+  <rect x="62" y="300" width="176" height="45" rx="8" fill="#151b25" stroke="#f3b74b" stroke-width="1.5" stroke-dasharray="5,4"/>
+  <text x="150" y="324" text-anchor="middle" font-size="10" font-weight="700" fill="#ffd37a">macOS Keychain</text>
+  <text x="150" y="338" text-anchor="middle" font-size="8" fill="#a8b3c2">or environment variables</text>
 
-  <!-- Arrows -->
-  <!-- Agent ↔ Rust (MCP) -->
-  <line x1="240" y1="100" x2="330" y2="120" stroke="#aaa" stroke-width="2" marker-end="url(#arrow-bi)"/>
-  <line x1="330" y1="105" x2="240" y2="95" stroke="#aaa" stroke-width="2" marker-end="url(#arrow-bi)"/>
-  <text x="275" y="90" text-anchor="middle" font-size="8" fill="#aaa" transform="rotate(-25, 275, 90)">JSON-RPC MCP</text>
+  <rect x="62" y="370" width="176" height="45" rx="8" fill="#151b25" stroke="#9aa3ad" stroke-width="1.5" stroke-dasharray="5,4"/>
+  <text x="150" y="394" text-anchor="middle" font-size="10" font-weight="700" fill="#e2e8f0">Project policy</text>
+  <text x="150" y="408" text-anchor="middle" font-size="8" fill="#a8b3c2">.safeselect/*.toml</text>
 
-  <!-- Rust ↔ Java (stdin/stdout) -->
-  <line x1="460" y1="300" x2="460" y2="335" stroke="#888" stroke-width="2" marker-end="url(#arrow)"/>
-  <line x1="445" y1="335" x2="445" y2="300" stroke="#888" stroke-width="2" marker-end="url(#arrow)"/>
-  <text x="478" y="322" font-size="8" fill="#888">stdin/stdout</text>
-  <text x="478" y="332" font-size="8" fill="#888">JSON-lines</text>
+  <line x1="250" y1="170" x2="327" y2="170" stroke="#b7c0cc" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="289" y="157" text-anchor="middle" font-size="8" fill="#b7c0cc">MCP JSON-RPC</text>
 
-  <!-- Java ↔ DB (JDBC) -->
-  <line x1="580" y1="380" x2="635" y2="380" stroke="#666" stroke-width="2" marker-end="url(#arrow-dashed)"/>
-  <text x="608" y="372" text-anchor="middle" font-size="8" fill="#666">JDBC</text>
+  <path d="M 580 392 C 628 392, 616 158, 665 158" fill="none" stroke="#8ba4ba" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="626" y="262" text-anchor="middle" font-size="8" fill="#8ba4ba" transform="rotate(-84 626 262)">JDBC</text>
 
-  <!-- Security note -->
-  <rect x="60" y="220" width="180" height="50" rx="8" fill="#1e1e2f" stroke="#e04848" stroke-width="1.5" stroke-dasharray="4,3"/>
-  <text x="150" y="240" text-anchor="middle" font-size="10" font-weight="bold" fill="#ff8a80">No open ports</text>
-  <text x="150" y="255" text-anchor="middle" font-size="9" fill="#999">Agent initiates connection</text>
+  <path d="M 580 420 C 628 420, 616 294, 665 294" fill="none" stroke="#8bc5a3" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="626" y="358" text-anchor="middle" font-size="8" fill="#9fe0b8" transform="rotate(-72 626 358)">MongoDB driver</text>
 
-  <!-- Keychain -->
-  <rect x="60" y="290" width="180" height="36" rx="8" fill="#1e1e2f" stroke="#aaa" stroke-width="1.5" stroke-dasharray="4,3"/>
-  <text x="150" y="310" text-anchor="middle" font-size="10" font-weight="bold" fill="#e0e0e0">macOS Keychain</text>
-  <text x="150" y="322" text-anchor="middle" font-size="8" fill="#888">secrets on demand</text>
+  <line x1="430" y1="326" x2="430" y2="364" stroke="#9aa3ad" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="492" y1="364" x2="492" y2="326" stroke="#9aa3ad" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="394" y="347" text-anchor="middle" font-size="8" fill="#9aa3ad">requests</text>
+  <text x="529" y="347" text-anchor="middle" font-size="8" fill="#9aa3ad">responses</text>
+  <text x="461" y="357" text-anchor="middle" font-size="8" fill="#9aa3ad">JSON-lines stdio</text>
 
-  <!-- Keychain → Rust -->
-  <line x1="240" y1="308" x2="340" y2="250" stroke="#666" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrow-dashed)"/>
+  <path d="M 238 323 C 280 323, 300 250, 335 250" fill="none" stroke="#f3b74b" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+  <path d="M 238 392 C 285 392, 300 270, 335 270" fill="none" stroke="#9aa3ad" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
 
-  <!-- Legend -->
-  <text x="60" y="470" font-size="9" fill="#888">▲ bidirectional</text>
-  <text x="200" y="470" font-size="9" fill="#888">─ dashed: side channel</text>
-  <text x="60" y="485" font-size="9" fill="#888">■ Rust modules: security · audit · mcp · config</text>
-  <text x="60" y="500" font-size="9" fill="#888">Fail-closed on: security violation · limit exceeded · JDBC error</text>
+  <text x="65" y="470" font-size="9" fill="#a8b3c2">Security boundary: read-only policy, scope control, limits, audit, fail-closed exits.</text>
+  <text x="65" y="491" font-size="9" fill="#a8b3c2">Runtime boundary: MCP and sidecar use stdio; SafeSelect opens no listening ports.</text>
 </svg>
