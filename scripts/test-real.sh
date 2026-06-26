@@ -2,14 +2,35 @@
 set -euo pipefail
 
 # Local script to run real PostgreSQL integration tests
-# Usage: ./scripts/test-real.sh [suite]
+# Usage: ./scripts/test-real.sh [suite] [-y|--yes]
 #   suite: security | smoke | reconnect | all (default: all)
 #
 # Prerequisites:
 #   - Docker running
 #   - Optionally set SAFESELECT_SECURITY_ADMIN_PASSWORD if different from 'testpass'
 
-SUITE="${1:-all}"
+SUITE="all"
+AUTO_CONFIRM=0
+for arg in "$@"; do
+    case "$arg" in
+        security|smoke|reconnect|all)
+            SUITE="$arg"
+            ;;
+        -y|--yes)
+            AUTO_CONFIRM=1
+            ;;
+        "")
+            ;;
+        *)
+            echo "Unknown argument: $arg"
+            echo "Usage: $0 [security|smoke|reconnect|all] [-y|--yes]"
+            exit 1
+            ;;
+    esac
+done
+if [[ "${SAFESELECT_TEST_AUTO_CONFIRM:-0}" == "1" ]]; then
+    AUTO_CONFIRM=1
+fi
 COMPOSE_FILE="${SAFESELECT_TEST_COMPOSE_FILE:-docker-compose.integration.yml}"
 PROJECT_NAME="${SAFESELECT_TEST_COMPOSE_PROJECT:-safeselect-real}"
 COMPOSE_CMD=(docker-compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE")
@@ -19,6 +40,11 @@ export SAFESELECT_SECURITY_HOST="${SAFESELECT_SECURITY_HOST:-localhost}"
 export SAFESELECT_SECURITY_PORT="${SAFESELECT_SECURITY_PORT:-5432}"
 export SAFESELECT_SECURITY_ADMIN_USER="${SAFESELECT_SECURITY_ADMIN_USER:-postgres}"
 export SAFESELECT_SECURITY_DOCKER_CONTAINER="${SAFESELECT_SECURITY_DOCKER_CONTAINER:-${PROJECT_NAME}-postgres-1}"
+export SAFESELECT_MONGODB_ADMIN_PASSWORD="${SAFESELECT_MONGODB_ADMIN_PASSWORD:-testpass}"
+export SAFESELECT_MONGODB_ADMIN_USER="${SAFESELECT_MONGODB_ADMIN_USER:-root}"
+export SAFESELECT_MONGODB_HOST="${SAFESELECT_MONGODB_HOST:-localhost}"
+export SAFESELECT_MONGODB_PORT="${SAFESELECT_MONGODB_PORT:-27017}"
+export SAFESELECT_MONGODB_DOCKER_CONTAINER="${SAFESELECT_MONGODB_DOCKER_CONTAINER:-${PROJECT_NAME}-mongodb-1}"
 
 TOTAL_TESTS_RUN=0
 TOTAL_SUITES_RUN=0
@@ -28,7 +54,9 @@ echo "=== SafeSelect Real Integration Tests ==="
 echo "Compose file: $COMPOSE_FILE"
 echo "Compose project: $PROJECT_NAME"
 echo "PostgreSQL container: $SAFESELECT_SECURITY_DOCKER_CONTAINER"
+echo "MongoDB container: $SAFESELECT_MONGODB_DOCKER_CONTAINER"
 echo "PostgreSQL: $SAFESELECT_SECURITY_HOST:$SAFESELECT_SECURITY_PORT"
+echo "MongoDB: $SAFESELECT_MONGODB_HOST:$SAFESELECT_MONGODB_PORT"
 echo "Suite: $SUITE"
 echo ""
 
@@ -67,6 +95,28 @@ done
 
 if [[ "$postgres_ready" -ne 1 ]]; then
     echo "ERROR: Cannot connect to PostgreSQL in container"
+    echo "Check container is healthy and credentials are correct"
+    exit 1
+fi
+
+echo "Waiting for MongoDB to become ready..."
+mongodb_ready=0
+for _ in $(seq 1 60); do
+    if docker exec \
+        "$SAFESELECT_MONGODB_DOCKER_CONTAINER" \
+        mongosh \
+        "mongodb://$SAFESELECT_MONGODB_ADMIN_USER:$SAFESELECT_MONGODB_ADMIN_PASSWORD@localhost:27017/admin" \
+        --quiet \
+        --eval "db.adminCommand({ ping: 1 })" \
+        >/dev/null 2>&1; then
+        mongodb_ready=1
+        break
+    fi
+    sleep 1
+done
+
+if [[ "$mongodb_ready" -ne 1 ]]; then
+    echo "ERROR: Cannot connect to MongoDB in container"
     echo "Check container is healthy and credentials are correct"
     exit 1
 fi
@@ -125,12 +175,16 @@ run_smoke() {
 }
 
 run_reconnect() {
-    echo "WARNING: This will restart the Docker container '$SAFESELECT_SECURITY_DOCKER_CONTAINER'"
-    read -p "Continue? [y/N] " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        echo "Skipped reconnect test"
-        return
+    if [[ "$AUTO_CONFIRM" -ne 1 ]]; then
+        echo "WARNING: This will restart the Docker container '$SAFESELECT_SECURITY_DOCKER_CONTAINER'"
+        read -p "Continue? [y/N] " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            echo "Skipped reconnect test"
+            return
+        fi
+    else
+        echo "Auto-confirmed reconnect restart for '$SAFESELECT_SECURITY_DOCKER_CONTAINER'"
     fi
 
     run_cargo_suite \
@@ -155,7 +209,7 @@ case "$SUITE" in
         ;;
     *)
         echo "Unknown suite: $SUITE"
-        echo "Usage: $0 [security|smoke|reconnect|all]"
+        echo "Usage: $0 [security|smoke|reconnect|all] [-y|--yes]"
         exit 1
         ;;
 esac

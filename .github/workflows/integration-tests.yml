@@ -60,6 +60,11 @@ jobs:
           SAFESELECT_SECURITY_PORT: 5432
           SAFESELECT_SECURITY_ADMIN_USER: postgres
           SAFESELECT_SECURITY_ADMIN_PASSWORD: testpass
+          SAFESELECT_MONGODB_HOST: localhost
+          SAFESELECT_MONGODB_PORT: 27017
+          SAFESELECT_MONGODB_ADMIN_USER: root
+          SAFESELECT_MONGODB_ADMIN_PASSWORD: testpass
+          SAFESELECT_MONGODB_DOCKER_CONTAINER: safeselect-mongodb-1
         run: |
           echo "=== Running Security Tests ==="
           cargo test --test security -- --nocapture

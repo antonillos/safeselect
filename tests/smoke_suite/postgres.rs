@@ -201,6 +201,7 @@ pub fn run_safeselect(root: &Path, config_dir: &Path, sql: &str) -> (String, Str
     )
 }
 
+#[allow(dead_code)]
 pub fn run_safeselect_args(
     root: &Path,
     config_dir: &Path,
