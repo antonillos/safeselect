@@ -21,6 +21,7 @@ import java.sql.*;
 import java.net.URLEncoder;
 import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -516,6 +517,7 @@ public class Main {
         Document filter = toDocument(params.getOrDefault("filter", Map.of()));
         MongoCollection<Document> collection = mongoClient.getDatabase(databaseName).getCollection(collectionName);
         FindIterable<Document> find = collection.find(filter);
+        applyMongoTimeout(find);
 
         Object projection = params.get("projection");
         if (projection != null) {
@@ -602,6 +604,7 @@ public class Main {
 
         MongoCollection<Document> collection = mongoClient.getDatabase(databaseName).getCollection(collectionName);
         AggregateIterable<Document> aggregate = collection.aggregate(pipeline).allowDiskUse(false);
+        applyMongoTimeout(aggregate);
         sendDocumentIterable(writer, id, aggregate.iterator(), startTime, "documents", "document_count");
     }
 
@@ -626,7 +629,9 @@ public class Main {
         MongoCollection<Document> collection = mongoClient.getDatabase(databaseName).getCollection(collectionName);
         List<Object> values = new ArrayList<>();
         long byteCount = 0;
-        try (MongoCursor<BsonValue> cursor = collection.distinct(field, filter, BsonValue.class).iterator()) {
+        var distinct = collection.distinct(field, filter, BsonValue.class);
+        applyMongoTimeout(distinct);
+        try (MongoCursor<BsonValue> cursor = distinct.iterator()) {
             while (cursor.hasNext() && values.size() < limit && values.size() < maxRows) {
                 Object value = convertBsonValue(cursor.next());
                 long valueBytes = MAPPER.writeValueAsBytes(value).length;
@@ -664,7 +669,9 @@ public class Main {
             return;
         }
         Document filter = toDocument(params.getOrDefault("filter", Map.of()));
-        long count = mongoClient.getDatabase(databaseName).getCollection(collectionName).countDocuments(filter);
+        var countOptions = new com.mongodb.client.model.CountOptions();
+        applyMongoTimeout(countOptions);
+        long count = mongoClient.getDatabase(databaseName).getCollection(collectionName).countDocuments(filter, countOptions);
         long elapsedMs = System.currentTimeMillis() - startTime;
         sendResponse(writer, id, Map.of("count", count, "elapsed_ms", elapsedMs, "elapsed", formatElapsed(elapsedMs)), null);
     }
@@ -694,7 +701,11 @@ public class Main {
         if (params.get("limit") != null) {
             find.append("limit", numberParam(params, "limit", Math.min(maxRows, 100)));
         }
+        applyMongoTimeout(find);
         Document explain = new Document("explain", find);
+        if (statementTimeoutMs > 0) {
+            explain.append("maxTimeMS", statementTimeoutMs);
+        }
         Document result = mongoClient.getDatabase(databaseName).runCommand(explain, ReadPreference.secondaryPreferred());
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("explain", convertBsonValue(result));
@@ -726,7 +737,9 @@ public class Main {
         MongoCollection<Document> collection = mongoClient.getDatabase(databaseName).getCollection(collectionName);
         FieldStats stats = new FieldStats(exampleLimit);
         long scanned = 0;
-        try (MongoCursor<Document> cursor = collection.find(filter).limit((int) Math.min(sampleSize, maxRows)).iterator()) {
+        FindIterable<Document> find = collection.find(filter).limit((int) Math.min(sampleSize, maxRows));
+        applyMongoTimeout(find);
+        try (MongoCursor<Document> cursor = find.iterator()) {
             while (cursor.hasNext()) {
                 scanned++;
                 stats.accept(resolvePath(cursor.next(), field));
@@ -762,7 +775,9 @@ public class Main {
         MongoCollection<Document> collection = mongoClient.getDatabase(databaseName).getCollection(collectionName);
         Map<String, FieldStats> fields = new TreeMap<>();
         long scanned = 0;
-        try (MongoCursor<Document> cursor = collection.find(filter).limit((int) Math.min(sampleSize, maxRows)).iterator()) {
+        FindIterable<Document> find = collection.find(filter).limit((int) Math.min(sampleSize, maxRows));
+        applyMongoTimeout(find);
+        try (MongoCursor<Document> cursor = find.iterator()) {
             while (cursor.hasNext()) {
                 scanned++;
                 collectFields("", cursor.next(), fields, exampleLimit);
@@ -803,6 +818,7 @@ public class Main {
         FindIterable<Document> find = mongoClient.getDatabase(databaseName).getCollection(collectionName)
                 .find(filter)
                 .limit((int) Math.min(limit, maxRows));
+        applyMongoTimeout(find);
         if (params.get("projection") != null) {
             find.projection(toDocument(params.get("projection")));
         }
@@ -864,6 +880,36 @@ public class Main {
         }
         Object value = params.get(name);
         return value instanceof Number numberValue ? numberValue.longValue() : defaultValue;
+    }
+
+    private static void applyMongoTimeout(FindIterable<Document> iterable) {
+        if (statementTimeoutMs > 0) {
+            iterable.maxTime(statementTimeoutMs, TimeUnit.MILLISECONDS);
+        }
+    }
+
+    private static void applyMongoTimeout(AggregateIterable<Document> iterable) {
+        if (statementTimeoutMs > 0) {
+            iterable.maxTime(statementTimeoutMs, TimeUnit.MILLISECONDS);
+        }
+    }
+
+    private static void applyMongoTimeout(com.mongodb.client.DistinctIterable<BsonValue> iterable) {
+        if (statementTimeoutMs > 0) {
+            iterable.maxTime(statementTimeoutMs, TimeUnit.MILLISECONDS);
+        }
+    }
+
+    private static void applyMongoTimeout(Document command) {
+        if (statementTimeoutMs > 0) {
+            command.append("maxTimeMS", statementTimeoutMs);
+        }
+    }
+
+    private static void applyMongoTimeout(com.mongodb.client.model.CountOptions options) {
+        if (statementTimeoutMs > 0) {
+            options.maxTime(statementTimeoutMs, TimeUnit.MILLISECONDS);
+        }
     }
 
     private static Object convertBsonValue(Object value) throws Exception {

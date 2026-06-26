@@ -3631,6 +3631,7 @@ fn cmd_check(
                 &resolved.environment.database.username,
                 &resolved.password,
                 0,
+                resolved.project.limits.statement_timeout_ms,
                 limits,
                 false,
             )?;

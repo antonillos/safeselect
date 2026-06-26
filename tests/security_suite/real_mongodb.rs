@@ -224,6 +224,42 @@ pub fn run() {
         );
         assert_eq!(&database_state(), &baseline, "byte limit changed MongoDB state");
 
+        log_check("timeout rejection is visible");
+        let timeout = harness.call_tool(
+            28,
+            "aggregate_documents",
+            json!({
+                "database": mongodb::test_db(),
+                "collection": "safe_docs",
+                "pipeline": [
+                    {
+                        "$addFields": {
+                            "slow": {
+                                "$function": {
+                                    "body": "function(name) { var start = Date.now(); while (Date.now() - start < 7000) {} return name; }",
+                                    "args": ["$name"],
+                                    "lang": "js"
+                                }
+                            }
+                        }
+                    }
+                ],
+                "limit": 1
+            }),
+        );
+        assert!(!timeout.success, "timeout scenario unexpectedly succeeded: {}", timeout.text);
+        assert!(
+            timeout.text.contains("ExecutionTimeout")
+                || timeout.text.contains("exceeded time limit")
+                || timeout.text.contains("MaxTimeMSExpired")
+                || timeout.text.contains("did not respond")
+                || timeout.text.contains("stalled output")
+                || timeout.text.to_lowercase().contains("timed out"),
+            "timeout failed for wrong reason: {}",
+            timeout.text
+        );
+        assert_eq!(&database_state(), &baseline, "timeout changed MongoDB state");
+
         log_check("baseline remained unchanged after all rejections");
         assert_eq!(database_state(), baseline);
     });

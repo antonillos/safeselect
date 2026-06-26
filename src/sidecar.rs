@@ -140,6 +140,7 @@ impl SidecarProcess {
         username: &str,
         password: &str,
         idle_timeout_seconds: u64,
+        statement_timeout_ms: u64,
         result_limits: ResultLimits,
         verbose: bool,
     ) -> Result<Self> {
@@ -151,7 +152,7 @@ impl SidecarProcess {
             username,
             password,
             idle_timeout_seconds,
-            0,
+            statement_timeout_ms,
             result_limits,
             verbose,
         )

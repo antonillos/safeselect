@@ -1746,6 +1746,7 @@ impl McpServer {
                 &self.db_username,
                 &self.db_password,
                 self.idle_timeout_seconds,
+                self.security.limits().statement_timeout_ms,
                 limits,
                 self.verbose_sidecar,
             ),
