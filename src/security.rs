@@ -1342,6 +1342,54 @@ mod tests {
     }
 
     #[test]
+    fn test_read_only_rejects_copy_to_program() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        assert!(engine
+            .check_read_only("COPY (SELECT * FROM users) TO PROGRAM 'cat'")
+            .is_err());
+    }
+
+    #[test]
+    fn test_read_only_rejects_do_block() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        assert!(engine
+            .check_read_only("DO $$ BEGIN DELETE FROM users; END $$")
+            .is_err());
+    }
+
+    #[test]
+    fn test_read_only_rejects_lock_table() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        assert!(engine
+            .check_read_only("LOCK TABLE users IN ACCESS EXCLUSIVE MODE")
+            .is_err());
+    }
+
+    #[test]
+    fn test_read_only_rejects_prepare_delete() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        assert!(engine
+            .check_read_only("PREPARE doomed AS DELETE FROM users")
+            .is_err());
+    }
+
+    #[test]
+    fn test_read_only_rejects_call() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        assert!(engine
+            .check_read_only("CALL pg_catalog.rotate_logfile()")
+            .is_err());
+    }
+
+    #[test]
+    fn test_read_only_rejects_declare_cursor() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        assert!(engine
+            .check_read_only("DECLARE c CURSOR FOR SELECT * FROM users")
+            .is_err());
+    }
+
+    #[test]
     fn test_read_only_delete_rejected() {
         let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
         let sql = "DELETE FROM users";
