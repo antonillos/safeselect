@@ -74,7 +74,7 @@ Query responses include `row_count`, `byte_count`, `elapsed_ms`, and a human-rea
 | Config | `config_validate`, `config_show`, `config_set_password`, `config_set_ssh_password`, `config_reset` |
 | Setup | `import_compose`, `driver_list`, `driver_add`, `driver_download`, `agent_detect`, `agent_install`, `agent_status`, `agent_uninstall` |
 
-When no `.safeselect/` directory exists, `safeselect serve --environment <env>` enters setup mode and exposes only the setup-safe tools.
+When no `.safeselect/` directory exists, `safeselect serve --environment <env>` enters setup mode automatically and exposes only the setup-safe tools.
 
 ## CLI Essentials
 
