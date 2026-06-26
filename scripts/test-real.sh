@@ -33,7 +33,14 @@ if [[ "${SAFESELECT_TEST_AUTO_CONFIRM:-0}" == "1" ]]; then
 fi
 COMPOSE_FILE="${SAFESELECT_TEST_COMPOSE_FILE:-docker-compose.integration.yml}"
 PROJECT_NAME="${SAFESELECT_TEST_COMPOSE_PROJECT:-safeselect-real}"
-COMPOSE_CMD=(docker-compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE")
+if docker compose version >/dev/null 2>&1; then
+    COMPOSE_CMD=(docker compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE")
+elif command -v docker-compose >/dev/null 2>&1; then
+    COMPOSE_CMD=(docker-compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE")
+else
+    echo "ERROR: Docker Compose is required. Install the Docker Compose plugin or docker-compose."
+    exit 1
+fi
 
 export SAFESELECT_SECURITY_ADMIN_PASSWORD="${SAFESELECT_SECURITY_ADMIN_PASSWORD:-testpass}"
 export SAFESELECT_SECURITY_HOST="${SAFESELECT_SECURITY_HOST:-localhost}"

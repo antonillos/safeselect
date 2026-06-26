@@ -28,7 +28,7 @@ jobs:
           java-version: '17'
 
       - name: Start integration services
-        run: docker-compose -f docker-compose.integration.yml up -d
+        run: docker compose -f docker-compose.integration.yml up -d
 
       - name: Cache cargo dependencies
         uses: actions/cache@v6
@@ -103,4 +103,4 @@ jobs:
 
       - name: Stop integration services
         if: always()
-        run: docker-compose -f docker-compose.integration.yml down -v
+        run: docker compose -f docker-compose.integration.yml down -v
