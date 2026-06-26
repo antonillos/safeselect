@@ -25,20 +25,33 @@ pub fn run() {
     std::fs::create_dir_all(&repo_root).unwrap();
     std::fs::create_dir_all(&config_dir).unwrap();
 
+    log_step("starting real PostgreSQL smoke suite");
+    log_step(&format!("workspace: {}", tmp.display()));
+    log_step("setting up PostgreSQL fixtures");
     postgres::setup_database();
+    log_step("writing SafeSelect test config");
     postgres::write_config(&repo_root);
+    log_step("downloading PostgreSQL JDBC driver");
     postgres::download_driver(&config_dir);
 
     let result = std::panic::catch_unwind(|| {
+        log_check("`safeselect check` happy path");
         assert_check_ok(&repo_root, &config_dir);
+        log_check("SELECT happy path");
         assert_select_ok(&repo_root, &config_dir);
+        log_check("user-visible SQL error reporting");
         assert_sql_error_visible(&repo_root, &config_dir);
+        log_check("MCP server survives SQL errors");
         assert_mcp_sql_error_stays_alive(&repo_root, &config_dir);
+        log_check("security rejection visibility");
         assert_security_rejection_visible(&repo_root, &config_dir);
+        log_check("result limit visibility");
         assert_result_limit_visible(&repo_root, &config_dir);
+        log_check("timeout-control rejection visibility");
         assert_timeout_control_visible(&repo_root, &config_dir);
     });
 
+    log_step("cleaning up PostgreSQL fixtures");
     postgres::cleanup_database();
     let _ = std::fs::remove_dir_all(&tmp);
 
@@ -119,6 +132,7 @@ fn assert_mcp_sql_error_stays_alive(repo_root: &std::path::Path, config_dir: &st
         .stderr(Stdio::piped())
         .spawn()
         .expect("failed to start MCP server");
+    log_step(&format!("spawned MCP server pid={}", child.id()));
 
     let mut stdin = child.stdin.take().unwrap();
     let stdout = child.stdout.take().unwrap();
@@ -243,6 +257,7 @@ fn assert_mcp_sql_error_stays_alive(repo_root: &std::path::Path, config_dir: &st
         "MCP server did not respond to follow-up query after SQL error: {ok_response}"
     );
 
+    log_step("stopping MCP server after successful follow-up query");
     let _ = child.kill();
     let _ = child.wait();
 }
@@ -280,4 +295,12 @@ fn assert_timeout_control_visible(repo_root: &std::path::Path, config_dir: &std:
         stderr.contains("Query rejected") && stderr.contains("function PG_SLEEP not allowed"),
         "timeout control rejection was not visible enough\nstdout:\n{stdout}\nstderr:\n{stderr}"
     );
+}
+
+fn log_step(message: &str) {
+    eprintln!("[smoke-real] {message}");
+}
+
+fn log_check(message: &str) {
+    eprintln!("[check][smoke-real] {message}");
 }

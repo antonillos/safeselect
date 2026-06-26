@@ -35,19 +35,30 @@ pub fn run() {
     std::fs::create_dir_all(&repo_root).unwrap();
     std::fs::create_dir_all(&config_dir).unwrap();
 
+    log_step("starting reconnect regression test");
+    log_step(&format!("workspace: {}", tmp.display()));
+    log_step(&format!("target container: {container}"));
+    log_step("setting up PostgreSQL fixtures");
     postgres::setup_database();
+    log_step("writing SafeSelect test config");
     postgres::write_config(&repo_root);
+    log_step("downloading PostgreSQL JDBC driver");
     postgres::download_driver(&config_dir);
 
     let result = std::panic::catch_unwind(|| {
+        log_check("query before restart");
         assert_select_ok(&repo_root, &config_dir, "before restart");
 
+        log_step(&format!("restarting Docker container: {container}"));
         docker(&["restart", &container]);
+        log_step("waiting for PostgreSQL after restart");
         postgres::wait_for_postgres();
 
+        log_check("query after restart");
         assert_select_ok(&repo_root, &config_dir, "after restart");
     });
 
+    log_step("cleaning up PostgreSQL fixtures");
     postgres::cleanup_database();
     let _ = std::fs::remove_dir_all(&tmp);
 
@@ -81,4 +92,12 @@ fn docker(args: &[&str]) {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+fn log_step(message: &str) {
+    eprintln!("[reconnect-real] {message}");
+}
+
+fn log_check(message: &str) {
+    eprintln!("[check][reconnect-real] {message}");
 }

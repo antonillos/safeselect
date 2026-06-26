@@ -20,13 +20,20 @@ pub fn run() {
     std::fs::create_dir_all(&repo_root).unwrap();
     std::fs::create_dir_all(&config_dir).unwrap();
 
+    log_step("starting real PostgreSQL security suite");
+    log_step(&format!("workspace: {}", tmp.display()));
+    log_step("setting up PostgreSQL fixtures");
     postgres::setup_database();
+    log_step("writing SafeSelect test config");
     postgres::write_config(&repo_root);
+    log_step("downloading PostgreSQL JDBC driver");
     postgres::download_driver(&config_dir);
 
     let result = std::panic::catch_unwind(|| {
         let baseline = database_state();
+        log_step(&format!("captured baseline database state: {:?}", baseline));
 
+        log_check("SELECT happy path");
         let (stdout, stderr, success) =
             postgres::run_safeselect(&repo_root, &config_dir, "SELECT 1 AS ok");
         assert!(
@@ -35,6 +42,7 @@ pub fn run() {
         );
         assert!(stdout.contains("| 1"), "unexpected SELECT output: {stdout}");
 
+        log_check("EXPLAIN SELECT happy path");
         let (stdout, stderr, success) = postgres::run_safeselect(
             &repo_root,
             &config_dir,
@@ -51,6 +59,7 @@ pub fn run() {
             "unexpected EXPLAIN output: {stdout}"
         );
 
+        log_check("WITH ORDINALITY happy path");
         let (stdout, stderr, success) = postgres::run_safeselect(
             &repo_root,
             &config_dir,
@@ -65,6 +74,7 @@ pub fn run() {
             "unexpected WITH ORDINALITY output: {stdout}"
         );
 
+        log_check("WITH ... SELECT happy path");
         let (stdout, stderr, success) = postgres::run_safeselect(
                 &repo_root,
                 &config_dir,
@@ -171,9 +181,11 @@ pub fn run() {
             &baseline,
         );
 
+        log_check("baseline remained unchanged after all rejections");
         assert_eq!(database_state(), baseline);
     });
 
+    log_step("cleaning up PostgreSQL fixtures");
     postgres::cleanup_database();
     let _ = std::fs::remove_dir_all(&tmp);
 
@@ -189,6 +201,8 @@ fn assert_rejected(
     sql: &str,
     baseline: &DatabaseState,
 ) {
+    log_check(&format!("expect rejection: {name}"));
+    log_step(&format!("sql={sql}"));
     let (stdout, stderr, success) = postgres::run_safeselect(root, config_dir, sql);
     assert!(
         !success,
@@ -206,6 +220,7 @@ fn assert_rejected(
         baseline,
         "{name} changed database state despite rejection"
     );
+    log_step(&format!("confirmed rejection without mutation: {name}"));
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -240,4 +255,12 @@ fn database_state() -> DatabaseState {
             "SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename = 'evil_copy';",
         ),
     }
+}
+
+fn log_step(message: &str) {
+    eprintln!("[security-real] {message}");
+}
+
+fn log_check(message: &str) {
+    eprintln!("[check][security-real] {message}");
 }
