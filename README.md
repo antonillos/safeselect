@@ -13,7 +13,50 @@
 
 SafeSelect gives coding agents a constrained database tool for SQL and NoSQL systems: discover structure, inspect data, run read-only operations, diagnose connectivity, and recover stale connections without ever getting write access.
 
+Most database MCP servers make it easy to connect an agent to a database. SafeSelect is built for the harder problem: letting an agent inspect production-shaped data without turning the database into an unrestricted tool surface.
+
+> [!NOTE]
+> SafeSelect is a safety boundary for agent access, not a replacement for database permissions. Use least-privilege database users when you can; SafeSelect still constrains overpowered credentials when agents connect through it.
+
 Current backend support: PostgreSQL and MongoDB.
+
+## Why SafeSelect?
+
+SafeSelect is intentionally narrower than general-purpose database MCP servers. It is not a tool builder, SQL workbench, or remote database gateway. It is a local safety boundary for agents that need database visibility, not database power.
+
+| SafeSelect prioritizes | What this means |
+|---|---|
+| Local stdio transport | No network listener or open MCP port |
+| Read-only tools | Agents do not receive write-capable database tools |
+| Credential-independent safety | Even DBA credentials are constrained to SafeSelect's read-only tool surface |
+| Fail-closed enforcement | Policy violations terminate the process |
+| Secret isolation | Passwords stay in Keychain or environment variables |
+| Project-scoped policy | Each repository defines its own allowed data surface |
+| Embedded sidecar | One installed binary reaches JDBC and MongoDB drivers behind Rust policy |
+
+## What Makes It Different?
+
+| General database MCP servers | SafeSelect |
+|---|---|
+| Often expose configurable tools | Exposes a fixed, read-only tool surface |
+| May support remote HTTP transports | Uses local MCP stdio by default |
+| Usually optimize for broad backend coverage | Optimizes for enforceable policy and agent safety |
+| Often rely on least-privilege database users | Enforces read-only behavior even when credentials are overpowered |
+| Often keep connection setup separate | Imports from DBeaver, Docker Compose, and MongoDB Compass |
+| May log queries for debugging | Hashes query text before audit logging |
+| Treat security failures as recoverable errors | Fails closed and terminates the MCP process |
+
+The product promise is simple: **agents can look, but they cannot mutate**. Even if the configured database user is a DBA, the agent still only receives SafeSelect's constrained read-only operations.
+
+> [!TIP]
+> This is useful when teams already have DBeaver, Docker Compose, or MongoDB Compass connections and need to expose them to agents without redesigning database users first.
+
+## Backend Support
+
+| Backend | Status | Tools |
+|---|---|---|
+| PostgreSQL | Supported | `list_tables`, `select`, `explain` |
+| MongoDB | Supported | `list_databases`, `list_collections`, `find_documents` |
 
 ## Architecture
 
@@ -42,6 +85,21 @@ safeselect agent install opencode --environment testing
 ```
 
 The generated MCP name defaults to `safeselect-<project>-<environment>`.
+
+The generated MCP entry is a stdio server scoped to one project and environment:
+
+```json
+{
+  "mcpServers": {
+    "safeselect-myapp-testing": {
+      "command": "safeselect",
+      "args": ["serve", "--project", "/path/to/myapp", "--environment", "testing"]
+    }
+  }
+}
+```
+
+See [AI agent integration](docs/agents.md) for client-specific setup and manual configuration.
 
 ## Agent Workflow
 
@@ -75,6 +133,9 @@ Query responses include `row_count`, `byte_count`, `elapsed_ms`, and a human-rea
 | Setup | `import_compose`, `driver_list`, `driver_add`, `driver_download`, `agent_detect`, `agent_install`, `agent_status`, `agent_uninstall` |
 
 When no `.safeselect/` directory exists, `safeselect serve --environment <env>` enters setup mode automatically and exposes only the setup-safe tools.
+
+> [!IMPORTANT]
+> Setup mode does not expose query tools. Agents can help import and validate configuration before any database inspection tools become available.
 
 ## CLI Essentials
 
@@ -125,6 +186,7 @@ Requirements: Rust 1.81+, Java 17+, Maven 3.8+. `sshpass` is optional for passwo
 - [Installation guide](docs/install.md)
 - [AI agent integration](docs/agents.md)
 - [Security model](docs/security.md)
+- [Security policy](SECURITY.md)
 - [Distribution](docs/distribution.md)
 - [Changelog](CHANGELOG.md)
 
