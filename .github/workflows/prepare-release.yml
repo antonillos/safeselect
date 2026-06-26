@@ -15,12 +15,8 @@ on:
       version:
         description: Exact version (without v prefix, optional)
         required: false
-      source_branch:
-        description: Branch to create the release from
-        required: true
-        default: develop
       base_branch:
-        description: Branch to open the release PR against
+        description: Branch to release from and open the release PR against
         required: true
         default: main
 
@@ -40,28 +36,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.source_branch }}
+          ref: ${{ inputs.base_branch }}
           fetch-depth: 0
-      - name: Validate branch ancestry
+      - name: Fetch release base
         shell: bash
         run: |
           set -euo pipefail
-          git fetch origin "${{ inputs.source_branch }}" "${{ inputs.base_branch }}"
-
-          source_ref="origin/${{ inputs.source_branch }}"
-          base_ref="origin/${{ inputs.base_branch }}"
-
-          if ! git merge-base "${source_ref}" "${base_ref}" >/dev/null 2>&1; then
-            {
-              printf '## Release preparation blocked\n\n'
-              printf 'The source branch `%s` and base branch `%s` do not share Git history.\n\n' \
-                "${{ inputs.source_branch }}" \
-                "${{ inputs.base_branch }}"
-              printf 'GitHub cannot open a PR between unrelated branches. Reconnect the branch history first, or run the workflow with a base branch that shares ancestry with `%s`.\n' \
-                "${{ inputs.source_branch }}"
-            } >> "${GITHUB_STEP_SUMMARY}"
-            exit 1
-          fi
+          git fetch origin "${{ inputs.base_branch }}"
       - name: Install Rust
         shell: bash
         run: rustup toolchain install stable --profile minimal
