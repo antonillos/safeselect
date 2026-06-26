@@ -11,6 +11,9 @@ jobs:
   integration-tests:
     name: Real Integration Tests
     runs-on: ubuntu-latest
+    env:
+      CARGO_HTTP_MULTIPLEXING: "false"
+      CARGO_NET_RETRY: "10"
 
     steps:
       - name: Checkout code
