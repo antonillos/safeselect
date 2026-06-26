@@ -126,11 +126,11 @@ jobs:
           set -euo pipefail
           version_tag="${{ steps.version.outputs.tag }}"
           release_date="$(date +%F)"
-          previous_tag="$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)"
-          range="HEAD"
+          previous_tag="$(git describe --tags --abbrev=0 --match 'v*' "origin/${{ inputs.base_branch }}" 2>/dev/null || true)"
+          range="origin/${{ inputs.base_branch }}"
 
           if [[ -n "${previous_tag}" ]]; then
-            range="${previous_tag}..HEAD"
+            range="${previous_tag}..origin/${{ inputs.base_branch }}"
           fi
 
           tmp_features="$(mktemp)"
@@ -211,9 +211,15 @@ jobs:
         run: |
           set -euo pipefail
           branch="release/${{ steps.version.outputs.tag }}"
+          release_files="$(mktemp -d)"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -b "${branch}"
+          cp CHANGELOG.md Cargo.toml Cargo.lock sidecar/pom.xml "${release_files}/"
+          git checkout -B "${branch}" "origin/${{ inputs.base_branch }}"
+          cp "${release_files}/CHANGELOG.md" CHANGELOG.md
+          cp "${release_files}/Cargo.toml" Cargo.toml
+          cp "${release_files}/Cargo.lock" Cargo.lock
+          cp "${release_files}/pom.xml" sidecar/pom.xml
           git add CHANGELOG.md Cargo.toml Cargo.lock sidecar/pom.xml
           git commit -m "release: bump to ${{ steps.version.outputs.next }}"
           git push --force-with-lease origin "${branch}"
