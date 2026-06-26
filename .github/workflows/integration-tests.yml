@@ -11,20 +11,6 @@ jobs:
   integration-tests:
     name: Real Integration Tests
     runs-on: ubuntu-latest
-    
-    services:
-      postgres:
-        image: postgres:17
-        env:
-          POSTGRES_PASSWORD: testpass
-          POSTGRES_DB: testdb
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
 
     steps:
       - name: Checkout code
@@ -40,6 +26,9 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
+
+      - name: Start integration services
+        run: docker-compose -f docker-compose.integration.yml up -d
 
       - name: Cache cargo dependencies
         uses: actions/cache@v6
@@ -106,3 +95,7 @@ jobs:
             target/debug/deps/*.log
             ~/.local/state/safeselect/logs/
           retention-days: 7
+
+      - name: Stop integration services
+        if: always()
+        run: docker-compose -f docker-compose.integration.yml down -v

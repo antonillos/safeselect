@@ -25,6 +25,8 @@ pub fn run() {
     postgres::download_driver(&config_dir);
 
     let result = std::panic::catch_unwind(|| {
+        let baseline = database_state();
+
         let (stdout, stderr, success) =
             postgres::run_safeselect(&repo_root, &config_dir, "SELECT 1 AS ok");
         assert!(
@@ -108,6 +110,42 @@ pub fn run() {
                 "EXPLAIN ANALYZE DELETE",
                 "EXPLAIN ANALYZE DELETE FROM public.safe_table WHERE id = 1",
             ),
+            (
+                "CREATE TABLE AS",
+                "CREATE TABLE public.evil_copy AS SELECT * FROM public.safe_table",
+            ),
+            (
+                "CREATE TEMP TABLE AS",
+                "CREATE TEMP TABLE tmp_evil AS SELECT * FROM public.safe_table",
+            ),
+            (
+                "COPY TO PROGRAM",
+                "COPY (SELECT name FROM public.safe_table) TO PROGRAM 'cat'",
+            ),
+            (
+                "DO block",
+                "DO $$ BEGIN DELETE FROM public.safe_table; END $$",
+            ),
+            ("LOCK TABLE", "LOCK TABLE public.safe_table IN ACCESS EXCLUSIVE MODE"),
+            (
+                "MERGE",
+                "MERGE INTO public.safe_table AS t USING (SELECT 1 AS id) AS s ON t.id = s.id WHEN MATCHED THEN UPDATE SET name = 'oops'",
+            ),
+            (
+                "CALL",
+                "CALL pg_catalog.set_config('role', 'postgres', false)",
+            ),
+            (
+                "PREPARE",
+                "PREPARE evil AS DELETE FROM public.safe_table WHERE id = 1",
+            ),
+            (
+                "DECLARE cursor",
+                "DECLARE evil CURSOR FOR SELECT * FROM public.safe_table",
+            ),
+            ("transaction begin", "BEGIN"),
+            ("transaction commit", "COMMIT"),
+            ("transaction rollback", "ROLLBACK"),
             ("denied relation", "SELECT * FROM public.secret_table"),
             (
                 "session change",
@@ -115,7 +153,7 @@ pub fn run() {
             ),
             ("sleep", "SELECT pg_sleep(5)"),
         ] {
-            assert_rejected(&repo_root, &config_dir, name, sql);
+            assert_rejected(&repo_root, &config_dir, name, sql, &baseline);
         }
 
         assert_rejected(
@@ -123,24 +161,17 @@ pub fn run() {
             &config_dir,
             "row limit",
             "SELECT id FROM public.safe_table ORDER BY id",
+            &baseline,
         );
         assert_rejected(
             &repo_root,
             &config_dir,
             "byte limit",
             "SELECT payload FROM public.large_payload WHERE id = 1",
+            &baseline,
         );
 
-        let counts = postgres::psql(
-            &postgres::test_db(),
-            "SELECT count(*) || ':' || string_agg(name, ',' ORDER BY id) FROM public.safe_table;",
-        );
-        assert_eq!(counts, "3:alpha,beta,gamma");
-        let secret_count = postgres::psql(
-            &postgres::test_db(),
-            "SELECT count(*) FROM public.secret_table;",
-        );
-        assert_eq!(secret_count, "1");
+        assert_eq!(database_state(), baseline);
     });
 
     postgres::cleanup_database();
@@ -151,7 +182,13 @@ pub fn run() {
     }
 }
 
-fn assert_rejected(root: &Path, config_dir: &Path, name: &str, sql: &str) {
+fn assert_rejected(
+    root: &Path,
+    config_dir: &Path,
+    name: &str,
+    sql: &str,
+    baseline: &DatabaseState,
+) {
     let (stdout, stderr, success) = postgres::run_safeselect(root, config_dir, sql);
     assert!(
         !success,
@@ -160,7 +197,47 @@ fn assert_rejected(root: &Path, config_dir: &Path, name: &str, sql: &str) {
     assert!(
         stderr.contains("Query rejected")
             || stderr.contains("Read-only mode")
-            || stderr.contains("RESULT_LIMIT_EXCEEDED"),
+            || stderr.contains("RESULT_LIMIT_EXCEEDED")
+            || stderr.contains("Limit exceeded"),
         "{name} failed for the wrong reason\nstdout:\n{stdout}\nstderr:\n{stderr}"
     );
+    assert_eq!(
+        &database_state(),
+        baseline,
+        "{name} changed database state despite rejection"
+    );
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DatabaseState {
+    safe_table_summary: String,
+    safe_table_rows: String,
+    secret_table_rows: String,
+    temp_evil_exists: String,
+    evil_copy_exists: String,
+}
+
+fn database_state() -> DatabaseState {
+    DatabaseState {
+        safe_table_summary: postgres::psql(
+            &postgres::test_db(),
+            "SELECT count(*) || ':' || string_agg(name, ',' ORDER BY id) FROM public.safe_table;",
+        ),
+        safe_table_rows: postgres::psql(
+            &postgres::test_db(),
+            "SELECT string_agg(id || ':' || octet_length(payload), ',' ORDER BY id) FROM public.safe_table;",
+        ),
+        secret_table_rows: postgres::psql(
+            &postgres::test_db(),
+            "SELECT count(*) FROM public.secret_table;",
+        ),
+        temp_evil_exists: postgres::psql(
+            &postgres::test_db(),
+            "SELECT count(*) FROM pg_tables WHERE schemaname LIKE 'pg_temp%' AND tablename = 'tmp_evil';",
+        ),
+        evil_copy_exists: postgres::psql(
+            &postgres::test_db(),
+            "SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename = 'evil_copy';",
+        ),
+    }
 }

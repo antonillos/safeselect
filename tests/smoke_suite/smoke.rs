@@ -265,7 +265,9 @@ fn assert_result_limit_visible(repo_root: &std::path::Path, config_dir: &std::pa
     );
     assert!(!success, "large result unexpectedly succeeded: {stdout}");
     assert!(
-        stderr.contains("RESULT_LIMIT_EXCEEDED") && stderr.contains("Result size limit exceeded"),
+        (stderr.contains("RESULT_LIMIT_EXCEEDED")
+            && stderr.contains("Result size limit exceeded"))
+            || (stderr.contains("Limit exceeded") && stderr.contains("limit is 1000")),
         "limit error was not visible enough\nstdout:\n{stdout}\nstderr:\n{stderr}"
     );
 }

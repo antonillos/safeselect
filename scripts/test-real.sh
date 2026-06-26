@@ -6,40 +6,69 @@ set -euo pipefail
 #   suite: security | smoke | reconnect | all (default: all)
 #
 # Prerequisites:
-#   - Docker running with PostgreSQL container
-#   - Set SAFESELECT_SECURITY_DOCKER_CONTAINER=<container-name>
+#   - Docker running
 #   - Optionally set SAFESELECT_SECURITY_ADMIN_PASSWORD if different from 'testpass'
 
 SUITE="${1:-all}"
+COMPOSE_FILE="${SAFESELECT_TEST_COMPOSE_FILE:-docker-compose.integration.yml}"
+PROJECT_NAME="${SAFESELECT_TEST_COMPOSE_PROJECT:-safeselect-real}"
+COMPOSE_CMD=(docker-compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE")
 
-# Default Docker container if not set
-export SAFESELECT_SECURITY_DOCKER_CONTAINER="${SAFESELECT_SECURITY_DOCKER_CONTAINER:-compose-postgres-1}"
-export SAFESELECT_SECURITY_ADMIN_PASSWORD="${SAFESELECT_SECURITY_ADMIN_PASSWORD:-}"
+export SAFESELECT_SECURITY_ADMIN_PASSWORD="${SAFESELECT_SECURITY_ADMIN_PASSWORD:-testpass}"
 export SAFESELECT_SECURITY_HOST="${SAFESELECT_SECURITY_HOST:-localhost}"
 export SAFESELECT_SECURITY_PORT="${SAFESELECT_SECURITY_PORT:-5432}"
 export SAFESELECT_SECURITY_ADMIN_USER="${SAFESELECT_SECURITY_ADMIN_USER:-postgres}"
+export SAFESELECT_SECURITY_DOCKER_CONTAINER="${SAFESELECT_SECURITY_DOCKER_CONTAINER:-${PROJECT_NAME}-postgres-1}"
 
 echo "=== SafeSelect Real Integration Tests ==="
-echo "Docker container: $SAFESELECT_SECURITY_DOCKER_CONTAINER"
+echo "Compose file: $COMPOSE_FILE"
+echo "Compose project: $PROJECT_NAME"
+echo "PostgreSQL container: $SAFESELECT_SECURITY_DOCKER_CONTAINER"
 echo "PostgreSQL: $SAFESELECT_SECURITY_HOST:$SAFESELECT_SECURITY_PORT"
 echo "Suite: $SUITE"
 echo ""
 
-# Check Docker container is running
-if ! docker ps --format '{{.Names}}' | grep -q "^${SAFESELECT_SECURITY_DOCKER_CONTAINER}$"; then
-    echo "ERROR: Docker container '$SAFESELECT_SECURITY_DOCKER_CONTAINER' is not running"
-    echo "Start your PostgreSQL container first"
+cleanup() {
+    "${COMPOSE_CMD[@]}" down -v >/dev/null 2>&1 || true
+}
+
+trap cleanup EXIT
+
+if [[ ! -f "$COMPOSE_FILE" ]]; then
+    echo "ERROR: Compose file '$COMPOSE_FILE' not found"
     exit 1
 fi
 
-# Check psql is available in container
-if ! docker exec "$SAFESELECT_SECURITY_DOCKER_CONTAINER" psql -U "$SAFESELECT_SECURITY_ADMIN_USER" -c "SELECT 1" >/dev/null 2>&1; then
+echo "Starting integration services..."
+"${COMPOSE_CMD[@]}" up -d
+
+if ! "${COMPOSE_CMD[@]}" ps | grep -q 'postgres'; then
+    echo "ERROR: PostgreSQL service did not start"
+    exit 1
+fi
+
+echo "Waiting for PostgreSQL to become ready..."
+postgres_ready=0
+for _ in $(seq 1 60); do
+    if docker exec \
+        -e "PGPASSWORD=$SAFESELECT_SECURITY_ADMIN_PASSWORD" \
+        "$SAFESELECT_SECURITY_DOCKER_CONTAINER" \
+        psql -U "$SAFESELECT_SECURITY_ADMIN_USER" -d postgres -c "SELECT 1" \
+        >/dev/null 2>&1; then
+        postgres_ready=1
+        break
+    fi
+    sleep 1
+done
+
+if [[ "$postgres_ready" -ne 1 ]]; then
     echo "ERROR: Cannot connect to PostgreSQL in container"
     echo "Check container is healthy and credentials are correct"
     exit 1
 fi
 
 echo "✓ PostgreSQL connection verified"
+echo "✓ MongoDB service available in compose stack"
 echo ""
 
 run_security() {
