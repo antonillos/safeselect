@@ -1,4 +1,8 @@
-use crate::backend::{DocumentFindRequest, DocumentResult};
+use crate::backend::{
+    DocumentAggregateRequest, DocumentCountRequest, DocumentDistinctRequest,
+    DocumentExplainRequest, DocumentFieldProfileRequest, DocumentFindRequest,
+    DocumentFixtureRequest, DocumentResult, DocumentSchemaRequest,
+};
 use crate::error::{Result, SafeselectError};
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -412,6 +416,68 @@ impl SidecarProcess {
                 "empty response from sidecar".into(),
             )),
         }
+    }
+
+    pub fn aggregate_documents(
+        &mut self,
+        request: &DocumentAggregateRequest,
+    ) -> Result<serde_json::Value> {
+        self.document_value_request("aggregate_documents", serde_json::to_value(request)?)
+    }
+
+    pub fn distinct_documents(
+        &mut self,
+        request: &DocumentDistinctRequest,
+    ) -> Result<serde_json::Value> {
+        self.document_value_request("distinct_documents", serde_json::to_value(request)?)
+    }
+
+    pub fn count_documents(&mut self, request: &DocumentCountRequest) -> Result<serde_json::Value> {
+        self.document_value_request("count_documents", serde_json::to_value(request)?)
+    }
+
+    pub fn explain_documents(
+        &mut self,
+        request: &DocumentExplainRequest,
+    ) -> Result<serde_json::Value> {
+        self.document_value_request("explain_documents", serde_json::to_value(request)?)
+    }
+
+    pub fn profile_document_field(
+        &mut self,
+        request: &DocumentFieldProfileRequest,
+    ) -> Result<serde_json::Value> {
+        self.document_value_request("profile_document_field", serde_json::to_value(request)?)
+    }
+
+    pub fn discover_document_schema(
+        &mut self,
+        request: &DocumentSchemaRequest,
+    ) -> Result<serde_json::Value> {
+        self.document_value_request("discover_document_schema", serde_json::to_value(request)?)
+    }
+
+    pub fn generate_document_fixture(
+        &mut self,
+        request: &DocumentFixtureRequest,
+    ) -> Result<serde_json::Value> {
+        self.document_value_request("generate_document_fixture", serde_json::to_value(request)?)
+    }
+
+    fn document_value_request(
+        &mut self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let resp = self.send_request(method, Some(params))?;
+        if let Some(err) = resp.error {
+            return Err(SafeselectError::Sidecar(format!(
+                "{method} failed [{}]: {}",
+                err.code, err.message
+            )));
+        }
+        resp.ok
+            .ok_or_else(|| SafeselectError::Sidecar("empty response from sidecar".into()))
     }
 
     fn send_request(

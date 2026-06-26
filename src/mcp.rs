@@ -1,6 +1,10 @@
 use crate::agents;
 use crate::audit::AuditLog;
-use crate::backend::{BackendCapability, BackendDescriptor, DocumentFindRequest};
+use crate::backend::{
+    BackendCapability, BackendDescriptor, DocumentAggregateRequest, DocumentCountRequest,
+    DocumentDistinctRequest, DocumentExplainRequest, DocumentFieldProfileRequest,
+    DocumentFindRequest, DocumentFixtureRequest, DocumentSchemaRequest,
+};
 use crate::compose;
 use crate::config::{ConfigLoader, EnvironmentConfig, ProjectConfig};
 use crate::diagnostics::{self, DiagnosticCode, DiagnosticStatus};
@@ -48,6 +52,15 @@ struct ToolDefinition {
     description: String,
     #[serde(rename = "inputSchema")]
     input_schema: serde_json::Value,
+}
+
+macro_rules! required_string {
+    ($server:expr, $id:expr, $args:expr, $name:literal) => {
+        match $args.get($name).and_then(|v| v.as_str()) {
+            Some(value) => value,
+            None => return $server.send_error($id, -32602, format!("Missing '{}' argument", $name)),
+        }
+    };
 }
 
 pub struct McpServer {
@@ -414,6 +427,137 @@ impl McpServer {
             });
         }
 
+        if self.backend.has(BackendCapability::DocumentAggregate) {
+            tools.push(ToolDefinition {
+                name: "aggregate_documents".into(),
+                description: self.tool_description("run a read-only MongoDB aggregation pipeline"),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "database": {"type": "string"},
+                        "collection": {"type": "string"},
+                        "pipeline": {"type": "array", "description": "Read-only aggregation pipeline; $out and $merge are rejected"},
+                        "limit": {"type": "integer", "description": "Maximum result documents to return"}
+                    },
+                    "required": ["database", "collection", "pipeline"]
+                }),
+            });
+        }
+
+        if self.backend.has(BackendCapability::DocumentDistinct) {
+            tools.push(ToolDefinition {
+                name: "distinct_documents".into(),
+                description: self.tool_description("list distinct values for a MongoDB field"),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "database": {"type": "string"},
+                        "collection": {"type": "string"},
+                        "field": {"type": "string"},
+                        "filter": {"type": "object"},
+                        "limit": {"type": "integer"}
+                    },
+                    "required": ["database", "collection", "field"]
+                }),
+            });
+        }
+
+        if self.backend.has(BackendCapability::DocumentCount) {
+            tools.push(ToolDefinition {
+                name: "count_documents".into(),
+                description: self.tool_description("count MongoDB documents matching a filter"),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "database": {"type": "string"},
+                        "collection": {"type": "string"},
+                        "filter": {"type": "object"}
+                    },
+                    "required": ["database", "collection"]
+                }),
+            });
+        }
+
+        if self.backend.has(BackendCapability::DocumentExplain) {
+            tools.push(ToolDefinition {
+                name: "explain_documents".into(),
+                description: self.tool_description("explain a read-only MongoDB find query"),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "database": {"type": "string"},
+                        "collection": {"type": "string"},
+                        "filter": {"type": "object"},
+                        "projection": {"type": "object"},
+                        "sort": {"type": "object"},
+                        "limit": {"type": "integer"}
+                    },
+                    "required": ["database", "collection"]
+                }),
+            });
+        }
+
+        if self.backend.has(BackendCapability::DocumentProfile) {
+            tools.push(ToolDefinition {
+                name: "profile_document_field".into(),
+                description: self
+                    .tool_description("profile a nested MongoDB field over a bounded sample"),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "database": {"type": "string"},
+                        "collection": {"type": "string"},
+                        "field": {"type": "string"},
+                        "filter": {"type": "object"},
+                        "sample_size": {"type": "integer"},
+                        "examples": {"type": "integer"}
+                    },
+                    "required": ["database", "collection", "field"]
+                }),
+            });
+        }
+
+        if self.backend.has(BackendCapability::DocumentSchema) {
+            tools.push(ToolDefinition {
+                name: "discover_document_schema".into(),
+                description: self.tool_description(
+                    "infer frequent MongoDB fields and types over a bounded sample",
+                ),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "database": {"type": "string"},
+                        "collection": {"type": "string"},
+                        "filter": {"type": "object"},
+                        "sample_size": {"type": "integer"},
+                        "examples": {"type": "integer"}
+                    },
+                    "required": ["database", "collection"]
+                }),
+            });
+        }
+
+        if self.backend.has(BackendCapability::DocumentFixture) {
+            tools.push(ToolDefinition {
+                name: "generate_document_fixture".into(),
+                description: self.tool_description(
+                    "return anonymized MongoDB fixture samples without writing files",
+                ),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "database": {"type": "string"},
+                        "collection": {"type": "string"},
+                        "filter": {"type": "object"},
+                        "projection": {"type": "object"},
+                        "limit": {"type": "integer"},
+                        "redact_fields": {"type": "array", "items": {"type": "string"}}
+                    },
+                    "required": ["database", "collection"]
+                }),
+            });
+        }
+
         tools.extend([
             ToolDefinition {
                 name: "disconnect".into(),
@@ -735,6 +879,17 @@ impl McpServer {
             "list_databases" => self.handle_list_databases(msg.id.clone()),
             "list_collections" => self.handle_list_collections(msg.id.clone(), &args),
             "find_documents" => self.handle_find_documents(msg.id.clone(), &args),
+            "aggregate_documents" => self.handle_aggregate_documents(msg.id.clone(), &args),
+            "distinct_documents" => self.handle_distinct_documents(msg.id.clone(), &args),
+            "count_documents" => self.handle_count_documents(msg.id.clone(), &args),
+            "explain_documents" => self.handle_explain_documents(msg.id.clone(), &args),
+            "profile_document_field" => self.handle_profile_document_field(msg.id.clone(), &args),
+            "discover_document_schema" => {
+                self.handle_discover_document_schema(msg.id.clone(), &args)
+            }
+            "generate_document_fixture" => {
+                self.handle_generate_document_fixture(msg.id.clone(), &args)
+            }
             "disconnect" => self.handle_disconnect(msg.id.clone()),
             "connect" => self.handle_connect(msg.id.clone()),
             "config_validate" => self.handle_config_validate(msg.id.clone(), &args),
@@ -774,6 +929,13 @@ impl McpServer {
                 BackendCapability::DatabaseDiscovery => "database_discovery",
                 BackendCapability::CollectionDiscovery => "collection_discovery",
                 BackendCapability::DocumentFind => "document_find",
+                BackendCapability::DocumentAggregate => "document_aggregate",
+                BackendCapability::DocumentDistinct => "document_distinct",
+                BackendCapability::DocumentCount => "document_count",
+                BackendCapability::DocumentExplain => "document_explain",
+                BackendCapability::DocumentProfile => "document_profile",
+                BackendCapability::DocumentSchema => "document_schema",
+                BackendCapability::DocumentFixture => "document_fixture",
             })
             .collect();
 
@@ -878,6 +1040,218 @@ impl McpServer {
                 self.audit
                     .record("DOCUMENT_ERROR", "error", "find_documents")?;
                 self.send_error(id, -32000, format!("Find documents failed: {e}"))
+            }
+        }
+    }
+
+    fn handle_aggregate_documents(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        let request = DocumentAggregateRequest {
+            database: required_string!(self, id, args, "database").to_string(),
+            collection: required_string!(self, id, args, "collection").to_string(),
+            pipeline: args
+                .get("pipeline")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!([])),
+            limit: args
+                .get("limit")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(self.security.limits().max_rows.min(100)),
+        };
+        self.handle_document_value(
+            id,
+            "aggregate_documents",
+            |security| security.validate_document_aggregate(&request),
+            |sidecar| sidecar.aggregate_documents(&request),
+        )
+    }
+
+    fn handle_distinct_documents(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        let request = DocumentDistinctRequest {
+            database: required_string!(self, id, args, "database").to_string(),
+            collection: required_string!(self, id, args, "collection").to_string(),
+            field: required_string!(self, id, args, "field").to_string(),
+            filter: args
+                .get("filter")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({})),
+            limit: args
+                .get("limit")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(self.security.limits().max_rows.min(100)),
+        };
+        self.handle_document_value(
+            id,
+            "distinct_documents",
+            |security| security.validate_document_distinct(&request),
+            |sidecar| sidecar.distinct_documents(&request),
+        )
+    }
+
+    fn handle_count_documents(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        let request = DocumentCountRequest {
+            database: required_string!(self, id, args, "database").to_string(),
+            collection: required_string!(self, id, args, "collection").to_string(),
+            filter: args
+                .get("filter")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({})),
+        };
+        self.handle_document_value(
+            id,
+            "count_documents",
+            |security| security.validate_document_count(&request),
+            |sidecar| sidecar.count_documents(&request),
+        )
+    }
+
+    fn handle_explain_documents(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        let request = DocumentExplainRequest {
+            database: required_string!(self, id, args, "database").to_string(),
+            collection: required_string!(self, id, args, "collection").to_string(),
+            filter: args
+                .get("filter")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({})),
+            projection: args.get("projection").cloned(),
+            sort: args.get("sort").cloned(),
+            limit: args.get("limit").and_then(|v| v.as_u64()),
+        };
+        self.handle_document_value(
+            id,
+            "explain_documents",
+            |security| security.validate_document_explain(&request),
+            |sidecar| sidecar.explain_documents(&request),
+        )
+    }
+
+    fn handle_profile_document_field(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        let request = DocumentFieldProfileRequest {
+            database: required_string!(self, id, args, "database").to_string(),
+            collection: required_string!(self, id, args, "collection").to_string(),
+            field: required_string!(self, id, args, "field").to_string(),
+            filter: args
+                .get("filter")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({})),
+            sample_size: args
+                .get("sample_size")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(self.security.limits().max_rows.min(1000)),
+            examples: args.get("examples").and_then(|v| v.as_u64()).unwrap_or(5),
+        };
+        self.handle_document_value(
+            id,
+            "profile_document_field",
+            |security| security.validate_document_field_profile(&request),
+            |sidecar| sidecar.profile_document_field(&request),
+        )
+    }
+
+    fn handle_discover_document_schema(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        let request = DocumentSchemaRequest {
+            database: required_string!(self, id, args, "database").to_string(),
+            collection: required_string!(self, id, args, "collection").to_string(),
+            filter: args
+                .get("filter")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({})),
+            sample_size: args
+                .get("sample_size")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(self.security.limits().max_rows.min(1000)),
+            examples: args.get("examples").and_then(|v| v.as_u64()).unwrap_or(3),
+        };
+        self.handle_document_value(
+            id,
+            "discover_document_schema",
+            |security| security.validate_document_schema(&request),
+            |sidecar| sidecar.discover_document_schema(&request),
+        )
+    }
+
+    fn handle_generate_document_fixture(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        let request = DocumentFixtureRequest {
+            database: required_string!(self, id, args, "database").to_string(),
+            collection: required_string!(self, id, args, "collection").to_string(),
+            filter: args
+                .get("filter")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({})),
+            projection: args.get("projection").cloned(),
+            limit: args
+                .get("limit")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(self.security.limits().max_rows.min(20)),
+            redact_fields: args
+                .get("redact_fields")
+                .and_then(|v| v.as_array())
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(|value| value.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default(),
+        };
+        self.handle_document_value(
+            id,
+            "generate_document_fixture",
+            |security| security.validate_document_fixture(&request),
+            |sidecar| sidecar.generate_document_fixture(&request),
+        )
+    }
+
+    fn handle_document_value<V, E>(
+        &mut self,
+        id: Option<serde_json::Value>,
+        operation: &str,
+        validate: V,
+        execute: E,
+    ) -> Result<()>
+    where
+        V: FnOnce(&SecurityEngine) -> Result<()>,
+        E: FnOnce(&mut SidecarProcess) -> Result<serde_json::Value>,
+    {
+        if let Err(e) = validate(&self.security) {
+            self.audit.record("REJECT", "reject", operation)?;
+            return self.send_error(id, -32000, format!("Request rejected: {e}"));
+        }
+        match execute(self.ensure_sidecar()?) {
+            Ok(result) => {
+                self.audit.record("PASS", "allow", operation)?;
+                self.write_response(&json_text_response(id, &result)?)
+            }
+            Err(e) => {
+                self.audit.record("DOCUMENT_ERROR", "error", operation)?;
+                self.send_error(id, -32000, format!("{operation} failed: {e}"))
             }
         }
     }

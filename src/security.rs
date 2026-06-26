@@ -1,4 +1,8 @@
-use crate::backend::DocumentFindRequest;
+use crate::backend::{
+    DocumentAggregateRequest, DocumentCollectionRequest, DocumentCountRequest,
+    DocumentDistinctRequest, DocumentExplainRequest, DocumentFieldProfileRequest,
+    DocumentFindRequest, DocumentFixtureRequest, DocumentSchemaRequest,
+};
 use crate::config::{LimitsConfig, SecurityPolicy};
 use crate::error::{Result, SafeselectError};
 
@@ -59,8 +63,10 @@ impl SecurityEngine {
     }
 
     pub fn validate_document_find(&self, request: &DocumentFindRequest) -> Result<()> {
-        self.validate_document_database(&request.database)?;
-        self.check_document_name("collection", &request.collection)?;
+        self.validate_document_collection(&DocumentCollectionRequest {
+            database: request.database.clone(),
+            collection: request.collection.clone(),
+        })?;
 
         if !request.filter.is_object() {
             return Err(SafeselectError::QueryRejected(
@@ -88,19 +94,12 @@ impl SecurityEngine {
             )));
         }
 
-        if !self.policy.allowed_databases.is_empty()
-            && !self
-                .policy
-                .allowed_databases
-                .iter()
-                .any(|database| database == &request.database)
-        {
-            return Err(SafeselectError::QueryRejected(format!(
-                "Database '{}' is not in the allowed databases list ({})",
-                request.database,
-                self.policy.allowed_databases.join(", ")
-            )));
-        }
+        Ok(())
+    }
+
+    pub fn validate_document_collection(&self, request: &DocumentCollectionRequest) -> Result<()> {
+        self.validate_document_database(&request.database)?;
+        self.check_document_name("collection", &request.collection)?;
 
         let namespace = format!("{}.{}", request.database, request.collection);
         if !self.policy.allowed_collections.is_empty()
@@ -128,6 +127,164 @@ impl SecurityEngine {
             )));
         }
 
+        Ok(())
+    }
+
+    pub fn validate_document_aggregate(&self, request: &DocumentAggregateRequest) -> Result<()> {
+        self.validate_document_collection(&DocumentCollectionRequest {
+            database: request.database.clone(),
+            collection: request.collection.clone(),
+        })?;
+        if !request.pipeline.is_array() {
+            return Err(SafeselectError::QueryRejected(
+                "Aggregation pipeline must be a JSON array".into(),
+            ));
+        }
+        if request.limit == 0 || request.limit > self.limits.max_rows {
+            return Err(SafeselectError::QueryRejected(format!(
+                "Aggregation limit must be between 1 and {}",
+                self.limits.max_rows
+            )));
+        }
+        for stage in request.pipeline.as_array().into_iter().flatten() {
+            let Some(stage_object) = stage.as_object() else {
+                return Err(SafeselectError::QueryRejected(
+                    "Aggregation stages must be JSON objects".into(),
+                ));
+            };
+            for name in stage_object.keys() {
+                if matches!(name.as_str(), "$out" | "$merge" | "$currentOp") {
+                    return Err(SafeselectError::QueryRejected(format!(
+                        "Aggregation stage '{name}' is not read-only"
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn validate_document_distinct(&self, request: &DocumentDistinctRequest) -> Result<()> {
+        self.validate_document_collection(&DocumentCollectionRequest {
+            database: request.database.clone(),
+            collection: request.collection.clone(),
+        })?;
+        self.check_document_field(&request.field)?;
+        if !request.filter.is_object() {
+            return Err(SafeselectError::QueryRejected(
+                "Distinct filter must be a JSON object".into(),
+            ));
+        }
+        if request.limit == 0 || request.limit > self.limits.max_rows {
+            return Err(SafeselectError::QueryRejected(format!(
+                "Distinct limit must be between 1 and {}",
+                self.limits.max_rows
+            )));
+        }
+        Ok(())
+    }
+
+    pub fn validate_document_count(&self, request: &DocumentCountRequest) -> Result<()> {
+        self.validate_document_collection(&DocumentCollectionRequest {
+            database: request.database.clone(),
+            collection: request.collection.clone(),
+        })?;
+        if !request.filter.is_object() {
+            return Err(SafeselectError::QueryRejected(
+                "Count filter must be a JSON object".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn validate_document_explain(&self, request: &DocumentExplainRequest) -> Result<()> {
+        self.validate_document_collection(&DocumentCollectionRequest {
+            database: request.database.clone(),
+            collection: request.collection.clone(),
+        })?;
+        if !request.filter.is_object() {
+            return Err(SafeselectError::QueryRejected(
+                "Explain filter must be a JSON object".into(),
+            ));
+        }
+        if request
+            .projection
+            .as_ref()
+            .is_some_and(|projection| !projection.is_object())
+        {
+            return Err(SafeselectError::QueryRejected(
+                "Explain projection must be a JSON object".into(),
+            ));
+        }
+        if request.sort.as_ref().is_some_and(|sort| !sort.is_object()) {
+            return Err(SafeselectError::QueryRejected(
+                "Explain sort must be a JSON object".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn validate_document_field_profile(
+        &self,
+        request: &DocumentFieldProfileRequest,
+    ) -> Result<()> {
+        self.validate_document_collection(&DocumentCollectionRequest {
+            database: request.database.clone(),
+            collection: request.collection.clone(),
+        })?;
+        self.check_document_field(&request.field)?;
+        self.check_document_sample_size(request.sample_size, "Profile sample size")?;
+        self.check_document_sample_size(request.examples, "Profile examples")?;
+        if !request.filter.is_object() {
+            return Err(SafeselectError::QueryRejected(
+                "Profile filter must be a JSON object".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn validate_document_schema(&self, request: &DocumentSchemaRequest) -> Result<()> {
+        self.validate_document_collection(&DocumentCollectionRequest {
+            database: request.database.clone(),
+            collection: request.collection.clone(),
+        })?;
+        self.check_document_sample_size(request.sample_size, "Schema sample size")?;
+        self.check_document_sample_size(request.examples, "Schema examples")?;
+        if !request.filter.is_object() {
+            return Err(SafeselectError::QueryRejected(
+                "Schema filter must be a JSON object".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn validate_document_fixture(&self, request: &DocumentFixtureRequest) -> Result<()> {
+        self.validate_document_collection(&DocumentCollectionRequest {
+            database: request.database.clone(),
+            collection: request.collection.clone(),
+        })?;
+        if !request.filter.is_object() {
+            return Err(SafeselectError::QueryRejected(
+                "Fixture filter must be a JSON object".into(),
+            ));
+        }
+        if request
+            .projection
+            .as_ref()
+            .is_some_and(|projection| !projection.is_object())
+        {
+            return Err(SafeselectError::QueryRejected(
+                "Fixture projection must be a JSON object".into(),
+            ));
+        }
+        if request.limit == 0 || request.limit > self.limits.max_rows {
+            return Err(SafeselectError::QueryRejected(format!(
+                "Fixture limit must be between 1 and {}",
+                self.limits.max_rows
+            )));
+        }
+        for field in &request.redact_fields {
+            self.check_document_field(field)?;
+        }
         Ok(())
     }
 
@@ -451,6 +608,33 @@ impl SecurityEngine {
         {
             return Err(SafeselectError::QueryRejected(format!(
                 "Invalid document {kind} name: {name}"
+            )));
+        }
+        Ok(())
+    }
+
+    fn check_document_field(&self, field: &str) -> Result<()> {
+        if field.is_empty()
+            || field.len() > 512
+            || field.contains('\0')
+            || field.contains('$')
+            || field.contains(' ')
+            || field.starts_with('.')
+            || field.ends_with('.')
+            || field.split('.').any(str::is_empty)
+        {
+            return Err(SafeselectError::QueryRejected(format!(
+                "Invalid document field path: {field}"
+            )));
+        }
+        Ok(())
+    }
+
+    fn check_document_sample_size(&self, value: u64, label: &str) -> Result<()> {
+        if value == 0 || value > self.limits.max_rows {
+            return Err(SafeselectError::QueryRejected(format!(
+                "{label} must be between 1 and {}",
+                self.limits.max_rows
             )));
         }
         Ok(())
@@ -1273,6 +1457,47 @@ mod tests {
             limit: 10,
         };
         assert!(engine.validate_document_find(&request).is_err());
+    }
+
+    #[test]
+    fn test_document_aggregate_rejects_write_stage() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        let request = DocumentAggregateRequest {
+            database: "app".into(),
+            collection: "users".into(),
+            pipeline: serde_json::json!([{"$match": {"active": true}}, {"$out": "copy"}]),
+            limit: 10,
+        };
+        assert!(engine.validate_document_aggregate(&request).is_err());
+    }
+
+    #[test]
+    fn test_document_aggregate_allows_read_only_pipeline() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        let request = DocumentAggregateRequest {
+            database: "app".into(),
+            collection: "users".into(),
+            pipeline: serde_json::json!([
+                {"$match": {"active": true}},
+                {"$group": {"_id": "$owner", "count": {"$sum": 1}}},
+                {"$sort": {"count": -1}}
+            ]),
+            limit: 10,
+        };
+        assert!(engine.validate_document_aggregate(&request).is_ok());
+    }
+
+    #[test]
+    fn test_document_distinct_rejects_invalid_field_path() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        let request = DocumentDistinctRequest {
+            database: "app".into(),
+            collection: "users".into(),
+            field: "$owner".into(),
+            filter: serde_json::json!({}),
+            limit: 10,
+        };
+        assert!(engine.validate_document_distinct(&request).is_err());
     }
 
     #[test]

@@ -16,6 +16,13 @@ pub enum BackendCapability {
     DatabaseDiscovery,
     CollectionDiscovery,
     DocumentFind,
+    DocumentAggregate,
+    DocumentDistinct,
+    DocumentCount,
+    DocumentExplain,
+    DocumentProfile,
+    DocumentSchema,
+    DocumentFixture,
 }
 
 #[derive(Debug, Clone)]
@@ -35,6 +42,86 @@ pub struct DocumentFindRequest {
     #[serde(default)]
     pub sort: Option<serde_json::Value>,
     pub limit: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DocumentCollectionRequest {
+    pub database: String,
+    pub collection: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DocumentAggregateRequest {
+    pub database: String,
+    pub collection: String,
+    pub pipeline: serde_json::Value,
+    pub limit: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DocumentDistinctRequest {
+    pub database: String,
+    pub collection: String,
+    pub field: String,
+    #[serde(default)]
+    pub filter: serde_json::Value,
+    pub limit: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DocumentCountRequest {
+    pub database: String,
+    pub collection: String,
+    #[serde(default)]
+    pub filter: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DocumentExplainRequest {
+    pub database: String,
+    pub collection: String,
+    #[serde(default)]
+    pub filter: serde_json::Value,
+    #[serde(default)]
+    pub projection: Option<serde_json::Value>,
+    #[serde(default)]
+    pub sort: Option<serde_json::Value>,
+    #[serde(default)]
+    pub limit: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DocumentFieldProfileRequest {
+    pub database: String,
+    pub collection: String,
+    pub field: String,
+    #[serde(default)]
+    pub filter: serde_json::Value,
+    pub sample_size: u64,
+    pub examples: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DocumentSchemaRequest {
+    pub database: String,
+    pub collection: String,
+    #[serde(default)]
+    pub filter: serde_json::Value,
+    pub sample_size: u64,
+    pub examples: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DocumentFixtureRequest {
+    pub database: String,
+    pub collection: String,
+    #[serde(default)]
+    pub filter: serde_json::Value,
+    #[serde(default)]
+    pub projection: Option<serde_json::Value>,
+    pub limit: u64,
+    #[serde(default)]
+    pub redact_fields: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,6 +156,13 @@ impl BackendDescriptor {
                 BackendCapability::DatabaseDiscovery,
                 BackendCapability::CollectionDiscovery,
                 BackendCapability::DocumentFind,
+                BackendCapability::DocumentAggregate,
+                BackendCapability::DocumentDistinct,
+                BackendCapability::DocumentCount,
+                BackendCapability::DocumentExplain,
+                BackendCapability::DocumentProfile,
+                BackendCapability::DocumentSchema,
+                BackendCapability::DocumentFixture,
             ],
         }
     }
