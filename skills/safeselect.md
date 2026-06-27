@@ -1,7 +1,7 @@
 ---
 name: safeselect
 description: >
-  SafeSelect: MCP SQL Fail-Closed for AI Agents.
+  SafeSelect: fail-closed read-only database access for AI agents over MCP.
   Secure database access with read-only enforcement, AST-level SQL validation,
   and full fail-closed on any security incident.
 tools:
