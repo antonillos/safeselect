@@ -54,7 +54,7 @@ fn repo_file(path: &str) -> String {
 fn test_help() {
     let (stdout, _, success) = &run(&["--help"]);
     assert!(success);
-    assert!(stdout.contains("MCP SQL Fail-Closed"));
+    assert!(stdout.contains("Fail-closed read-only database access"));
     assert!(stdout.contains("serve"));
     assert!(stdout.contains("config"));
     assert!(stdout.contains("driver"));

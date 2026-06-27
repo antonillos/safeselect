@@ -7,7 +7,11 @@ const VERSION: &str = match option_env!("SAFESELECT_BUILD_VERSION") {
 };
 
 #[derive(Parser)]
-#[command(name = "safeselect", about = "MCP SQL Fail-Closed for AI Agents", version = VERSION)]
+#[command(
+    name = "safeselect",
+    about = "Fail-closed read-only database access for AI agents over MCP",
+    version = VERSION
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,

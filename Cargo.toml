@@ -2,7 +2,7 @@
 name = "safeselect"
 version = "0.5.1"
 edition = "2021"
-description = "MCP SQL Fail-Closed for AI Agents"
+description = "Fail-closed read-only database access for AI agents over MCP"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
