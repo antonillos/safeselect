@@ -1,0 +1,33 @@
+src/main.rs
+  s_7a59f88cf7fa82::t_17060f72a5e49a 135-147,3189-3215,3917-3950,3955-3967
+src/sidecar.rs
+  s_7a59f88cf7fa82::t_9118ab87b7651f 8,11,44,219-220,224,226-231,241,246,259,264,270-278,289-297,334-364
+tests/security_suite/real_mongodb.rs
+  s_7a59f88cf7fa82::t_42d86b17ed2c9b 16-17,37-73,75-90,94,98-112,121,132-136,140,152-161,165,174-178,268-278,285,305-309,313,334-338,349-353,379-383,390,395-406
+docs/agents.md
+  s_7a59f88cf7fa82::t_000ab8c1bdc82a 17,190,194,198-199,201,252-259
+src/cli.rs
+  s_7a59f88cf7fa82::t_3b49743071b6cf 119,125
+src/mcp.rs
+  s_7a59f88cf7fa82::t_122c866f64b16b 222,439-444,569-571,818,844,957-959,1739-1769,1771-1775,1782-1785,2523-2546,2548-2549,2552-2586,2589-2590,2592-2593,2597-2600,2604,2608-2641,2644-2645,2678-2681,2779,2792-2811,2813-2814,2819
+src/security.rs
+  s_7a59f88cf7fa82::t_f13643b71fa9f9 140,152,1522-1537
+tests/smoke_suite/mongodb.rs
+  s_7a59f88cf7fa82::t_e4d4b52901d520 213-216,266-274
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.4",
+  "base_commit_sha": "e4f3946af0b0e51740ddb5b07a893a6879e6d93e",
+  "prompts": {},
+  "sessions": {
+    "s_7a59f88cf7fa82": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f13ee-448e-7c30-90e1-a6b929bd7167",
+        "model": "gpt-5.5"
+      },
+      "human_author": "antonillos <305277+antonillos@users.noreply.github.com>"
+    }
+  }
+}
