@@ -137,7 +137,7 @@ impl SecurityEngine {
         })?;
         if !request.pipeline.is_array() {
             return Err(SafeselectError::QueryRejected(
-                "Aggregation pipeline must be a JSON array".into(),
+                "Aggregation pipeline must be a JSON array of stage objects. Correct the pipeline argument before retrying; do not repeat the same call. Example: [{\"$match\":{\"active\":true}}]".into(),
             ));
         }
         if request.limit == 0 || request.limit > self.limits.max_rows {
@@ -149,7 +149,7 @@ impl SecurityEngine {
         for stage in request.pipeline.as_array().into_iter().flatten() {
             let Some(stage_object) = stage.as_object() else {
                 return Err(SafeselectError::QueryRejected(
-                    "Aggregation stages must be JSON objects".into(),
+                    "Aggregation stages must be JSON objects. Correct the pipeline argument before retrying; do not repeat the same call. Example: [{\"$match\":{\"active\":true}}]".into(),
                 ));
             };
             for name in stage_object.keys() {
@@ -1517,6 +1517,22 @@ mod tests {
             limit: 10,
         };
         assert!(engine.validate_document_aggregate(&request).is_err());
+    }
+
+    #[test]
+    fn test_document_aggregate_rejects_non_object_stage_with_retry_guidance() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        let request = DocumentAggregateRequest {
+            database: "app".into(),
+            collection: "users".into(),
+            pipeline: serde_json::json!(["$match"]),
+            limit: 10,
+        };
+        let err = engine.validate_document_aggregate(&request).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("Aggregation stages must be JSON objects"));
+        assert!(message.contains("do not repeat the same call"));
+        assert!(message.contains(r#"[{"$match":{"active":true}}]"#));
     }
 
     #[test]

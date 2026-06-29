@@ -5,10 +5,10 @@ use crate::backend::{
 };
 use crate::error::{Result, SafeselectError};
 use serde::{Deserialize, Serialize};
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -41,6 +41,7 @@ pub struct SidecarProcess {
     child: Child,
     writer: BufWriter<ChildStdin>,
     reader: BufReader<ChildStdout>,
+    stderr: Option<ChildStderr>,
     next_id: u64,
     statement_timeout_ms: u64,
     request_timeout_ms: u64,
@@ -215,13 +216,19 @@ impl SidecarProcess {
             args.push("--verbose");
         }
 
-        let mut child = Command::new("java")
+        let java = Self::java_executable();
+        let mut child = Command::new(&java)
             .args(&args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::piped())
             .spawn()
-            .map_err(|e| SafeselectError::Sidecar(format!("failed to start Java: {e}")))?;
+            .map_err(|e| {
+                SafeselectError::Sidecar(format!(
+                    "failed to start Java at '{}': {e}",
+                    java.display()
+                ))
+            })?;
 
         let stdin = child
             .stdin
@@ -231,10 +238,12 @@ impl SidecarProcess {
             .stdout
             .take()
             .ok_or_else(|| SafeselectError::Sidecar("failed to capture stdout".into()))?;
+        let stderr = child.stderr.take();
 
         let mut proc = Self {
             writer: BufWriter::new(stdin),
             reader: BufReader::new(stdout),
+            stderr,
             child,
             next_id: 0,
             statement_timeout_ms,
@@ -247,20 +256,26 @@ impl SidecarProcess {
             },
         };
 
-        proc.send_password(password)?;
+        proc.send_password(password, backend)?;
         proc.ping()?;
         Ok(proc)
     }
 
-    fn send_password(&mut self, password: &str) -> Result<()> {
+    fn send_password(&mut self, password: &str, backend: &str) -> Result<()> {
         writeln!(self.writer, "{password}")?;
         self.writer.flush()?;
         let mut ack = String::new();
         self.reader.read_line(&mut ack)?;
         if ack.is_empty() {
-            return Err(SafeselectError::Sidecar(
-                "sidecar process terminated during startup — JDBC connection failed".into(),
-            ));
+            let stderr = self.read_stderr();
+            let detail = if stderr.is_empty() {
+                String::new()
+            } else {
+                format!(": {stderr}")
+            };
+            return Err(SafeselectError::Sidecar(format!(
+                "sidecar process terminated during startup — {backend} backend connection failed{detail}"
+            )));
         }
         let ack = ack.trim();
         if ack != "ready" {
@@ -269,6 +284,15 @@ impl SidecarProcess {
             )));
         }
         Ok(())
+    }
+
+    fn read_stderr(&mut self) -> String {
+        let Some(mut stderr) = self.stderr.take() else {
+            return String::new();
+        };
+        let mut text = String::new();
+        let _ = stderr.read_to_string(&mut text);
+        text.trim().to_string()
     }
 
     fn ensure_sidecar_jar() -> Result<PathBuf> {
@@ -305,6 +329,37 @@ impl SidecarProcess {
         }
 
         Ok(jar_path)
+    }
+
+    fn java_executable() -> PathBuf {
+        if let Ok(java_home) = std::env::var("JAVA_HOME") {
+            let java = PathBuf::from(java_home).join("bin").join("java");
+            if java.exists() {
+                return java;
+            }
+        }
+        if let Ok(homebrew_prefix) = std::env::var("HOMEBREW_PREFIX") {
+            let java = PathBuf::from(homebrew_prefix).join("opt/java/bin/java");
+            if java.exists() {
+                return java;
+            }
+        }
+        for java in [
+            "/opt/homebrew/opt/java/bin/java",
+            "/usr/local/opt/java/bin/java",
+        ] {
+            let java = PathBuf::from(java);
+            if java.exists() {
+                return java;
+            }
+        }
+        if let Ok(home) = std::env::var("HOME") {
+            let java = PathBuf::from(home).join("homebrew/opt/java/bin/java");
+            if java.exists() {
+                return java;
+            }
+        }
+        PathBuf::from("java")
     }
 
     pub fn ping(&mut self) -> Result<()> {
