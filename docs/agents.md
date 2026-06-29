@@ -14,6 +14,7 @@ Product direction for agents:
 - Agent-ready workflows take priority over manual-only ergonomics.
 
 Agents should treat SafeSelect as their database boundary:
+- Use SafeSelect MCP tools only; SafeSelect does not expose MCP resources, so `list_mcp_resources` is not a database discovery step.
 - Use `list_tables` before guessing schema names.
 - Use `select` only for small, targeted read-only queries.
 - Use `explain` to inspect query plans, index usage, and bottlenecks.
@@ -186,17 +187,18 @@ explicitly investigating performance.
 
 ### `connect`
 
-Reconnect to the configured database by re-establishing the JDBC connection.
+Reconnect to the configured database by re-establishing the backend connection.
 
 ### `disconnect`
 
-Close the current JDBC connection.
+Close the current backend connection.
 
 ### `reconnect`
 
-Restart the Java sidecar process and verify the database connection with a test query.
+Restart the Java sidecar process and verify the database connection. JDBC environments
+use `SELECT 1`; document environments use a read-only backend ping.
 Use this after tunnel changes, stale connections, sidecar timeouts, or recoverable
-JDBC errors.
+connection errors.
 
 SafeSelect also auto-recovers from recoverable connection failures during query
 execution by restarting the sidecar and retrying once. Agents should still call
@@ -247,12 +249,14 @@ Remove SafeSelect binary, config, data, audit logs, and keychain entries. Requir
 
 When database access fails, agents should proceed in this order:
 
-1. Call `check` and read the stable diagnostic codes.
-2. If the sidecar, SSH tunnel, or JDBC connection is stale, call `reconnect` once.
-3. If config is missing or invalid, call `config_validate` and `config_show`.
-4. If the driver is missing, call `driver_list` then `driver_download` for PostgreSQL.
-5. If the secret is missing, ask the user for permission/password and use `config_set_password`.
-6. Do not retry rejected SQL after a security violation; SafeSelect intentionally exits fail-closed.
+1. If a data tool returns `Connection closed`, stop probing data tools; call `check`.
+2. Otherwise, call `check` and read the stable diagnostic codes.
+3. If `check` reports `SAFESELECT_SIDECAR_CONNECTION_FAILED` while starting the sidecar, do not call `reconnect`; report the diagnostic and inspect config, tunnel, or backend availability.
+4. If an existing sidecar, SSH tunnel, or backend connection is stale, call `reconnect` once.
+5. If config is missing or invalid, call `config_validate` and `config_show`.
+6. If the driver is missing, call `driver_list` then `driver_download` for PostgreSQL.
+7. If the secret is missing, ask the user for permission/password and use `config_set_password`.
+8. Do not retry rejected SQL after a security violation; SafeSelect intentionally exits fail-closed.
 
 Timeouts are bounded by the project `statement_timeout_ms`. If a query times out,
 agents should narrow filters, inspect the plan with `explain`, or ask the user

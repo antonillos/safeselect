@@ -116,13 +116,13 @@ pub enum Command {
         #[arg(long)]
         environment: String,
     },
-    /// Restart sidecar and verify the database connection with a test query
+    /// Restart sidecar and verify the database connection
     Reconnect {
         /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
         #[arg(long)]
         project: Option<PathBuf>,
         #[arg(long)]
-        environment: String,
+        environment: Option<String>,
     },
     /// Uninstall SafeSelect (binary, global config, data, audit, keychain)
     Uninstall {

@@ -132,7 +132,19 @@ fn run(cli: Cli) -> Result<()> {
             environment,
         } => {
             let dir = resolve_project_dir(&loader, project)?;
-            cmd_reconnect(&loader, &dir, &environment)
+            if let Some(environment) = environment {
+                cmd_reconnect(&loader, &dir, &environment)
+            } else {
+                let env_names = list_environment_names(&dir)?;
+                if env_names.is_empty() {
+                    println!(
+                        "No environments found in {}",
+                        dir.join(".safeselect").join("environments").display()
+                    );
+                    return Ok(());
+                }
+                run_reconnects(&loader, &dir, &env_names)
+            }
         }
         Command::Uninstall { force } => cmd_uninstall(force),
     }
@@ -3174,6 +3186,33 @@ fn run_checks(repo_root: &std::path::Path, env_names: &[String], verbose: bool) 
     Ok(())
 }
 
+/// Run `safeselect reconnect` for each environment and report results.
+fn run_reconnects(
+    loader: &ConfigLoader,
+    repo_root: &std::path::Path,
+    env_names: &[String],
+) -> Result<()> {
+    let mut failures = Vec::new();
+    for env_name in env_names {
+        match cmd_reconnect(loader, repo_root, env_name) {
+            Ok(()) => {}
+            Err(e) => {
+                println!("Reconnect failed for {env_name}: {e}");
+                failures.push(format!("{env_name}: {e}"));
+            }
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(SafeselectError::Other(format!(
+            "reconnect failed for {} environment(s): {}",
+            failures.len(),
+            failures.join("; ")
+        )))
+    }
+}
+
 fn cmd_serve_setup(_loader: &ConfigLoader, repo_root: &Path) -> Result<()> {
     tracing::info!("No .safeselect/ found — entering setup mode");
 
@@ -3875,32 +3914,57 @@ fn cmd_reconnect(
         }
     }
 
-    let driver = resolved.driver.as_ref().ok_or_else(|| {
-        SafeselectError::Config("reconnect currently supports only JDBC environments".into())
-    })?;
-    let mut sidecar = SidecarProcess::start_with_timeout(
-        &driver.path,
-        &driver.class,
-        &resolved.environment.database.url,
-        &resolved.environment.database.username,
-        &resolved.password,
-        0,
-        resolved.project.limits.statement_timeout_ms,
-        ResultLimits {
-            max_rows: resolved.project.limits.max_rows,
-            max_result_bytes: resolved.project.limits.max_result_bytes,
-        },
-        false,
-    )?;
+    let limits = ResultLimits {
+        max_rows: resolved.project.limits.max_rows,
+        max_result_bytes: resolved.project.limits.max_result_bytes,
+    };
+    let mut sidecar = match resolved.environment.database.kind {
+        crate::backend::BackendKind::Jdbc => {
+            let driver = resolved.driver.as_ref().ok_or_else(|| {
+                SafeselectError::Config(
+                    "reconnect requires a JDBC driver for JDBC environments".into(),
+                )
+            })?;
+            SidecarProcess::start_with_timeout(
+                &driver.path,
+                &driver.class,
+                &resolved.environment.database.url,
+                &resolved.environment.database.username,
+                &resolved.password,
+                0,
+                resolved.project.limits.statement_timeout_ms,
+                limits,
+                false,
+            )?
+        }
+        crate::backend::BackendKind::Document => SidecarProcess::start_document_with_timeout(
+            resolved.environment.database.vendor(),
+            &resolved.environment.database.url,
+            &resolved.environment.database.username,
+            &resolved.password,
+            0,
+            resolved.project.limits.statement_timeout_ms,
+            limits,
+            false,
+        )?,
+    };
 
     sidecar.ping()?;
     println!("  ✓ Sidecar started and pinged");
 
-    let result = sidecar.execute("SELECT 1 AS connection_test")?;
-    println!(
-        "  ✓ Connection verified: SELECT 1 returned {} row(s)",
-        result.row_count
-    );
+    match resolved.environment.database.kind {
+        crate::backend::BackendKind::Jdbc => {
+            let result = sidecar.execute("SELECT 1 AS connection_test")?;
+            println!(
+                "  ✓ Connection verified: SELECT 1 returned {} row(s)",
+                result.row_count
+            );
+        }
+        crate::backend::BackendKind::Document => {
+            sidecar.verify_document_connection()?;
+            println!("  ✓ Connection verified: MongoDB ping succeeded");
+        }
+    }
 
     sidecar.shutdown()?;
     println!("  ✓ Reconnection successful to {name}/{environment}");

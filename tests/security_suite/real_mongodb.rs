@@ -13,7 +13,8 @@ pub fn run() {
         format!("security_mongo_{}", std::process::id()),
     );
 
-    let tmp = std::env::temp_dir().join(format!("safeselect-mongo-security-{}", std::process::id()));
+    let tmp =
+        std::env::temp_dir().join(format!("safeselect-mongo-security-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);
     let repo_root = tmp.join("repo");
     let config_dir = tmp.join("config");
@@ -28,35 +29,87 @@ pub fn run() {
     mongodb::write_config(&repo_root);
 
     let result = std::panic::catch_unwind(|| {
-        log_check("`safeselect check` happy path");
-        let (stdout, stderr, success) = mongodb::run_safeselect_args(
-            &repo_root,
-            &config_dir,
-            &["check", "--environment", "testing"],
-        );
-        assert!(success, "check failed\nstdout:\n{stdout}\nstderr:\n{stderr}");
-        assert!(stdout.contains("MongoDB ping succeeded"), "unexpected check output: {stdout}");
-
         let baseline = database_state();
         log_step(&format!("captured baseline MongoDB state: {:?}", baseline));
 
         let mut harness = mongodb::McpHarness::start(&repo_root, &config_dir);
 
+        log_check("MCP tools/list exposes document tools and guidance");
+        let tools = harness.list_tools(9);
+        assert!(
+            tools.to_string().contains("database_info")
+                && tools.to_string().contains("list_databases")
+                && tools.to_string().contains("aggregate_documents"),
+            "document tools missing from tools/list: {tools}"
+        );
+        assert!(
+            tools
+                .to_string()
+                .contains("\"items\":{\"type\":\"object\"}")
+                && tools.to_string().contains("do not call list_mcp_resources"),
+            "agent guidance missing from tools/list: {tools}"
+        );
+
+        log_check("MCP database_info declares document backend and no resources");
+        let info = harness.call_tool(10, "database_info", json!({}));
+        assert!(info.success, "database_info failed: {}", info.text);
+        assert!(
+            info.text.contains("\"kind\":\"document\"")
+                && info.text.contains("\"resources_supported\":false"),
+            "unexpected database_info: {}",
+            info.text
+        );
+
+        log_check("MCP check happy path");
+        let check = harness.call_tool(11, "check", json!({}));
+        assert!(check.success, "MCP check failed: {}", check.text);
+        assert!(
+            check.text.contains("MongoDB ping succeeded")
+                && !check.text.contains("PostgreSQL unreachable")
+                && !check.text.contains("JDBC connection failed"),
+            "unexpected MCP check output: {}",
+            check.text
+        );
+
         log_check("list_databases is filtered to allowed databases");
-        let databases = harness.call_tool(10, "list_databases", json!({}));
-        assert!(databases.success, "list_databases failed: {}", databases.text);
-        assert!(databases.text.contains(&mongodb::test_db()), "allowed database missing: {}", databases.text);
-        assert!(!databases.text.contains("admin"), "unexpected admin database leak: {}", databases.text);
+        let databases = harness.call_tool(12, "list_databases", json!({}));
+        assert!(
+            databases.success,
+            "list_databases failed: {}",
+            databases.text
+        );
+        assert!(
+            databases.text.contains(&mongodb::test_db()),
+            "allowed database missing: {}",
+            databases.text
+        );
+        assert!(
+            !databases.text.contains("admin"),
+            "unexpected admin database leak: {}",
+            databases.text
+        );
 
         log_check("list_collections hides denied collections");
         let collections = harness.call_tool(
-            11,
+            13,
             "list_collections",
             json!({ "database": mongodb::test_db() }),
         );
-        assert!(collections.success, "list_collections failed: {}", collections.text);
-        assert!(collections.text.contains("safe_docs"), "safe_docs missing: {}", collections.text);
-        assert!(collections.text.contains("large_docs"), "large_docs missing: {}", collections.text);
+        assert!(
+            collections.success,
+            "list_collections failed: {}",
+            collections.text
+        );
+        assert!(
+            collections.text.contains("safe_docs"),
+            "safe_docs missing: {}",
+            collections.text
+        );
+        assert!(
+            collections.text.contains("large_docs"),
+            "large_docs missing: {}",
+            collections.text
+        );
         assert!(
             !collections.text.contains("secret_docs"),
             "secret_docs should have been filtered out: {}",
@@ -65,7 +118,7 @@ pub fn run() {
 
         log_check("find_documents happy path");
         let find = harness.call_tool(
-            12,
+            14,
             "find_documents",
             json!({
                 "database": mongodb::test_db(),
@@ -76,11 +129,15 @@ pub fn run() {
             }),
         );
         assert!(find.success, "find_documents failed: {}", find.text);
-        assert!(find.text.contains("alpha") && find.text.contains("beta"), "unexpected find result: {}", find.text);
+        assert!(
+            find.text.contains("alpha") && find.text.contains("beta"),
+            "unexpected find result: {}",
+            find.text
+        );
 
         log_check("aggregate_documents happy path");
         let aggregate = harness.call_tool(
-            13,
+            15,
             "aggregate_documents",
             json!({
                 "database": mongodb::test_db(),
@@ -92,12 +149,20 @@ pub fn run() {
                 "limit": 2
             }),
         );
-        assert!(aggregate.success, "aggregate_documents failed: {}", aggregate.text);
-        assert!(aggregate.text.contains("alpha"), "unexpected aggregate result: {}", aggregate.text);
+        assert!(
+            aggregate.success,
+            "aggregate_documents failed: {}",
+            aggregate.text
+        );
+        assert!(
+            aggregate.text.contains("alpha"),
+            "unexpected aggregate result: {}",
+            aggregate.text
+        );
 
         log_check("explain_documents happy path");
         let explain = harness.call_tool(
-            14,
+            16,
             "explain_documents",
             json!({
                 "database": mongodb::test_db(),
@@ -106,7 +171,11 @@ pub fn run() {
                 "limit": 1
             }),
         );
-        assert!(explain.success, "explain_documents failed: {}", explain.text);
+        assert!(
+            explain.success,
+            "explain_documents failed: {}",
+            explain.text
+        );
         assert!(
             explain.text.contains("queryPlanner")
                 || explain.text.contains("winningPlan")
@@ -196,13 +265,24 @@ pub fn run() {
                     "limit": 1
                 }),
             ),
+            (
+                27,
+                "aggregate non-object stage",
+                "aggregate_documents",
+                json!({
+                    "database": mongodb::test_db(),
+                    "collection": "safe_docs",
+                    "pipeline": ["$match"],
+                    "limit": 1
+                }),
+            ),
         ] {
             assert_rejected(&mut harness, id, name, tool, args, &baseline);
         }
 
         log_check("byte limit rejection");
         let byte_limit = harness.call_tool(
-            27,
+            28,
             "find_documents",
             json!({
                 "database": mongodb::test_db(),
@@ -222,11 +302,15 @@ pub fn run() {
             "byte limit failed for wrong reason: {}",
             byte_limit.text
         );
-        assert_eq!(&database_state(), &baseline, "byte limit changed MongoDB state");
+        assert_eq!(
+            &database_state(),
+            &baseline,
+            "byte limit changed MongoDB state"
+        );
 
         log_check("timeout rejection is visible");
         let timeout = harness.call_tool(
-            28,
+            29,
             "aggregate_documents",
             json!({
                 "database": mongodb::test_db(),
@@ -247,7 +331,11 @@ pub fn run() {
                 "limit": 1
             }),
         );
-        assert!(!timeout.success, "timeout scenario unexpectedly succeeded: {}", timeout.text);
+        assert!(
+            !timeout.success,
+            "timeout scenario unexpectedly succeeded: {}",
+            timeout.text
+        );
         assert!(
             timeout.text.contains("ExecutionTimeout")
                 || timeout.text.contains("exceeded time limit")
@@ -258,7 +346,11 @@ pub fn run() {
             "timeout failed for wrong reason: {}",
             timeout.text
         );
-        assert_eq!(&database_state(), &baseline, "timeout changed MongoDB state");
+        assert_eq!(
+            &database_state(),
+            &baseline,
+            "timeout changed MongoDB state"
+        );
 
         log_check("baseline remained unchanged after all rejections");
         assert_eq!(database_state(), baseline);
@@ -284,18 +376,34 @@ fn assert_rejected(
     log_check(&format!("expect rejection: {name}"));
     log_step(&format!("tool={tool} args={args}"));
     let response = harness.call_tool(id, tool, args);
-    assert!(!response.success, "{name} unexpectedly succeeded: {}", response.text);
+    assert!(
+        !response.success,
+        "{name} unexpectedly succeeded: {}",
+        response.text
+    );
     assert!(
         response.text.contains("Request rejected")
             || response.text.contains("not read-only")
             || response.text.contains("not in the allowed databases list")
             || response.text.contains("denied")
             || response.text.contains("must be a JSON object")
+            || response.text.contains("must be JSON objects")
             || response.text.contains("must be between 1 and"),
         "{name} failed for the wrong reason: {}",
         response.text
     );
-    assert_eq!(&database_state(), baseline, "{name} changed MongoDB state despite rejection");
+    if name == "aggregate non-object stage" {
+        assert!(
+            response.text.contains("do not repeat the same call"),
+            "aggregate stage rejection should guide retry behavior: {}",
+            response.text
+        );
+    }
+    assert_eq!(
+        &database_state(),
+        baseline,
+        "{name} changed MongoDB state despite rejection"
+    );
     log_step(&format!("confirmed rejection without mutation: {name}"));
 }
 
