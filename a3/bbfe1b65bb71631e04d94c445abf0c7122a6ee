@@ -1,0 +1,29 @@
+src/mcp.rs
+  s_7a59f88cf7fa82::t_a6b15997dc53a9 473-475,481-484,486
+src/security.rs
+  s_fd265031d54faf::t_f93777b06d5d12 155-159,201-205,1520-1542,1571-1598
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.4",
+  "base_commit_sha": "a3bbfe1b65bb71631e04d94c445abf0c7122a6ee",
+  "prompts": {},
+  "sessions": {
+    "s_7a59f88cf7fa82": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f13ee-448e-7c30-90e1-a6b929bd7167",
+        "model": "unknown"
+      },
+      "human_author": "antonillos <305277+antonillos@users.noreply.github.com>"
+    },
+    "s_fd265031d54faf": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f17b5-5d90-70d3-9e32-3874b079b6aa",
+        "model": "unknown"
+      },
+      "human_author": "antonillos <305277+antonillos@users.noreply.github.com>"
+    }
+  }
+}
