@@ -470,15 +470,20 @@ impl McpServer {
         if self.backend.has(BackendCapability::DocumentCount) {
             tools.push(ToolDefinition {
                 name: "count_documents".into(),
-                description: self.tool_description("count MongoDB documents matching a filter"),
+                description: self.tool_description(
+                    "count MongoDB documents matching a non-empty filter; full collection counts are rejected because they can scan large PRE collections",
+                ),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
                         "database": {"type": "string"},
                         "collection": {"type": "string"},
-                        "filter": {"type": "object"}
+                        "filter": {
+                            "type": "object",
+                            "description": "Non-empty MongoDB filter. Do not use {} for exploratory counts; use find_documents with limit or an indexed filter."
+                        }
                     },
-                    "required": ["database", "collection"]
+                    "required": ["database", "collection", "filter"]
                 }),
             });
         }
