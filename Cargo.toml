@@ -1,6 +1,6 @@
 [package]
 name = "safeselect"
-version = "0.5.1"
+version = "0.5.2"
 edition = "2021"
 description = "Fail-closed read-only database access for AI agents over MCP"
 license = "MIT OR Apache-2.0"
