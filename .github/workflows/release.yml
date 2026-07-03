@@ -95,6 +95,8 @@ jobs:
     if: needs.validate-version.outputs.exists != 'true'
     needs: validate-version
     uses: ./.github/workflows/integration-tests.yml
+    with:
+      target_ref: ${{ needs.validate-version.outputs.target-ref }}
 
   create-release:
     if: needs.validate-version.outputs.exists != 'true' && needs.integration-tests.result == 'success'
