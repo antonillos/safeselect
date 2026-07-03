@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented in this file.
 
+## [v0.5.2] - 2026-07-03
+
+### Build And CI
+
+- ci: restore content-based main sync workflow
+- chore: promote develop to main
+
 ## [v0.5.1] - 2026-06-26
 
 ### Added
