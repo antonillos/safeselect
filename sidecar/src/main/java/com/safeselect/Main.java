@@ -1,6 +1,6 @@
 package com.safeselect;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.mongodb.client.FindIterable;
 import com.mongodb.client.AggregateIterable;
 import com.mongodb.client.MongoClient;

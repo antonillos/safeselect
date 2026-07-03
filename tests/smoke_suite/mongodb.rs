@@ -140,27 +140,6 @@ variable = "SAFESELECT_MONGODB_TEST_PASSWORD"
     .unwrap();
 }
 
-pub fn run_safeselect_args(
-    root: &Path,
-    config_dir: &Path,
-    args: &[&str],
-) -> (String, String, bool) {
-    let output = Command::new(safeselect_bin())
-        .args(args)
-        .env("SAFESELECT_CONFIG_DIR", config_dir)
-        .env("SAFESELECT_MONGODB_TEST_PASSWORD", TEST_PASSWORD)
-        .env("NO_COLOR", "1")
-        .current_dir(root)
-        .output()
-        .expect("failed to run safeselect");
-
-    (
-        strip_ansi(&String::from_utf8_lossy(&output.stdout)),
-        strip_ansi(&String::from_utf8_lossy(&output.stderr)),
-        output.status.success(),
-    )
-}
-
 pub fn collection_count(collection: &str) -> String {
     mongo_eval(&format!(
         "db.getSiblingDB('{db_name}').{collection}.countDocuments({{}})",
@@ -231,7 +210,10 @@ impl McpHarness {
             .and_then(|result| result.get("serverInfo"))
             .map(|_| response.to_string())
             .unwrap_or_else(|| response.to_string());
-        assert!(text.contains("safeselect"), "unexpected initialize response: {text}");
+        assert!(
+            text.contains("safeselect"),
+            "unexpected initialize response: {text}"
+        );
 
         self.send_json(&serde_json::json!({
             "jsonrpc": "2.0",
@@ -279,6 +261,15 @@ impl McpHarness {
             success: !is_error,
             text,
         }
+    }
+
+    pub fn list_tools(&mut self, id: u64) -> Value {
+        self.send_json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "tools/list"
+        }));
+        self.read_json_response()
     }
 
     fn send_json(&mut self, value: &Value) {
@@ -377,21 +368,4 @@ fn mongo_admin_user() -> String {
 
 fn mongo_admin_password() -> String {
     std::env::var("SAFESELECT_MONGODB_ADMIN_PASSWORD").unwrap_or_else(|_| TEST_PASSWORD.into())
-}
-
-fn strip_ansi(s: &str) -> String {
-    s.chars()
-        .fold((String::new(), false), |(mut out, mut escape), c| {
-            if escape {
-                if c == 'm' {
-                    escape = false;
-                }
-            } else if c == '\x1b' {
-                escape = true;
-            } else {
-                out.push(c);
-            }
-            (out, escape)
-        })
-        .0
 }

@@ -1,5 +1,5 @@
 class Safeselect < Formula
-  desc "MCP SQL Fail-Closed for AI Agents"
+  desc "Fail-closed read-only database access for AI agents over MCP"
   homepage "https://github.com/antonillos/safeselect"
   license "MIT OR Apache-2.0"
 

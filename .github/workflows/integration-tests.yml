@@ -5,7 +5,17 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      target_ref:
+        description: Branch or commit to test
+        required: false
+        default: ""
   workflow_call:
+    inputs:
+      target_ref:
+        description: Branch or commit to test
+        required: false
+        type: string
 
 jobs:
   integration-tests:
@@ -18,6 +28,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.target_ref || github.ref }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -31,7 +43,7 @@ jobs:
           java-version: '17'
 
       - name: Start integration services
-        run: docker compose -f docker-compose.integration.yml up -d
+        run: docker compose -f docker-compose.integration.yml up -d --wait
 
       - name: Cache cargo dependencies
         uses: actions/cache@v6

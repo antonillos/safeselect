@@ -137,7 +137,7 @@ impl SecurityEngine {
         })?;
         if !request.pipeline.is_array() {
             return Err(SafeselectError::QueryRejected(
-                "Aggregation pipeline must be a JSON array".into(),
+                "Aggregation pipeline must be a JSON array of stage objects. Correct the pipeline argument before retrying; do not repeat the same call. Example: [{\"$match\":{\"active\":true}}]".into(),
             ));
         }
         if request.limit == 0 || request.limit > self.limits.max_rows {
@@ -149,9 +149,14 @@ impl SecurityEngine {
         for stage in request.pipeline.as_array().into_iter().flatten() {
             let Some(stage_object) = stage.as_object() else {
                 return Err(SafeselectError::QueryRejected(
-                    "Aggregation stages must be JSON objects".into(),
+                    "Aggregation stages must be JSON objects. Correct the pipeline argument before retrying; do not repeat the same call. Example: [{\"$match\":{\"active\":true}}]".into(),
                 ));
             };
+            if stage_object.len() != 1 {
+                return Err(SafeselectError::QueryRejected(
+                    "Aggregation stages must contain exactly one operator. Correct the pipeline argument before retrying; do not repeat the same call. Example: [{\"$match\":{\"active\":true}}]".into(),
+                ));
+            }
             for name in stage_object.keys() {
                 if matches!(name.as_str(), "$out" | "$merge" | "$currentOp") {
                     return Err(SafeselectError::QueryRejected(format!(
@@ -191,6 +196,11 @@ impl SecurityEngine {
         if !request.filter.is_object() {
             return Err(SafeselectError::QueryRejected(
                 "Count filter must be a JSON object".into(),
+            ));
+        }
+        if request.filter.as_object().is_some_and(|filter| filter.is_empty()) {
+            return Err(SafeselectError::QueryRejected(
+                "Count filter must not be empty; full collection counts are rejected".into(),
             ));
         }
         Ok(())
@@ -1508,12 +1518,79 @@ mod tests {
     }
 
     #[test]
+    fn test_document_count_rejects_empty_filter() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        let request = DocumentCountRequest {
+            database: "app".into(),
+            collection: "users".into(),
+            filter: serde_json::json!({}),
+        };
+        let err = engine.validate_document_count(&request).unwrap_err();
+        assert!(err.to_string().contains("Count filter must not be empty"));
+    }
+
+    #[test]
+    fn test_document_count_allows_non_empty_filter() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        let request = DocumentCountRequest {
+            database: "app".into(),
+            collection: "users".into(),
+            filter: serde_json::json!({"owners.30": {"$exists": true}}),
+        };
+        assert!(engine.validate_document_count(&request).is_ok());
+    }
+
+    #[test]
     fn test_document_aggregate_rejects_write_stage() {
         let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
         let request = DocumentAggregateRequest {
             database: "app".into(),
             collection: "users".into(),
             pipeline: serde_json::json!([{"$match": {"active": true}}, {"$out": "copy"}]),
+            limit: 10,
+        };
+        assert!(engine.validate_document_aggregate(&request).is_err());
+    }
+
+    #[test]
+    fn test_document_aggregate_rejects_non_object_stage_with_retry_guidance() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        let request = DocumentAggregateRequest {
+            database: "app".into(),
+            collection: "users".into(),
+            pipeline: serde_json::json!(["$match"]),
+            limit: 10,
+        };
+        let err = engine.validate_document_aggregate(&request).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("Aggregation stages must be JSON objects"));
+        assert!(message.contains("do not repeat the same call"));
+        assert!(message.contains(r#"[{"$match":{"active":true}}]"#));
+    }
+
+    #[test]
+    fn test_document_aggregate_rejects_empty_stage_with_retry_guidance() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        let request = DocumentAggregateRequest {
+            database: "app".into(),
+            collection: "users".into(),
+            pipeline: serde_json::json!([{}]),
+            limit: 10,
+        };
+        let err = engine.validate_document_aggregate(&request).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("Aggregation stages must contain exactly one operator"));
+        assert!(message.contains("do not repeat the same call"));
+        assert!(message.contains(r#"[{"$match":{"active":true}}]"#));
+    }
+
+    #[test]
+    fn test_document_aggregate_rejects_multi_operator_stage() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        let request = DocumentAggregateRequest {
+            database: "app".into(),
+            collection: "users".into(),
+            pipeline: serde_json::json!([{"$match": {"active": true}, "$sort": {"_id": 1}}]),
             limit: 10,
         };
         assert!(engine.validate_document_aggregate(&request).is_err());
