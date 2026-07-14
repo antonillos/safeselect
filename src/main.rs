@@ -4004,10 +4004,9 @@ fn cmd_uninstall(force: bool) -> Result<()> {
 
     let mut removed_anything = false;
 
-    let bin = dirs::home_dir().map(|h| h.join(".local").join("bin").join("safeselect"));
-    if let Some(ref path) = bin {
+    for path in uninstall_binary_paths() {
         if path.exists() {
-            std::fs::remove_file(path)?;
+            std::fs::remove_file(&path)?;
             println!("  ✓ Removed {}", path.display());
             removed_anything = true;
         }
@@ -4091,9 +4090,32 @@ fn cmd_uninstall(force: bool) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn uninstall_binary_paths() -> Vec<PathBuf> {
+    let Some(home) = dirs::home_dir() else {
+        return Vec::new();
+    };
+    vec![
+        home.join(".local/bin/safeselect"),
+        home.join(".cargo/bin/safeselect"),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn uninstall_checks_supported_user_binary_locations() {
+        let home = dirs::home_dir().expect("home directory should be available");
+
+        assert_eq!(
+            uninstall_binary_paths(),
+            vec![
+                home.join(".local/bin/safeselect"),
+                home.join(".cargo/bin/safeselect"),
+            ]
+        );
+    }
 
     fn sample_dbeaver_connection() -> dbeaver::DBeaverConnection {
         dbeaver::DBeaverConnection {
