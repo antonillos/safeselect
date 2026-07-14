@@ -3021,15 +3021,16 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
             }
         }
 
-        // Helper: spawn sshpass -p <pw> ssh <ssh_args>
+        // Pass the password through the environment so it is not exposed in process arguments.
         let spawn_sshpass = |password: &str| -> std::io::Result<std::process::Child> {
-            let mut full = vec!["-p".into(), password.to_string(), "ssh".into()];
+            let mut full = vec!["-e".into(), "ssh".into()];
             full.extend(ssh_args.clone());
             std::process::Command::new("sshpass")
                 .args(&full)
+                .env("SSHPASS", password)
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
+                .stderr(std::process::Stdio::piped())
                 .spawn()
         };
 
@@ -3041,7 +3042,7 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
                 .args(&full)
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
+                .stderr(std::process::Stdio::piped())
                 .spawn()
         };
 
@@ -3096,7 +3097,7 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
         };
 
         // Wait briefly: if the bastion/tunnel is down, fail fast like JDBC clients do.
-        let tunnel_wait = Duration::from_secs(5);
+        let tunnel_wait = Duration::from_secs(10);
         let deadline = std::time::Instant::now() + tunnel_wait;
         let mut backend_ok = false;
         while std::time::Instant::now() < deadline {
@@ -3119,18 +3120,29 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
             if backend_ok {
                 break;
             }
-            std::thread::sleep(Duration::from_secs(2));
+            std::thread::sleep(Duration::from_millis(250));
         }
         if backend_ok {
             println!("OK");
             // Detach child so it survives after we exit
             let _ = std::thread::spawn(move || {
-                let _ = child.wait();
+                let _ = child.wait_with_output();
             });
         } else {
             let _ = child.kill();
-            let _ = child.wait();
+            let ssh_error = child.wait_with_output().ok().and_then(|output| {
+                let detail = String::from_utf8_lossy(&output.stderr)
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+                (!detail.is_empty()).then_some(detail)
+            });
             println!("FAILED");
+            if let Some(detail) = ssh_error {
+                println!("  SSH error: {detail}");
+            }
             println!(
                 "  Database not reachable through SSH tunnel (polled for up to {}s)",
                 tunnel_wait.as_secs()
