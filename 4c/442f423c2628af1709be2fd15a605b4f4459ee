@@ -1,0 +1,19 @@
+src/agents.rs
+  s_f4d30d8f7eb12b::t_b41ae0182ef6c4 51-68,70-73,145-161,402,1114-1134
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.11",
+  "base_commit_sha": "4c442f423c2628af1709be2fd15a605b4f4459ee",
+  "prompts": {},
+  "sessions": {
+    "s_f4d30d8f7eb12b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5fcd-adba-7572-ae97-ca4d03fe3fe5",
+        "model": "unknown"
+      },
+      "human_author": "antonillos <305277+antonillos@users.noreply.github.com>"
+    }
+  }
+}
