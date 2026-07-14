@@ -1,0 +1,21 @@
+src/main.rs
+  s_f4d30d8f7eb12b::t_247339c0820156 4007,4009,4093-4102,4107-4119
+src/mcp.rs
+  s_f4d30d8f7eb12b::t_47780090adc4d2 2844-2845
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.11",
+  "base_commit_sha": "ecfc9e83dcb7c3cbb49cf138230f050288c66f2f",
+  "prompts": {},
+  "sessions": {
+    "s_f4d30d8f7eb12b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5fcd-adba-7572-ae97-ca4d03fe3fe5",
+        "model": "unknown"
+      },
+      "human_author": "antonillos <305277+antonillos@users.noreply.github.com>"
+    }
+  }
+}
