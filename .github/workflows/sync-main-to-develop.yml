@@ -26,6 +26,8 @@ jobs:
           fetch-depth: 0
       - name: Prepare sync branch
         id: sync
+        env:
+          CI_SIGNING_KEY: ${{ secrets.SAFESELECT_CI_SIGNING_KEY }}
         shell: bash
         run: |
           set -euo pipefail
@@ -37,8 +39,19 @@ jobs:
           fi
 
           branch="sync/main-to-develop"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          signing_key="${RUNNER_TEMP}/safeselect-ci-signing-key"
+          if [[ -z "${CI_SIGNING_KEY}" ]]; then
+            printf 'Error: SAFESELECT_CI_SIGNING_KEY is not configured.\n' >&2
+            exit 1
+          fi
+          umask 077
+          printf '%s\n' "${CI_SIGNING_KEY}" > "${signing_key}"
+
+          git config user.name "antonillos"
+          git config user.email "305277+antonillos@users.noreply.github.com"
+          git config gpg.format ssh
+          git config user.signingkey "${signing_key}"
+          git config commit.gpgsign true
           git checkout -B "${branch}" origin/develop
 
           # Record main as an ancestor of develop instead of copying main's file
@@ -47,12 +60,14 @@ jobs:
           # it contains the work that happened after the release.
           git merge \
             --no-ff \
+            --gpg-sign \
             --strategy=ort \
             --strategy-option=ours \
             --message "chore: sync main into develop" \
             origin/main
 
           git merge-base --is-ancestor origin/main HEAD
+          git cat-file commit HEAD | grep -q '^gpgsig '
           git push --force-with-lease origin "${branch}"
 
           printf 'needed=true\n' >> "${GITHUB_OUTPUT}"
