@@ -198,7 +198,11 @@ impl SecurityEngine {
                 "Count filter must be a JSON object".into(),
             ));
         }
-        if request.filter.as_object().is_some_and(|filter| filter.is_empty()) {
+        if request
+            .filter
+            .as_object()
+            .is_some_and(|filter| filter.is_empty())
+        {
             return Err(SafeselectError::QueryRejected(
                 "Count filter must not be empty; full collection counts are rejected".into(),
             ));
@@ -1455,16 +1459,20 @@ mod tests {
 
     #[test]
     fn test_allowed_schema_pass() {
-        let mut policy = SecurityPolicy::default();
-        policy.allowed_schemas = vec!["public".into()];
+        let policy = SecurityPolicy {
+            allowed_schemas: vec!["public".into()],
+            ..SecurityPolicy::default()
+        };
         let engine = SecurityEngine::new(policy, LimitsConfig::default());
         assert!(engine.validate("SELECT * FROM public.users").is_ok());
     }
 
     #[test]
     fn test_denied_relation() {
-        let mut policy = SecurityPolicy::default();
-        policy.denied_relations = vec!["public.users_credentials".into()];
+        let policy = SecurityPolicy {
+            denied_relations: vec!["public.users_credentials".into()],
+            ..SecurityPolicy::default()
+        };
         let engine = SecurityEngine::new(policy, LimitsConfig::default());
         assert!(engine
             .validate("SELECT * FROM public.users_credentials")

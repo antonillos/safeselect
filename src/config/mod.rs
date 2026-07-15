@@ -54,7 +54,7 @@ impl ConfigLoader {
         for entry in std::fs::read_dir(&self.drivers_dir)? {
             let entry = entry?;
             let path = entry.path();
-            if path.extension().map_or(false, |e| e == "toml") {
+            if path.extension().is_some_and(|e| e == "toml") {
                 let content = std::fs::read_to_string(&path)?;
                 let config: DriverConfig = toml::from_str(&content)?;
                 if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {

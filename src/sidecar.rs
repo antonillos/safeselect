@@ -135,6 +135,7 @@ impl SidecarProcess {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn start_document_with_timeout(
         vendor: &str,
         url: &str,

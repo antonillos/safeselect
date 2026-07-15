@@ -296,7 +296,7 @@ fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
                                     .flatten()
                                     .flatten()
                                     .filter(|e| {
-                                        e.path().extension().map_or(false, |ext| ext == "toml")
+                                        e.path().extension().is_some_and(|ext| ext == "toml")
                                     })
                                     .filter_map(|e| {
                                         e.path()
@@ -695,7 +695,7 @@ fn clear_project_config(repo_root: &Path, delete_dir: bool) -> Result<()> {
         if let Ok(entries) = std::fs::read_dir(&env_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.extension().map_or(false, |ext| ext == "toml") {
+                if path.extension().is_some_and(|ext| ext == "toml") {
                     if let Ok(content) = std::fs::read_to_string(&path) {
                         if let Ok(env_cfg) = toml::from_str::<config::EnvironmentConfig>(&content) {
                             if let Some(ref secret) = env_cfg.database.secret {
@@ -959,7 +959,7 @@ fn cmd_agent(action: AgentAction) -> Result<()> {
                     if let Ok(content) = std::fs::read_to_string(&project_file) {
                         if let Ok(project) = toml::from_str::<config::ProjectConfig>(&content) {
                             // MCP timeout = statement_timeout + 30s buffer
-                            (project.limits.statement_timeout_ms + 30_000) as u64
+                            project.limits.statement_timeout_ms + 30_000
                         } else {
                             120_000 // Default 2 minutes if config parse fails
                         }
@@ -1022,7 +1022,7 @@ fn cmd_agent(action: AgentAction) -> Result<()> {
                 if project_file.exists() {
                     if let Ok(content) = std::fs::read_to_string(&project_file) {
                         if let Ok(project) = toml::from_str::<config::ProjectConfig>(&content) {
-                            (project.limits.statement_timeout_ms + 30_000) as u64
+                            project.limits.statement_timeout_ms + 30_000
                         } else {
                             120_000
                         }
@@ -2919,10 +2919,7 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
             std::io::stdout().flush()?;
         }
 
-        let use_password = match &ssh.auth_type {
-            Some(at) if at == "PASSWORD" => true,
-            _ => false,
-        };
+        let use_password = matches!(&ssh.auth_type, Some(at) if at == "PASSWORD");
 
         // Check if we CAN establish our own tunnel (sshpass or key available)
         let can_establish = if use_password {
@@ -2993,10 +2990,7 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
         let tunnel_local_host = ssh.local_host.as_deref().unwrap_or("localhost");
         let tunnel_local_port = ssh.local_port.unwrap_or(15432);
 
-        let use_password = match &ssh.auth_type {
-            Some(at) if at == "PASSWORD" => true,
-            _ => false,
-        };
+        let use_password = matches!(&ssh.auth_type, Some(at) if at == "PASSWORD");
 
         // Use a different local port (15432) for forwarding, not the SSH server port
         // Build SSH args

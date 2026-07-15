@@ -2568,9 +2568,10 @@ impl McpServer {
                                     DiagnosticCode::SshTunnelAttempt,
                                     "Establishing SSH tunnel...",
                                 ));
-                                if let Err(e) =
-                                    setup_ssh_tunnels(&self.repo_root, &[self.env_name.clone()])
-                                {
+                                if let Err(e) = setup_ssh_tunnels(
+                                    &self.repo_root,
+                                    std::slice::from_ref(&self.env_name),
+                                ) {
                                     lines.push(diagnostics::line(
                                         DiagnosticStatus::Fail,
                                         DiagnosticCode::SshTunnelFailed,
@@ -2624,9 +2625,10 @@ impl McpServer {
                                 DiagnosticCode::SshTunnelAttempt,
                                 "Establishing SSH tunnel...",
                             ));
-                            if let Err(e) =
-                                setup_ssh_tunnels(&self.repo_root, &[self.env_name.clone()])
-                            {
+                            if let Err(e) = setup_ssh_tunnels(
+                                &self.repo_root,
+                                std::slice::from_ref(&self.env_name),
+                            ) {
                                 lines.push(diagnostics::line(
                                     DiagnosticStatus::Fail,
                                     DiagnosticCode::SshTunnelFailed,
@@ -2761,7 +2763,9 @@ impl McpServer {
                         "Preparing SSH tunnel before reconnect ({:?})",
                         start.elapsed()
                     );
-                    if let Err(e) = setup_ssh_tunnels(&self.repo_root, &[self.env_name.clone()]) {
+                    if let Err(e) =
+                        setup_ssh_tunnels(&self.repo_root, std::slice::from_ref(&self.env_name))
+                    {
                         return self.send_error(
                             id,
                             -32000,

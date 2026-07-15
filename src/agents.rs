@@ -1,10 +1,12 @@
 use crate::error::{Result, SafeselectError};
 use std::path::{Path, PathBuf};
 
+type ClientDetector = fn() -> Option<PathBuf>;
+
 pub fn detect_clients() -> Result<Vec<ClientConfig>> {
     let mut clients = vec![];
 
-    let candidates: Vec<(&str, fn() -> Option<PathBuf>)> = vec![
+    let candidates: Vec<(&str, ClientDetector)> = vec![
         ("opencode", detect_opencode_config),
         ("copilot", detect_copilot_config),
         ("cursor", detect_cursor_config),
@@ -538,7 +540,7 @@ fn detect_gemini_config() -> Option<PathBuf> {
     }
 }
 
-fn verify_permissions(path: &PathBuf) -> Result<()> {
+fn verify_permissions(path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -1034,6 +1036,19 @@ fn remove_text_block(content: &str, name: &str) -> String {
         .join("\n")
 }
 
+fn show_diff(old: &str, new: &str) {
+    use similar::{ChangeTag, TextDiff};
+    let diff = TextDiff::from_lines(old, new);
+    for change in diff.iter_all_changes() {
+        let sign = match change.tag() {
+            ChangeTag::Delete => "-",
+            ChangeTag::Insert => "+",
+            ChangeTag::Equal => " ",
+        };
+        print!("{}{}", sign, change.value());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1177,18 +1192,5 @@ value = true
             config_has_entry("opencode", content, "safeselect-demo-pre").unwrap();
 
         assert!(global_has_entry);
-    }
-}
-
-fn show_diff(old: &str, new: &str) {
-    use similar::{ChangeTag, TextDiff};
-    let diff = TextDiff::from_lines(old, new);
-    for change in diff.iter_all_changes() {
-        let sign = match change.tag() {
-            ChangeTag::Delete => "-",
-            ChangeTag::Insert => "+",
-            ChangeTag::Equal => " ",
-        };
-        print!("{}{}", sign, change.value());
     }
 }
