@@ -126,6 +126,15 @@ Use `format: "text"` when the output is mainly for a human.
 
 Arguments:
 - `sql` (required): query to explain
+- `analyze` (optional): execute the SELECT to collect actual runtime statistics
+- `buffers` (optional): include cache/disk page activity
+- `explain_verbose` (optional): include PostgreSQL `VERBOSE` planner output
+- `format` (optional): `"json"` (default) or `"text"`
+- `verbose` (optional): enable sidecar logging for this execution
+
+For performance investigations, agents can request `analyze`, `buffers`, and
+`explain_verbose` together. Because `ANALYZE` executes the SELECT, avoid it for
+large or expensive queries unless the user is explicitly investigating performance.
 
 ### `list_databases`
 
@@ -155,33 +164,19 @@ Arguments:
 - `projection` (optional): JSON object projection
 - `sort` (optional): JSON object sort
 - `limit` (optional): maximum number of documents to return
-- `analyze` (optional): add `ANALYZE` and execute the SELECT to collect actual runtime statistics
-- `buffers` (optional): add `BUFFERS` to show cache/disk page activity
-- `explain_verbose` (optional): add PostgreSQL `VERBOSE` planner output
-- `format` (optional): `"json"` default or `"text"`
-- `verbose` (optional): enable verbose sidecar logging, not PostgreSQL `EXPLAIN VERBOSE`
 
-For performance investigations, agents should normally request:
+### Additional MongoDB tools
 
-```json
-{
-  "sql": "SELECT ...",
-  "analyze": true,
-  "buffers": true,
-  "explain_verbose": true,
-  "format": "json"
-}
-```
+- `aggregate_documents`: run a non-empty array of JSON-object stages; `$out` and `$merge` are rejected.
+- `distinct_documents`: return distinct values for a field, optionally filtered and limited.
+- `count_documents`: count documents matching a required, non-empty filter; `{}` is rejected to avoid accidental full scans.
+- `explain_documents`: explain a bounded find query without executing a write.
+- `profile_document_field`: profile a nested field over a bounded sample.
+- `discover_document_schema`: infer frequent fields and types over a bounded sample.
+- `generate_document_fixture`: return anonymized samples in the response; it never writes fixture files.
 
-That produces a statement equivalent to:
-
-```sql
-EXPLAIN (ANALYZE, BUFFERS, VERBOSE, FORMAT JSON) SELECT ...
-```
-
-`ANALYZE` executes the SELECT. It is useful for real bottlenecks and index usage,
-but agents should avoid it for very large or expensive queries unless the user is
-explicitly investigating performance.
+All document tools enforce configured database/collection allowlists and denylists,
+statement timeouts, and result-size limits.
 
 ## Connection Tools
 

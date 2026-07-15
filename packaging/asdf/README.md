@@ -14,7 +14,7 @@ asdf set -u safeselect "${SAFESELECT_VERSION}"
 ## Requirements
 
 - Java 17+
-- A JDBC driver (install with `safeselect driver download --vendor postgresql`)
+- A JDBC driver for PostgreSQL environments (install with `safeselect driver download --vendor postgresql`); MongoDB needs no separate driver
 
 ## MCP
 
