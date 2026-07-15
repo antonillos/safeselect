@@ -2841,9 +2841,8 @@ impl McpServer {
         let mut removed_anything = false;
         let mut lines = vec![];
 
-        let bin = dirs::home_dir().map(|h| h.join(".local").join("bin").join("safeselect"));
-        if let Some(ref path) = bin.filter(|p| p.exists()) {
-            if std::fs::remove_file(path).is_ok() {
+        for path in crate::uninstall_binary_paths() {
+            if path.exists() && std::fs::remove_file(&path).is_ok() {
                 lines.push(format!("  ✓ Removed {}", path.display()));
                 removed_anything = true;
             }
