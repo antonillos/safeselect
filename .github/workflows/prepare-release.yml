@@ -188,13 +188,26 @@ jobs:
       - name: Run tests
         run: cargo test
       - name: Create release branch
+        env:
+          CI_SIGNING_KEY: ${{ secrets.SAFESELECT_CI_SIGNING_KEY }}
         shell: bash
         run: |
           set -euo pipefail
           branch="release/${{ steps.version.outputs.tag }}"
           release_files="$(mktemp -d)"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          signing_key="${RUNNER_TEMP}/safeselect-ci-signing-key"
+          if [[ -z "${CI_SIGNING_KEY}" ]]; then
+            printf 'Error: SAFESELECT_CI_SIGNING_KEY is not configured.\n' >&2
+            exit 1
+          fi
+          umask 077
+          printf '%s\n' "${CI_SIGNING_KEY}" > "${signing_key}"
+
+          git config user.name "antonillos"
+          git config user.email "305277+antonillos@users.noreply.github.com"
+          git config gpg.format ssh
+          git config user.signingkey "${signing_key}"
+          git config commit.gpgsign true
           cp CHANGELOG.md Cargo.toml Cargo.lock sidecar/pom.xml "${release_files}/"
           git checkout -B "${branch}" "origin/${{ inputs.base_branch }}"
           cp "${release_files}/CHANGELOG.md" CHANGELOG.md
@@ -202,7 +215,8 @@ jobs:
           cp "${release_files}/Cargo.lock" Cargo.lock
           cp "${release_files}/pom.xml" sidecar/pom.xml
           git add CHANGELOG.md Cargo.toml Cargo.lock sidecar/pom.xml
-          git commit -m "release: bump to ${{ steps.version.outputs.next }}"
+          git commit --gpg-sign -m "release: bump to ${{ steps.version.outputs.next }}"
+          git cat-file commit HEAD | grep -q '^gpgsig '
           git push --force-with-lease origin "${branch}"
       - name: Open release PR
         env:
