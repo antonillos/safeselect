@@ -2,6 +2,40 @@
 
 All notable changes to this project are documented in this file.
 
+## [v0.6.0] - 2026-07-15
+
+### Fixed
+
+- fix: harden MongoDB MCP recovery
+- fix: reject empty MongoDB counts
+- fix: update jackson databind dependency
+
+### Documentation
+
+- docs: update safeselect product description
+- docs: align documentation with latest changes
+- docs: sync documentation after remote merge
+
+### Build And CI
+
+- chore: sync main into develop (#43)
+- ci: restore content-based main sync workflow
+- ci: harden release integration workflow
+- chore: sync main into develop
+- chore: resolve formatting and clippy warnings
+- ci: run postgres reconnect integration test
+- ci: make main sync preserve develop changes
+- ci: sign main synchronization commits
+
+### Other
+
+- chore(deps): bump uuid from 1.23.3 to 1.23.4
+- feat(agent): allow choosing opencode jsonc config
+- fix(ssh): make password tunnels more reliable
+- fix(uninstall): remove cargo-installed binary
+- chore(deps): bump uuid from 1.23.4 to 1.23.5
+- chore(deps): bump toml from 1.1.2+spec-1.1.0 to 1.1.3+spec-1.1.0
+
 ## [v0.5.2] - 2026-07-03
 
 ### Fixed
