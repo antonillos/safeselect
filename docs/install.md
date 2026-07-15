@@ -87,3 +87,16 @@ The agent installation writes an MCP stdio entry that runs `safeselect serve` fo
 one project and one environment. Agents do not receive raw database passwords.
 `agent upgrade` also migrates older entry names to the canonical
 `safeselect-<project>-<environment>` convention when it can detect the project.
+
+During an interactive OpenCode installation, SafeSelect can use the existing
+project-local config, create `.opencode/opencode.jsonc` alongside an existing
+`.opencode/opencode.json`, or install to the global config.
+
+## Uninstall
+
+```bash
+safeselect uninstall
+```
+
+The uninstaller removes SafeSelect binaries installed under either `~/.local/bin`
+or `~/.cargo/bin`, together with global config, data, audit logs, and Keychain entries.

@@ -52,12 +52,15 @@ safeselect agent status
 ```
 
 The installation command:
-1. Detects the agent's config file
-2. Validates the config format and permissions
-3. Creates a backup
-4. Shows a diff of the change
-5. Writes the new config atomically
-6. Verifies the write
+
+1. Detects the agent's config file.
+2. For an interactive OpenCode install, offers the existing project-local config,
+   a new `.opencode/opencode.jsonc` when `.opencode/opencode.json` already exists,
+   or the global config.
+3. Validates the selected config format and permissions.
+4. Creates a backup.
+5. Shows a diff of the change.
+6. Writes the new config atomically and verifies it.
 
 Use `safeselect agent upgrade` when you already have an installed SafeSelect MCP
 entry and want to refresh it after upgrading the SafeSelect binary. By default it
@@ -238,7 +241,8 @@ verification, and agent installation.
 ### `uninstall`
 
 Remove SafeSelect binary, config, data, audit logs, and keychain entries. Requires
-`confirm: true`.
+`confirm: true`. Binary cleanup covers both `~/.local/bin/safeselect` from the
+release installer and `~/.cargo/bin/safeselect` from `cargo install`.
 
 ## Agent Recovery Flow
 

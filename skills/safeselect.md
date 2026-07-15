@@ -78,6 +78,7 @@ commands:
   - safeselect import-dbeaver <path-to-zip>
   - safeselect import-compose --path compose.yml
   - safeselect import-compass [--path <compass-file-or-directory>]
+  - safeselect uninstall
 config:
   directory: "~/.config/safeselect/"
   structure: |
@@ -99,6 +100,7 @@ security:
   - MongoDB aggregation rejects $out and $merge; counts require non-empty filters
   - Read-only enforcement per project policy
   - Secrets via macOS Keychain or env vars (never in config files)
+  - Database passwords use sidecar stdin; SSH passwords use the sshpass environment, never process arguments
   - SHA-256 driver validation on every connection
   - No credentials in JDBC URLs
 agent_guidance:

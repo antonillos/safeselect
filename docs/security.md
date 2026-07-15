@@ -79,7 +79,8 @@ Any violation triggers:
 - Sources: macOS Keychain or environment variables (never inline)
 - Resolved once at startup, held in memory
 - Never written to disk or log files
-- Passwords passed to Java sidecar via stdin (not CLI args)
+- Database passwords are passed to the Java sidecar via stdin; SSH passwords are
+  supplied to `sshpass` through its environment variable, never through process arguments
 
 ## Threat Model
 

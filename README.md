@@ -151,8 +151,13 @@ When no `.safeselect/` directory exists, `safeselect serve --environment <env>` 
 | `safeselect agent install <client> --environment <env>` | Install an MCP entry |
 | `safeselect config set-password --environment <env>` | Store the database password |
 | `safeselect config set-ssh-password --environment <env>` | Store the SSH password |
+| `safeselect uninstall` | Remove installed binaries, global state, audit data, and Keychain entries |
 
 Use `safeselect --help` or a command-specific `--help` for the full CLI.
+
+Interactive OpenCode installation lets you choose the project-local JSON config,
+create a separate `.opencode/opencode.jsonc` when appropriate, or use the global config.
+Uninstall checks both release-installer and Cargo binary locations.
 
 ## Configuration
 
