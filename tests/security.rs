@@ -1,7 +1,7 @@
-#[path = "smoke_suite/postgres.rs"]
-mod postgres;
 #[path = "smoke_suite/mongodb.rs"]
 mod mongodb;
+#[path = "smoke_suite/postgres.rs"]
+mod postgres;
 #[path = "security_suite/mod.rs"]
 mod security_suite;
 

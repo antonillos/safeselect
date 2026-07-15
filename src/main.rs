@@ -296,7 +296,7 @@ fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
                                     .flatten()
                                     .flatten()
                                     .filter(|e| {
-                                        e.path().extension().map_or(false, |ext| ext == "toml")
+                                        e.path().extension().is_some_and(|ext| ext == "toml")
                                     })
                                     .filter_map(|e| {
                                         e.path()
@@ -695,7 +695,7 @@ fn clear_project_config(repo_root: &Path, delete_dir: bool) -> Result<()> {
         if let Ok(entries) = std::fs::read_dir(&env_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.extension().map_or(false, |ext| ext == "toml") {
+                if path.extension().is_some_and(|ext| ext == "toml") {
                     if let Ok(content) = std::fs::read_to_string(&path) {
                         if let Ok(env_cfg) = toml::from_str::<config::EnvironmentConfig>(&content) {
                             if let Some(ref secret) = env_cfg.database.secret {
@@ -959,7 +959,7 @@ fn cmd_agent(action: AgentAction) -> Result<()> {
                     if let Ok(content) = std::fs::read_to_string(&project_file) {
                         if let Ok(project) = toml::from_str::<config::ProjectConfig>(&content) {
                             // MCP timeout = statement_timeout + 30s buffer
-                            (project.limits.statement_timeout_ms + 30_000) as u64
+                            project.limits.statement_timeout_ms + 30_000
                         } else {
                             120_000 // Default 2 minutes if config parse fails
                         }
@@ -1022,7 +1022,7 @@ fn cmd_agent(action: AgentAction) -> Result<()> {
                 if project_file.exists() {
                     if let Ok(content) = std::fs::read_to_string(&project_file) {
                         if let Ok(project) = toml::from_str::<config::ProjectConfig>(&content) {
-                            (project.limits.statement_timeout_ms + 30_000) as u64
+                            project.limits.statement_timeout_ms + 30_000
                         } else {
                             120_000
                         }
@@ -2919,10 +2919,7 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
             std::io::stdout().flush()?;
         }
 
-        let use_password = match &ssh.auth_type {
-            Some(at) if at == "PASSWORD" => true,
-            _ => false,
-        };
+        let use_password = matches!(&ssh.auth_type, Some(at) if at == "PASSWORD");
 
         // Check if we CAN establish our own tunnel (sshpass or key available)
         let can_establish = if use_password {
@@ -2993,10 +2990,7 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
         let tunnel_local_host = ssh.local_host.as_deref().unwrap_or("localhost");
         let tunnel_local_port = ssh.local_port.unwrap_or(15432);
 
-        let use_password = match &ssh.auth_type {
-            Some(at) if at == "PASSWORD" => true,
-            _ => false,
-        };
+        let use_password = matches!(&ssh.auth_type, Some(at) if at == "PASSWORD");
 
         // Use a different local port (15432) for forwarding, not the SSH server port
         // Build SSH args
@@ -3021,15 +3015,16 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
             }
         }
 
-        // Helper: spawn sshpass -p <pw> ssh <ssh_args>
+        // Pass the password through the environment so it is not exposed in process arguments.
         let spawn_sshpass = |password: &str| -> std::io::Result<std::process::Child> {
-            let mut full = vec!["-p".into(), password.to_string(), "ssh".into()];
+            let mut full = vec!["-e".into(), "ssh".into()];
             full.extend(ssh_args.clone());
             std::process::Command::new("sshpass")
                 .args(&full)
+                .env("SSHPASS", password)
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
+                .stderr(std::process::Stdio::piped())
                 .spawn()
         };
 
@@ -3041,7 +3036,7 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
                 .args(&full)
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
+                .stderr(std::process::Stdio::piped())
                 .spawn()
         };
 
@@ -3096,7 +3091,7 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
         };
 
         // Wait briefly: if the bastion/tunnel is down, fail fast like JDBC clients do.
-        let tunnel_wait = Duration::from_secs(5);
+        let tunnel_wait = Duration::from_secs(10);
         let deadline = std::time::Instant::now() + tunnel_wait;
         let mut backend_ok = false;
         while std::time::Instant::now() < deadline {
@@ -3119,18 +3114,29 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
             if backend_ok {
                 break;
             }
-            std::thread::sleep(Duration::from_secs(2));
+            std::thread::sleep(Duration::from_millis(250));
         }
         if backend_ok {
             println!("OK");
             // Detach child so it survives after we exit
             let _ = std::thread::spawn(move || {
-                let _ = child.wait();
+                let _ = child.wait_with_output();
             });
         } else {
             let _ = child.kill();
-            let _ = child.wait();
+            let ssh_error = child.wait_with_output().ok().and_then(|output| {
+                let detail = String::from_utf8_lossy(&output.stderr)
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+                (!detail.is_empty()).then_some(detail)
+            });
             println!("FAILED");
+            if let Some(detail) = ssh_error {
+                println!("  SSH error: {detail}");
+            }
             println!(
                 "  Database not reachable through SSH tunnel (polled for up to {}s)",
                 tunnel_wait.as_secs()
@@ -3992,10 +3998,9 @@ fn cmd_uninstall(force: bool) -> Result<()> {
 
     let mut removed_anything = false;
 
-    let bin = dirs::home_dir().map(|h| h.join(".local").join("bin").join("safeselect"));
-    if let Some(ref path) = bin {
+    for path in uninstall_binary_paths() {
         if path.exists() {
-            std::fs::remove_file(path)?;
+            std::fs::remove_file(&path)?;
             println!("  ✓ Removed {}", path.display());
             removed_anything = true;
         }
@@ -4079,9 +4084,32 @@ fn cmd_uninstall(force: bool) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn uninstall_binary_paths() -> Vec<PathBuf> {
+    let Some(home) = dirs::home_dir() else {
+        return Vec::new();
+    };
+    vec![
+        home.join(".local/bin/safeselect"),
+        home.join(".cargo/bin/safeselect"),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn uninstall_checks_supported_user_binary_locations() {
+        let home = dirs::home_dir().expect("home directory should be available");
+
+        assert_eq!(
+            uninstall_binary_paths(),
+            vec![
+                home.join(".local/bin/safeselect"),
+                home.join(".cargo/bin/safeselect"),
+            ]
+        );
+    }
 
     fn sample_dbeaver_connection() -> dbeaver::DBeaverConnection {
         dbeaver::DBeaverConnection {

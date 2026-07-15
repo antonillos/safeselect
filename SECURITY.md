@@ -32,14 +32,15 @@ best-effort basis.
 SafeSelect implements multiple layers of security (all enforced server-side, not configurable by the agent):
 
 - **Fail-closed**: any security incident terminates the MCP process immediately
-- **Read-only always enforced**: only SELECT, EXPLAIN, and WITH queries allowed, never configurable
-- **Single statement**: multi-statement SQL is rejected unless explicitly allowed
+- **Read-only always enforced**: SQL is limited to SELECT, EXPLAIN, and WITH; MongoDB is limited to fixed discovery, read, analysis, and anonymized-fixture tools
+- **Single statement**: multi-statement SQL is always rejected
 - **SQL validation**: parsed and validated against policy before execution
 - **Allowed schemas / denied relations**: policy-based access control per project
 - **SHA-256 driver validation**: JDBC drivers are checksummed before each use
 - **macOS Keychain**: secrets stored securely, never in config files
-- **Password isolation**: passwords passed via stdin, never as CLI args
+- **Password isolation**: database passwords pass to the sidecar via stdin and SSH passwords pass to `sshpass` via its environment variable, never as CLI arguments
 - **Audit log**: all queries hashed (SHA-256), never stored in plain text
 - **Result limits**: row count and byte size limits enforced
 - **Auto-disconnect**: configurable idle timeout closes connection after inactivity
 - **Explicit query-plan analysis**: `EXPLAIN ANALYZE` is opt-in and still constrained by read-only validation
+- **MongoDB policy enforcement**: database/collection scopes, forbidden aggregation write stages, non-empty count filters, and bounded samples/results are enforced server-side

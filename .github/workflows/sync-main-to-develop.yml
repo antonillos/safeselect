@@ -10,6 +10,10 @@ permissions:
   contents: write
   pull-requests: write
 
+concurrency:
+  group: sync-main-to-develop
+  cancel-in-progress: false
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
@@ -22,6 +26,8 @@ jobs:
           fetch-depth: 0
       - name: Prepare sync branch
         id: sync
+        env:
+          CI_SIGNING_KEY: ${{ secrets.SAFESELECT_CI_SIGNING_KEY }}
         shell: bash
         run: |
           set -euo pipefail
@@ -33,24 +39,35 @@ jobs:
           fi
 
           branch="sync/main-to-develop"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          signing_key="${RUNNER_TEMP}/safeselect-ci-signing-key"
+          if [[ -z "${CI_SIGNING_KEY}" ]]; then
+            printf 'Error: SAFESELECT_CI_SIGNING_KEY is not configured.\n' >&2
+            exit 1
+          fi
+          umask 077
+          printf '%s\n' "${CI_SIGNING_KEY}" > "${signing_key}"
+
+          git config user.name "antonillos"
+          git config user.email "305277+antonillos@users.noreply.github.com"
+          git config gpg.format ssh
+          git config user.signingkey "${signing_key}"
+          git config commit.gpgsign true
           git checkout -B "${branch}" origin/develop
 
-          sync_files="$(mktemp)"
-          git diff --name-only -z origin/develop..origin/main > "${sync_files}"
-          if [[ ! -s "${sync_files}" ]]; then
-            printf 'needed=false\n' >> "${GITHUB_OUTPUT}"
-            printf 'Develop differs from main only by commit history. Nothing to sync.\n' >> "${GITHUB_STEP_SUMMARY}"
-            exit 0
-          fi
+          # Record main as an ancestor of develop instead of copying main's file
+          # snapshot. Non-conflicting changes from both branches are retained. If
+          # both branches changed the same lines, keep develop's version because
+          # it contains the work that happened after the release.
+          git merge \
+            --no-ff \
+            --gpg-sign \
+            --strategy=ort \
+            --strategy-option=ours \
+            --message "chore: sync main into develop" \
+            origin/main
 
-          while IFS= read -r -d '' path; do
-            git checkout origin/main -- "${path}"
-          done < "${sync_files}"
-
-          xargs -0 git add -- < "${sync_files}"
-          git commit -m "chore: sync main into develop"
+          git merge-base --is-ancestor origin/main HEAD
+          git cat-file commit HEAD | grep -q '^gpgsig '
           git push --force-with-lease origin "${branch}"
 
           printf 'needed=true\n' >> "${GITHUB_OUTPUT}"
@@ -64,7 +81,7 @@ jobs:
           set -euo pipefail
           branch="${{ steps.sync.outputs.branch }}"
           title="chore: sync main into develop"
-          body="Sync main back into develop after release."
+          body="Merge main back into develop after release so both branches share history. Non-conflicting changes from both branches are retained; overlapping lines keep the newer develop version."
           pr_url=""
           pr_number=""
 

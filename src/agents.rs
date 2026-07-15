@@ -1,10 +1,12 @@
 use crate::error::{Result, SafeselectError};
 use std::path::{Path, PathBuf};
 
+type ClientDetector = fn() -> Option<PathBuf>;
+
 pub fn detect_clients() -> Result<Vec<ClientConfig>> {
     let mut clients = vec![];
 
-    let candidates: Vec<(&str, fn() -> Option<PathBuf>)> = vec![
+    let candidates: Vec<(&str, ClientDetector)> = vec![
         ("opencode", detect_opencode_config),
         ("copilot", detect_copilot_config),
         ("cursor", detect_cursor_config),
@@ -48,11 +50,29 @@ pub fn install_entry(
         if let Some(root) = repo_root {
             if let Some(local_path) = detect_local_client_config(client, root) {
                 println!("Found local config: {}", local_path.display());
-                println!("Install to global config instead of local? [y/N] ");
-                let mut input = String::new();
-                std::io::stdin().read_line(&mut input)?;
-                if input.trim().eq_ignore_ascii_case("y") {
+                let jsonc_path = opencode_jsonc_alternative(client, &local_path);
+                let local_option = format!("Use local config ({})", local_path.display());
+                let jsonc_option = jsonc_path
+                    .as_ref()
+                    .map(|path| format!("Create local JSONC config ({})", path.display()));
+                let global_option = "Use global config".to_string();
+                let mut options = vec![local_option.clone()];
+                if let Some(option) = &jsonc_option {
+                    options.push(option.clone());
+                }
+                options.push(global_option.clone());
+
+                let selected =
+                    inquire::Select::new("Where should SafeSelect be installed?", options)
+                        .prompt()
+                        .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?;
+
+                if selected == global_option {
                     get_client_config(client)?
+                } else if jsonc_option.as_ref() == Some(&selected) {
+                    let jsonc_path = jsonc_path.expect("JSONC option requires a path");
+                    create_opencode_config(&jsonc_path)?;
+                    jsonc_path
                 } else {
                     println!("Installing to local config...");
                     local_path
@@ -121,6 +141,23 @@ pub fn install_entry(
     }
 
     println!("Entry '{entry_name}' installed for {client}");
+    Ok(())
+}
+
+fn opencode_jsonc_alternative(client: &str, local_path: &Path) -> Option<PathBuf> {
+    if client != "opencode" || local_path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+        return None;
+    }
+
+    let jsonc_path = local_path.with_extension("jsonc");
+    (!jsonc_path.exists()).then_some(jsonc_path)
+}
+
+fn create_opencode_config(path: &Path) -> Result<()> {
+    let default_config = serde_json::json!({
+        "mcp": {}
+    });
+    std::fs::write(path, serde_json::to_string_pretty(&default_config)?)?;
     Ok(())
 }
 
@@ -363,11 +400,8 @@ fn get_local_client_config(client: &str, repo_root: Option<&Path>) -> Result<Pat
                 existing.clone()
             } else {
                 std::fs::create_dir_all(&opencode_dir)?;
-                let default_config = serde_json::json!({
-                    "mcp": {}
-                });
                 let target = opencode_dir.join("opencode.jsonc");
-                std::fs::write(&target, serde_json::to_string_pretty(&default_config)?)?;
+                create_opencode_config(&target)?;
                 target
             }
         }
@@ -506,7 +540,7 @@ fn detect_gemini_config() -> Option<PathBuf> {
     }
 }
 
-fn verify_permissions(path: &PathBuf) -> Result<()> {
+fn verify_permissions(path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -1002,6 +1036,19 @@ fn remove_text_block(content: &str, name: &str) -> String {
         .join("\n")
 }
 
+fn show_diff(old: &str, new: &str) {
+    use similar::{ChangeTag, TextDiff};
+    let diff = TextDiff::from_lines(old, new);
+    for change in diff.iter_all_changes() {
+        let sign = match change.tag() {
+            ChangeTag::Delete => "-",
+            ChangeTag::Insert => "+",
+            ChangeTag::Equal => " ",
+        };
+        print!("{}{}", sign, change.value());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1080,6 +1127,27 @@ value = true
     }
 
     #[test]
+    fn offers_jsonc_alternative_for_existing_opencode_json() {
+        let temp = std::env::temp_dir().join(format!(
+            "safeselect-agent-jsonc-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).unwrap();
+        let json_path = temp.join("opencode.json");
+        std::fs::write(&json_path, "{}").unwrap();
+
+        let alternative = opencode_jsonc_alternative("opencode", &json_path);
+
+        assert_eq!(alternative, Some(temp.join("opencode.jsonc")));
+        assert!(opencode_jsonc_alternative("cursor", &json_path).is_none());
+
+        std::fs::write(temp.join("opencode.jsonc"), "{}").unwrap();
+        assert!(opencode_jsonc_alternative("opencode", &json_path).is_none());
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
     fn prefers_local_uninstall_target_when_entry_exists() {
         let temp =
             std::env::temp_dir().join(format!("safeselect-agent-test-{}", std::process::id()));
@@ -1124,18 +1192,5 @@ value = true
             config_has_entry("opencode", content, "safeselect-demo-pre").unwrap();
 
         assert!(global_has_entry);
-    }
-}
-
-fn show_diff(old: &str, new: &str) {
-    use similar::{ChangeTag, TextDiff};
-    let diff = TextDiff::from_lines(old, new);
-    for change in diff.iter_all_changes() {
-        let sign = match change.tag() {
-            ChangeTag::Delete => "-",
-            ChangeTag::Insert => "+",
-            ChangeTag::Equal => " ",
-        };
-        print!("{}{}", sign, change.value());
     }
 }

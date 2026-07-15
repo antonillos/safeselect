@@ -6,7 +6,7 @@
 [![Security](https://img.shields.io/badge/Security-fail--closed-success?logo=trustpilot&logoColor=white)]()
 [![Rust](https://img.shields.io/badge/Rust-1.81%2B-dea584?logo=rust&logoColor=white)]()
 [![Java](https://img.shields.io/badge/Java-17%2B-5382a1?logo=openjdk&logoColor=white)]()
-[![MCP](https://img.shields.io/badge/MCP-0.1.0-7b68ee)]()
+[![MCP](https://img.shields.io/badge/MCP-stdio%20tools-7b68ee)]()
 [![Homebrew](https://img.shields.io/badge/Homebrew-tap-FBB040?logo=homebrew&logoColor=white)](https://github.com/antonillos/homebrew-tap)
 [![asdf](https://img.shields.io/badge/asdf-plugin-8A2BE2)](https://github.com/antonillos/asdf-safeselect)
 [![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
@@ -56,7 +56,7 @@ The product promise is simple: **agents can look, but they cannot mutate**. Even
 | Backend | Status | Tools |
 |---|---|---|
 | PostgreSQL | Supported | `list_tables`, `select`, `explain` |
-| MongoDB | Supported | `list_databases`, `list_collections`, `find_documents` |
+| MongoDB | Supported | Discovery, find, aggregation, distinct/count, explain, profiling, schema inference, and anonymized fixtures |
 
 ## Architecture
 
@@ -107,7 +107,7 @@ Agents should use SafeSelect in this order:
 
 1. `database_info`
 2. `list_tables` for SQL, or `list_databases` / `list_collections` for NoSQL
-3. `select`, `explain`, or `find_documents`
+3. `select` / `explain`, or the bounded MongoDB read tool that matches the task
 4. `check`, `connect`, or `reconnect` when connectivity is stale
 
 Query responses include `row_count`, `byte_count`, `elapsed_ms`, and a human-readable `elapsed` value so agents can reason about result size and latency.
@@ -127,9 +127,10 @@ Query responses include `row_count`, `byte_count`, `elapsed_ms`, and a human-rea
 | Area | Tools |
 |---|---|
 | SQL | `list_tables`, `select`, `explain` |
-| NoSQL | `list_databases`, `list_collections`, `find_documents` |
+| MongoDB reads | `list_databases`, `list_collections`, `find_documents`, `aggregate_documents`, `distinct_documents`, `count_documents`, `explain_documents` |
+| MongoDB analysis | `profile_document_field`, `discover_document_schema`, `generate_document_fixture` |
 | Connection | `database_info`, `check`, `connect`, `disconnect`, `reconnect` |
-| Config | `config_validate`, `config_show`, `config_set_password`, `config_set_ssh_password`, `config_reset` |
+| Config | `config_validate`, `config_show`, `config_set_password`, `config_rename_environment`, `config_delete_environment`, `config_reset` |
 | Setup | `import_compose`, `driver_list`, `driver_add`, `driver_download`, `agent_detect`, `agent_install`, `agent_status`, `agent_uninstall` |
 
 When no `.safeselect/` directory exists, `safeselect serve --environment <env>` enters setup mode automatically and exposes only the setup-safe tools.
@@ -150,8 +151,13 @@ When no `.safeselect/` directory exists, `safeselect serve --environment <env>` 
 | `safeselect agent install <client> --environment <env>` | Install an MCP entry |
 | `safeselect config set-password --environment <env>` | Store the database password |
 | `safeselect config set-ssh-password --environment <env>` | Store the SSH password |
+| `safeselect uninstall` | Remove installed binaries, global state, audit data, and Keychain entries |
 
 Use `safeselect --help` or a command-specific `--help` for the full CLI.
+
+Interactive OpenCode installation lets you choose the project-local JSON config,
+create a separate `.opencode/opencode.jsonc` when appropriate, or use the global config.
+Uninstall checks both release-installer and Cargo binary locations.
 
 ## Configuration
 

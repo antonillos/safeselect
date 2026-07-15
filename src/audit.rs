@@ -107,7 +107,7 @@ impl AuditLog {
     fn cleanup_old(&self, dir: &std::path::Path) -> Result<()> {
         let mut files: Vec<_> = std::fs::read_dir(dir)?
             .filter_map(|e| e.ok())
-            .filter(|e| e.path().extension().map_or(false, |ext| ext == "jsonl"))
+            .filter(|e| e.path().extension().is_some_and(|ext| ext == "jsonl"))
             .collect();
         files.sort_by_key(|e| e.path());
 

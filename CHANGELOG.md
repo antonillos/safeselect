@@ -4,10 +4,27 @@ All notable changes to this project are documented in this file.
 
 ## [v0.5.2] - 2026-07-03
 
+### Fixed
+
+- Hardened MongoDB MCP recovery by refreshing resolved connection settings, distinguishing startup failures from stale connections, and supporting backend-aware reconnect checks.
+- Rejected empty MongoDB count filters to prevent accidental full-collection scans.
+- Updated Jackson Databind to 3.1.4 and migrated the sidecar imports to the new package namespace.
+- Made password-based SSH tunnels more reliable by keeping passwords out of process arguments, polling more responsively, waiting longer for startup, and reporting SSH errors.
+- Removed binaries installed by either the release installer (`~/.local/bin`) or Cargo (`~/.cargo/bin`) during uninstall.
+
+### Added
+
+- Added an interactive OpenCode install target picker, including the option to create a project-local `opencode.jsonc` when `opencode.json` already exists.
+
+### Documentation
+
+- Updated SafeSelect's product description across the CLI, package metadata, agent skill, and documentation.
+
 ### Build And CI
 
-- ci: restore content-based main sync workflow
-- chore: promote develop to main
+- Restored content-based synchronization from `main` to `develop`.
+- Hardened release integration workflow inputs and package-manager publishing.
+- Updated `uuid` from 1.23.3 to 1.23.5 and `toml` from 1.1.2 to 1.1.3.
 
 ## [v0.5.1] - 2026-06-26
 

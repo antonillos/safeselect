@@ -2568,9 +2568,10 @@ impl McpServer {
                                     DiagnosticCode::SshTunnelAttempt,
                                     "Establishing SSH tunnel...",
                                 ));
-                                if let Err(e) =
-                                    setup_ssh_tunnels(&self.repo_root, &[self.env_name.clone()])
-                                {
+                                if let Err(e) = setup_ssh_tunnels(
+                                    &self.repo_root,
+                                    std::slice::from_ref(&self.env_name),
+                                ) {
                                     lines.push(diagnostics::line(
                                         DiagnosticStatus::Fail,
                                         DiagnosticCode::SshTunnelFailed,
@@ -2624,9 +2625,10 @@ impl McpServer {
                                 DiagnosticCode::SshTunnelAttempt,
                                 "Establishing SSH tunnel...",
                             ));
-                            if let Err(e) =
-                                setup_ssh_tunnels(&self.repo_root, &[self.env_name.clone()])
-                            {
+                            if let Err(e) = setup_ssh_tunnels(
+                                &self.repo_root,
+                                std::slice::from_ref(&self.env_name),
+                            ) {
                                 lines.push(diagnostics::line(
                                     DiagnosticStatus::Fail,
                                     DiagnosticCode::SshTunnelFailed,
@@ -2761,7 +2763,9 @@ impl McpServer {
                         "Preparing SSH tunnel before reconnect ({:?})",
                         start.elapsed()
                     );
-                    if let Err(e) = setup_ssh_tunnels(&self.repo_root, &[self.env_name.clone()]) {
+                    if let Err(e) =
+                        setup_ssh_tunnels(&self.repo_root, std::slice::from_ref(&self.env_name))
+                    {
                         return self.send_error(
                             id,
                             -32000,
@@ -2841,9 +2845,8 @@ impl McpServer {
         let mut removed_anything = false;
         let mut lines = vec![];
 
-        let bin = dirs::home_dir().map(|h| h.join(".local").join("bin").join("safeselect"));
-        if let Some(ref path) = bin.filter(|p| p.exists()) {
-            if std::fs::remove_file(path).is_ok() {
+        for path in crate::uninstall_binary_paths() {
+            if path.exists() && std::fs::remove_file(&path).is_ok() {
                 lines.push(format!("  ✓ Removed {}", path.display()));
                 removed_anything = true;
             }

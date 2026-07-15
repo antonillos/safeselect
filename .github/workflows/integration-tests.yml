@@ -98,6 +98,7 @@ jobs:
       - name: Run reconnect test
         env:
           SAFESELECT_RECONNECT_TEST: 1
+          SAFESELECT_SECURITY_DOCKER_CONTAINER: safeselect-postgres-1
           SAFESELECT_SECURITY_HOST: localhost
           SAFESELECT_SECURITY_PORT: 5432
           SAFESELECT_SECURITY_ADMIN_USER: postgres

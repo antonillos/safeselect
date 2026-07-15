@@ -5,9 +5,20 @@ description: >
   Secure database access with read-only enforcement, AST-level SQL validation,
   and full fail-closed on any security incident.
 tools:
+  - database_info
   - select
   - list_tables
   - explain
+  - list_databases
+  - list_collections
+  - find_documents
+  - aggregate_documents
+  - distinct_documents
+  - count_documents
+  - explain_documents
+  - profile_document_field
+  - discover_document_schema
+  - generate_document_fixture
   - connect
   - disconnect
   - reconnect
@@ -46,6 +57,7 @@ setup: |
   # Import config from DBeaver export or docker-compose
   safeselect import-dbeaver ~/Downloads/dbeaver-export.zip
   safeselect import-compose --path compose.yml
+  safeselect import-compass --path "$HOME/.config/MongoDB Compass"
 commands:
   - safeselect serve --project <name> --environment <env>
   - safeselect config validate --project <name> --environment <env>
@@ -65,6 +77,8 @@ commands:
   - safeselect agent uninstall <client> --name <n>
   - safeselect import-dbeaver <path-to-zip>
   - safeselect import-compose --path compose.yml
+  - safeselect import-compass [--path <compass-file-or-directory>]
+  - safeselect uninstall
 config:
   directory: "~/.config/safeselect/"
   structure: |
@@ -82,12 +96,18 @@ config:
 security:
   - Fail-closed: any security incident terminates the process
   - Read-only SQL validation for SELECT, EXPLAIN, and WITH
+  - Fixed read-only MongoDB tools with database and collection policy enforcement
+  - MongoDB aggregation rejects $out and $merge; counts require non-empty filters
   - Read-only enforcement per project policy
   - Secrets via macOS Keychain or env vars (never in config files)
+  - Database passwords use sidecar stdin; SSH passwords use the sshpass environment, never process arguments
   - SHA-256 driver validation on every connection
   - No credentials in JDBC URLs
 agent_guidance:
   - Use list_tables before guessing schema names
+  - Use database_info before discovery when the backend is unknown
+  - Use list_databases and list_collections before MongoDB reads
+  - Use bounded filters and limits for MongoDB analysis tools
   - Use explain with FORMAT JSON by default for agent parsing
   - Use explain analyze + buffers + explain_verbose for index and bottleneck analysis
   - Use format text only when the plan is meant for a human

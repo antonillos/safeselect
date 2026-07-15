@@ -2,14 +2,16 @@
 
 ## Prerequisites
 
-- **Java 17+** (for the JDBC sidecar)
+- **Java 17+** (for the embedded database sidecar)
 - **Rust 1.81+** (only if building from source)
 
 The Java sidecar is embedded in the Rust binary, so you only need the JDK at
 runtime. No Maven or Rust is needed to run SafeSelect.
 
-SafeSelect also needs a PostgreSQL JDBC driver registered in its global config.
-The usual setup path downloads it automatically during import, or you can run:
+PostgreSQL environments also need a JDBC driver registered in the global config.
+MongoDB support is included in the embedded sidecar and needs no separate driver.
+The usual PostgreSQL setup path downloads its driver automatically during import,
+or you can run:
 
 ```bash
 safeselect driver download --vendor postgresql
@@ -59,7 +61,7 @@ curl -fsSL https://raw.githubusercontent.com/antonillos/safeselect/main/packagin
 
 ```bash
 safeselect --version
-# safeselect 0.3.0
+# safeselect <version>
 ```
 
 ## First Project Setup
@@ -71,6 +73,8 @@ for the agent:
 safeselect import-dbeaver ~/Downloads/dbeaver-export.zip
 # or:
 safeselect import-compose
+# or:
+safeselect import-compass --path "$HOME/.config/MongoDB Compass"
 
 safeselect check --environment testing
 safeselect agent install opencode --environment testing
@@ -83,3 +87,16 @@ The agent installation writes an MCP stdio entry that runs `safeselect serve` fo
 one project and one environment. Agents do not receive raw database passwords.
 `agent upgrade` also migrates older entry names to the canonical
 `safeselect-<project>-<environment>` convention when it can detect the project.
+
+During an interactive OpenCode installation, SafeSelect can use the existing
+project-local config, create `.opencode/opencode.jsonc` alongside an existing
+`.opencode/opencode.json`, or install to the global config.
+
+## Uninstall
+
+```bash
+safeselect uninstall
+```
+
+The uninstaller removes SafeSelect binaries installed under either `~/.local/bin`
+or `~/.cargo/bin`, together with global config, data, audit logs, and Keychain entries.
