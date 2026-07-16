@@ -217,7 +217,7 @@ impl SidecarProcess {
             args.push("--verbose");
         }
 
-        let java = Self::java_executable();
+        let java = Self::java_executable()?;
         let mut child = Command::new(&java)
             .args(&args)
             .stdin(Stdio::piped())
@@ -332,17 +332,17 @@ impl SidecarProcess {
         Ok(jar_path)
     }
 
-    fn java_executable() -> PathBuf {
+    fn java_executable() -> Result<PathBuf> {
         if let Ok(java_home) = std::env::var("JAVA_HOME") {
             let java = PathBuf::from(java_home).join("bin").join("java");
             if java.exists() {
-                return java;
+                return Self::validate_java(java);
             }
         }
         if let Ok(homebrew_prefix) = std::env::var("HOMEBREW_PREFIX") {
             let java = PathBuf::from(homebrew_prefix).join("opt/java/bin/java");
             if java.exists() {
-                return java;
+                return Self::validate_java(java);
             }
         }
         for java in [
@@ -351,16 +351,38 @@ impl SidecarProcess {
         ] {
             let java = PathBuf::from(java);
             if java.exists() {
-                return java;
+                return Self::validate_java(java);
             }
         }
         if let Ok(home) = std::env::var("HOME") {
             let java = PathBuf::from(home).join("homebrew/opt/java/bin/java");
             if java.exists() {
-                return java;
+                return Self::validate_java(java);
             }
         }
-        PathBuf::from("java")
+        Self::validate_java(PathBuf::from("java"))
+    }
+
+    fn validate_java(java: PathBuf) -> Result<PathBuf> {
+        let output = Command::new(&java).arg("-version").output().map_err(|_| {
+            SafeselectError::Sidecar(
+                "Java 17 or newer is required. Install it with: brew install openjdk@17".into(),
+            )
+        })?;
+        let version_output = String::from_utf8_lossy(&output.stderr);
+        let major = java_major_version(&version_output).ok_or_else(|| {
+            SafeselectError::Sidecar(format!(
+                "could not determine Java version from '{}'",
+                java.display()
+            ))
+        })?;
+        if major < 17 {
+            return Err(SafeselectError::Sidecar(format!(
+                "Java 17 or newer is required, but Java {major} was found at '{}'. Install it with: brew install openjdk@17",
+                java.display()
+            )));
+        }
+        Ok(java)
     }
 
     pub fn ping(&mut self) -> Result<()> {
@@ -687,5 +709,37 @@ impl Drop for SidecarProcess {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+fn java_major_version(version_output: &str) -> Option<u32> {
+    let version = version_output.split('"').nth(1)?;
+    let first = version.split('.').next()?.parse().ok()?;
+    if first == 1 {
+        version.split('.').nth(1)?.parse().ok()
+    } else {
+        Some(first)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::java_major_version;
+
+    #[test]
+    fn parses_modern_java_versions() {
+        assert_eq!(
+            java_major_version("openjdk version \"26.0.1\" 2026-04-21"),
+            Some(26)
+        );
+        assert_eq!(
+            java_major_version("openjdk version \"17.0.19\" 2026-04-21"),
+            Some(17)
+        );
+    }
+
+    #[test]
+    fn parses_legacy_java_versions() {
+        assert_eq!(java_major_version("java version \"1.8.0_451\""), Some(8));
     }
 }

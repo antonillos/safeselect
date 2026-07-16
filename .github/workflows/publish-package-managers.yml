@@ -88,10 +88,30 @@ jobs:
               sha256 "${INTEL_SHA}"
             end
 
-            depends_on "openjdk@17"
-
             def install
               bin.install "safeselect"
+            end
+
+            def caveats
+              <<~EOS
+                SafeSelect has been installed. To get started:
+
+                  safeselect --help
+
+                SafeSelect requires Java 17 or newer at runtime. If needed, install it with:
+
+                  brew install openjdk@17
+
+                PostgreSQL requires a JDBC driver. Download it with:
+
+                  safeselect driver download --vendor postgresql
+
+                For MCP (Model Context Protocol) support, install the integration:
+
+                  safeselect agent install opencode --environment <env> --name <name>
+
+                (Run from your project repo — .safeselect/ is auto-detected.)
+              EOS
             end
 
             test do

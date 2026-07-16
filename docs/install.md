@@ -5,7 +5,7 @@
 - **Java 17+** (for the embedded database sidecar)
 - **Rust 1.81+** (only if building from source)
 
-The Java sidecar is embedded in the Rust binary, so you only need the JDK at
+The Java sidecar is embedded in the Rust binary, so you only need a Java 17+
 runtime. No Maven or Rust is needed to run SafeSelect.
 
 PostgreSQL environments also need a JDBC driver registered in the global config.

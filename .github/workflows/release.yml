@@ -300,8 +300,6 @@ jobs:
               sha256 "${INTEL_SHA}"
             end
 
-            depends_on "openjdk@17"
-
             def install
               bin.install "safeselect"
             end
@@ -312,7 +310,11 @@ jobs:
 
                   safeselect --help
 
-                A JDBC driver is required. Download the PostgreSQL driver:
+                SafeSelect requires Java 17 or newer at runtime. If needed, install it with:
+
+                  brew install openjdk@17
+
+                PostgreSQL requires a JDBC driver. Download it with:
 
                   safeselect driver download --vendor postgresql
 

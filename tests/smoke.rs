@@ -155,7 +155,7 @@ fn test_setup_mode_documentation_matches_cli() {
 fn test_homebrew_formula_tracks_current_release_shape() {
     let formula = repo_file("packaging/homebrew/safeselect.rb");
     assert!(formula.contains("version \"0.3.0\""));
-    assert!(formula.contains("openjdk@17"));
+    assert!(!formula.contains("depends_on \"openjdk@17\""));
     assert!(formula.contains("safeselect-v#{version}-aarch64-apple-darwin.tar.gz"));
     assert!(formula.contains("safeselect-v#{version}-x86_64-apple-darwin.tar.gz"));
     assert!(!formula.contains("v0.1.0"));
