@@ -1,0 +1,19 @@
+src/sidecar.rs
+  s_907f54f0435563::t_42624e89363f67 220,335,339,345,354,360,363-385,714-745
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.11",
+  "base_commit_sha": "96f59b3d925c97e561153fb64639e19e924401e7",
+  "prompts": {},
+  "sessions": {
+    "s_907f54f0435563": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f6acc-6b5c-7ae2-b1c9-e851bbade30e",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "antonillos <305277+antonillos@users.noreply.github.com>"
+    }
+  }
+}
