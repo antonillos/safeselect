@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented in this file.
 
+## [v0.6.1] - 2026-07-17
+
+### Documentation
+
+- docs: align patch release documentation
+
+### Other
+
+- fix(homebrew): accept existing Java 17+ runtimes
+- fix(compass): support tunneled SRV connections
+
 ## [Unreleased]
 
 ### Fixed
