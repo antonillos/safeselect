@@ -2613,11 +2613,8 @@ fn rewrite_mongodb_url_for_local_endpoint(
     let credentials_end = authority.rfind('@').map(|idx| idx + 1).unwrap_or(0);
     let credentials = &authority[..credentials_end];
     let suffix = &url[path_start..];
-    let rewritten_suffix = if suffix.is_empty() || suffix == "/" {
-        "/".to_string()
-    } else {
-        normalize_mongodb_local_tunnel_suffix(suffix)
-    };
+    let rewritten_suffix =
+        normalize_mongodb_local_tunnel_suffix(if suffix.is_empty() { "/" } else { suffix });
     Some(format!(
         "mongodb://{}{}:{}{}",
         credentials, local_host, local_port, rewritten_suffix
@@ -2626,7 +2623,7 @@ fn rewrite_mongodb_url_for_local_endpoint(
 
 fn normalize_mongodb_local_tunnel_suffix(suffix: &str) -> String {
     let Some((path, query)) = suffix.split_once('?') else {
-        return format!("{suffix}?tls=true&directConnection=true");
+        return format!("{suffix}?tls=true&tlsAllowInvalidHostnames=true&directConnection=true");
     };
 
     let mut params: Vec<String> = query.split('&').map(|part| part.to_string()).collect();
@@ -2996,7 +2993,7 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
         // Build SSH args
         let mut ssh_args: Vec<String> = vec![
             "-o".into(),
-            "ConnectTimeout=5".into(),
+            "ConnectTimeout=15".into(),
             "-o".into(),
             "ExitOnForwardFailure=yes".into(),
             "-o".into(),
@@ -3091,7 +3088,7 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
         };
 
         // Wait briefly: if the bastion/tunnel is down, fail fast like JDBC clients do.
-        let tunnel_wait = Duration::from_secs(10);
+        let tunnel_wait = Duration::from_secs(20);
         let deadline = std::time::Instant::now() + tunnel_wait;
         let mut backend_ok = false;
         while std::time::Instant::now() < deadline {
@@ -3167,14 +3164,14 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
 
 /// Run `safeselect check` for each environment and report results.
 fn run_checks(repo_root: &std::path::Path, env_names: &[String], verbose: bool) -> Result<()> {
-    use std::io::Write;
-
     println!("── Verification ──────────────────────────────────");
     println!();
     let mut all_ok = true;
-    for env_name in env_names {
-        print!("  • {env_name} ... ");
-        std::io::stdout().flush()?;
+    for (index, env_name) in env_names.iter().enumerate() {
+        if index > 0 {
+            println!();
+        }
+        println!("  • {env_name}");
         let loader = config::ConfigLoader::new();
         match cmd_check(&loader, repo_root, env_name, verbose) {
             Ok(()) => println!("OK"),
@@ -4468,6 +4465,23 @@ username = "usr_app"
         assert_eq!(
             result.as_deref(),
             Some("mongodb://user@localhost:2222/?retryWrites=true&tls=true&tlsAllowInvalidHostnames=true&directConnection=true")
+        );
+    }
+
+    #[test]
+    fn rewrite_mongodb_srv_url_without_query_adds_tunnel_tls_options() {
+        let result = rewrite_mongodb_url_for_local_endpoint(
+            "mongodb+srv://user@cluster.example.mongodb.net/",
+            "localhost",
+            15433,
+        );
+
+        assert_eq!(
+            result,
+            Some(
+                "mongodb://user@localhost:15433/?tls=true&tlsAllowInvalidHostnames=true&directConnection=true"
+                    .to_string()
+            )
         );
     }
 

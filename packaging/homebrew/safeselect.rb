@@ -13,8 +13,6 @@ class Safeselect < Formula
     sha256 "RELEASE_SHA256_X86_64"
   end
 
-  depends_on "openjdk@17"
-
   def install
     bin.install "safeselect"
   end
@@ -25,7 +23,11 @@ class Safeselect < Formula
 
         safeselect --help
 
-      A JDBC driver is required. Download the PostgreSQL driver:
+      SafeSelect requires Java 17 or newer at runtime. If needed, install it with:
+
+        brew install openjdk@17
+
+      PostgreSQL requires a JDBC driver. Download it with:
 
         safeselect driver download --vendor postgresql
 

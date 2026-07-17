@@ -27,6 +27,9 @@ brew install antonillos/tap/safeselect
 ```
 
 The formula is at [github.com/antonillos/homebrew-tap](https://github.com/antonillos/homebrew-tap).
+It intentionally does not depend on Homebrew's `openjdk@17` formula: SafeSelect
+accepts any available Java 17+ runtime and reports how to install one when no
+compatible runtime is found.
 
 ### asdf
 
