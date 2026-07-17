@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- Accepted any available Java 17+ runtime instead of forcing Homebrew to install
+  its `openjdk@17` formula, with explicit diagnostics for missing or outdated Java.
+- Supported MongoDB Compass `mongodb+srv://` connections through SSH tunnels by
+  resolving SRV targets and applying the TLS and direct-connection options required
+  for local forwarding.
+
+### Documentation
+
+- Documented the Homebrew Java runtime behavior and tunneled MongoDB SRV imports.
+
 ## [v0.6.0] - 2026-07-15
 
 ### Fixed

@@ -84,6 +84,10 @@ safeselect check --environment testing
 safeselect agent install opencode --environment testing
 ```
 
+SafeSelect uses any available Java 17+ runtime instead of requiring Homebrew's
+`openjdk@17` formula specifically. If Java is missing or too old, install or
+select a Java 17+ runtime before running database commands.
+
 The generated MCP name defaults to `safeselect-<project>-<environment>`.
 
 The generated MCP entry is a stdio server scoped to one project and environment:
@@ -158,6 +162,9 @@ Use `safeselect --help` or a command-specific `--help` for the full CLI.
 Interactive OpenCode installation lets you choose the project-local JSON config,
 create a separate `.opencode/opencode.jsonc` when appropriate, or use the global config.
 Uninstall checks both release-installer and Cargo binary locations.
+MongoDB Compass imports support SSH-tunneled `mongodb+srv://` connections by resolving
+the SRV target and rewriting the local endpoint with the required TLS and direct-connection
+options.
 
 ## Configuration
 
