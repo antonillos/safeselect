@@ -1,9 +1,11 @@
 name: Sync Main To Develop
 
 on:
-  push:
-    branches:
-      - main
+  workflow_run:
+    workflows:
+      - Release
+    types:
+      - completed
   workflow_dispatch:
 
 permissions:
@@ -19,6 +21,7 @@ env:
 
 jobs:
   sync:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
