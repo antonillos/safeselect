@@ -111,79 +111,107 @@ jobs:
             ];
             const deadline = Date.now() + 30 * 60 * 1000;
 
-            // PRs created by GITHUB_TOKEN do not reliably trigger another
-            // pull_request run when the label is added. Dispatch one complete
-            // Verify run and track that exact run instead of mixing check runs
-            // from different events.
-            const dispatchStartedAt = Date.now();
-            await github.rest.actions.createWorkflowDispatch({
+            async function loadRequiredJobs(runId) {
+              const jobs = await github.paginate(
+                github.rest.actions.listJobsForWorkflowRun,
+                {
+                  owner,
+                  repo,
+                  run_id: runId,
+                  per_page: 100,
+                }
+              );
+              const jobsByName = new Map(jobs.map((job) => [job.name, job]));
+              const invalid = requiredChecks.filter((name) => {
+                const job = jobsByName.get(name);
+                return !job || job.status !== "completed" ||
+                  job.conclusion !== "success";
+              });
+              return { jobsByName, invalid };
+            }
+
+            // Reuse a complete successful pull_request run only when it belongs
+            // to the immutable PR head being validated. This avoids repeating
+            // expensive checks without ever mixing jobs from different SHAs or
+            // workflow runs.
+            let verifyRun = null;
+            const pullRequestRuns = await github.rest.actions.listWorkflowRuns({
               owner,
               repo,
               workflow_id: "verify.yml",
-              ref: pull.head.ref,
+              event: "pull_request",
+              branch: pull.head.ref,
+              status: "success",
+              per_page: 20,
             });
+            for (const candidate of pullRequestRuns.data.workflow_runs) {
+              if (candidate.head_sha !== pull.head.sha) continue;
+              const candidateJobs = await loadRequiredJobs(candidate.id);
+              if (!candidateJobs.invalid.length) {
+                verifyRun = candidate;
+                break;
+              }
+            }
 
-            let verifyRun = null;
-            while (Date.now() < deadline && !verifyRun) {
-              const runs = await github.rest.actions.listWorkflowRuns({
+            // PRs created by GITHUB_TOKEN do not reliably start a usable
+            // pull_request run. Dispatch and track one exact Verify run only
+            // when no complete successful run exists for this head.
+            if (!verifyRun) {
+              const dispatchStartedAt = Date.now();
+              await github.rest.actions.createWorkflowDispatch({
                 owner,
                 repo,
                 workflow_id: "verify.yml",
-                event: "workflow_dispatch",
-                branch: pull.head.ref,
-                per_page: 20,
+                ref: pull.head.ref,
               });
-              verifyRun = runs.data.workflow_runs.find((run) =>
-                run.head_sha === pull.head.sha &&
-                new Date(run.created_at).getTime() >= dispatchStartedAt - 5000
-              );
-              if (!verifyRun) await sleep(5000);
+
+              while (Date.now() < deadline && !verifyRun) {
+                const runs = await github.rest.actions.listWorkflowRuns({
+                  owner,
+                  repo,
+                  workflow_id: "verify.yml",
+                  event: "workflow_dispatch",
+                  branch: pull.head.ref,
+                  per_page: 20,
+                });
+                verifyRun = runs.data.workflow_runs.find((run) =>
+                  run.head_sha === pull.head.sha &&
+                  new Date(run.created_at).getTime() >= dispatchStartedAt - 5000
+                );
+                if (!verifyRun) await sleep(5000);
+              }
             }
 
             if (!verifyRun) {
-              await comment("⏳ Timed out waiting for the dispatched Verify run to start.");
+              await comment("⏳ Timed out waiting for a usable Verify run.");
               core.setFailed("Verify run did not start.");
               return;
             }
 
-            while (Date.now() < deadline) {
+            while (verifyRun.status !== "completed" && Date.now() < deadline) {
+              await sleep(15000);
               verifyRun = (await github.rest.actions.getWorkflowRun({
                 owner,
                 repo,
                 run_id: verifyRun.id,
               })).data;
-              if (verifyRun.status === "completed") break;
-              await sleep(15000);
             }
 
             if (verifyRun.status !== "completed") {
-              await comment("⏳ Timed out waiting for the dispatched Verify run.");
+              await comment("⏳ Timed out waiting for the Verify run.");
               core.setFailed("Verify run timed out.");
               return;
             }
 
-            const jobs = await github.paginate(
-              github.rest.actions.listJobsForWorkflowRun,
-              {
-                owner,
-                repo,
-                run_id: verifyRun.id,
-                per_page: 100,
-              }
-            );
-            const jobsByName = new Map(jobs.map((job) => [job.name, job]));
-            const invalid = requiredChecks.filter((name) => {
-              const job = jobsByName.get(name);
-              return !job || job.status !== "completed" || job.conclusion !== "success";
-            });
+            const { jobsByName, invalid } = await loadRequiredJobs(verifyRun.id);
             if (verifyRun.conclusion !== "success" || invalid.length) {
               await comment(
-                `⛔ Dispatched Verify run failed: ${invalid.map((name) => {
+                `⛔ Verify run failed: ${invalid.map((name) => {
                   const job = jobsByName.get(name);
                   return `\`${name}\` (${job?.conclusion || "missing"})`;
                 }).join(", ")}.\n\nRun: ${verifyRun.html_url}`
               );
-              core.setFailed("Dispatched Verify run failed.");
+              core.setFailed("Verify run failed.");
               return;
             }
 
