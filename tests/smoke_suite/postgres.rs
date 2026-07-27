@@ -98,6 +98,7 @@ pub fn setup_database() {
         &test_db,
         &format!(
             "CREATE TABLE public.safe_table (id int primary key, name text, payload text); \
+             CREATE VIEW public.safe_view AS SELECT id, name FROM public.safe_table; \
              CREATE TABLE public.large_payload (id int primary key, payload text); \
              CREATE TABLE public.secret_table (id int primary key, secret text); \
              INSERT INTO public.safe_table VALUES (1, 'alpha', repeat('a', 20)), (2, 'beta', repeat('b', 20)), (3, 'gamma', repeat('c', 200)); \

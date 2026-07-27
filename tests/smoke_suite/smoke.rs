@@ -183,13 +183,72 @@ fn assert_mcp_sql_error_stays_alive(repo_root: &std::path::Path, config_dir: &st
     .unwrap();
     stdin.flush().unwrap();
 
-    // First query: intentional SQL error (table does not exist)
     writeln!(
         stdin,
         "{}",
         serde_json::json!({
             "jsonrpc": "2.0",
             "id": 2,
+            "method": "tools/list"
+        })
+    )
+    .unwrap();
+    stdin.flush().unwrap();
+
+    let mut tools_response = String::new();
+    reader
+        .read_line(&mut tools_response)
+        .expect("failed to read MCP tools response");
+    assert!(
+        tools_response.contains("describe_table")
+            && !tools_response.contains("discover_document_schema"),
+        "unexpected PostgreSQL tools response: {tools_response}"
+    );
+
+    for (id, relation, expected_columns) in [
+        (3, "safe_table", &["id", "name", "payload"][..]),
+        (4, "safe_view", &["id", "name"][..]),
+    ] {
+        writeln!(
+            stdin,
+            "{}",
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "tools/call",
+                "params": {
+                    "name": "describe_table",
+                    "arguments": {
+                        "schema": "public",
+                        "table": relation
+                    }
+                }
+            })
+        )
+        .unwrap();
+        stdin.flush().unwrap();
+
+        let mut describe_response = String::new();
+        reader
+            .read_line(&mut describe_response)
+            .expect("failed to read describe_table response");
+        assert!(
+            describe_response.contains("\"next_suggestion\"")
+                && describe_response.contains("\"ordinal_position\"")
+                && expected_columns
+                    .iter()
+                    .all(|column| describe_response.contains(column)),
+            "unexpected describe_table response for {relation}: {describe_response}"
+        );
+    }
+
+    // First query: intentional SQL error (table does not exist)
+    writeln!(
+        stdin,
+        "{}",
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 5,
             "method": "tools/call",
             "params": {
                 "name": "select",
@@ -218,7 +277,8 @@ fn assert_mcp_sql_error_stays_alive(repo_root: &std::path::Path, config_dir: &st
     assert!(
         error_response.contains("Query execution failed")
             && error_response.contains("SQL execution failed [SQL_ERROR]")
-            && error_response.contains("does not exist"),
+            && error_response.contains("does not exist")
+            && error_response.contains("list_tables"),
         "SQL error was not visible in MCP response: {error_response}"
     );
 
@@ -234,7 +294,7 @@ fn assert_mcp_sql_error_stays_alive(repo_root: &std::path::Path, config_dir: &st
         "{}",
         serde_json::json!({
             "jsonrpc": "2.0",
-            "id": 3,
+            "id": 6,
             "method": "tools/call",
             "params": {
                 "name": "select",

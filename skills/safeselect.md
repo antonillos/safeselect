@@ -8,6 +8,7 @@ tools:
   - database_info
   - select
   - list_tables
+  - describe_table
   - explain
   - list_databases
   - list_collections
@@ -104,9 +105,11 @@ security:
   - SHA-256 driver validation on every connection
   - No credentials in JDBC URLs
 agent_guidance:
-  - Use list_tables before guessing schema names
   - Use database_info before discovery when the backend is unknown
-  - Use list_databases and list_collections before MongoDB reads
+  - For SQL, use list_tables then describe_table before select or explain; never guess column names
+  - For MongoDB, use list_databases, list_collections, then discover_document_schema before find or aggregate; never guess field names
+  - Treat MongoDB schema discovery as sampled and non-exhaustive; an absent field may still exist outside the sample
+  - Follow next_suggestion from discovery results and do not repeat an invalid query without rediscovering the target structure
   - Use bounded filters and limits for MongoDB analysis tools
   - Use explain with FORMAT JSON by default for agent parsing
   - Use explain analyze + buffers + explain_verbose for index and bottleneck analysis

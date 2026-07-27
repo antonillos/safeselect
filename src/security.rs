@@ -26,6 +26,32 @@ impl SecurityEngine {
         &self.policy.allowed_schemas
     }
 
+    pub fn validate_relation_access(&self, schema: &str, relation: &str) -> Result<()> {
+        if !self.policy.allowed_schemas.is_empty()
+            && !self
+                .policy
+                .allowed_schemas
+                .iter()
+                .any(|allowed| allowed == schema)
+        {
+            return Err(SafeselectError::QueryRejected(format!(
+                "Schema '{schema}' is not in the allowed schemas list ({})",
+                self.policy.allowed_schemas.join(", ")
+            )));
+        }
+
+        let qualified = format!("{schema}.{relation}");
+        if self.policy.denied_relations.iter().any(|denied| {
+            denied.eq_ignore_ascii_case(relation) || denied.eq_ignore_ascii_case(&qualified)
+        }) {
+            return Err(SafeselectError::QueryRejected(format!(
+                "Relation '{qualified}' is denied"
+            )));
+        }
+
+        Ok(())
+    }
+
     pub fn filter_document_databases(&self, databases: Vec<String>) -> Vec<String> {
         if self.policy.allowed_databases.is_empty() {
             return databases;

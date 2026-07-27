@@ -15,7 +15,9 @@ Product direction for agents:
 
 Agents should treat SafeSelect as their database boundary:
 - Use SafeSelect MCP tools only; SafeSelect does not expose MCP resources, so `list_mcp_resources` is not a database discovery step.
-- Use `list_tables` before guessing schema names.
+- For SQL, use `list_tables` then `describe_table`; never guess column names.
+- For MongoDB, use `list_databases`, `list_collections`, then `discover_document_schema`; never guess field names.
+- Follow `next_suggestion` from discovery results instead of repeating an invalid query unchanged.
 - Use `select` only for small, targeted read-only queries.
 - Use `explain` to inspect query plans, index usage, and bottlenecks.
 - Use `check` or `reconnect` before retrying after connection or SSH tunnel errors.
@@ -111,10 +113,35 @@ Successful responses are returned as MCP text content containing JSON with:
 ### `list_tables`
 
 List database tables, optionally filtered by schema name. Use this before
-writing queries against an unfamiliar database.
+describing an unfamiliar relation.
 
 Arguments:
 - `schema` (optional): schema name filter
+
+The response preserves the standard SQL result fields and adds
+`next_suggestion`, directing the agent to `describe_table`.
+
+### `describe_table`
+
+Return ordered column metadata for one PostgreSQL table or view. SafeSelect
+generates a fixed read-only `information_schema.columns` query internally; the
+agent cannot provide SQL to this tool.
+
+Arguments:
+- `schema` (required): allowed schema containing the relation
+- `table` (required): table or view name
+
+Successful responses contain:
+- `schema` and `table`: the described relation
+- `columns`: ordered objects containing `column_name`, `data_type`,
+  `is_nullable`, `column_default`, and `ordinal_position`
+- `column_count`, result byte/timing metadata, and `next_suggestion`
+
+Use only returned column names in the following `select` or `explain`. If the
+relation is missing or inaccessible, follow the response's suggestion to call
+`list_tables`; do not retry with guessed names. Schema allowlists and relation
+denylists are checked before catalog access, and security violations remain
+fail-closed.
 
 ### `explain`
 
@@ -145,12 +172,18 @@ List document databases for document-store backends.
 
 Arguments: none
 
+The response contains `databases` and a `next_suggestion` to call
+`list_collections`.
+
 ### `list_collections`
 
 List document collections in a database.
 
 Arguments:
 - `database` (required): database name
+
+The response contains the filtered `collections` and a `next_suggestion` to
+call `discover_document_schema`.
 
 ### `find_documents`
 
@@ -175,11 +208,21 @@ Arguments:
 - `count_documents`: count documents matching a required, non-empty filter; `{}` is rejected to avoid accidental full scans.
 - `explain_documents`: explain a bounded find query without executing a write.
 - `profile_document_field`: profile a nested field over a bounded sample.
-- `discover_document_schema`: infer frequent fields and types over a bounded sample.
+- `discover_document_schema`: infer frequent fields and types over a bounded,
+  non-exhaustive sample. Its response includes `sampled_documents`,
+  `schema_inference: "sampled_not_exhaustive"`, an explicit notice, and
+  `next_suggestion`.
 - `generate_document_fixture`: return anonymized samples in the response; it never writes fixture files.
 
 All document tools enforce configured database/collection allowlists and denylists,
 statement timeouts, and result-size limits.
+
+MongoDB collections do not have an authoritative fixed schema. A field absent
+from `discover_document_schema` may still exist outside the selected filter or
+sample. Use observed fields for the next bounded `find_documents` or
+`aggregate_documents` call, or inspect one field with `profile_document_field`.
+If a field/path error is recoverable, rediscover the collection schema before
+retrying; never broaden policy or limits automatically.
 
 ## Connection Tools
 

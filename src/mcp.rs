@@ -286,8 +286,9 @@ impl McpServer {
         if self.backend.has(BackendCapability::SqlQuery) {
             tools.push(ToolDefinition {
                 name: "select".into(),
-                description: self
-                    .tool_description("execute a read-only SELECT query on the target database"),
+                description: self.tool_description(
+                    "execute a read-only SELECT query on the target database; use describe_table before querying an unfamiliar relation and never guess column names",
+                ),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -308,8 +309,9 @@ impl McpServer {
         if self.backend.has(BackendCapability::TableDiscovery) {
             tools.push(ToolDefinition {
                 name: "list_tables".into(),
-                description: self
-                    .tool_description("list database tables, optionally filtered by schema"),
+                description: self.tool_description(
+                    "list database tables, optionally filtered by schema; next call describe_table before querying an unfamiliar relation",
+                ),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -318,6 +320,27 @@ impl McpServer {
                             "description": "Schema filter (optional)"
                         }
                     }
+                }),
+            });
+            tools.push(ToolDefinition {
+                name: "describe_table".into(),
+                description: self.tool_description(
+                    "describe columns for a database table or view using read-only catalog metadata; use only returned column names in select or explain",
+                ),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "schema": {
+                            "type": "string",
+                            "description": "Schema containing the table or view"
+                        },
+                        "table": {
+                            "type": "string",
+                            "description": "Table or view name"
+                        }
+                    },
+                    "required": ["schema", "table"],
+                    "additionalProperties": false
                 }),
             });
         }
@@ -393,7 +416,9 @@ impl McpServer {
         if self.backend.has(BackendCapability::DocumentFind) {
             tools.push(ToolDefinition {
                 name: "find_documents".into(),
-                description: self.tool_description("find documents in a collection"),
+                description: self.tool_description(
+                    "find documents in a collection; use discover_document_schema first and never guess field names",
+                ),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -430,7 +455,9 @@ impl McpServer {
         if self.backend.has(BackendCapability::DocumentAggregate) {
             tools.push(ToolDefinition {
                 name: "aggregate_documents".into(),
-                description: self.tool_description("run a read-only MongoDB aggregation pipeline"),
+                description: self.tool_description(
+                    "run a read-only MongoDB aggregation pipeline; use discover_document_schema first and never guess field names",
+                ),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -531,7 +558,7 @@ impl McpServer {
             tools.push(ToolDefinition {
                 name: "discover_document_schema".into(),
                 description: self.tool_description(
-                    "infer frequent MongoDB fields and types over a bounded sample",
+                    "infer frequent MongoDB fields and types over a bounded, non-exhaustive sample; use observed fields in find_documents, aggregate_documents, or profile_document_field",
                 ),
                 input_schema: serde_json::json!({
                     "type": "object",
@@ -886,6 +913,7 @@ impl McpServer {
             "database_info" => self.handle_database_info(msg.id.clone()),
             "select" => self.handle_select(msg.id.clone(), &args),
             "list_tables" => self.handle_list_tables(msg.id.clone(), &args),
+            "describe_table" => self.handle_describe_table(msg.id.clone(), &args),
             "explain" => self.handle_explain(msg.id.clone(), &args),
             "list_databases" => self.handle_list_databases(msg.id.clone()),
             "list_collections" => self.handle_list_collections(msg.id.clone(), &args),
@@ -949,6 +977,14 @@ impl McpServer {
                 BackendCapability::DocumentFixture => "document_fixture",
             })
             .collect();
+        let next_suggestion = match self.backend.kind {
+            crate::backend::BackendKind::Jdbc => {
+                "Call list_tables, then describe_table before select or explain."
+            }
+            crate::backend::BackendKind::Document => {
+                "Call list_databases, then list_collections and discover_document_schema before document reads."
+            }
+        };
 
         let resp = JsonRpcResponse {
             jsonrpc: "2.0",
@@ -961,7 +997,8 @@ impl McpServer {
                         "vendor": self.backend.vendor,
                         "capabilities": capabilities,
                         "resources_supported": false,
-                        "discovery": "Use MCP tools such as list_databases/list_collections or list_tables; SafeSelect does not expose MCP resources."
+                        "discovery": "Use the backend-specific SafeSelect discovery tools; SafeSelect does not expose MCP resources.",
+                        "next_suggestion": next_suggestion
                     }))?
                 }]
             })),
@@ -974,7 +1011,13 @@ impl McpServer {
         match self.ensure_sidecar()?.list_databases() {
             Ok(databases) => {
                 let databases = self.security.filter_document_databases(databases);
-                self.write_response(&json_text_response(id, &databases)?)
+                self.write_response(&json_text_response(
+                    id,
+                    &serde_json::json!({
+                        "databases": databases,
+                        "next_suggestion": "Choose an allowed database and call list_collections."
+                    }),
+                )?)
             }
             Err(e) => self.send_error(id, -32000, format!("List databases failed: {e}")),
         }
@@ -997,7 +1040,14 @@ impl McpServer {
                 let collections = self
                     .security
                     .filter_document_collections(database, collections);
-                self.write_response(&json_text_response(id, &collections)?)
+                self.write_response(&json_text_response(
+                    id,
+                    &serde_json::json!({
+                        "database": database,
+                        "collections": collections,
+                        "next_suggestion": "Choose an allowed collection and call discover_document_schema before document reads."
+                    }),
+                )?)
             }
             Err(e) => self.send_error(id, -32000, format!("List collections failed: {e}")),
         }
@@ -1202,7 +1252,11 @@ impl McpServer {
             id,
             "discover_document_schema",
             |security| security.validate_document_schema(&request),
-            |sidecar| sidecar.discover_document_schema(&request),
+            |sidecar| {
+                sidecar
+                    .discover_document_schema(&request)
+                    .map(add_document_schema_guidance)
+            },
         )
     }
 
@@ -1264,7 +1318,11 @@ impl McpServer {
             }
             Err(e) => {
                 self.audit.record("DOCUMENT_ERROR", "error", operation)?;
-                self.send_error(id, -32000, format!("{operation} failed: {e}"))
+                self.send_error(
+                    id,
+                    -32000,
+                    document_operation_error_message(operation, &e.to_string()),
+                )
             }
         }
     }
@@ -1339,10 +1397,7 @@ impl McpServer {
                 let elapsed = start.elapsed();
                 tracing::warn!("Query SQL error after {elapsed:?}: {msg}");
                 self.audit.record("JDBC_ERROR", "error", sql)?;
-                self.write_response(&tool_error_response(
-                    id,
-                    format!("Query execution failed: {msg}"),
-                ))
+                self.write_response(&tool_error_response(id, sql_query_error_message(msg)))
             }
             Err(e) => {
                 let elapsed = start.elapsed();
@@ -1417,6 +1472,10 @@ impl McpServer {
         match self.execute_with_reconnect(&sql) {
             Ok(result) => {
                 self.audit.record("PASS", "allow", &sql)?;
+                let result = add_next_suggestion(
+                    serde_json::to_value(result)?,
+                    "Choose an existing allowed relation and call describe_table before select or explain.",
+                );
                 let resp = JsonRpcResponse {
                     jsonrpc: "2.0",
                     id,
@@ -1438,6 +1497,93 @@ impl McpServer {
             Err(e) => {
                 self.audit.record("JDBC_ERROR", "error", &sql)?;
                 self.write_response(&tool_error_response(id, format!("Query failed: {e}")))
+            }
+        }
+    }
+
+    fn handle_describe_table(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        if !has_only_keys(args, &["schema", "table"]) {
+            return self.send_error(
+                id,
+                -32602,
+                "describe_table accepts only 'schema' and 'table' arguments",
+            );
+        }
+
+        let schema = required_string!(self, id, args, "schema");
+        let table = required_string!(self, id, args, "table");
+        if !is_valid_identifier(schema) {
+            return self.send_error(
+                id,
+                -32602,
+                "Invalid schema name: must start with a letter or underscore and contain only alphanumeric characters and underscores",
+            );
+        }
+        if !is_valid_identifier(table) {
+            return self.send_error(
+                id,
+                -32602,
+                "Invalid table name: must start with a letter or underscore and contain only alphanumeric characters and underscores",
+            );
+        }
+
+        let relation_check = format!("SELECT * FROM {schema}.{table}");
+        if let Err(e) = validate_describe_target(&self.security, schema, table) {
+            self.audit.record("REJECT", "reject", &relation_check)?;
+            let _ = self.send_error(id, -32000, format!("Request rejected: {e}"));
+            self.fail_closed("Security violation");
+            return Ok(());
+        }
+
+        let sql = build_describe_table_sql(schema, table);
+        if let Err(e) = self.security.validate_system(&sql) {
+            self.audit.record("REJECT", "reject", &sql)?;
+            let _ = self.send_error(id, -32000, format!("Query rejected: {e}"));
+            self.fail_closed("Security violation");
+            return Ok(());
+        }
+
+        match self.execute_with_reconnect(&sql) {
+            Ok(result) => {
+                self.audit.record("PASS", "allow", &sql)?;
+                let result = add_table_description_guidance(result, schema, table)?;
+                let columns_empty = match result["columns"].as_array() {
+                    Some(columns) => columns.is_empty(),
+                    None => true,
+                };
+                if columns_empty {
+                    self.write_response(&tool_error_response(
+                        id,
+                        format!(
+                            "Relation '{schema}.{table}' was not found or has no accessible columns. Next suggestion: call list_tables for an allowed schema and choose an existing relation."
+                        ),
+                    ))
+                } else {
+                    self.write_response(&json_text_response(id, &result)?)
+                }
+            }
+            Err(SafeselectError::SqlError(ref msg)) => {
+                tracing::warn!("Describe table SQL error: {msg}");
+                self.audit.record("JDBC_ERROR", "error", &sql)?;
+                self.write_response(&tool_error_response(
+                    id,
+                    format!(
+                        "Describe table failed: {msg}. Next suggestion: call list_tables to confirm the relation and schema."
+                    ),
+                ))
+            }
+            Err(e) => {
+                self.audit.record("JDBC_ERROR", "error", &sql)?;
+                self.write_response(&tool_error_response(
+                    id,
+                    format!(
+                        "Describe table failed: {e}. Next suggestion: call check, then reconnect once only if check reports a stale existing connection."
+                    ),
+                ))
             }
         }
     }
@@ -3494,6 +3640,108 @@ fn is_valid_identifier(s: &str) -> bool {
         .all(|b| b.is_ascii_alphanumeric() || *b == b'_')
 }
 
+fn has_only_keys(value: &serde_json::Value, allowed: &[&str]) -> bool {
+    value
+        .as_object()
+        .is_some_and(|object| object.keys().all(|key| allowed.contains(&key.as_str())))
+}
+
+fn build_describe_table_sql(schema: &str, table: &str) -> String {
+    format!(
+        "SELECT COALESCE(json_agg(json_build_object('column_name', column_name, 'data_type', data_type, 'is_nullable', is_nullable, 'column_default', column_default, 'ordinal_position', ordinal_position) ORDER BY ordinal_position), '[]'::json)::text AS columns_json FROM information_schema.columns WHERE table_schema = '{}' AND table_name = '{}'",
+        schema.replace('\'', "''"),
+        table.replace('\'', "''")
+    )
+}
+
+fn validate_describe_target(security: &SecurityEngine, schema: &str, table: &str) -> Result<()> {
+    security.validate_relation_access(schema, table)?;
+    security.validate(&format!("SELECT * FROM {schema}.{table}"))
+}
+
+fn add_next_suggestion(mut value: serde_json::Value, suggestion: &str) -> serde_json::Value {
+    if let Some(object) = value.as_object_mut() {
+        object.insert("next_suggestion".into(), serde_json::json!(suggestion));
+        value
+    } else {
+        serde_json::json!({
+            "result": value,
+            "next_suggestion": suggestion
+        })
+    }
+}
+
+fn add_table_description_guidance(
+    result: crate::sidecar::QueryResult,
+    schema: &str,
+    table: &str,
+) -> Result<serde_json::Value> {
+    let columns = match result.rows.first().and_then(|row| row.first()) {
+        Some(serde_json::Value::String(json)) => serde_json::from_str(json)?,
+        Some(value @ serde_json::Value::Array(_)) => value.clone(),
+        _ => serde_json::json!([]),
+    };
+    let column_count = columns.as_array().map_or(0, Vec::len);
+    Ok(serde_json::json!({
+        "schema": schema,
+        "table": table,
+        "columns": columns,
+        "column_count": column_count,
+        "byte_count": result.byte_count,
+        "elapsed_ms": result.elapsed_ms,
+        "elapsed": result.elapsed,
+        "next_suggestion": "Use only the returned column names in a targeted select or explain query."
+    }))
+}
+
+fn add_document_schema_guidance(mut value: serde_json::Value) -> serde_json::Value {
+    let guidance = serde_json::json!({
+        "schema_inference": "sampled_not_exhaustive",
+        "schema_notice": "Fields and types are inferred from a bounded sample. A field absent from this result may still exist outside the sample.",
+        "next_suggestion": "Use observed fields in a bounded find_documents or aggregate_documents call, or inspect one field with profile_document_field."
+    });
+    if let (Some(result), Some(guidance)) = (value.as_object_mut(), guidance.as_object()) {
+        result.extend(guidance.clone());
+        value
+    } else {
+        serde_json::json!({
+            "schema": value,
+            "schema_inference": "sampled_not_exhaustive",
+            "schema_notice": "Fields and types are inferred from a bounded sample. A field absent from this result may still exist outside the sample.",
+            "next_suggestion": "Use observed fields in a bounded find_documents or aggregate_documents call, or inspect one field with profile_document_field."
+        })
+    }
+}
+
+fn sql_query_error_message(message: &str) -> String {
+    let lower = message.to_lowercase();
+    let suggestion = if lower.contains("column") && lower.contains("does not exist") {
+        " Next suggestion: call describe_table for the target relation, then retry using only returned column names."
+    } else if lower.contains("relation") && lower.contains("does not exist") {
+        " Next suggestion: call list_tables, then describe_table for an existing relation."
+    } else {
+        ""
+    };
+    format!("Query execution failed: {message}{suggestion}")
+}
+
+fn document_operation_error_message(operation: &str, message: &str) -> String {
+    let lower = message.to_lowercase();
+    let field_error = (lower.contains("field") || lower.contains("path"))
+        && (lower.contains("unknown")
+            || lower.contains("not found")
+            || lower.contains("does not exist")
+            || lower.contains("unrecognized"));
+    let suggestion = if operation != "discover_document_schema" && field_error {
+        " Next suggestion: call discover_document_schema for the target collection, then retry using observed fields."
+    } else if is_recoverable_connection_error(message) {
+        " Next suggestion: call check, then reconnect once only if check reports a stale existing connection."
+    } else {
+        ""
+    };
+    format!("{operation} failed: {message}{suggestion}")
+}
+
 fn build_explain_sql(sql: &str, args: &serde_json::Value) -> std::result::Result<String, String> {
     let format = match args.get("format").and_then(|v| v.as_str()) {
         Some("json") | None => "JSON",
@@ -3535,6 +3783,121 @@ fn build_explain_sql(sql: &str, args: &serde_json::Value) -> std::result::Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn describe_table_sql_is_a_fixed_read_only_catalog_query() {
+        let sql = build_describe_table_sql("public", "users");
+
+        assert_eq!(
+            sql,
+            "SELECT COALESCE(json_agg(json_build_object('column_name', column_name, 'data_type', data_type, 'is_nullable', is_nullable, 'column_default', column_default, 'ordinal_position', ordinal_position) ORDER BY ordinal_position), '[]'::json)::text AS columns_json FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users'"
+        );
+    }
+
+    #[test]
+    fn describe_table_identifiers_reject_injection() {
+        assert!(is_valid_identifier("public"));
+        assert!(is_valid_identifier("_private"));
+        assert!(!is_valid_identifier("public; DROP TABLE users"));
+        assert!(!is_valid_identifier("public.users"));
+        assert!(!is_valid_identifier("' OR '1'='1"));
+        assert!(!is_valid_identifier(""));
+    }
+
+    #[test]
+    fn describe_table_accepts_no_extra_arguments() {
+        assert!(has_only_keys(
+            &serde_json::json!({"schema": "public", "table": "users"}),
+            &["schema", "table"]
+        ));
+        assert!(!has_only_keys(
+            &serde_json::json!({
+                "schema": "public",
+                "table": "users",
+                "sql": "DELETE FROM public.users"
+            }),
+            &["schema", "table"]
+        ));
+    }
+
+    #[test]
+    fn describe_table_target_respects_schema_and_relation_policy() {
+        let security = SecurityEngine::new(
+            crate::config::SecurityPolicy {
+                allowed_schemas: vec!["public".into()],
+                denied_relations: vec!["public.secrets".into()],
+                ..Default::default()
+            },
+            crate::config::LimitsConfig::default(),
+        );
+
+        assert!(validate_describe_target(&security, "public", "users").is_ok());
+        assert!(validate_describe_target(&security, "private", "users").is_err());
+        assert!(validate_describe_target(&security, "public", "secrets").is_err());
+    }
+
+    #[test]
+    fn table_description_includes_next_suggestion() {
+        let result = crate::sidecar::QueryResult {
+            columns: vec!["columns_json".into()],
+            rows: vec![vec![serde_json::json!(
+                r#"[{"column_name":"id","data_type":"integer","is_nullable":"NO","column_default":null,"ordinal_position":1}]"#
+            )]],
+            row_count: 1,
+            byte_count: 32,
+            elapsed_ms: 1,
+            elapsed: "1ms".into(),
+        };
+
+        let value = add_table_description_guidance(result, "public", "users").unwrap();
+
+        assert_eq!(value["schema"], "public");
+        assert_eq!(value["table"], "users");
+        assert_eq!(value["columns"][0]["column_name"], "id");
+        assert_eq!(value["column_count"], 1);
+        assert!(value["next_suggestion"].as_str().is_some());
+    }
+
+    #[test]
+    fn document_schema_is_marked_as_sampled_and_actionable() {
+        let value = add_document_schema_guidance(serde_json::json!({
+            "sampled_documents": 2,
+            "fields": [{"field": "name"}]
+        }));
+
+        assert_eq!(value["schema_inference"], "sampled_not_exhaustive");
+        assert!(value["schema_notice"]
+            .as_str()
+            .unwrap()
+            .contains("may still exist"));
+        assert!(value["next_suggestion"]
+            .as_str()
+            .unwrap()
+            .contains("find_documents"));
+    }
+
+    #[test]
+    fn missing_column_errors_recommend_schema_discovery() {
+        let message =
+            sql_query_error_message("ERROR: column p.data does not exist at character 279");
+
+        assert!(message.contains("describe_table"));
+        assert!(message.contains("only returned column names"));
+    }
+
+    #[test]
+    fn security_and_connection_errors_do_not_suggest_schema_bypasses() {
+        let sql_message = sql_query_error_message("connection is closed");
+        let document_message =
+            document_operation_error_message("find_documents", "connection is closed");
+        let unknown_host_message =
+            document_operation_error_message("find_documents", "unknown host");
+
+        assert!(!sql_message.contains("Next suggestion"));
+        assert!(document_message.contains("call check"));
+        assert!(!document_message.contains("discover_document_schema"));
+        assert!(!unknown_host_message.contains("Next suggestion"));
+    }
 
     #[test]
     fn build_explain_sql_defaults_to_json() {
