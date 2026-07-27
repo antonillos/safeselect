@@ -235,6 +235,7 @@ fn assert_mcp_sql_error_stays_alive(repo_root: &std::path::Path, config_dir: &st
         assert!(
             describe_response.contains("\"next_suggestion\"")
                 && describe_response.contains("\"ordinal_position\"")
+                && describe_response.contains("\"udt_name\"")
                 && expected_columns
                     .iter()
                     .all(|column| describe_response.contains(column)),

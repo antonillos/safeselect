@@ -108,6 +108,10 @@ agent_guidance:
   - Use database_info before discovery when the backend is unknown
   - If the user only requested capabilities, tools, or available relations, report the discovery result and stop without reading data
   - For SQL data inspection, choose exactly one table_schema and table_name pair from list_tables, then call describe_table with those exact literal values; never pass placeholders, use wildcards, or guess column names
+  - Use describe_table data_type and udt_name to choose type-compatible operators; PostgreSQL array udt_name values such as _jsonb identify the element type
+  - Place SQL WITH CTEs at the beginning of the statement; do not nest WITH inside a subquery
+  - When GROUP BY rejects an aggregate expression or its ordinal position, group only by non-aggregate columns or omit GROUP BY for a single aggregate result
+  - When PostgreSQL reports that an operator does not exist, rediscover types and use compatible operators; for JSON/JSONB use -> or ->> against observed fields and never cast blindly
   - For MongoDB, use list_databases, list_collections, then discover_document_schema before find or aggregate; never guess field names
   - Treat MongoDB schema discovery as sampled and non-exhaustive; an absent field may still exist outside the sample
   - Follow next_suggestion from discovery results and do not repeat an invalid query without rediscovering the target structure

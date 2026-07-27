@@ -289,7 +289,7 @@ impl McpServer {
             tools.push(ToolDefinition {
                 name: "select".into(),
                 description: self.tool_description(
-                    "execute a read-only SELECT query on the target database; use describe_table before querying an unfamiliar relation and never guess column names",
+                    "execute a read-only SELECT query on the target database; use describe_table before querying an unfamiliar relation, never guess column names, and place WITH CTEs at the beginning of the statement instead of nesting them in subqueries",
                 ),
                 input_schema: serde_json::json!({
                     "type": "object",
@@ -327,7 +327,7 @@ impl McpServer {
             tools.push(ToolDefinition {
                 name: "describe_table".into(),
                 description: self.tool_description(
-                    "describe columns for exactly one database table or view using read-only catalog metadata; schema and table must be exact values copied from one list_tables row, and placeholders or wildcards are not accepted",
+                    "describe columns and PostgreSQL underlying type names for exactly one database table or view using read-only catalog metadata; schema and table must be exact values copied from one list_tables row, and placeholders or wildcards are not accepted",
                 ),
                 input_schema: serde_json::json!({
                     "type": "object",
@@ -352,7 +352,7 @@ impl McpServer {
             ToolDefinition {
                 name: "explain".into(),
                 description: self
-                    .tool_description("show a query execution plan; ANALYZE executes the SELECT"),
+                    .tool_description("show a query execution plan; ANALYZE executes the SELECT, and WITH CTEs must be placed at the beginning of the explained statement instead of nested in subqueries"),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -3661,7 +3661,7 @@ fn describe_identifier_error(kind: &str, value: &str) -> Option<String> {
 
 fn build_describe_table_sql(schema: &str, table: &str) -> String {
     format!(
-        "SELECT COALESCE(json_agg(json_build_object('column_name', column_name, 'data_type', data_type, 'is_nullable', is_nullable, 'column_default', column_default, 'ordinal_position', ordinal_position) ORDER BY ordinal_position), '[]'::json)::text AS columns_json FROM information_schema.columns WHERE table_schema = '{}' AND table_name = '{}'",
+        "SELECT COALESCE(json_agg(json_build_object('column_name', column_name, 'data_type', data_type, 'udt_name', udt_name, 'is_nullable', is_nullable, 'column_default', column_default, 'ordinal_position', ordinal_position) ORDER BY ordinal_position), '[]'::json)::text AS columns_json FROM information_schema.columns WHERE table_schema = '{}' AND table_name = '{}'",
         schema.replace('\'', "''"),
         table.replace('\'', "''")
     )
@@ -3703,7 +3703,7 @@ fn add_table_description_guidance(
         "byte_count": result.byte_count,
         "elapsed_ms": result.elapsed_ms,
         "elapsed": result.elapsed,
-        "next_suggestion": "Use only the returned column names in a targeted select or explain query."
+        "next_suggestion": "Use only the returned column names and choose type-compatible operators from data_type and udt_name in a targeted select or explain query."
     }))
 }
 
@@ -3732,6 +3732,12 @@ fn sql_query_error_message(message: &str) -> String {
         " Next suggestion: call describe_table for the target relation, then retry using only returned column names."
     } else if lower.contains("relation") && lower.contains("does not exist") {
         " Next suggestion: call list_tables, then describe_table for an existing relation."
+    } else if lower.contains("aggregate functions are not allowed in group by") {
+        " Next suggestion: remove aggregate expressions or their ordinal positions from GROUP BY; group only by non-aggregate columns, or omit GROUP BY for a single aggregate result."
+    } else if lower.contains("operator does not exist") && lower.contains("json") {
+        " Next suggestion: call describe_table for the target relation and compare data_type and udt_name before retrying with type-compatible operators. For json/jsonb values, use JSON operators such as -> or ->> against observed fields; do not cast blindly."
+    } else if lower.contains("operator does not exist") {
+        " Next suggestion: call describe_table for the target relation and compare data_type and udt_name before retrying with type-compatible operators; do not add casts unless the intended semantics require them."
     } else {
         ""
     };
@@ -3803,7 +3809,7 @@ mod tests {
 
         assert_eq!(
             sql,
-            "SELECT COALESCE(json_agg(json_build_object('column_name', column_name, 'data_type', data_type, 'is_nullable', is_nullable, 'column_default', column_default, 'ordinal_position', ordinal_position) ORDER BY ordinal_position), '[]'::json)::text AS columns_json FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users'"
+            "SELECT COALESCE(json_agg(json_build_object('column_name', column_name, 'data_type', data_type, 'udt_name', udt_name, 'is_nullable', is_nullable, 'column_default', column_default, 'ordinal_position', ordinal_position) ORDER BY ordinal_position), '[]'::json)::text AS columns_json FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users'"
         );
     }
 
@@ -3873,7 +3879,7 @@ mod tests {
         let result = crate::sidecar::QueryResult {
             columns: vec!["columns_json".into()],
             rows: vec![vec![serde_json::json!(
-                r#"[{"column_name":"id","data_type":"integer","is_nullable":"NO","column_default":null,"ordinal_position":1}]"#
+                r#"[{"column_name":"relations","data_type":"ARRAY","udt_name":"_jsonb","is_nullable":"NO","column_default":null,"ordinal_position":1}]"#
             )]],
             row_count: 1,
             byte_count: 32,
@@ -3885,9 +3891,14 @@ mod tests {
 
         assert_eq!(value["schema"], "public");
         assert_eq!(value["table"], "users");
-        assert_eq!(value["columns"][0]["column_name"], "id");
+        assert_eq!(value["columns"][0]["column_name"], "relations");
+        assert_eq!(value["columns"][0]["data_type"], "ARRAY");
+        assert_eq!(value["columns"][0]["udt_name"], "_jsonb");
         assert_eq!(value["column_count"], 1);
-        assert!(value["next_suggestion"].as_str().is_some());
+        assert!(value["next_suggestion"]
+            .as_str()
+            .unwrap()
+            .contains("type-compatible operators"));
     }
 
     #[test]
@@ -3915,6 +3926,39 @@ mod tests {
 
         assert!(message.contains("describe_table"));
         assert!(message.contains("only returned column names"));
+    }
+
+    #[test]
+    fn aggregate_group_by_errors_recommend_a_valid_grouping_shape() {
+        let message = sql_query_error_message(
+            "ERROR: aggregate functions are not allowed in GROUP BY Position: 235",
+        );
+
+        assert!(message.contains("remove aggregate expressions"));
+        assert!(message.contains("group only by non-aggregate columns"));
+        assert!(message.contains("omit GROUP BY"));
+    }
+
+    #[test]
+    fn json_operator_errors_recommend_type_compatible_json_access() {
+        let message = sql_query_error_message(
+            "ERROR: operator does not exist: jsonb ~~ text Hint: You might need to add explicit type casts.",
+        );
+
+        assert!(message.contains("describe_table"));
+        assert!(message.contains("data_type and udt_name"));
+        assert!(message.contains("-> or ->>"));
+        assert!(message.contains("do not cast blindly"));
+    }
+
+    #[test]
+    fn generic_operator_errors_do_not_guess_a_cast() {
+        let message =
+            sql_query_error_message("ERROR: operator does not exist: integer = character varying");
+
+        assert!(message.contains("type-compatible operators"));
+        assert!(message.contains("intended semantics"));
+        assert!(!message.contains("JSON operators"));
     }
 
     #[test]

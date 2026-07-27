@@ -19,6 +19,8 @@ Agents should treat SafeSelect as their database boundary:
 - For MongoDB, use `list_databases`, `list_collections`, then `discover_document_schema`; never guess field names.
 - Follow `next_suggestion` from discovery results instead of repeating an invalid query unchanged.
 - Use `select` only for small, targeted read-only queries.
+- Place SQL CTEs at the beginning of the statement; do not nest `WITH` inside a
+  subquery.
 - Use `explain` to inspect query plans, index usage, and bottlenecks.
 - Use `check` or `reconnect` before retrying after connection or SSH tunnel errors.
 - Never ask the user for database passwords if `config_set_password` or existing config can resolve them.
@@ -97,6 +99,8 @@ information, report it and stop; do not continue into discovery or data access.
 Execute a read-only query and return JSON-serialized rows. The query is validated before execution:
 - Must be read-only (`SELECT`, `EXPLAIN`, or `WITH`)
 - Must be a single statement
+- CTEs must be declared by a leading `WITH`; nested `WITH` clauses in subqueries
+  are conservatively rejected
 - Must respect schema allowlists and relation denylists
 - Result row count and byte limits are enforced
 
@@ -111,6 +115,14 @@ Successful responses are returned as MCP text content containing JSON with:
 - `byte_count`: approximate payload bytes
 - `elapsed_ms`: precise execution time in milliseconds
 - `elapsed`: human-readable execution time
+
+Recoverable PostgreSQL errors include a concrete safe next step when SafeSelect
+can identify one. For example, if an aggregate or its ordinal position appears
+in `GROUP BY`, remove it and group only by non-aggregate columns, or omit
+`GROUP BY` when producing one aggregate result. For an incompatible operator,
+rediscover the relation and compare `data_type` and `udt_name`; use operators
+that match the observed types rather than adding a cast blindly. JSON and JSONB
+values should use JSON operators such as `->` and `->>` against observed fields.
 
 ### `list_tables`
 
@@ -143,9 +155,13 @@ call and directs the agent to copy one exact relation from `list_tables`.
 
 Successful responses contain:
 - `schema` and `table`: the described relation
-- `columns`: ordered objects containing `column_name`, `data_type`,
+- `columns`: ordered objects containing `column_name`, `data_type`, `udt_name`,
   `is_nullable`, `column_default`, and `ordinal_position`
 - `column_count`, result byte/timing metadata, and `next_suggestion`
+
+`udt_name` is PostgreSQL's underlying type name. It preserves information hidden
+by generic `data_type` values; for example, a `jsonb[]` column has
+`data_type: "ARRAY"` and `udt_name: "_jsonb"`.
 
 Use only returned column names in the following `select` or `explain`. If the
 relation is missing or inaccessible, follow the response's suggestion to call
