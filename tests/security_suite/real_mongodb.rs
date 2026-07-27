@@ -124,6 +124,24 @@ pub fn run() {
             collections.text
         );
 
+        log_check("unknown document namespaces fail explicitly");
+        let missing_collection = harness.call_tool(
+            29,
+            "find_documents",
+            json!({
+                "database": mongodb::test_db(),
+                "collection": "missing_docs",
+                "filter": { "active": true },
+                "limit": 1
+            }),
+        );
+        assert!(!missing_collection.success);
+        assert!(
+            missing_collection.text.contains("does not exist"),
+            "unexpected missing collection response: {}",
+            missing_collection.text
+        );
+
         log_check("discover_document_schema is bounded, explicit, and actionable");
         let schema = harness.call_tool(
             30,
@@ -147,6 +165,9 @@ pub fn run() {
                 && schema
                     .text
                     .contains("\"schema_inference\":\"sampled_not_exhaustive\"")
+                && schema
+                    .text
+                    .contains("\"sample_scope\":\"2 document(s) examined\"")
                 && schema.text.contains("\"next_suggestion\"")
                 && schema.text.contains("may still exist"),
             "unexpected schema discovery result: {}",

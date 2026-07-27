@@ -117,6 +117,13 @@ Agents should use SafeSelect in this order:
 
 Agents must discover relation or collection structure before querying unfamiliar data and use each discovery response's `next_suggestion` instead of guessing column or field names. SQL descriptions are catalog metadata; MongoDB schemas are inferred from a bounded, non-exhaustive sample.
 
+MongoDB query documents must remain complete nested JSON values. Clients that
+flatten nested tool arguments can pass `filter`, `projection`, and `sort` as
+JSON-encoded object strings and `pipeline` as a JSON-encoded array string.
+`redact_fields` also accepts a JSON-encoded string array. Flattened keys are
+rejected so a lost filter or redaction can never become a less constrained
+fallback.
+
 Query responses include `row_count`, `byte_count`, `elapsed_ms`, and a human-readable `elapsed` value so agents can reason about result size and latency.
 
 ## Security Model

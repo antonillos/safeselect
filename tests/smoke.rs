@@ -1,5 +1,8 @@
+use sha2::{Digest, Sha256};
+use std::io::Write;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 fn safeselect_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_safeselect"))
@@ -129,6 +132,165 @@ fn test_serve_missing_project() {
     ]);
     assert!(!success);
     assert!(stderr.contains("does not exist") || stderr.contains("not found"));
+}
+
+#[test]
+fn test_mcp_security_rejection_is_audited_before_fail_closed_exit() {
+    let tmp = std::env::temp_dir().join(format!(
+        "safeselect-fail-closed-audit-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    let repo_root = tmp.join("repo");
+    let safeselect_dir = repo_root.join(".safeselect");
+    let environment_dir = safeselect_dir.join("environments");
+    let config_dir = tmp.join("config");
+    let driver_dir = config_dir.join("drivers");
+    let audit_dir = tmp.join("audit");
+    std::fs::create_dir_all(&environment_dir).unwrap();
+    std::fs::create_dir_all(&driver_dir).unwrap();
+
+    std::fs::write(
+        safeselect_dir.join("project.toml"),
+        format!(
+            r#"
+version = 1
+display_name = "Fail Closed Audit Test"
+
+[security]
+require_single_statement = true
+
+[audit]
+enabled = true
+directory = "{}"
+max_file_bytes = 1000000
+retain_files = 2
+"#,
+            audit_dir.display()
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        environment_dir.join("testing.toml"),
+        r#"
+version = 1
+
+[database]
+kind = "jdbc"
+vendor = "postgresql"
+driver = "postgresql"
+url = "jdbc:postgresql://127.0.0.1:1/unused"
+username = "unused"
+
+[database.secret]
+source = "env"
+variable = "SAFESELECT_FAIL_CLOSED_TEST_PASSWORD"
+"#,
+    )
+    .unwrap();
+
+    let jar_path = tmp.join("unused.jar");
+    std::fs::write(&jar_path, []).unwrap();
+    std::fs::write(
+        driver_dir.join("postgresql.toml"),
+        format!(
+            r#"
+version = 1
+vendor = "postgresql"
+path = "{}"
+class = "org.postgresql.Driver"
+sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+"#,
+            jar_path.display()
+        ),
+    )
+    .unwrap();
+
+    let forbidden_sql = "INSERT INTO public.audit_probe(value) VALUES ('synthetic')";
+    let mut child = Command::new(safeselect_bin())
+        .args([
+            "serve",
+            "--project",
+            repo_root.to_str().unwrap(),
+            "--environment",
+            "testing",
+        ])
+        .env("SAFESELECT_CONFIG_DIR", &config_dir)
+        .env("SAFESELECT_FAIL_CLOSED_TEST_PASSWORD", "unused")
+        .env("NO_COLOR", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to start MCP server");
+
+    let mut stdin = child.stdin.take().unwrap();
+    writeln!(
+        stdin,
+        "{}",
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "clientInfo": {"name": "fail-closed-audit-test"}
+            }
+        })
+    )
+    .unwrap();
+    writeln!(
+        stdin,
+        "{}",
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "select",
+                "arguments": {"sql": forbidden_sql}
+            }
+        })
+    )
+    .unwrap();
+    stdin.flush().unwrap();
+    drop(stdin);
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            panic!("MCP server did not fail closed after a security rejection");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(status.code(), Some(1));
+
+    let project_audit_dir = audit_dir.join("Fail Closed Audit Test").join("testing");
+    let audit_files: Vec<_> = std::fs::read_dir(&project_audit_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(audit_files.len(), 1);
+
+    let audit = std::fs::read_to_string(&audit_files[0]).unwrap();
+    let entries: Vec<serde_json::Value> = audit
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["category"], "REJECT");
+    assert_eq!(entries[0]["decision"], "reject");
+    assert_eq!(
+        entries[0]["query_hash"],
+        hex::encode(Sha256::digest(forbidden_sql.as_bytes()))
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
 }
 
 #[test]

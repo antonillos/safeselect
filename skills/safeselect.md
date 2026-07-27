@@ -118,6 +118,10 @@ agent_guidance:
   - After a statement timeout, do not retry unchanged or broaden the query; preserve or narrow selective predicates and time bounds, avoid leading-wildcard LIKE or ILIKE on large relations, use a bounded discovery query then equality or IN, and never increase limits automatically
   - LIMIT helps row retrieval but does not by itself bound DISTINCT, GROUP BY, COUNT, or ORDER BY; after a timeout call the explain tool with analyze=false and never send EXPLAIN through select
   - For MongoDB, use list_databases, list_collections, then discover_document_schema before find or aggregate; never guess field names
+  - Pass MongoDB filter, projection, and sort as complete nested JSON objects; if the MCP client flattens them, use one JSON-encoded object string instead
+  - Pass aggregation pipeline as one complete JSON array or JSON-encoded array string; never use flattened top-level keys such as filter.name or pipeline[0].$match.name
+  - Pass generate_document_fixture redact_fields as one complete string array or JSON-encoded string array; never flatten or omit intended redactions
+  - If SafeSelect rejects a flattened or missing required filter, do not retry the same call; immediately preserve the intended constraint in one nested or JSON-encoded value, and never substitute {} or an unfiltered query
   - Treat MongoDB schema discovery as sampled and non-exhaustive; an absent field may still exist outside the sample
   - Follow next_suggestion from discovery results and do not repeat an invalid query without rediscovering the target structure
   - Use bounded filters and limits for MongoDB analysis tools

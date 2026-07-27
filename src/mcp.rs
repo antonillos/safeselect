@@ -63,6 +63,120 @@ macro_rules! required_string {
     };
 }
 
+#[derive(Clone, Copy)]
+enum DocumentJsonKind {
+    Object,
+    Array,
+}
+
+impl DocumentJsonKind {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Object => "object",
+            Self::Array => "array",
+        }
+    }
+
+    fn matches(self, value: &serde_json::Value) -> bool {
+        match self {
+            Self::Object => value.is_object(),
+            Self::Array => value.is_array(),
+        }
+    }
+}
+
+fn parse_document_json_argument(
+    args: &serde_json::Value,
+    name: &str,
+    kind: DocumentJsonKind,
+    required: bool,
+) -> std::result::Result<Option<serde_json::Value>, String> {
+    let flattened_key = args.as_object().and_then(|values| {
+        values.keys().find(|key| {
+            key.starts_with(&format!("{name}.")) || key.starts_with(&format!("{name}["))
+        })
+    });
+    if let Some(key) = flattened_key {
+        return Err(format!(
+            "Invalid '{name}' argument: flattened key '{key}' is not accepted because flattening can lose query constraints. Do not retry this call unchanged. Next suggestion: immediately pass '{name}' as one nested JSON {kind} or as a JSON-encoded {kind} string; never replace it with an empty or unfiltered fallback.",
+            kind = kind.name()
+        ));
+    }
+
+    let Some(value) = args.get(name) else {
+        if required {
+            return Err(format!(
+                "Missing '{name}' argument. Next suggestion: pass '{name}' as one nested JSON {kind} or as a JSON-encoded {kind} string; do not run an unfiltered fallback.",
+                kind = kind.name()
+            ));
+        }
+        return Ok(None);
+    };
+
+    let parsed = if let Some(encoded) = value.as_str() {
+        serde_json::from_str(encoded).map_err(|error| {
+            format!(
+                "Invalid '{name}' JSON string: {error}. Next suggestion: pass one valid JSON {kind}; do not flatten its keys.",
+                kind = kind.name()
+            )
+        })?
+    } else {
+        value.clone()
+    };
+
+    if !kind.matches(&parsed) {
+        return Err(format!(
+            "Invalid '{name}' argument: expected a JSON {kind} or a JSON-encoded {kind} string. Next suggestion: preserve the complete nested value and do not flatten its keys.",
+            kind = kind.name()
+        ));
+    }
+
+    Ok(Some(parsed))
+}
+
+fn parse_document_string_array_argument(
+    args: &serde_json::Value,
+    name: &str,
+) -> std::result::Result<Option<Vec<String>>, String> {
+    let Some(value) = parse_document_json_argument(args, name, DocumentJsonKind::Array, false)?
+    else {
+        return Ok(None);
+    };
+    let values = value
+        .as_array()
+        .expect("document JSON array parser returned a non-array");
+    values
+        .iter()
+        .map(|value| {
+            value.as_str().map(str::to_string).ok_or_else(|| {
+                format!(
+                    "Invalid '{name}' argument: every array item must be a string. Next suggestion: pass one complete JSON string array or a JSON-encoded string array; do not omit intended redactions."
+                )
+            })
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map(Some)
+}
+
+macro_rules! required_document_json {
+    ($server:expr, $id:expr, $args:expr, $name:literal, $kind:expr) => {
+        match parse_document_json_argument($args, $name, $kind, true) {
+            Ok(Some(value)) => value,
+            Ok(None) => unreachable!("required document JSON argument returned no value"),
+            Err(error) => return $server.send_error($id, -32602, error),
+        }
+    };
+}
+
+macro_rules! optional_document_json {
+    ($server:expr, $id:expr, $args:expr, $name:literal, $kind:expr) => {
+        match parse_document_json_argument($args, $name, $kind, false) {
+            Ok(value) => value,
+            Err(error) => return $server.send_error($id, -32602, error),
+        }
+    };
+}
+
 pub struct McpServer {
     sidecar: Option<SidecarProcess>,
     security: SecurityEngine,
@@ -433,23 +547,33 @@ impl McpServer {
                             "description": "Collection name"
                         },
                         "filter": {
-                            "type": "object",
-                            "description": "Document filter"
+                            "oneOf": [
+                                {"type": "object"},
+                                {"type": "string"}
+                            ],
+                            "description": "Required document filter. Pass one nested JSON object, or a JSON-encoded object string if the client flattens nested arguments. Never use top-level keys such as filter.name."
                         },
                         "projection": {
-                            "type": "object",
-                            "description": "Projection document"
+                            "oneOf": [
+                                {"type": "object"},
+                                {"type": "string"}
+                            ],
+                            "description": "Projection document as one nested JSON object or JSON-encoded object string; never flatten its keys"
                         },
                         "sort": {
-                            "type": "object",
-                            "description": "Sort document"
+                            "oneOf": [
+                                {"type": "object"},
+                                {"type": "string"}
+                            ],
+                            "description": "Sort document as one nested JSON object or JSON-encoded object string; never flatten its keys"
                         },
                         "limit": {
                             "type": "integer",
                             "description": "Maximum number of documents to return"
                         }
                     },
-                    "required": ["database", "collection", "filter"]
+                    "required": ["database", "collection", "filter"],
+                    "additionalProperties": false
                 }),
             });
         }
@@ -466,14 +590,20 @@ impl McpServer {
                         "database": {"type": "string"},
                         "collection": {"type": "string"},
                         "pipeline": {
-                            "type": "array",
-                            "description": "Read-only MongoDB aggregation pipeline. Each item must be one JSON object, e.g. {\"$match\":{\"active\":true}}; do not pass stage names or JSON strings. $out and $merge are rejected.",
-                            "items": {"type": "object"},
-                            "minItems": 1
+                            "oneOf": [
+                                {
+                                    "type": "array",
+                                    "items": {"type": "object"},
+                                    "minItems": 1
+                                },
+                                {"type": "string"}
+                            ],
+                            "description": "Read-only MongoDB aggregation pipeline. Pass one nested JSON array of object stages, or a JSON-encoded array string if the client flattens nested arguments. Never use top-level keys such as pipeline[0].$match.name. $out and $merge are rejected."
                         },
                         "limit": {"type": "integer", "description": "Maximum result documents to return"}
                     },
-                    "required": ["database", "collection", "pipeline"]
+                    "required": ["database", "collection", "pipeline"],
+                    "additionalProperties": false
                 }),
             });
         }
@@ -488,10 +618,14 @@ impl McpServer {
                         "database": {"type": "string"},
                         "collection": {"type": "string"},
                         "field": {"type": "string"},
-                        "filter": {"type": "object"},
+                        "filter": {
+                            "oneOf": [{"type": "object"}, {"type": "string"}],
+                            "description": "Optional filter as one nested JSON object or JSON-encoded object string; never flatten its keys"
+                        },
                         "limit": {"type": "integer"}
                     },
-                    "required": ["database", "collection", "field"]
+                    "required": ["database", "collection", "field"],
+                    "additionalProperties": false
                 }),
             });
         }
@@ -508,11 +642,12 @@ impl McpServer {
                         "database": {"type": "string"},
                         "collection": {"type": "string"},
                         "filter": {
-                            "type": "object",
-                            "description": "Non-empty MongoDB filter. Do not use {} for exploratory counts; use find_documents with limit or an indexed filter."
+                            "oneOf": [{"type": "object"}, {"type": "string"}],
+                            "description": "Required non-empty MongoDB filter as one nested JSON object or JSON-encoded object string. Never use top-level keys such as filter.name. Do not use {} for exploratory counts; use find_documents with limit or an indexed filter."
                         }
                     },
-                    "required": ["database", "collection", "filter"]
+                    "required": ["database", "collection", "filter"],
+                    "additionalProperties": false
                 }),
             });
         }
@@ -526,12 +661,22 @@ impl McpServer {
                     "properties": {
                         "database": {"type": "string"},
                         "collection": {"type": "string"},
-                        "filter": {"type": "object"},
-                        "projection": {"type": "object"},
-                        "sort": {"type": "object"},
+                        "filter": {
+                            "oneOf": [{"type": "object"}, {"type": "string"}],
+                            "description": "Optional filter as one nested JSON object or JSON-encoded object string; never flatten its keys"
+                        },
+                        "projection": {
+                            "oneOf": [{"type": "object"}, {"type": "string"}],
+                            "description": "Optional projection as one nested JSON object or JSON-encoded object string; never flatten its keys"
+                        },
+                        "sort": {
+                            "oneOf": [{"type": "object"}, {"type": "string"}],
+                            "description": "Optional sort as one nested JSON object or JSON-encoded object string; never flatten its keys"
+                        },
                         "limit": {"type": "integer"}
                     },
-                    "required": ["database", "collection"]
+                    "required": ["database", "collection"],
+                    "additionalProperties": false
                 }),
             });
         }
@@ -547,11 +692,15 @@ impl McpServer {
                         "database": {"type": "string"},
                         "collection": {"type": "string"},
                         "field": {"type": "string"},
-                        "filter": {"type": "object"},
+                        "filter": {
+                            "oneOf": [{"type": "object"}, {"type": "string"}],
+                            "description": "Optional filter as one nested JSON object or JSON-encoded object string; never flatten its keys"
+                        },
                         "sample_size": {"type": "integer"},
                         "examples": {"type": "integer"}
                     },
-                    "required": ["database", "collection", "field"]
+                    "required": ["database", "collection", "field"],
+                    "additionalProperties": false
                 }),
             });
         }
@@ -567,11 +716,15 @@ impl McpServer {
                     "properties": {
                         "database": {"type": "string"},
                         "collection": {"type": "string"},
-                        "filter": {"type": "object"},
+                        "filter": {
+                            "oneOf": [{"type": "object"}, {"type": "string"}],
+                            "description": "Optional filter as one nested JSON object or JSON-encoded object string; never flatten its keys"
+                        },
                         "sample_size": {"type": "integer"},
                         "examples": {"type": "integer"}
                     },
-                    "required": ["database", "collection"]
+                    "required": ["database", "collection"],
+                    "additionalProperties": false
                 }),
             });
         }
@@ -580,19 +733,32 @@ impl McpServer {
             tools.push(ToolDefinition {
                 name: "generate_document_fixture".into(),
                 description: self.tool_description(
-                    "return anonymized MongoDB fixture samples without writing files",
+                    "return bounded MongoDB fixture samples without writing files; only fields explicitly named in redact_fields are replaced",
                 ),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
                         "database": {"type": "string"},
                         "collection": {"type": "string"},
-                        "filter": {"type": "object"},
-                        "projection": {"type": "object"},
+                        "filter": {
+                            "oneOf": [{"type": "object"}, {"type": "string"}],
+                            "description": "Optional filter as one nested JSON object or JSON-encoded object string; never flatten its keys"
+                        },
+                        "projection": {
+                            "oneOf": [{"type": "object"}, {"type": "string"}],
+                            "description": "Optional projection as one nested JSON object or JSON-encoded object string; never flatten its keys"
+                        },
                         "limit": {"type": "integer"},
-                        "redact_fields": {"type": "array", "items": {"type": "string"}}
+                        "redact_fields": {
+                            "oneOf": [
+                                {"type": "array", "items": {"type": "string"}},
+                                {"type": "string"}
+                            ],
+                            "description": "Fields to replace in the returned sample, as one complete JSON string array or JSON-encoded string array. Fields not listed here remain unchanged; never flatten its items."
+                        }
                     },
-                    "required": ["database", "collection"]
+                    "required": ["database", "collection"],
+                    "additionalProperties": false
                 }),
             });
         }
@@ -1068,10 +1234,10 @@ impl McpServer {
             Some(collection) => collection.to_string(),
             None => return self.send_error(id, -32602, "Missing 'collection' argument"),
         };
-        let filter = args
-            .get("filter")
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!({}));
+        let filter = required_document_json!(self, id, args, "filter", DocumentJsonKind::Object);
+        let projection =
+            optional_document_json!(self, id, args, "projection", DocumentJsonKind::Object);
+        let sort = optional_document_json!(self, id, args, "sort", DocumentJsonKind::Object);
         let limit = args
             .get("limit")
             .and_then(|v| v.as_u64())
@@ -1080,8 +1246,8 @@ impl McpServer {
             database,
             collection,
             filter,
-            projection: args.get("projection").cloned(),
-            sort: args.get("sort").cloned(),
+            projection,
+            sort,
             limit,
         };
 
@@ -1099,6 +1265,7 @@ impl McpServer {
                 {
                     return self.send_error(id, -32000, format!("{e}"));
                 }
+                let result = add_empty_document_result_guidance(serde_json::to_value(&result)?);
                 self.write_response(&json_text_response(id, &result)?)
             }
             Err(e) => {
@@ -1117,10 +1284,7 @@ impl McpServer {
         let request = DocumentAggregateRequest {
             database: required_string!(self, id, args, "database").to_string(),
             collection: required_string!(self, id, args, "collection").to_string(),
-            pipeline: args
-                .get("pipeline")
-                .cloned()
-                .unwrap_or_else(|| serde_json::json!([])),
+            pipeline: required_document_json!(self, id, args, "pipeline", DocumentJsonKind::Array),
             limit: args
                 .get("limit")
                 .and_then(|v| v.as_u64())
@@ -1143,9 +1307,7 @@ impl McpServer {
             database: required_string!(self, id, args, "database").to_string(),
             collection: required_string!(self, id, args, "collection").to_string(),
             field: required_string!(self, id, args, "field").to_string(),
-            filter: args
-                .get("filter")
-                .cloned()
+            filter: optional_document_json!(self, id, args, "filter", DocumentJsonKind::Object)
                 .unwrap_or_else(|| serde_json::json!({})),
             limit: args
                 .get("limit")
@@ -1168,10 +1330,7 @@ impl McpServer {
         let request = DocumentCountRequest {
             database: required_string!(self, id, args, "database").to_string(),
             collection: required_string!(self, id, args, "collection").to_string(),
-            filter: args
-                .get("filter")
-                .cloned()
-                .unwrap_or_else(|| serde_json::json!({})),
+            filter: required_document_json!(self, id, args, "filter", DocumentJsonKind::Object),
         };
         self.handle_document_value(
             id,
@@ -1189,12 +1348,16 @@ impl McpServer {
         let request = DocumentExplainRequest {
             database: required_string!(self, id, args, "database").to_string(),
             collection: required_string!(self, id, args, "collection").to_string(),
-            filter: args
-                .get("filter")
-                .cloned()
+            filter: optional_document_json!(self, id, args, "filter", DocumentJsonKind::Object)
                 .unwrap_or_else(|| serde_json::json!({})),
-            projection: args.get("projection").cloned(),
-            sort: args.get("sort").cloned(),
+            projection: optional_document_json!(
+                self,
+                id,
+                args,
+                "projection",
+                DocumentJsonKind::Object
+            ),
+            sort: optional_document_json!(self, id, args, "sort", DocumentJsonKind::Object),
             limit: args.get("limit").and_then(|v| v.as_u64()),
         };
         self.handle_document_value(
@@ -1214,9 +1377,7 @@ impl McpServer {
             database: required_string!(self, id, args, "database").to_string(),
             collection: required_string!(self, id, args, "collection").to_string(),
             field: required_string!(self, id, args, "field").to_string(),
-            filter: args
-                .get("filter")
-                .cloned()
+            filter: optional_document_json!(self, id, args, "filter", DocumentJsonKind::Object)
                 .unwrap_or_else(|| serde_json::json!({})),
             sample_size: args
                 .get("sample_size")
@@ -1240,9 +1401,7 @@ impl McpServer {
         let request = DocumentSchemaRequest {
             database: required_string!(self, id, args, "database").to_string(),
             collection: required_string!(self, id, args, "collection").to_string(),
-            filter: args
-                .get("filter")
-                .cloned()
+            filter: optional_document_json!(self, id, args, "filter", DocumentJsonKind::Object)
                 .unwrap_or_else(|| serde_json::json!({})),
             sample_size: args
                 .get("sample_size")
@@ -1267,34 +1426,37 @@ impl McpServer {
         id: Option<serde_json::Value>,
         args: &serde_json::Value,
     ) -> Result<()> {
+        let redact_fields = match parse_document_string_array_argument(args, "redact_fields") {
+            Ok(value) => value.unwrap_or_default(),
+            Err(error) => return self.send_error(id, -32602, error),
+        };
         let request = DocumentFixtureRequest {
             database: required_string!(self, id, args, "database").to_string(),
             collection: required_string!(self, id, args, "collection").to_string(),
-            filter: args
-                .get("filter")
-                .cloned()
+            filter: optional_document_json!(self, id, args, "filter", DocumentJsonKind::Object)
                 .unwrap_or_else(|| serde_json::json!({})),
-            projection: args.get("projection").cloned(),
+            projection: optional_document_json!(
+                self,
+                id,
+                args,
+                "projection",
+                DocumentJsonKind::Object
+            ),
             limit: args
                 .get("limit")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(self.security.limits().max_rows.min(20)),
-            redact_fields: args
-                .get("redact_fields")
-                .and_then(|v| v.as_array())
-                .map(|values| {
-                    values
-                        .iter()
-                        .filter_map(|value| value.as_str().map(str::to_string))
-                        .collect()
-                })
-                .unwrap_or_default(),
+            redact_fields,
         };
         self.handle_document_value(
             id,
             "generate_document_fixture",
             |security| security.validate_document_fixture(&request),
-            |sidecar| sidecar.generate_document_fixture(&request),
+            |sidecar| {
+                sidecar
+                    .generate_document_fixture(&request)
+                    .map(add_document_fixture_guidance)
+            },
         )
     }
 
@@ -1316,6 +1478,7 @@ impl McpServer {
         match execute(self.ensure_sidecar()?) {
             Ok(result) => {
                 self.audit.record("PASS", "allow", operation)?;
+                let result = add_empty_document_result_guidance(result);
                 self.write_response(&json_text_response(id, &result)?)
             }
             Err(e) => {
@@ -2027,10 +2190,22 @@ impl McpServer {
             ),
             String::new(),
             "--- TLS ---".into(),
-            match resolved.environment.tls {
-                Some(ref tls) => format!("Mode: {}", tls.mode),
-                None => "TLS: disabled".into(),
-            },
+            config_tls_status(
+                resolved.environment.database.kind,
+                &resolved.environment.database.url,
+                resolved
+                    .environment
+                    .tls
+                    .as_ref()
+                    .map(|tls| tls.mode.as_str()),
+            ),
+        ]);
+        if resolved.environment.database.kind == crate::backend::BackendKind::Document {
+            lines.extend(document_read_preference_status(
+                &resolved.environment.database.url,
+            ));
+        }
+        lines.extend([
             String::new(),
             "--- SSH ---".into(),
             match resolved.environment.ssh {
@@ -3708,9 +3883,13 @@ fn add_table_description_guidance(
 }
 
 fn add_document_schema_guidance(mut value: serde_json::Value) -> serde_json::Value {
+    let sampled_documents = value
+        .get("sampled_documents")
+        .and_then(serde_json::Value::as_u64);
     let guidance = serde_json::json!({
         "schema_inference": "sampled_not_exhaustive",
         "schema_notice": "Fields and types are inferred from a bounded sample. A field absent from this result may still exist outside the sample.",
+        "sample_scope": sampled_documents.map(|count| format!("{count} document(s) examined")),
         "next_suggestion": "Use observed fields in a bounded find_documents or aggregate_documents call, or inspect one field with profile_document_field."
     });
     if let (Some(result), Some(guidance)) = (value.as_object_mut(), guidance.as_object()) {
@@ -3724,6 +3903,90 @@ fn add_document_schema_guidance(mut value: serde_json::Value) -> serde_json::Val
             "next_suggestion": "Use observed fields in a bounded find_documents or aggregate_documents call, or inspect one field with profile_document_field."
         })
     }
+}
+
+fn add_document_fixture_guidance(mut value: serde_json::Value) -> serde_json::Value {
+    let guidance = serde_json::json!({
+        "redaction_scope": "explicit_fields_only",
+        "redaction_notice": "Only fields listed in redacted_fields are replaced. Every other returned field remains unchanged."
+    });
+    if let (Some(result), Some(guidance)) = (value.as_object_mut(), guidance.as_object()) {
+        result.extend(guidance.clone());
+        value
+    } else {
+        serde_json::json!({
+            "fixture": value,
+            "redaction_scope": "explicit_fields_only",
+            "redaction_notice": "Only fields listed in redacted_fields are replaced. Every other returned field remains unchanged."
+        })
+    }
+}
+
+fn add_empty_document_result_guidance(mut value: serde_json::Value) -> serde_json::Value {
+    let is_empty = value
+        .get("document_count")
+        .and_then(serde_json::Value::as_u64)
+        .is_some_and(|count| count == 0)
+        || value
+            .get("count")
+            .and_then(serde_json::Value::as_u64)
+            .is_some_and(|count| count == 0)
+        || ["documents", "results", "values"].iter().any(|field| {
+            value
+                .get(field)
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(Vec::is_empty)
+        });
+    if is_empty {
+        if let Some(result) = value.as_object_mut() {
+            result.insert(
+                "empty_result_notice".into(),
+                serde_json::Value::String(
+                    "No matches were found. MongoDB has no authoritative collection schema, so verify database, collection, and field names with discovery tools before treating this as proof that the data is absent.".into(),
+                ),
+            );
+        }
+    }
+    value
+}
+
+fn uri_query_parameter<'a>(uri: &'a str, name: &str) -> Option<&'a str> {
+    uri.split_once('?')?.1.split('&').find_map(|parameter| {
+        let (key, value) = parameter.split_once('=')?;
+        key.eq_ignore_ascii_case(name).then_some(value)
+    })
+}
+
+fn config_tls_status(
+    backend: crate::backend::BackendKind,
+    uri: &str,
+    configured_mode: Option<&str>,
+) -> String {
+    if let Some(mode) = configured_mode {
+        return format!("Mode: {mode}");
+    }
+    if backend == crate::backend::BackendKind::Document {
+        return match uri_query_parameter(uri, "tls").or_else(|| uri_query_parameter(uri, "ssl")) {
+            Some(value) if value.eq_ignore_ascii_case("true") => {
+                "TLS: enabled (MongoDB URI)".into()
+            }
+            Some(value) if value.eq_ignore_ascii_case("false") => {
+                "TLS: disabled (MongoDB URI)".into()
+            }
+            _ => "TLS: not explicitly configured in MongoDB URI".into(),
+        };
+    }
+    "TLS: disabled".into()
+}
+
+fn document_read_preference_status(uri: &str) -> Vec<String> {
+    let preference = uri_query_parameter(uri, "readPreference").unwrap_or("primary");
+    vec![
+        String::new(),
+        "--- Read Preference ---".into(),
+        format!("Mode: {preference}"),
+        "Selection preference only: MongoDB may choose another eligible member according to its server-selection rules.".into(),
+    ]
 }
 
 fn sql_query_error_message(message: &str) -> String {
@@ -3917,6 +4180,7 @@ mod tests {
         }));
 
         assert_eq!(value["schema_inference"], "sampled_not_exhaustive");
+        assert_eq!(value["sample_scope"], "2 document(s) examined");
         assert!(value["schema_notice"]
             .as_str()
             .unwrap()
@@ -3925,6 +4189,201 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("find_documents"));
+    }
+
+    #[test]
+    fn document_fixture_discloses_explicit_redaction_scope() {
+        let value = add_document_fixture_guidance(serde_json::json!({
+            "redacted_fields": ["token"],
+            "documents": [{"name": "unchanged", "token": "[REDACTED]"}]
+        }));
+
+        assert_eq!(value["redaction_scope"], "explicit_fields_only");
+        assert!(value["redaction_notice"]
+            .as_str()
+            .unwrap()
+            .contains("Every other returned field remains unchanged"));
+    }
+
+    #[test]
+    fn empty_document_results_warn_about_unverifiable_field_names() {
+        let value = add_empty_document_result_guidance(serde_json::json!({
+            "documents": [],
+            "document_count": 0
+        }));
+
+        assert!(value["empty_result_notice"]
+            .as_str()
+            .unwrap()
+            .contains("field names"));
+    }
+
+    #[test]
+    fn document_connection_details_report_uri_tls_and_read_preference_semantics() {
+        let uri = "mongodb://host/db?tls=true&readPreference=secondaryPreferred";
+
+        assert_eq!(
+            config_tls_status(crate::backend::BackendKind::Document, uri, None),
+            "TLS: enabled (MongoDB URI)"
+        );
+        let read_preference = document_read_preference_status(uri).join("\n");
+        assert!(read_preference.contains("Mode: secondaryPreferred"));
+        assert!(read_preference.contains("Selection preference only"));
+    }
+
+    #[test]
+    fn document_tls_status_does_not_claim_disabled_when_uri_is_unspecified() {
+        assert_eq!(
+            config_tls_status(
+                crate::backend::BackendKind::Document,
+                "mongodb://host/db",
+                None
+            ),
+            "TLS: not explicitly configured in MongoDB URI"
+        );
+    }
+
+    #[test]
+    fn document_json_arguments_accept_nested_values() {
+        let args = serde_json::json!({
+            "filter": {"name": "expected"},
+            "pipeline": [{"$match": {"active": true}}]
+        });
+
+        let filter = parse_document_json_argument(&args, "filter", DocumentJsonKind::Object, true)
+            .unwrap()
+            .unwrap();
+        let pipeline =
+            parse_document_json_argument(&args, "pipeline", DocumentJsonKind::Array, true)
+                .unwrap()
+                .unwrap();
+
+        assert_eq!(filter, serde_json::json!({"name": "expected"}));
+        assert_eq!(pipeline, serde_json::json!([{"$match": {"active": true}}]));
+    }
+
+    #[test]
+    fn document_json_arguments_accept_json_encoded_fallbacks() {
+        let args = serde_json::json!({
+            "filter": r#"{"name":"expected"}"#,
+            "pipeline": r#"[{"$match":{"active":true}}]"#
+        });
+
+        let filter = parse_document_json_argument(&args, "filter", DocumentJsonKind::Object, true)
+            .unwrap()
+            .unwrap();
+        let pipeline =
+            parse_document_json_argument(&args, "pipeline", DocumentJsonKind::Array, true)
+                .unwrap()
+                .unwrap();
+
+        assert_eq!(filter, serde_json::json!({"name": "expected"}));
+        assert_eq!(pipeline, serde_json::json!([{"$match": {"active": true}}]));
+    }
+
+    #[test]
+    fn document_json_arguments_reject_flattened_keys() {
+        for (args, name, kind) in [
+            (
+                serde_json::json!({"filter.name": "expected"}),
+                "filter",
+                DocumentJsonKind::Object,
+            ),
+            (
+                serde_json::json!({"pipeline[0].$match.name": "expected"}),
+                "pipeline",
+                DocumentJsonKind::Array,
+            ),
+        ] {
+            let error = parse_document_json_argument(&args, name, kind, true).unwrap_err();
+
+            assert!(error.contains("flattened key"));
+            assert!(error.contains("Do not retry this call unchanged"));
+            assert!(error.contains("immediately pass"));
+            assert!(error.contains("JSON-encoded"));
+            assert!(error.contains("never replace it with an empty or unfiltered fallback"));
+        }
+    }
+
+    #[test]
+    fn required_document_json_argument_never_defaults_to_empty() {
+        let error = parse_document_json_argument(
+            &serde_json::json!({}),
+            "filter",
+            DocumentJsonKind::Object,
+            true,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("Missing 'filter' argument"));
+        assert!(error.contains("do not run an unfiltered fallback"));
+    }
+
+    #[test]
+    fn optional_document_json_argument_can_be_absent() {
+        let value = parse_document_json_argument(
+            &serde_json::json!({}),
+            "filter",
+            DocumentJsonKind::Object,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(value, None);
+    }
+
+    #[test]
+    fn document_json_arguments_reject_invalid_json_and_wrong_shapes() {
+        let invalid_json = parse_document_json_argument(
+            &serde_json::json!({"filter": "{"}),
+            "filter",
+            DocumentJsonKind::Object,
+            true,
+        )
+        .unwrap_err();
+        let wrong_shape = parse_document_json_argument(
+            &serde_json::json!({"pipeline": r#"{"$match":{}}"#}),
+            "pipeline",
+            DocumentJsonKind::Array,
+            true,
+        )
+        .unwrap_err();
+
+        assert!(invalid_json.contains("Invalid 'filter' JSON string"));
+        assert!(wrong_shape.contains("expected a JSON array"));
+    }
+
+    #[test]
+    fn document_string_arrays_accept_encoded_values_and_reject_invalid_items() {
+        let values = parse_document_string_array_argument(
+            &serde_json::json!({"redact_fields": r#"["password","token"]"#}),
+            "redact_fields",
+        )
+        .unwrap()
+        .unwrap();
+        let error = parse_document_string_array_argument(
+            &serde_json::json!({"redact_fields": ["password", 42]}),
+            "redact_fields",
+        )
+        .unwrap_err();
+
+        assert_eq!(values, vec!["password", "token"]);
+        assert!(error.contains("every array item must be a string"));
+        assert!(error.contains("do not omit intended redactions"));
+    }
+
+    #[test]
+    fn explicit_empty_document_filter_remains_visible_to_security_policy() {
+        let filter = parse_document_json_argument(
+            &serde_json::json!({"filter": {}}),
+            "filter",
+            DocumentJsonKind::Object,
+            true,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(filter, serde_json::json!({}));
     }
 
     #[test]

@@ -463,6 +463,11 @@ impl SidecarProcess {
     }
 
     pub fn list_collections(&mut self, database: &str) -> Result<Vec<String>> {
+        self.ensure_document_database_exists(database)?;
+        self.list_collections_unchecked(database)
+    }
+
+    fn list_collections_unchecked(&mut self, database: &str) -> Result<Vec<String>> {
         let resp = self.send_request(
             "list_collections",
             Some(serde_json::json!({ "database": database })),
@@ -482,6 +487,7 @@ impl SidecarProcess {
     }
 
     pub fn find_documents(&mut self, request: &DocumentFindRequest) -> Result<DocumentResult> {
+        self.ensure_document_namespace_exists(&request.database, &request.collection)?;
         let resp = self.send_request("find_documents", Some(serde_json::to_value(request)?))?;
         if let Some(err) = resp.error {
             return Err(SafeselectError::Sidecar(format!(
@@ -548,6 +554,17 @@ impl SidecarProcess {
         method: &str,
         params: serde_json::Value,
     ) -> Result<serde_json::Value> {
+        let database = params
+            .get("database")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| SafeselectError::Sidecar("missing document database".into()))?
+            .to_string();
+        let collection = params
+            .get("collection")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| SafeselectError::Sidecar("missing document collection".into()))?
+            .to_string();
+        self.ensure_document_namespace_exists(&database, &collection)?;
         let resp = self.send_request(method, Some(params))?;
         if let Some(err) = resp.error {
             return Err(SafeselectError::Sidecar(format!(
@@ -557,6 +574,33 @@ impl SidecarProcess {
         }
         resp.ok
             .ok_or_else(|| SafeselectError::Sidecar("empty response from sidecar".into()))
+    }
+
+    fn ensure_document_database_exists(&mut self, database: &str) -> Result<()> {
+        if self
+            .list_databases()?
+            .iter()
+            .any(|candidate| candidate == database)
+        {
+            return Ok(());
+        }
+        Err(SafeselectError::Sidecar(format!(
+            "document database '{database}' does not exist"
+        )))
+    }
+
+    fn ensure_document_namespace_exists(&mut self, database: &str, collection: &str) -> Result<()> {
+        self.ensure_document_database_exists(database)?;
+        if self
+            .list_collections_unchecked(database)?
+            .iter()
+            .any(|candidate| candidate == collection)
+        {
+            return Ok(());
+        }
+        Err(SafeselectError::Sidecar(format!(
+            "document collection '{database}.{collection}' does not exist"
+        )))
     }
 
     fn send_request(

@@ -238,20 +238,32 @@ call `discover_document_schema`.
 Find documents in a collection. The request is validated before execution:
 - Must target an allowed database/collection when allowlists are configured
 - Must not target denied collections
-- `filter`, `projection`, and `sort` must be JSON objects
+- `filter`, `projection`, and `sort` must decode to JSON objects
 - Result document count and byte limits are enforced
 
 Arguments:
 - `database` (required): database name
 - `collection` (required): collection name
-- `filter` (required): JSON object filter
-- `projection` (optional): JSON object projection
-- `sort` (optional): JSON object sort
+- `filter` (required): one nested JSON object filter, or a JSON-encoded object
+  string when the MCP client cannot preserve nested tool arguments
+- `projection` (optional): one nested JSON object or JSON-encoded object string
+- `sort` (optional): one nested JSON object or JSON-encoded object string
 - `limit` (optional): maximum number of documents to return
+
+Never send flattened top-level keys such as `filter.name`,
+`projection.field`, or `sort.created_at`. SafeSelect rejects them because
+flattening can discard query constraints. A missing required filter is also
+rejected and is never converted to `{}`. Do not replace a rejected filter with
+an empty or unfiltered fallback. After a flattened-argument rejection, do not
+repeat the same call: immediately resend the complete value as nested JSON or
+as the JSON-encoded fallback.
 
 ### Additional MongoDB tools
 
-- `aggregate_documents`: run a non-empty array of JSON-object stages; `$out` and `$merge` are rejected.
+- `aggregate_documents`: run a non-empty array of JSON-object stages; a
+  JSON-encoded array string is accepted as a client compatibility fallback.
+  Flattened keys such as `pipeline[0].$match.name` are rejected. `$out` and
+  `$merge` are rejected.
 - `distinct_documents`: return distinct values for a field, optionally filtered and limited.
 - `count_documents`: count documents matching a required, non-empty filter; `{}` is rejected to avoid accidental full scans.
 - `explain_documents`: explain a bounded find query without executing a write.
@@ -264,6 +276,15 @@ Arguments:
 
 All document tools enforce configured database/collection allowlists and denylists,
 statement timeouts, and result-size limits.
+
+For every document tool, pass `filter`, `projection`, and `sort` as complete
+nested JSON objects. If a client flattens nested tool arguments, pass the
+complete value as a JSON-encoded object string instead. The same rule applies
+to `pipeline`, using a complete JSON array or JSON-encoded array string.
+`redact_fields` likewise accepts a complete string array or JSON-encoded string
+array; non-string items are rejected rather than silently ignored.
+SafeSelect parses these strings strictly and validates the resulting structure
+through the same read-only policy.
 
 MongoDB collections do not have an authoritative fixed schema. A field absent
 from `discover_document_schema` may still exist outside the selected filter or
