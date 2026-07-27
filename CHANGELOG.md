@@ -2,6 +2,37 @@
 
 All notable changes to this project are documented in this file.
 
+## [v0.6.3] - 2026-07-27
+
+### Added
+
+- feat: harden agent database workflows
+
+### Documentation
+
+- docs: align changelog for next release
+
+### Build And CI
+
+- ci: sync develop after release completion (#65)
+- ci: add smart merge command (#69)
+
+### Other
+
+- chore(deps): bump serde_json from 1.0.150 to 1.0.151 (#59)
+- chore(deps): bump uuid from 1.23.5 to 1.24.0 (#63)
+- chore(deps): bump clap from 4.6.1 to 4.6.4 (#61)
+- chore(deps): bump libc from 0.2.186 to 0.2.189 (#62)
+- chore(deps): bump serde from 1.0.228 to 1.0.229 (#60)
+- chore(deps): bump tools.jackson.core:jackson-databind (#64)
+- release: bump to 0.6.2 (#66)
+- feat(mcp): add secure schema discovery
+- fix(mcp): harden schema discovery guidance
+- feat(mcp): add type-aware SQL guidance
+- fix(mcp): strengthen SQL recovery guidance
+- fix(ci): track a single verify run in smart merge
+- fix(ci): wait for required merge checks
+
 ## [v0.6.2] - 2026-07-26
 
 ### Build And CI
