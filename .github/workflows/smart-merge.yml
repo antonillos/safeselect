@@ -187,6 +187,40 @@ jobs:
               return;
             }
 
+            // Required-workflow rules can require the pull_request run in
+            // addition to the explicit workflow_dispatch validation above.
+            // Wait until GitHub reports that every branch requirement is
+            // satisfied instead of attempting the merge while checks are still
+            // shown as expected.
+            let readyPull = null;
+            while (Date.now() < deadline) {
+              readyPull = (await github.rest.pulls.get({
+                owner,
+                repo,
+                pull_number: pullNumber,
+              })).data;
+              if (readyPull.head.sha !== pull.head.sha) {
+                await comment("⛔ The PR head changed during validation. Run `/merge` again.");
+                core.setFailed("Pull request head changed during validation.");
+                return;
+              }
+              if (readyPull.mergeable === false) {
+                await comment("⛔ This pull request developed merge conflicts during validation.");
+                core.setFailed("Pull request has merge conflicts.");
+                return;
+              }
+              if (readyPull.mergeable_state === "clean") break;
+              await sleep(15000);
+            }
+
+            if (!readyPull || readyPull.mergeable_state !== "clean") {
+              await comment(
+                "⏳ Timed out waiting for GitHub branch requirements to become mergeable."
+              );
+              core.setFailed("Branch requirements did not become mergeable.");
+              return;
+            }
+
             const commits = await github.paginate(github.rest.pulls.listCommits, {
               owner,
               repo,

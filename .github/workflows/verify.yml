@@ -86,9 +86,6 @@ jobs:
   security:
     name: Security & Licenses
     needs: unit
-    if: >
-      github.event_name != 'pull_request' ||
-      contains(github.event.pull_request.labels.*.name, 'safe-to-merge')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
