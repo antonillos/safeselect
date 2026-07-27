@@ -30,17 +30,37 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Added the read-only PostgreSQL `describe_table` tool with ordered catalog
+  metadata, including PostgreSQL-specific `udt_name` values.
+- Added guided SQL and MongoDB schema discovery with actionable
+  `next_suggestion` responses.
+- Added type-aware PostgreSQL recovery guidance for missing columns, invalid
+  grouping, incompatible operators, JSON/JSONB values, and JSON arrays.
+- Added strict JSON-string compatibility fallbacks for MongoDB clients that
+  cannot preserve nested tool arguments.
+
 ### Fixed
 
-- Accepted any available Java 17+ runtime instead of forcing Homebrew to install
-  its `openjdk@17` formula, with explicit diagnostics for missing or outdated Java.
-- Supported MongoDB Compass `mongodb+srv://` connections through SSH tunnels by
-  resolving SRV targets and applying the TLS and direct-connection options required
-  for local forwarding.
+- Rejected flattened, missing, or structurally invalid MongoDB filters,
+  projections, sorts, pipelines, and redaction lists instead of falling back to
+  less constrained requests.
+- Hardened timeout recovery so agents preserve or narrow predicates, avoid
+  expensive wildcard retries, and inspect plans without automatically raising
+  configured limits.
+- Conservatively rejected nested SQL `WITH` clauses while continuing to support
+  leading read-only CTEs.
 
 ### Documentation
 
-- Documented the Homebrew Java runtime behavior and tunneled MongoDB SRV imports.
+- Documented schema-first database workflows, type-aware SQL recovery, bounded
+  timeout handling, sampled MongoDB schema inference, and nested-argument
+  compatibility.
+
+### Build And CI
+
+- Added the signed, policy-aware `/merge` pull-request comment workflow.
 
 ## [v0.6.0] - 2026-07-15
 
