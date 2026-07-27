@@ -124,7 +124,7 @@ pub fn run() {
             collections.text
         );
 
-        log_check("unknown document namespaces fail explicitly");
+        log_check("disallowed document namespaces fail explicitly");
         let missing_collection = harness.call_tool(
             29,
             "find_documents",
@@ -137,8 +137,10 @@ pub fn run() {
         );
         assert!(!missing_collection.success);
         assert!(
-            missing_collection.text.contains("does not exist"),
-            "unexpected missing collection response: {}",
+            missing_collection
+                .text
+                .contains("is not in the allowed collections list"),
+            "unexpected disallowed collection response: {}",
             missing_collection.text
         );
 
