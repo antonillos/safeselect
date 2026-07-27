@@ -232,13 +232,29 @@ fn assert_mcp_sql_error_stays_alive(repo_root: &std::path::Path, config_dir: &st
         reader
             .read_line(&mut describe_response)
             .expect("failed to read describe_table response");
+        let describe_rpc: serde_json::Value = serde_json::from_str(&describe_response)
+            .expect("describe_table response should be valid JSON-RPC");
+        let describe_text = describe_rpc["result"]["content"][0]["text"]
+            .as_str()
+            .expect("describe_table response should contain text content");
+        let description: serde_json::Value =
+            serde_json::from_str(describe_text).expect("describe_table text should be valid JSON");
+        let returned_columns = description["columns"]
+            .as_array()
+            .expect("describe_table should return columns");
         assert!(
-            describe_response.contains("\"next_suggestion\"")
-                && describe_response.contains("\"ordinal_position\"")
-                && describe_response.contains("\"udt_name\"")
+            description["next_suggestion"].is_string()
+                && returned_columns
+                    .iter()
+                    .all(|column| column["ordinal_position"].is_number())
+                && returned_columns
+                    .iter()
+                    .all(|column| column["udt_name"].is_string())
                 && expected_columns
                     .iter()
-                    .all(|column| describe_response.contains(column)),
+                    .all(|expected| returned_columns
+                        .iter()
+                        .any(|column| column["column_name"].as_str() == Some(expected))),
             "unexpected describe_table response for {relation}: {describe_response}"
         );
     }
