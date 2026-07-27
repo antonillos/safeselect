@@ -108,10 +108,15 @@ agent_guidance:
   - Use database_info before discovery when the backend is unknown
   - If the user only requested capabilities, tools, or available relations, report the discovery result and stop without reading data
   - For SQL data inspection, choose exactly one table_schema and table_name pair from list_tables, then call describe_table with those exact literal values; never pass placeholders, use wildcards, or guess column names
+  - Use a small LIMIT for row retrieval; for COUNT or GROUP BY narrow input in WHERE because a final LIMIT does not reduce rows scanned
   - Use describe_table data_type and udt_name to choose type-compatible operators; PostgreSQL array udt_name values such as _jsonb identify the element type
   - Place SQL WITH CTEs at the beginning of the statement; do not nest WITH inside a subquery
+  - After a missing-column error, call describe_table for every relation referenced by joins, unions, or subqueries, then use only returned column names and types
   - When GROUP BY rejects an aggregate expression or its ordinal position, group only by non-aggregate columns or omit GROUP BY for a single aggregate result
   - When PostgreSQL reports that an operator does not exist, rediscover types and use compatible operators; for JSON/JSONB use -> or ->> against observed fields and never cast blindly
+  - For JSON/JSONB arrays such as udt_name _jsonb, use EXISTS with unnest and JSON operators on each observed element; never cast the array to text or use LIKE/ILIKE as a fallback
+  - After a statement timeout, do not retry unchanged or broaden the query; preserve or narrow selective predicates and time bounds, avoid leading-wildcard LIKE or ILIKE on large relations, use a bounded discovery query then equality or IN, and never increase limits automatically
+  - LIMIT helps row retrieval but does not by itself bound DISTINCT, GROUP BY, COUNT, or ORDER BY; after a timeout call the explain tool with analyze=false and never send EXPLAIN through select
   - For MongoDB, use list_databases, list_collections, then discover_document_schema before find or aggregate; never guess field names
   - Treat MongoDB schema discovery as sampled and non-exhaustive; an absent field may still exist outside the sample
   - Follow next_suggestion from discovery results and do not repeat an invalid query without rediscovering the target structure

@@ -289,7 +289,7 @@ impl McpServer {
             tools.push(ToolDefinition {
                 name: "select".into(),
                 description: self.tool_description(
-                    "execute a read-only SELECT query on the target database; use describe_table before querying an unfamiliar relation, never guess column names, and place WITH CTEs at the beginning of the statement instead of nesting them in subqueries",
+                    "execute a read-only SELECT query on the target database; use describe_table before querying an unfamiliar relation, never guess column names, use a small LIMIT for row retrieval, place WITH CTEs at the beginning of the statement, and after a timeout preserve or narrow selective predicates instead of broadening the query",
                 ),
                 input_schema: serde_json::json!({
                     "type": "object",
@@ -352,7 +352,7 @@ impl McpServer {
             ToolDefinition {
                 name: "explain".into(),
                 description: self
-                    .tool_description("show a query execution plan; ANALYZE executes the SELECT, and WITH CTEs must be placed at the beginning of the explained statement instead of nested in subqueries"),
+                    .tool_description("show a query execution plan; after a timeout call this explain tool with analyze=false instead of putting EXPLAIN in the select tool, and place WITH CTEs at the beginning of the explained statement instead of nested in subqueries"),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -3729,11 +3729,19 @@ fn add_document_schema_guidance(mut value: serde_json::Value) -> serde_json::Val
 fn sql_query_error_message(message: &str) -> String {
     let lower = message.to_lowercase();
     let suggestion = if lower.contains("column") && lower.contains("does not exist") {
-        " Next suggestion: call describe_table for the target relation, then retry using only returned column names."
+        " Next suggestion: call describe_table for each referenced target relation, then retry using only the returned column names and types."
     } else if lower.contains("relation") && lower.contains("does not exist") {
         " Next suggestion: call list_tables, then describe_table for an existing relation."
+    } else if lower.contains("statement timeout exceeded")
+        || lower.contains("canceling statement due to statement timeout")
+    {
+        " Next suggestion: do not retry unchanged or with a broader query. Preserve or narrow every selective predicate, especially time bounds; never remove one during recovery. Avoid leading-wildcard LIKE or ILIKE on large relations. Use a bounded discovery query to find exact values, then use equality or IN. For row retrieval, add or reduce LIMIT. LIMIT does not by itself bound work for DISTINCT, GROUP BY, COUNT, or ORDER BY, so narrow their input in WHERE. Then call the explain tool with analyze=false to inspect scan and index usage without executing the query; do not put EXPLAIN in select. Do not increase the timeout automatically."
     } else if lower.contains("aggregate functions are not allowed in group by") {
         " Next suggestion: remove aggregate expressions or their ordinal positions from GROUP BY; group only by non-aggregate columns, or omit GROUP BY for a single aggregate result."
+    } else if lower.contains("operator does not exist")
+        && (lower.contains("jsonb[]") || lower.contains("json[]"))
+    {
+        " Next suggestion: call describe_table and inspect udt_name. A value such as _jsonb identifies a JSONB array; use EXISTS with unnest(array_column), then apply JSON operators such as -> or ->> to each observed element. Never cast the array to text or use LIKE/ILIKE as a fallback."
     } else if lower.contains("operator does not exist") && lower.contains("json") {
         " Next suggestion: call describe_table for the target relation and compare data_type and udt_name before retrying with type-compatible operators. For json/jsonb values, use JSON operators such as -> or ->> against observed fields; do not cast blindly."
     } else if lower.contains("operator does not exist") {
@@ -3925,7 +3933,8 @@ mod tests {
             sql_query_error_message("ERROR: column p.data does not exist at character 279");
 
         assert!(message.contains("describe_table"));
-        assert!(message.contains("only returned column names"));
+        assert!(message.contains("each referenced target relation"));
+        assert!(message.contains("only the returned column names and types"));
     }
 
     #[test]
@@ -3940,6 +3949,31 @@ mod tests {
     }
 
     #[test]
+    fn statement_timeout_errors_recommend_a_bounded_diagnostic_flow() {
+        for error in [
+            "Statement timeout exceeded: 120000ms - the query took too long to execute",
+            "ERROR: canceling statement due to statement timeout",
+        ] {
+            let message = sql_query_error_message(error);
+
+            assert!(message.contains("do not retry unchanged"));
+            assert!(message.contains("broader query"));
+            assert!(message.contains("Preserve or narrow every selective predicate"));
+            assert!(message.contains("especially time bounds"));
+            assert!(message.contains("leading-wildcard LIKE or ILIKE"));
+            assert!(message.contains("bounded discovery query"));
+            assert!(message.contains("add or reduce LIMIT"));
+            assert!(message.contains("equality or IN"));
+            assert!(message.contains(
+                "LIMIT does not by itself bound work for DISTINCT, GROUP BY, COUNT, or ORDER BY"
+            ));
+            assert!(message.contains("explain tool with analyze=false"));
+            assert!(message.contains("do not put EXPLAIN in select"));
+            assert!(message.contains("Do not increase the timeout automatically"));
+        }
+    }
+
+    #[test]
     fn json_operator_errors_recommend_type_compatible_json_access() {
         let message = sql_query_error_message(
             "ERROR: operator does not exist: jsonb ~~ text Hint: You might need to add explicit type casts.",
@@ -3949,6 +3983,20 @@ mod tests {
         assert!(message.contains("data_type and udt_name"));
         assert!(message.contains("-> or ->>"));
         assert!(message.contains("do not cast blindly"));
+    }
+
+    #[test]
+    fn json_array_operator_errors_recommend_structured_element_access() {
+        let message = sql_query_error_message(
+            "ERROR: operator does not exist: jsonb[] @> jsonb Hint: No operator matches the given name and argument types.",
+        );
+
+        assert!(message.contains("udt_name"));
+        assert!(message.contains("_jsonb"));
+        assert!(message.contains("EXISTS with unnest"));
+        assert!(message.contains("-> or ->>"));
+        assert!(message.contains("Never cast the array to text"));
+        assert!(message.contains("LIKE/ILIKE"));
     }
 
     #[test]

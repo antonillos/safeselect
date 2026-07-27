@@ -19,6 +19,12 @@ Agents should treat SafeSelect as their database boundary:
 - For MongoDB, use `list_databases`, `list_collections`, then `discover_document_schema`; never guess field names.
 - Follow `next_suggestion` from discovery results instead of repeating an invalid query unchanged.
 - Use `select` only for small, targeted read-only queries.
+- Use a small `LIMIT` for row retrieval. For aggregates, narrow input rows in
+  `WHERE`; a final `LIMIT` does not reduce the rows scanned by `COUNT` or
+  `GROUP BY`.
+- After a timeout, preserve or narrow selective predicates, especially time
+  bounds. Never retry with a broader query or leading-wildcard `LIKE`/`ILIKE`
+  over a large relation.
 - Place SQL CTEs at the beginning of the statement; do not nest `WITH` inside a
   subquery.
 - Use `explain` to inspect query plans, index usage, and bottlenecks.
@@ -123,6 +129,22 @@ in `GROUP BY`, remove it and group only by non-aggregate columns, or omit
 rediscover the relation and compare `data_type` and `udt_name`; use operators
 that match the observed types rather than adding a cast blindly. JSON and JSONB
 values should use JSON operators such as `->` and `->>` against observed fields.
+For JSON/JSONB arrays (`udt_name` such as `_jsonb`), use `EXISTS` with
+`unnest(array_column)` and apply JSON operators to each observed element. Never
+cast a JSON array to text or use `LIKE`/`ILIKE` as a fallback.
+If a column does not exist, call `describe_table` for every relation referenced
+by the query, including relations in joins, unions, and subqueries, then retry
+using only the returned column names and types.
+
+After a statement timeout, do not retry the query unchanged or broaden it.
+Preserve or narrow every selective predicate, especially time bounds, and avoid
+leading-wildcard `LIKE`/`ILIKE` over large relations. Use a bounded discovery
+query to find exact values, then use equality or `IN`. Add or reduce `LIMIT` for
+row retrieval, but remember that it does not by itself bound work for
+`DISTINCT`, `GROUP BY`, `COUNT`, or `ORDER BY`; narrow their input in `WHERE`.
+Then call the `explain` tool with `analyze=false` to inspect scan and index usage
+without executing the query. Do not send `EXPLAIN` through `select`, and never
+increase `statement_timeout_ms` automatically.
 
 ### `list_tables`
 
@@ -327,8 +349,12 @@ When database access fails, agents should proceed in this order:
 8. Do not retry rejected SQL after a security violation; SafeSelect intentionally exits fail-closed.
 
 Timeouts are bounded by the project `statement_timeout_ms`. If a query times out,
-agents should narrow filters, inspect the plan with `explain`, or ask the user
-before increasing project limits.
+agents must not retry it unchanged or broaden it. Preserve or narrow filters and
+time ranges, avoid leading-wildcard `LIKE`/`ILIKE`, and add or reduce `LIMIT` for
+row retrieval. `LIMIT` does not by itself bound `DISTINCT`, `GROUP BY`, `COUNT`,
+or `ORDER BY`, so narrow their input in `WHERE`. Call the `explain` tool with
+`analyze=false`; do not send `EXPLAIN` through `select`. Ask the user before
+increasing project limits.
 
 ## Security
 
