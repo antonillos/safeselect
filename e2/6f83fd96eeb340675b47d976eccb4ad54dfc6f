@@ -1,0 +1,39 @@
+src/mcp.rs
+  s_9fffd0e54d7022::t_f7fe84e49aed5e 66-179,550-554,557-561,564-568,575-576,593-601,605-606,621-624,627-628,645-646,649-650,664-675,678-679,695-698,702-703,719-722,726-727,736,743-750,752-758,760-761,1237-1240,1249-1250,1268,1287,1310,1333,1351,1353-1360,1380,1404,1429-1432,1436,1438-1444,1449,1455-1459,1481,2193-2208,3886-3888,3892,3908-3991,4183,4194-4388
+tests/security_suite/real_mongodb.rs
+  s_9fffd0e54d7022::t_a426930293b8df 127-144,168-170
+README.md
+  s_80dee0faf8ca2e::t_f5a30970656813 120-126
+docs/agents.md
+  s_80dee0faf8ca2e::t_6c2185971e00b1 241,247-250,253-260,263-266,280-288
+skills/safeselect.md
+  s_80dee0faf8ca2e::t_c2b0e5bd2251c1 121-124
+src/sidecar.rs
+  s_9fffd0e54d7022::t_3a6861e6279f88 466-470,490,557-567,579-605
+tests/smoke.rs
+  s_9fffd0e54d7022::t_9b58a60e66d57a 1-2,4-5,137-295
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "e26f83fd96eeb340675b47d976eccb4ad54dfc6f",
+  "prompts": {},
+  "sessions": {
+    "s_80dee0faf8ca2e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fa317-b0e1-7203-be04-221b52bd780a",
+        "model": "unknown"
+      },
+      "human_author": "antonillos <305277+antonillos@users.noreply.github.com>"
+    },
+    "s_9fffd0e54d7022": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fa4fe-93c8-70f3-88d7-0c95f601307f",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "antonillos <305277+antonillos@users.noreply.github.com>"
+    }
+  }
+}
