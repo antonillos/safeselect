@@ -460,6 +460,7 @@ fn assert_rejected(
             || response.text.contains("denied")
             || response.text.contains("must be a JSON object")
             || response.text.contains("must be JSON objects")
+            || (response.text.contains("Invalid '") && response.text.contains("JSON string"))
             || response.text.contains("must be between 1 and"),
         "{name} failed for the wrong reason: {}",
         response.text
