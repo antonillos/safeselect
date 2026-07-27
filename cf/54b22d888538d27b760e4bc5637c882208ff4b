@@ -1,0 +1,25 @@
+docs/agents.md
+  s_80dee0faf8ca2e::t_52a55a2056d261 22-23,102-103,119-126,158,162-165
+skills/safeselect.md
+  s_80dee0faf8ca2e::t_b1c6bf76fe3e25 111-114
+src/mcp.rs
+  s_80dee0faf8ca2e::t_11e9f1db7fae35 292,330,355,3664,3706,3735-3740,3812,3882,3894-3896,3898-3901,3931-3963
+tests/smoke_suite/smoke.rs
+  s_80dee0faf8ca2e::t_4a8834b8773b81 238
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "cf54b22d888538d27b760e4bc5637c882208ff4b",
+  "prompts": {},
+  "sessions": {
+    "s_80dee0faf8ca2e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fa317-b0e1-7203-be04-221b52bd780a",
+        "model": "unknown"
+      },
+      "human_author": "antonillos <305277+antonillos@users.noreply.github.com>"
+    }
+  }
+}
