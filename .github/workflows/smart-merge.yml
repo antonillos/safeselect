@@ -6,7 +6,7 @@ on:
       - created
 
 permissions:
-  actions: read
+  actions: write
   checks: read
   contents: write
   issues: write
@@ -110,57 +110,114 @@ jobs:
               "Security & Licenses",
             ];
             const deadline = Date.now() + 30 * 60 * 1000;
-            let latestChecks = new Map();
 
-            // Adding safe-to-merge starts a new run asynchronously.
-            await sleep(10000);
-            while (Date.now() < deadline) {
-              const checks = await github.paginate(github.rest.checks.listForRef, {
+            // PRs created by GITHUB_TOKEN do not reliably trigger another
+            // pull_request run when the label is added. Dispatch one complete
+            // Verify run and track that exact run instead of mixing check runs
+            // from different events.
+            const dispatchStartedAt = Date.now();
+            await github.rest.actions.createWorkflowDispatch({
+              owner,
+              repo,
+              workflow_id: "verify.yml",
+              ref: pull.head.ref,
+            });
+
+            let verifyRun = null;
+            while (Date.now() < deadline && !verifyRun) {
+              const runs = await github.rest.actions.listWorkflowRuns({
                 owner,
                 repo,
-                ref: pull.head.sha,
-                per_page: 100,
+                workflow_id: "verify.yml",
+                event: "workflow_dispatch",
+                branch: pull.head.ref,
+                per_page: 20,
               });
+              verifyRun = runs.data.workflow_runs.find((run) =>
+                run.head_sha === pull.head.sha &&
+                new Date(run.created_at).getTime() >= dispatchStartedAt - 5000
+              );
+              if (!verifyRun) await sleep(5000);
+            }
 
-              latestChecks = new Map();
-              for (const check of checks) {
-                const previous = latestChecks.get(check.name);
-                if (!previous || check.id > previous.id) {
-                  latestChecks.set(check.name, check);
-                }
-              }
+            if (!verifyRun) {
+              await comment("⏳ Timed out waiting for the dispatched Verify run to start.");
+              core.setFailed("Verify run did not start.");
+              return;
+            }
 
-              const required = requiredChecks.map((name) => latestChecks.get(name));
-              if (required.every(Boolean)) {
-                const failed = required.filter((check) =>
-                  check.status === "completed" &&
-                  !["success", "neutral"].includes(check.conclusion)
-                );
-                if (failed.length) {
-                  await comment(
-                    `⛔ Required checks failed: ${failed.map((check) =>
-                      `\`${check.name}\` (${check.conclusion})`).join(", ")}.`
-                  );
-                  core.setFailed("Required checks failed.");
-                  return;
-                }
-                if (required.every((check) =>
-                  check.status === "completed" &&
-                  ["success", "neutral"].includes(check.conclusion)
-                )) {
-                  break;
-                }
-              }
+            while (Date.now() < deadline) {
+              verifyRun = (await github.rest.actions.getWorkflowRun({
+                owner,
+                repo,
+                run_id: verifyRun.id,
+              })).data;
+              if (verifyRun.status === "completed") break;
               await sleep(15000);
             }
 
-            if (!requiredChecks.every((name) => {
-              const check = latestChecks.get(name);
-              return check && check.status === "completed" &&
-                ["success", "neutral"].includes(check.conclusion);
-            })) {
-              await comment("⏳ Timed out waiting for the complete required check suite.");
-              core.setFailed("Timed out waiting for required checks.");
+            if (verifyRun.status !== "completed") {
+              await comment("⏳ Timed out waiting for the dispatched Verify run.");
+              core.setFailed("Verify run timed out.");
+              return;
+            }
+
+            const jobs = await github.paginate(
+              github.rest.actions.listJobsForWorkflowRun,
+              {
+                owner,
+                repo,
+                run_id: verifyRun.id,
+                per_page: 100,
+              }
+            );
+            const jobsByName = new Map(jobs.map((job) => [job.name, job]));
+            const invalid = requiredChecks.filter((name) => {
+              const job = jobsByName.get(name);
+              return !job || job.status !== "completed" || job.conclusion !== "success";
+            });
+            if (verifyRun.conclusion !== "success" || invalid.length) {
+              await comment(
+                `⛔ Dispatched Verify run failed: ${invalid.map((name) => {
+                  const job = jobsByName.get(name);
+                  return `\`${name}\` (${job?.conclusion || "missing"})`;
+                }).join(", ")}.\n\nRun: ${verifyRun.html_url}`
+              );
+              core.setFailed("Dispatched Verify run failed.");
+              return;
+            }
+
+            // Required-workflow rules can require the pull_request run in
+            // addition to the explicit workflow_dispatch validation above.
+            // Wait until GitHub reports that every branch requirement is
+            // satisfied instead of attempting the merge while checks are still
+            // shown as expected.
+            let readyPull = null;
+            while (Date.now() < deadline) {
+              readyPull = (await github.rest.pulls.get({
+                owner,
+                repo,
+                pull_number: pullNumber,
+              })).data;
+              if (readyPull.head.sha !== pull.head.sha) {
+                await comment("⛔ The PR head changed during validation. Run `/merge` again.");
+                core.setFailed("Pull request head changed during validation.");
+                return;
+              }
+              if (readyPull.mergeable === false) {
+                await comment("⛔ This pull request developed merge conflicts during validation.");
+                core.setFailed("Pull request has merge conflicts.");
+                return;
+              }
+              if (readyPull.mergeable_state === "clean") break;
+              await sleep(15000);
+            }
+
+            if (!readyPull || readyPull.mergeable_state !== "clean") {
+              await comment(
+                "⏳ Timed out waiting for GitHub branch requirements to become mergeable."
+              );
+              core.setFailed("Branch requirements did not become mergeable.");
               return;
             }
 

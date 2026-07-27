@@ -55,7 +55,7 @@ The product promise is simple: **agents can look, but they cannot mutate**. Even
 
 | Backend | Status | Tools |
 |---|---|---|
-| PostgreSQL | Supported | `list_tables`, `select`, `explain` |
+| PostgreSQL | Supported | `list_tables`, `describe_table`, `select`, `explain` |
 | MongoDB | Supported | Discovery, find, aggregation, distinct/count, explain, profiling, schema inference, and anonymized fixtures |
 
 ## Architecture
@@ -110,9 +110,19 @@ See [AI agent integration](docs/agents.md) for client-specific setup and manual 
 Agents should use SafeSelect in this order:
 
 1. `database_info`
-2. `list_tables` for SQL, or `list_databases` / `list_collections` for NoSQL
-3. `select` / `explain`, or the bounded MongoDB read tool that matches the task
-4. `check`, `connect`, or `reconnect` when connectivity is stale
+2. `list_tables` then `describe_table` for SQL
+3. `list_databases`, `list_collections`, then `discover_document_schema` for NoSQL
+4. `select` / `explain`, or the bounded MongoDB read tool that matches the task
+5. `check`, `connect`, or `reconnect` when connectivity is stale
+
+Agents must discover relation or collection structure before querying unfamiliar data and use each discovery response's `next_suggestion` instead of guessing column or field names. SQL descriptions are catalog metadata; MongoDB schemas are inferred from a bounded, non-exhaustive sample.
+
+MongoDB query documents must remain complete nested JSON values. Clients that
+flatten nested tool arguments can pass `filter`, `projection`, and `sort` as
+JSON-encoded object strings and `pipeline` as a JSON-encoded array string.
+`redact_fields` also accepts a JSON-encoded string array. Flattened keys are
+rejected so a lost filter or redaction can never become a less constrained
+fallback.
 
 Query responses include `row_count`, `byte_count`, `elapsed_ms`, and a human-readable `elapsed` value so agents can reason about result size and latency.
 
@@ -130,7 +140,7 @@ Query responses include `row_count`, `byte_count`, `elapsed_ms`, and a human-rea
 
 | Area | Tools |
 |---|---|
-| SQL | `list_tables`, `select`, `explain` |
+| SQL | `list_tables`, `describe_table`, `select`, `explain` |
 | MongoDB reads | `list_databases`, `list_collections`, `find_documents`, `aggregate_documents`, `distinct_documents`, `count_documents`, `explain_documents` |
 | MongoDB analysis | `profile_document_field`, `discover_document_schema`, `generate_document_fixture` |
 | Connection | `database_info`, `check`, `connect`, `disconnect`, `reconnect` |

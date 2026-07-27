@@ -2,6 +2,37 @@
 
 All notable changes to this project are documented in this file.
 
+## [v0.6.3] - 2026-07-27
+
+### Added
+
+- feat: harden agent database workflows
+
+### Documentation
+
+- docs: align changelog for next release
+
+### Build And CI
+
+- ci: sync develop after release completion (#65)
+- ci: add smart merge command (#69)
+
+### Other
+
+- chore(deps): bump serde_json from 1.0.150 to 1.0.151 (#59)
+- chore(deps): bump uuid from 1.23.5 to 1.24.0 (#63)
+- chore(deps): bump clap from 4.6.1 to 4.6.4 (#61)
+- chore(deps): bump libc from 0.2.186 to 0.2.189 (#62)
+- chore(deps): bump serde from 1.0.228 to 1.0.229 (#60)
+- chore(deps): bump tools.jackson.core:jackson-databind (#64)
+- release: bump to 0.6.2 (#66)
+- feat(mcp): add secure schema discovery
+- fix(mcp): harden schema discovery guidance
+- feat(mcp): add type-aware SQL guidance
+- fix(mcp): strengthen SQL recovery guidance
+- fix(ci): track a single verify run in smart merge
+- fix(ci): wait for required merge checks
+
 ## [v0.6.2] - 2026-07-26
 
 ### Build And CI
@@ -30,17 +61,37 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Added the read-only PostgreSQL `describe_table` tool with ordered catalog
+  metadata, including PostgreSQL-specific `udt_name` values.
+- Added guided SQL and MongoDB schema discovery with actionable
+  `next_suggestion` responses.
+- Added type-aware PostgreSQL recovery guidance for missing columns, invalid
+  grouping, incompatible operators, JSON/JSONB values, and JSON arrays.
+- Added strict JSON-string compatibility fallbacks for MongoDB clients that
+  cannot preserve nested tool arguments.
+
 ### Fixed
 
-- Accepted any available Java 17+ runtime instead of forcing Homebrew to install
-  its `openjdk@17` formula, with explicit diagnostics for missing or outdated Java.
-- Supported MongoDB Compass `mongodb+srv://` connections through SSH tunnels by
-  resolving SRV targets and applying the TLS and direct-connection options required
-  for local forwarding.
+- Rejected flattened, missing, or structurally invalid MongoDB filters,
+  projections, sorts, pipelines, and redaction lists instead of falling back to
+  less constrained requests.
+- Hardened timeout recovery so agents preserve or narrow predicates, avoid
+  expensive wildcard retries, and inspect plans without automatically raising
+  configured limits.
+- Conservatively rejected nested SQL `WITH` clauses while continuing to support
+  leading read-only CTEs.
 
 ### Documentation
 
-- Documented the Homebrew Java runtime behavior and tunneled MongoDB SRV imports.
+- Documented schema-first database workflows, type-aware SQL recovery, bounded
+  timeout handling, sampled MongoDB schema inference, and nested-argument
+  compatibility.
+
+### Build And CI
+
+- Added the signed, policy-aware `/merge` pull-request comment workflow.
 
 ## [v0.6.0] - 2026-07-15
 

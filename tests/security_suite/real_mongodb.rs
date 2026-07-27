@@ -39,7 +39,9 @@ pub fn run() {
         assert!(
             tools.to_string().contains("database_info")
                 && tools.to_string().contains("list_databases")
-                && tools.to_string().contains("aggregate_documents"),
+                && tools.to_string().contains("aggregate_documents")
+                && tools.to_string().contains("discover_document_schema")
+                && !tools.to_string().contains("describe_table"),
             "document tools missing from tools/list: {tools}"
         );
         assert!(
@@ -55,7 +57,9 @@ pub fn run() {
         assert!(info.success, "database_info failed: {}", info.text);
         assert!(
             info.text.contains("\"kind\":\"document\"")
-                && info.text.contains("\"resources_supported\":false"),
+                && info.text.contains("\"resources_supported\":false")
+                && info.text.contains("\"next_suggestion\"")
+                && info.text.contains("discover_document_schema"),
             "unexpected database_info: {}",
             info.text
         );
@@ -79,7 +83,9 @@ pub fn run() {
             databases.text
         );
         assert!(
-            databases.text.contains(&mongodb::test_db()),
+            databases.text.contains(&mongodb::test_db())
+                && databases.text.contains("\"next_suggestion\"")
+                && databases.text.contains("list_collections"),
             "allowed database missing: {}",
             databases.text
         );
@@ -106,7 +112,9 @@ pub fn run() {
             collections.text
         );
         assert!(
-            collections.text.contains("large_docs"),
+            collections.text.contains("large_docs")
+                && collections.text.contains("\"next_suggestion\"")
+                && collections.text.contains("discover_document_schema"),
             "large_docs missing: {}",
             collections.text
         );
@@ -114,6 +122,56 @@ pub fn run() {
             !collections.text.contains("secret_docs"),
             "secret_docs should have been filtered out: {}",
             collections.text
+        );
+
+        log_check("unknown document namespaces fail explicitly");
+        let missing_collection = harness.call_tool(
+            29,
+            "find_documents",
+            json!({
+                "database": mongodb::test_db(),
+                "collection": "missing_docs",
+                "filter": { "active": true },
+                "limit": 1
+            }),
+        );
+        assert!(!missing_collection.success);
+        assert!(
+            missing_collection.text.contains("does not exist"),
+            "unexpected missing collection response: {}",
+            missing_collection.text
+        );
+
+        log_check("discover_document_schema is bounded, explicit, and actionable");
+        let schema = harness.call_tool(
+            30,
+            "discover_document_schema",
+            json!({
+                "database": mongodb::test_db(),
+                "collection": "safe_docs",
+                "filter": {},
+                "sample_size": 2,
+                "examples": 2
+            }),
+        );
+        assert!(
+            schema.success,
+            "discover_document_schema failed: {}",
+            schema.text
+        );
+        assert!(
+            schema.text.contains("\"sampled_documents\":2")
+                && schema.text.contains("\"field\":\"name\"")
+                && schema
+                    .text
+                    .contains("\"schema_inference\":\"sampled_not_exhaustive\"")
+                && schema
+                    .text
+                    .contains("\"sample_scope\":\"2 document(s) examined\"")
+                && schema.text.contains("\"next_suggestion\"")
+                && schema.text.contains("may still exist"),
+            "unexpected schema discovery result: {}",
+            schema.text
         );
 
         log_check("find_documents happy path");
@@ -274,6 +332,18 @@ pub fn run() {
                     "collection": "safe_docs",
                     "pipeline": ["$match"],
                     "limit": 1
+                }),
+            ),
+            (
+                31,
+                "schema discovery denied collection",
+                "discover_document_schema",
+                json!({
+                    "database": mongodb::test_db(),
+                    "collection": "secret_docs",
+                    "filter": {},
+                    "sample_size": 1,
+                    "examples": 1
                 }),
             ),
         ] {

@@ -15,8 +15,18 @@ Product direction for agents:
 
 Agents should treat SafeSelect as their database boundary:
 - Use SafeSelect MCP tools only; SafeSelect does not expose MCP resources, so `list_mcp_resources` is not a database discovery step.
-- Use `list_tables` before guessing schema names.
+- For SQL, use `list_tables` then `describe_table`; never guess column names.
+- For MongoDB, use `list_databases`, `list_collections`, then `discover_document_schema`; never guess field names.
+- Follow `next_suggestion` from discovery results instead of repeating an invalid query unchanged.
 - Use `select` only for small, targeted read-only queries.
+- Use a small `LIMIT` for row retrieval. For aggregates, narrow input rows in
+  `WHERE`; a final `LIMIT` does not reduce the rows scanned by `COUNT` or
+  `GROUP BY`.
+- After a timeout, preserve or narrow selective predicates, especially time
+  bounds. Never retry with a broader query or leading-wildcard `LIKE`/`ILIKE`
+  over a large relation.
+- Place SQL CTEs at the beginning of the statement; do not nest `WITH` inside a
+  subquery.
 - Use `explain` to inspect query plans, index usage, and bottlenecks.
 - Use `check` or `reconnect` before retrying after connection or SSH tunnel errors.
 - Never ask the user for database passwords if `config_set_password` or existing config can resolve them.
@@ -86,13 +96,17 @@ The installed entry looks like this in your agent's config:
 
 ## Primary Query Tools
 
-Use `database_info` first when the environment may not be SQL. It returns the active backend, vendor, and capabilities.
+Use `database_info` first when the environment may not be SQL. It returns the
+active backend, vendor, and capabilities. If the user only requested capability
+information, report it and stop; do not continue into discovery or data access.
 
 ### `select`
 
 Execute a read-only query and return JSON-serialized rows. The query is validated before execution:
 - Must be read-only (`SELECT`, `EXPLAIN`, or `WITH`)
 - Must be a single statement
+- CTEs must be declared by a leading `WITH`; nested `WITH` clauses in subqueries
+  are conservatively rejected
 - Must respect schema allowlists and relation denylists
 - Result row count and byte limits are enforced
 
@@ -108,13 +122,74 @@ Successful responses are returned as MCP text content containing JSON with:
 - `elapsed_ms`: precise execution time in milliseconds
 - `elapsed`: human-readable execution time
 
+Recoverable PostgreSQL errors include a concrete safe next step when SafeSelect
+can identify one. For example, if an aggregate or its ordinal position appears
+in `GROUP BY`, remove it and group only by non-aggregate columns, or omit
+`GROUP BY` when producing one aggregate result. For an incompatible operator,
+rediscover the relation and compare `data_type` and `udt_name`; use operators
+that match the observed types rather than adding a cast blindly. JSON and JSONB
+values should use JSON operators such as `->` and `->>` against observed fields.
+For JSON/JSONB arrays (`udt_name` such as `_jsonb`), use `EXISTS` with
+`unnest(array_column)` and apply JSON operators to each observed element. Never
+cast a JSON array to text or use `LIKE`/`ILIKE` as a fallback.
+If a column does not exist, call `describe_table` for every relation referenced
+by the query, including relations in joins, unions, and subqueries, then retry
+using only the returned column names and types.
+
+After a statement timeout, do not retry the query unchanged or broaden it.
+Preserve or narrow every selective predicate, especially time bounds, and avoid
+leading-wildcard `LIKE`/`ILIKE` over large relations. Use a bounded discovery
+query to find exact values, then use equality or `IN`. Add or reduce `LIMIT` for
+row retrieval, but remember that it does not by itself bound work for
+`DISTINCT`, `GROUP BY`, `COUNT`, or `ORDER BY`; narrow their input in `WHERE`.
+Then call the `explain` tool with `analyze=false` to inspect scan and index usage
+without executing the query. Do not send `EXPLAIN` through `select`, and never
+increase `statement_timeout_ms` automatically.
+
 ### `list_tables`
 
 List database tables, optionally filtered by schema name. Use this before
-writing queries against an unfamiliar database.
+describing an unfamiliar relation.
 
 Arguments:
 - `schema` (optional): schema name filter
+
+The response preserves the standard SQL result fields and adds
+`next_suggestion`. If the user requested data inspection, choose exactly one
+`table_schema`/`table_name` pair and call `describe_table`. If the user only
+requested the available relations or tools, report the result and stop. Do not
+pass placeholders such as `<schema from list_tables>`, `*`, `%`, or another
+wildcard.
+
+### `describe_table`
+
+Return ordered column metadata for one PostgreSQL table or view. SafeSelect
+generates a fixed read-only `information_schema.columns` query internally; the
+agent cannot provide SQL to this tool.
+
+Arguments:
+- `schema` (required): exact `table_schema` from one `list_tables` row
+- `table` (required): exact `table_name` from the same row
+
+Placeholders and wildcards are not supported. If a value such as
+`<schema from list_tables>`, `*`, or `%` is provided, SafeSelect rejects the
+call and directs the agent to copy one exact relation from `list_tables`.
+
+Successful responses contain:
+- `schema` and `table`: the described relation
+- `columns`: ordered objects containing `column_name`, `data_type`, `udt_name`,
+  `is_nullable`, `column_default`, and `ordinal_position`
+- `column_count`, result byte/timing metadata, and `next_suggestion`
+
+`udt_name` is PostgreSQL's underlying type name. It preserves information hidden
+by generic `data_type` values; for example, a `jsonb[]` column has
+`data_type: "ARRAY"` and `udt_name: "_jsonb"`.
+
+Use only returned column names in the following `select` or `explain`. If the
+relation is missing or inaccessible, follow the response's suggestion to call
+`list_tables`; do not retry with guessed names. Schema allowlists and relation
+denylists are checked before catalog access, and security violations remain
+fail-closed.
 
 ### `explain`
 
@@ -145,6 +220,9 @@ List document databases for document-store backends.
 
 Arguments: none
 
+The response contains `databases` and a `next_suggestion` to call
+`list_collections`.
+
 ### `list_collections`
 
 List document collections in a database.
@@ -152,34 +230,68 @@ List document collections in a database.
 Arguments:
 - `database` (required): database name
 
+The response contains the filtered `collections` and a `next_suggestion` to
+call `discover_document_schema`.
+
 ### `find_documents`
 
 Find documents in a collection. The request is validated before execution:
 - Must target an allowed database/collection when allowlists are configured
 - Must not target denied collections
-- `filter`, `projection`, and `sort` must be JSON objects
+- `filter`, `projection`, and `sort` must decode to JSON objects
 - Result document count and byte limits are enforced
 
 Arguments:
 - `database` (required): database name
 - `collection` (required): collection name
-- `filter` (required): JSON object filter
-- `projection` (optional): JSON object projection
-- `sort` (optional): JSON object sort
+- `filter` (required): one nested JSON object filter, or a JSON-encoded object
+  string when the MCP client cannot preserve nested tool arguments
+- `projection` (optional): one nested JSON object or JSON-encoded object string
+- `sort` (optional): one nested JSON object or JSON-encoded object string
 - `limit` (optional): maximum number of documents to return
+
+Never send flattened top-level keys such as `filter.name`,
+`projection.field`, or `sort.created_at`. SafeSelect rejects them because
+flattening can discard query constraints. A missing required filter is also
+rejected and is never converted to `{}`. Do not replace a rejected filter with
+an empty or unfiltered fallback. After a flattened-argument rejection, do not
+repeat the same call: immediately resend the complete value as nested JSON or
+as the JSON-encoded fallback.
 
 ### Additional MongoDB tools
 
-- `aggregate_documents`: run a non-empty array of JSON-object stages; `$out` and `$merge` are rejected.
+- `aggregate_documents`: run a non-empty array of JSON-object stages; a
+  JSON-encoded array string is accepted as a client compatibility fallback.
+  Flattened keys such as `pipeline[0].$match.name` are rejected. `$out` and
+  `$merge` are rejected.
 - `distinct_documents`: return distinct values for a field, optionally filtered and limited.
 - `count_documents`: count documents matching a required, non-empty filter; `{}` is rejected to avoid accidental full scans.
 - `explain_documents`: explain a bounded find query without executing a write.
 - `profile_document_field`: profile a nested field over a bounded sample.
-- `discover_document_schema`: infer frequent fields and types over a bounded sample.
+- `discover_document_schema`: infer frequent fields and types over a bounded,
+  non-exhaustive sample. Its response includes `sampled_documents`,
+  `schema_inference: "sampled_not_exhaustive"`, an explicit notice, and
+  `next_suggestion`.
 - `generate_document_fixture`: return anonymized samples in the response; it never writes fixture files.
 
 All document tools enforce configured database/collection allowlists and denylists,
 statement timeouts, and result-size limits.
+
+For every document tool, pass `filter`, `projection`, and `sort` as complete
+nested JSON objects. If a client flattens nested tool arguments, pass the
+complete value as a JSON-encoded object string instead. The same rule applies
+to `pipeline`, using a complete JSON array or JSON-encoded array string.
+`redact_fields` likewise accepts a complete string array or JSON-encoded string
+array; non-string items are rejected rather than silently ignored.
+SafeSelect parses these strings strictly and validates the resulting structure
+through the same read-only policy.
+
+MongoDB collections do not have an authoritative fixed schema. A field absent
+from `discover_document_schema` may still exist outside the selected filter or
+sample. Use observed fields for the next bounded `find_documents` or
+`aggregate_documents` call, or inspect one field with `profile_document_field`.
+If a field/path error is recoverable, rediscover the collection schema before
+retrying; never broaden policy or limits automatically.
 
 ## Connection Tools
 
@@ -258,8 +370,12 @@ When database access fails, agents should proceed in this order:
 8. Do not retry rejected SQL after a security violation; SafeSelect intentionally exits fail-closed.
 
 Timeouts are bounded by the project `statement_timeout_ms`. If a query times out,
-agents should narrow filters, inspect the plan with `explain`, or ask the user
-before increasing project limits.
+agents must not retry it unchanged or broaden it. Preserve or narrow filters and
+time ranges, avoid leading-wildcard `LIKE`/`ILIKE`, and add or reduce `LIMIT` for
+row retrieval. `LIMIT` does not by itself bound `DISTINCT`, `GROUP BY`, `COUNT`,
+or `ORDER BY`, so narrow their input in `WHERE`. Call the `explain` tool with
+`analyze=false`; do not send `EXPLAIN` through `select`. Ask the user before
+increasing project limits.
 
 ## Security
 

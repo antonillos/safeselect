@@ -63,6 +63,120 @@ macro_rules! required_string {
     };
 }
 
+#[derive(Clone, Copy)]
+enum DocumentJsonKind {
+    Object,
+    Array,
+}
+
+impl DocumentJsonKind {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Object => "object",
+            Self::Array => "array",
+        }
+    }
+
+    fn matches(self, value: &serde_json::Value) -> bool {
+        match self {
+            Self::Object => value.is_object(),
+            Self::Array => value.is_array(),
+        }
+    }
+}
+
+fn parse_document_json_argument(
+    args: &serde_json::Value,
+    name: &str,
+    kind: DocumentJsonKind,
+    required: bool,
+) -> std::result::Result<Option<serde_json::Value>, String> {
+    let flattened_key = args.as_object().and_then(|values| {
+        values.keys().find(|key| {
+            key.starts_with(&format!("{name}.")) || key.starts_with(&format!("{name}["))
+        })
+    });
+    if let Some(key) = flattened_key {
+        return Err(format!(
+            "Invalid '{name}' argument: flattened key '{key}' is not accepted because flattening can lose query constraints. Do not retry this call unchanged. Next suggestion: immediately pass '{name}' as one nested JSON {kind} or as a JSON-encoded {kind} string; never replace it with an empty or unfiltered fallback.",
+            kind = kind.name()
+        ));
+    }
+
+    let Some(value) = args.get(name) else {
+        if required {
+            return Err(format!(
+                "Missing '{name}' argument. Next suggestion: pass '{name}' as one nested JSON {kind} or as a JSON-encoded {kind} string; do not run an unfiltered fallback.",
+                kind = kind.name()
+            ));
+        }
+        return Ok(None);
+    };
+
+    let parsed = if let Some(encoded) = value.as_str() {
+        serde_json::from_str(encoded).map_err(|error| {
+            format!(
+                "Invalid '{name}' JSON string: {error}. Next suggestion: pass one valid JSON {kind}; do not flatten its keys.",
+                kind = kind.name()
+            )
+        })?
+    } else {
+        value.clone()
+    };
+
+    if !kind.matches(&parsed) {
+        return Err(format!(
+            "Invalid '{name}' argument: expected a JSON {kind} or a JSON-encoded {kind} string. Next suggestion: preserve the complete nested value and do not flatten its keys.",
+            kind = kind.name()
+        ));
+    }
+
+    Ok(Some(parsed))
+}
+
+fn parse_document_string_array_argument(
+    args: &serde_json::Value,
+    name: &str,
+) -> std::result::Result<Option<Vec<String>>, String> {
+    let Some(value) = parse_document_json_argument(args, name, DocumentJsonKind::Array, false)?
+    else {
+        return Ok(None);
+    };
+    let values = value
+        .as_array()
+        .expect("document JSON array parser returned a non-array");
+    values
+        .iter()
+        .map(|value| {
+            value.as_str().map(str::to_string).ok_or_else(|| {
+                format!(
+                    "Invalid '{name}' argument: every array item must be a string. Next suggestion: pass one complete JSON string array or a JSON-encoded string array; do not omit intended redactions."
+                )
+            })
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map(Some)
+}
+
+macro_rules! required_document_json {
+    ($server:expr, $id:expr, $args:expr, $name:literal, $kind:expr) => {
+        match parse_document_json_argument($args, $name, $kind, true) {
+            Ok(Some(value)) => value,
+            Ok(None) => unreachable!("required document JSON argument returned no value"),
+            Err(error) => return $server.send_error($id, -32602, error),
+        }
+    };
+}
+
+macro_rules! optional_document_json {
+    ($server:expr, $id:expr, $args:expr, $name:literal, $kind:expr) => {
+        match parse_document_json_argument($args, $name, $kind, false) {
+            Ok(value) => value,
+            Err(error) => return $server.send_error($id, -32602, error),
+        }
+    };
+}
+
 pub struct McpServer {
     sidecar: Option<SidecarProcess>,
     security: SecurityEngine,
@@ -276,7 +390,9 @@ impl McpServer {
     fn handle_tools_list(&mut self, msg: &JsonRpcMessage) -> Result<()> {
         let mut tools = vec![ToolDefinition {
             name: "database_info".into(),
-            description: self.tool_description("show active database backend and capabilities"),
+            description: self.tool_description(
+                "show active database backend and capabilities; if the user only asked about available capabilities, report them and stop",
+            ),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {}
@@ -286,8 +402,9 @@ impl McpServer {
         if self.backend.has(BackendCapability::SqlQuery) {
             tools.push(ToolDefinition {
                 name: "select".into(),
-                description: self
-                    .tool_description("execute a read-only SELECT query on the target database"),
+                description: self.tool_description(
+                    "execute a read-only SELECT query on the target database; use describe_table before querying an unfamiliar relation, never guess column names, use a small LIMIT for row retrieval, place WITH CTEs at the beginning of the statement, and after a timeout preserve or narrow selective predicates instead of broadening the query",
+                ),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -308,8 +425,9 @@ impl McpServer {
         if self.backend.has(BackendCapability::TableDiscovery) {
             tools.push(ToolDefinition {
                 name: "list_tables".into(),
-                description: self
-                    .tool_description("list database tables, optionally filtered by schema"),
+                description: self.tool_description(
+                    "list database tables, optionally filtered by schema; if the user requested data inspection, choose exactly one returned table_schema and table_name pair, then call describe_table without placeholders or wildcards; otherwise report the result and stop",
+                ),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -320,6 +438,27 @@ impl McpServer {
                     }
                 }),
             });
+            tools.push(ToolDefinition {
+                name: "describe_table".into(),
+                description: self.tool_description(
+                    "describe columns and PostgreSQL underlying type names for exactly one database table or view using read-only catalog metadata; schema and table must be exact values copied from one list_tables row, and placeholders or wildcards are not accepted",
+                ),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "schema": {
+                            "type": "string",
+                            "description": "Exact table_schema value copied from one list_tables row; placeholders and wildcards are not accepted"
+                        },
+                        "table": {
+                            "type": "string",
+                            "description": "Exact table_name value copied from the same list_tables row; placeholders and wildcards such as * or % are not accepted"
+                        }
+                    },
+                    "required": ["schema", "table"],
+                    "additionalProperties": false
+                }),
+            });
         }
 
         if self.backend.has(BackendCapability::SqlExplain) {
@@ -327,7 +466,7 @@ impl McpServer {
             ToolDefinition {
                 name: "explain".into(),
                 description: self
-                    .tool_description("show a query execution plan; ANALYZE executes the SELECT"),
+                    .tool_description("show a query execution plan; after a timeout call this explain tool with analyze=false instead of putting EXPLAIN in the select tool, and place WITH CTEs at the beginning of the explained statement instead of nested in subqueries"),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -393,7 +532,9 @@ impl McpServer {
         if self.backend.has(BackendCapability::DocumentFind) {
             tools.push(ToolDefinition {
                 name: "find_documents".into(),
-                description: self.tool_description("find documents in a collection"),
+                description: self.tool_description(
+                    "find documents in a collection; use discover_document_schema first and never guess field names",
+                ),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -406,23 +547,33 @@ impl McpServer {
                             "description": "Collection name"
                         },
                         "filter": {
-                            "type": "object",
-                            "description": "Document filter"
+                            "oneOf": [
+                                {"type": "object"},
+                                {"type": "string"}
+                            ],
+                            "description": "Required document filter. Pass one nested JSON object, or a JSON-encoded object string if the client flattens nested arguments. Never use top-level keys such as filter.name."
                         },
                         "projection": {
-                            "type": "object",
-                            "description": "Projection document"
+                            "oneOf": [
+                                {"type": "object"},
+                                {"type": "string"}
+                            ],
+                            "description": "Projection document as one nested JSON object or JSON-encoded object string; never flatten its keys"
                         },
                         "sort": {
-                            "type": "object",
-                            "description": "Sort document"
+                            "oneOf": [
+                                {"type": "object"},
+                                {"type": "string"}
+                            ],
+                            "description": "Sort document as one nested JSON object or JSON-encoded object string; never flatten its keys"
                         },
                         "limit": {
                             "type": "integer",
                             "description": "Maximum number of documents to return"
                         }
                     },
-                    "required": ["database", "collection", "filter"]
+                    "required": ["database", "collection", "filter"],
+                    "additionalProperties": false
                 }),
             });
         }
@@ -430,21 +581,29 @@ impl McpServer {
         if self.backend.has(BackendCapability::DocumentAggregate) {
             tools.push(ToolDefinition {
                 name: "aggregate_documents".into(),
-                description: self.tool_description("run a read-only MongoDB aggregation pipeline"),
+                description: self.tool_description(
+                    "run a read-only MongoDB aggregation pipeline; use discover_document_schema first and never guess field names",
+                ),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
                         "database": {"type": "string"},
                         "collection": {"type": "string"},
                         "pipeline": {
-                            "type": "array",
-                            "description": "Read-only MongoDB aggregation pipeline. Each item must be one JSON object, e.g. {\"$match\":{\"active\":true}}; do not pass stage names or JSON strings. $out and $merge are rejected.",
-                            "items": {"type": "object"},
-                            "minItems": 1
+                            "oneOf": [
+                                {
+                                    "type": "array",
+                                    "items": {"type": "object"},
+                                    "minItems": 1
+                                },
+                                {"type": "string"}
+                            ],
+                            "description": "Read-only MongoDB aggregation pipeline. Pass one nested JSON array of object stages, or a JSON-encoded array string if the client flattens nested arguments. Never use top-level keys such as pipeline[0].$match.name. $out and $merge are rejected."
                         },
                         "limit": {"type": "integer", "description": "Maximum result documents to return"}
                     },
-                    "required": ["database", "collection", "pipeline"]
+                    "required": ["database", "collection", "pipeline"],
+                    "additionalProperties": false
                 }),
             });
         }
@@ -459,10 +618,14 @@ impl McpServer {
                         "database": {"type": "string"},
                         "collection": {"type": "string"},
                         "field": {"type": "string"},
-                        "filter": {"type": "object"},
+                        "filter": {
+                            "oneOf": [{"type": "object"}, {"type": "string"}],
+                            "description": "Optional filter as one nested JSON object or JSON-encoded object string; never flatten its keys"
+                        },
                         "limit": {"type": "integer"}
                     },
-                    "required": ["database", "collection", "field"]
+                    "required": ["database", "collection", "field"],
+                    "additionalProperties": false
                 }),
             });
         }
@@ -479,11 +642,12 @@ impl McpServer {
                         "database": {"type": "string"},
                         "collection": {"type": "string"},
                         "filter": {
-                            "type": "object",
-                            "description": "Non-empty MongoDB filter. Do not use {} for exploratory counts; use find_documents with limit or an indexed filter."
+                            "oneOf": [{"type": "object"}, {"type": "string"}],
+                            "description": "Required non-empty MongoDB filter as one nested JSON object or JSON-encoded object string. Never use top-level keys such as filter.name. Do not use {} for exploratory counts; use find_documents with limit or an indexed filter."
                         }
                     },
-                    "required": ["database", "collection", "filter"]
+                    "required": ["database", "collection", "filter"],
+                    "additionalProperties": false
                 }),
             });
         }
@@ -497,12 +661,22 @@ impl McpServer {
                     "properties": {
                         "database": {"type": "string"},
                         "collection": {"type": "string"},
-                        "filter": {"type": "object"},
-                        "projection": {"type": "object"},
-                        "sort": {"type": "object"},
+                        "filter": {
+                            "oneOf": [{"type": "object"}, {"type": "string"}],
+                            "description": "Optional filter as one nested JSON object or JSON-encoded object string; never flatten its keys"
+                        },
+                        "projection": {
+                            "oneOf": [{"type": "object"}, {"type": "string"}],
+                            "description": "Optional projection as one nested JSON object or JSON-encoded object string; never flatten its keys"
+                        },
+                        "sort": {
+                            "oneOf": [{"type": "object"}, {"type": "string"}],
+                            "description": "Optional sort as one nested JSON object or JSON-encoded object string; never flatten its keys"
+                        },
                         "limit": {"type": "integer"}
                     },
-                    "required": ["database", "collection"]
+                    "required": ["database", "collection"],
+                    "additionalProperties": false
                 }),
             });
         }
@@ -518,11 +692,15 @@ impl McpServer {
                         "database": {"type": "string"},
                         "collection": {"type": "string"},
                         "field": {"type": "string"},
-                        "filter": {"type": "object"},
+                        "filter": {
+                            "oneOf": [{"type": "object"}, {"type": "string"}],
+                            "description": "Optional filter as one nested JSON object or JSON-encoded object string; never flatten its keys"
+                        },
                         "sample_size": {"type": "integer"},
                         "examples": {"type": "integer"}
                     },
-                    "required": ["database", "collection", "field"]
+                    "required": ["database", "collection", "field"],
+                    "additionalProperties": false
                 }),
             });
         }
@@ -531,18 +709,22 @@ impl McpServer {
             tools.push(ToolDefinition {
                 name: "discover_document_schema".into(),
                 description: self.tool_description(
-                    "infer frequent MongoDB fields and types over a bounded sample",
+                    "infer frequent MongoDB fields and types over a bounded, non-exhaustive sample; use observed fields in find_documents, aggregate_documents, or profile_document_field",
                 ),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
                         "database": {"type": "string"},
                         "collection": {"type": "string"},
-                        "filter": {"type": "object"},
+                        "filter": {
+                            "oneOf": [{"type": "object"}, {"type": "string"}],
+                            "description": "Optional filter as one nested JSON object or JSON-encoded object string; never flatten its keys"
+                        },
                         "sample_size": {"type": "integer"},
                         "examples": {"type": "integer"}
                     },
-                    "required": ["database", "collection"]
+                    "required": ["database", "collection"],
+                    "additionalProperties": false
                 }),
             });
         }
@@ -551,19 +733,32 @@ impl McpServer {
             tools.push(ToolDefinition {
                 name: "generate_document_fixture".into(),
                 description: self.tool_description(
-                    "return anonymized MongoDB fixture samples without writing files",
+                    "return bounded MongoDB fixture samples without writing files; only fields explicitly named in redact_fields are replaced",
                 ),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
                         "database": {"type": "string"},
                         "collection": {"type": "string"},
-                        "filter": {"type": "object"},
-                        "projection": {"type": "object"},
+                        "filter": {
+                            "oneOf": [{"type": "object"}, {"type": "string"}],
+                            "description": "Optional filter as one nested JSON object or JSON-encoded object string; never flatten its keys"
+                        },
+                        "projection": {
+                            "oneOf": [{"type": "object"}, {"type": "string"}],
+                            "description": "Optional projection as one nested JSON object or JSON-encoded object string; never flatten its keys"
+                        },
                         "limit": {"type": "integer"},
-                        "redact_fields": {"type": "array", "items": {"type": "string"}}
+                        "redact_fields": {
+                            "oneOf": [
+                                {"type": "array", "items": {"type": "string"}},
+                                {"type": "string"}
+                            ],
+                            "description": "Fields to replace in the returned sample, as one complete JSON string array or JSON-encoded string array. Fields not listed here remain unchanged; never flatten its items."
+                        }
                     },
-                    "required": ["database", "collection"]
+                    "required": ["database", "collection"],
+                    "additionalProperties": false
                 }),
             });
         }
@@ -886,6 +1081,7 @@ impl McpServer {
             "database_info" => self.handle_database_info(msg.id.clone()),
             "select" => self.handle_select(msg.id.clone(), &args),
             "list_tables" => self.handle_list_tables(msg.id.clone(), &args),
+            "describe_table" => self.handle_describe_table(msg.id.clone(), &args),
             "explain" => self.handle_explain(msg.id.clone(), &args),
             "list_databases" => self.handle_list_databases(msg.id.clone()),
             "list_collections" => self.handle_list_collections(msg.id.clone(), &args),
@@ -949,6 +1145,14 @@ impl McpServer {
                 BackendCapability::DocumentFixture => "document_fixture",
             })
             .collect();
+        let next_suggestion = match self.backend.kind {
+            crate::backend::BackendKind::Jdbc => {
+                "If the user requested data inspection, call list_tables, then describe_table before select or explain. Otherwise report the available SQL capabilities and stop."
+            }
+            crate::backend::BackendKind::Document => {
+                "If the user requested data inspection, call list_databases, then list_collections and discover_document_schema before document reads. Otherwise report the available document capabilities and stop."
+            }
+        };
 
         let resp = JsonRpcResponse {
             jsonrpc: "2.0",
@@ -961,7 +1165,8 @@ impl McpServer {
                         "vendor": self.backend.vendor,
                         "capabilities": capabilities,
                         "resources_supported": false,
-                        "discovery": "Use MCP tools such as list_databases/list_collections or list_tables; SafeSelect does not expose MCP resources."
+                        "discovery": "Use the backend-specific SafeSelect discovery tools; SafeSelect does not expose MCP resources.",
+                        "next_suggestion": next_suggestion
                     }))?
                 }]
             })),
@@ -974,7 +1179,13 @@ impl McpServer {
         match self.ensure_sidecar()?.list_databases() {
             Ok(databases) => {
                 let databases = self.security.filter_document_databases(databases);
-                self.write_response(&json_text_response(id, &databases)?)
+                self.write_response(&json_text_response(
+                    id,
+                    &serde_json::json!({
+                        "databases": databases,
+                        "next_suggestion": "Choose an allowed database and call list_collections."
+                    }),
+                )?)
             }
             Err(e) => self.send_error(id, -32000, format!("List databases failed: {e}")),
         }
@@ -997,7 +1208,14 @@ impl McpServer {
                 let collections = self
                     .security
                     .filter_document_collections(database, collections);
-                self.write_response(&json_text_response(id, &collections)?)
+                self.write_response(&json_text_response(
+                    id,
+                    &serde_json::json!({
+                        "database": database,
+                        "collections": collections,
+                        "next_suggestion": "Choose an allowed collection and call discover_document_schema before document reads."
+                    }),
+                )?)
             }
             Err(e) => self.send_error(id, -32000, format!("List collections failed: {e}")),
         }
@@ -1016,10 +1234,10 @@ impl McpServer {
             Some(collection) => collection.to_string(),
             None => return self.send_error(id, -32602, "Missing 'collection' argument"),
         };
-        let filter = args
-            .get("filter")
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!({}));
+        let filter = required_document_json!(self, id, args, "filter", DocumentJsonKind::Object);
+        let projection =
+            optional_document_json!(self, id, args, "projection", DocumentJsonKind::Object);
+        let sort = optional_document_json!(self, id, args, "sort", DocumentJsonKind::Object);
         let limit = args
             .get("limit")
             .and_then(|v| v.as_u64())
@@ -1028,8 +1246,8 @@ impl McpServer {
             database,
             collection,
             filter,
-            projection: args.get("projection").cloned(),
-            sort: args.get("sort").cloned(),
+            projection,
+            sort,
             limit,
         };
 
@@ -1047,6 +1265,7 @@ impl McpServer {
                 {
                     return self.send_error(id, -32000, format!("{e}"));
                 }
+                let result = add_empty_document_result_guidance(serde_json::to_value(&result)?);
                 self.write_response(&json_text_response(id, &result)?)
             }
             Err(e) => {
@@ -1065,10 +1284,7 @@ impl McpServer {
         let request = DocumentAggregateRequest {
             database: required_string!(self, id, args, "database").to_string(),
             collection: required_string!(self, id, args, "collection").to_string(),
-            pipeline: args
-                .get("pipeline")
-                .cloned()
-                .unwrap_or_else(|| serde_json::json!([])),
+            pipeline: required_document_json!(self, id, args, "pipeline", DocumentJsonKind::Array),
             limit: args
                 .get("limit")
                 .and_then(|v| v.as_u64())
@@ -1091,9 +1307,7 @@ impl McpServer {
             database: required_string!(self, id, args, "database").to_string(),
             collection: required_string!(self, id, args, "collection").to_string(),
             field: required_string!(self, id, args, "field").to_string(),
-            filter: args
-                .get("filter")
-                .cloned()
+            filter: optional_document_json!(self, id, args, "filter", DocumentJsonKind::Object)
                 .unwrap_or_else(|| serde_json::json!({})),
             limit: args
                 .get("limit")
@@ -1116,10 +1330,7 @@ impl McpServer {
         let request = DocumentCountRequest {
             database: required_string!(self, id, args, "database").to_string(),
             collection: required_string!(self, id, args, "collection").to_string(),
-            filter: args
-                .get("filter")
-                .cloned()
-                .unwrap_or_else(|| serde_json::json!({})),
+            filter: required_document_json!(self, id, args, "filter", DocumentJsonKind::Object),
         };
         self.handle_document_value(
             id,
@@ -1137,12 +1348,16 @@ impl McpServer {
         let request = DocumentExplainRequest {
             database: required_string!(self, id, args, "database").to_string(),
             collection: required_string!(self, id, args, "collection").to_string(),
-            filter: args
-                .get("filter")
-                .cloned()
+            filter: optional_document_json!(self, id, args, "filter", DocumentJsonKind::Object)
                 .unwrap_or_else(|| serde_json::json!({})),
-            projection: args.get("projection").cloned(),
-            sort: args.get("sort").cloned(),
+            projection: optional_document_json!(
+                self,
+                id,
+                args,
+                "projection",
+                DocumentJsonKind::Object
+            ),
+            sort: optional_document_json!(self, id, args, "sort", DocumentJsonKind::Object),
             limit: args.get("limit").and_then(|v| v.as_u64()),
         };
         self.handle_document_value(
@@ -1162,9 +1377,7 @@ impl McpServer {
             database: required_string!(self, id, args, "database").to_string(),
             collection: required_string!(self, id, args, "collection").to_string(),
             field: required_string!(self, id, args, "field").to_string(),
-            filter: args
-                .get("filter")
-                .cloned()
+            filter: optional_document_json!(self, id, args, "filter", DocumentJsonKind::Object)
                 .unwrap_or_else(|| serde_json::json!({})),
             sample_size: args
                 .get("sample_size")
@@ -1188,9 +1401,7 @@ impl McpServer {
         let request = DocumentSchemaRequest {
             database: required_string!(self, id, args, "database").to_string(),
             collection: required_string!(self, id, args, "collection").to_string(),
-            filter: args
-                .get("filter")
-                .cloned()
+            filter: optional_document_json!(self, id, args, "filter", DocumentJsonKind::Object)
                 .unwrap_or_else(|| serde_json::json!({})),
             sample_size: args
                 .get("sample_size")
@@ -1202,7 +1413,11 @@ impl McpServer {
             id,
             "discover_document_schema",
             |security| security.validate_document_schema(&request),
-            |sidecar| sidecar.discover_document_schema(&request),
+            |sidecar| {
+                sidecar
+                    .discover_document_schema(&request)
+                    .map(add_document_schema_guidance)
+            },
         )
     }
 
@@ -1211,34 +1426,37 @@ impl McpServer {
         id: Option<serde_json::Value>,
         args: &serde_json::Value,
     ) -> Result<()> {
+        let redact_fields = match parse_document_string_array_argument(args, "redact_fields") {
+            Ok(value) => value.unwrap_or_default(),
+            Err(error) => return self.send_error(id, -32602, error),
+        };
         let request = DocumentFixtureRequest {
             database: required_string!(self, id, args, "database").to_string(),
             collection: required_string!(self, id, args, "collection").to_string(),
-            filter: args
-                .get("filter")
-                .cloned()
+            filter: optional_document_json!(self, id, args, "filter", DocumentJsonKind::Object)
                 .unwrap_or_else(|| serde_json::json!({})),
-            projection: args.get("projection").cloned(),
+            projection: optional_document_json!(
+                self,
+                id,
+                args,
+                "projection",
+                DocumentJsonKind::Object
+            ),
             limit: args
                 .get("limit")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(self.security.limits().max_rows.min(20)),
-            redact_fields: args
-                .get("redact_fields")
-                .and_then(|v| v.as_array())
-                .map(|values| {
-                    values
-                        .iter()
-                        .filter_map(|value| value.as_str().map(str::to_string))
-                        .collect()
-                })
-                .unwrap_or_default(),
+            redact_fields,
         };
         self.handle_document_value(
             id,
             "generate_document_fixture",
             |security| security.validate_document_fixture(&request),
-            |sidecar| sidecar.generate_document_fixture(&request),
+            |sidecar| {
+                sidecar
+                    .generate_document_fixture(&request)
+                    .map(add_document_fixture_guidance)
+            },
         )
     }
 
@@ -1260,11 +1478,16 @@ impl McpServer {
         match execute(self.ensure_sidecar()?) {
             Ok(result) => {
                 self.audit.record("PASS", "allow", operation)?;
+                let result = add_empty_document_result_guidance(result);
                 self.write_response(&json_text_response(id, &result)?)
             }
             Err(e) => {
                 self.audit.record("DOCUMENT_ERROR", "error", operation)?;
-                self.send_error(id, -32000, format!("{operation} failed: {e}"))
+                self.send_error(
+                    id,
+                    -32000,
+                    document_operation_error_message(operation, &e.to_string()),
+                )
             }
         }
     }
@@ -1339,10 +1562,7 @@ impl McpServer {
                 let elapsed = start.elapsed();
                 tracing::warn!("Query SQL error after {elapsed:?}: {msg}");
                 self.audit.record("JDBC_ERROR", "error", sql)?;
-                self.write_response(&tool_error_response(
-                    id,
-                    format!("Query execution failed: {msg}"),
-                ))
+                self.write_response(&tool_error_response(id, sql_query_error_message(msg)))
             }
             Err(e) => {
                 let elapsed = start.elapsed();
@@ -1417,6 +1637,10 @@ impl McpServer {
         match self.execute_with_reconnect(&sql) {
             Ok(result) => {
                 self.audit.record("PASS", "allow", &sql)?;
+                let result = add_next_suggestion(
+                    serde_json::to_value(result)?,
+                    "If the user requested data inspection, choose exactly one table_schema and table_name pair from rows, then call describe_table with those exact values. Do not pass placeholders or wildcards such as * or %. Otherwise report the listed relations and stop.",
+                );
                 let resp = JsonRpcResponse {
                     jsonrpc: "2.0",
                     id,
@@ -1438,6 +1662,85 @@ impl McpServer {
             Err(e) => {
                 self.audit.record("JDBC_ERROR", "error", &sql)?;
                 self.write_response(&tool_error_response(id, format!("Query failed: {e}")))
+            }
+        }
+    }
+
+    fn handle_describe_table(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        if !has_only_keys(args, &["schema", "table"]) {
+            return self.send_error(
+                id,
+                -32602,
+                "describe_table accepts only 'schema' and 'table' arguments",
+            );
+        }
+
+        let schema = required_string!(self, id, args, "schema");
+        let table = required_string!(self, id, args, "table");
+        if let Some(message) = describe_identifier_error("schema", schema) {
+            return self.send_error(id, -32602, message);
+        }
+        if let Some(message) = describe_identifier_error("table", table) {
+            return self.send_error(id, -32602, message);
+        }
+
+        let relation_check = format!("SELECT * FROM {schema}.{table}");
+        if let Err(e) = validate_describe_target(&self.security, schema, table) {
+            self.audit.record("REJECT", "reject", &relation_check)?;
+            let _ = self.send_error(id, -32000, format!("Request rejected: {e}"));
+            self.fail_closed("Security violation");
+            return Ok(());
+        }
+
+        let sql = build_describe_table_sql(schema, table);
+        if let Err(e) = self.security.validate_system(&sql) {
+            self.audit.record("REJECT", "reject", &sql)?;
+            let _ = self.send_error(id, -32000, format!("Query rejected: {e}"));
+            self.fail_closed("Security violation");
+            return Ok(());
+        }
+
+        match self.execute_with_reconnect(&sql) {
+            Ok(result) => {
+                self.audit.record("PASS", "allow", &sql)?;
+                let result = add_table_description_guidance(result, schema, table)?;
+                let columns_empty = match result["columns"].as_array() {
+                    Some(columns) => columns.is_empty(),
+                    None => true,
+                };
+                if columns_empty {
+                    self.write_response(&tool_error_response(
+                        id,
+                        format!(
+                            "Relation '{schema}.{table}' was not found or has no accessible columns. Next suggestion: call list_tables for an allowed schema and choose an existing relation."
+                        ),
+                    ))
+                } else {
+                    self.write_response(&json_text_response(id, &result)?)
+                }
+            }
+            Err(SafeselectError::SqlError(ref msg)) => {
+                tracing::warn!("Describe table SQL error: {msg}");
+                self.audit.record("JDBC_ERROR", "error", &sql)?;
+                self.write_response(&tool_error_response(
+                    id,
+                    format!(
+                        "Describe table failed: {msg}. Next suggestion: call list_tables to confirm the relation and schema."
+                    ),
+                ))
+            }
+            Err(e) => {
+                self.audit.record("JDBC_ERROR", "error", &sql)?;
+                self.write_response(&tool_error_response(
+                    id,
+                    format!(
+                        "Describe table failed: {e}. Next suggestion: call check, then reconnect once only if check reports a stale existing connection."
+                    ),
+                ))
             }
         }
     }
@@ -1887,10 +2190,22 @@ impl McpServer {
             ),
             String::new(),
             "--- TLS ---".into(),
-            match resolved.environment.tls {
-                Some(ref tls) => format!("Mode: {}", tls.mode),
-                None => "TLS: disabled".into(),
-            },
+            config_tls_status(
+                resolved.environment.database.kind,
+                &resolved.environment.database.url,
+                resolved
+                    .environment
+                    .tls
+                    .as_ref()
+                    .map(|tls| tls.mode.as_str()),
+            ),
+        ]);
+        if resolved.environment.database.kind == crate::backend::BackendKind::Document {
+            lines.extend(document_read_preference_status(
+                &resolved.environment.database.url,
+            ));
+        }
+        lines.extend([
             String::new(),
             "--- SSH ---".into(),
             match resolved.environment.ssh {
@@ -3494,6 +3809,229 @@ fn is_valid_identifier(s: &str) -> bool {
         .all(|b| b.is_ascii_alphanumeric() || *b == b'_')
 }
 
+fn has_only_keys(value: &serde_json::Value, allowed: &[&str]) -> bool {
+    value
+        .as_object()
+        .is_some_and(|object| object.keys().all(|key| allowed.contains(&key.as_str())))
+}
+
+fn describe_identifier_error(kind: &str, value: &str) -> Option<String> {
+    if is_valid_identifier(value) {
+        return None;
+    }
+    if value.contains('<') || value.contains('>') {
+        return Some(format!(
+            "Invalid {kind} name: placeholders are not accepted. Next suggestion: copy the exact table_schema and table_name values from one list_tables row and call describe_table with those literal values."
+        ));
+    }
+    if value.contains('*') || value.contains('%') {
+        return Some(format!(
+            "Invalid {kind} name: wildcards are not supported. Next suggestion: choose exactly one table_schema and table_name pair from list_tables rows and call describe_table with those exact values."
+        ));
+    }
+    Some(format!(
+        "Invalid {kind} name: must start with a letter or underscore and contain only alphanumeric characters and underscores"
+    ))
+}
+
+fn build_describe_table_sql(schema: &str, table: &str) -> String {
+    format!(
+        "SELECT COALESCE(json_agg(json_build_object('column_name', column_name, 'data_type', data_type, 'udt_name', udt_name, 'is_nullable', is_nullable, 'column_default', column_default, 'ordinal_position', ordinal_position) ORDER BY ordinal_position), '[]'::json)::text AS columns_json FROM information_schema.columns WHERE table_schema = '{}' AND table_name = '{}'",
+        schema.replace('\'', "''"),
+        table.replace('\'', "''")
+    )
+}
+
+fn validate_describe_target(security: &SecurityEngine, schema: &str, table: &str) -> Result<()> {
+    security.validate_relation_access(schema, table)?;
+    security.validate(&format!("SELECT * FROM {schema}.{table}"))
+}
+
+fn add_next_suggestion(mut value: serde_json::Value, suggestion: &str) -> serde_json::Value {
+    if let Some(object) = value.as_object_mut() {
+        object.insert("next_suggestion".into(), serde_json::json!(suggestion));
+        value
+    } else {
+        serde_json::json!({
+            "result": value,
+            "next_suggestion": suggestion
+        })
+    }
+}
+
+fn add_table_description_guidance(
+    result: crate::sidecar::QueryResult,
+    schema: &str,
+    table: &str,
+) -> Result<serde_json::Value> {
+    let columns = match result.rows.first().and_then(|row| row.first()) {
+        Some(serde_json::Value::String(json)) => serde_json::from_str(json)?,
+        Some(value @ serde_json::Value::Array(_)) => value.clone(),
+        _ => serde_json::json!([]),
+    };
+    let column_count = columns.as_array().map_or(0, Vec::len);
+    Ok(serde_json::json!({
+        "schema": schema,
+        "table": table,
+        "columns": columns,
+        "column_count": column_count,
+        "byte_count": result.byte_count,
+        "elapsed_ms": result.elapsed_ms,
+        "elapsed": result.elapsed,
+        "next_suggestion": "Use only the returned column names and choose type-compatible operators from data_type and udt_name in a targeted select or explain query."
+    }))
+}
+
+fn add_document_schema_guidance(mut value: serde_json::Value) -> serde_json::Value {
+    let sampled_documents = value
+        .get("sampled_documents")
+        .and_then(serde_json::Value::as_u64);
+    let guidance = serde_json::json!({
+        "schema_inference": "sampled_not_exhaustive",
+        "schema_notice": "Fields and types are inferred from a bounded sample. A field absent from this result may still exist outside the sample.",
+        "sample_scope": sampled_documents.map(|count| format!("{count} document(s) examined")),
+        "next_suggestion": "Use observed fields in a bounded find_documents or aggregate_documents call, or inspect one field with profile_document_field."
+    });
+    if let (Some(result), Some(guidance)) = (value.as_object_mut(), guidance.as_object()) {
+        result.extend(guidance.clone());
+        value
+    } else {
+        serde_json::json!({
+            "schema": value,
+            "schema_inference": "sampled_not_exhaustive",
+            "schema_notice": "Fields and types are inferred from a bounded sample. A field absent from this result may still exist outside the sample.",
+            "next_suggestion": "Use observed fields in a bounded find_documents or aggregate_documents call, or inspect one field with profile_document_field."
+        })
+    }
+}
+
+fn add_document_fixture_guidance(mut value: serde_json::Value) -> serde_json::Value {
+    let guidance = serde_json::json!({
+        "redaction_scope": "explicit_fields_only",
+        "redaction_notice": "Only fields listed in redacted_fields are replaced. Every other returned field remains unchanged."
+    });
+    if let (Some(result), Some(guidance)) = (value.as_object_mut(), guidance.as_object()) {
+        result.extend(guidance.clone());
+        value
+    } else {
+        serde_json::json!({
+            "fixture": value,
+            "redaction_scope": "explicit_fields_only",
+            "redaction_notice": "Only fields listed in redacted_fields are replaced. Every other returned field remains unchanged."
+        })
+    }
+}
+
+fn add_empty_document_result_guidance(mut value: serde_json::Value) -> serde_json::Value {
+    let is_empty = value
+        .get("document_count")
+        .and_then(serde_json::Value::as_u64)
+        .is_some_and(|count| count == 0)
+        || value
+            .get("count")
+            .and_then(serde_json::Value::as_u64)
+            .is_some_and(|count| count == 0)
+        || ["documents", "results", "values"].iter().any(|field| {
+            value
+                .get(field)
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(Vec::is_empty)
+        });
+    if is_empty {
+        if let Some(result) = value.as_object_mut() {
+            result.insert(
+                "empty_result_notice".into(),
+                serde_json::Value::String(
+                    "No matches were found. MongoDB has no authoritative collection schema, so verify database, collection, and field names with discovery tools before treating this as proof that the data is absent.".into(),
+                ),
+            );
+        }
+    }
+    value
+}
+
+fn uri_query_parameter<'a>(uri: &'a str, name: &str) -> Option<&'a str> {
+    uri.split_once('?')?.1.split('&').find_map(|parameter| {
+        let (key, value) = parameter.split_once('=')?;
+        key.eq_ignore_ascii_case(name).then_some(value)
+    })
+}
+
+fn config_tls_status(
+    backend: crate::backend::BackendKind,
+    uri: &str,
+    configured_mode: Option<&str>,
+) -> String {
+    if let Some(mode) = configured_mode {
+        return format!("Mode: {mode}");
+    }
+    if backend == crate::backend::BackendKind::Document {
+        return match uri_query_parameter(uri, "tls").or_else(|| uri_query_parameter(uri, "ssl")) {
+            Some(value) if value.eq_ignore_ascii_case("true") => {
+                "TLS: enabled (MongoDB URI)".into()
+            }
+            Some(value) if value.eq_ignore_ascii_case("false") => {
+                "TLS: disabled (MongoDB URI)".into()
+            }
+            _ => "TLS: not explicitly configured in MongoDB URI".into(),
+        };
+    }
+    "TLS: disabled".into()
+}
+
+fn document_read_preference_status(uri: &str) -> Vec<String> {
+    let preference = uri_query_parameter(uri, "readPreference").unwrap_or("primary");
+    vec![
+        String::new(),
+        "--- Read Preference ---".into(),
+        format!("Mode: {preference}"),
+        "Selection preference only: MongoDB may choose another eligible member according to its server-selection rules.".into(),
+    ]
+}
+
+fn sql_query_error_message(message: &str) -> String {
+    let lower = message.to_lowercase();
+    let suggestion = if lower.contains("column") && lower.contains("does not exist") {
+        " Next suggestion: call describe_table for each referenced target relation, then retry using only the returned column names and types."
+    } else if lower.contains("relation") && lower.contains("does not exist") {
+        " Next suggestion: call list_tables, then describe_table for an existing relation."
+    } else if lower.contains("statement timeout exceeded")
+        || lower.contains("canceling statement due to statement timeout")
+    {
+        " Next suggestion: do not retry unchanged or with a broader query. Preserve or narrow every selective predicate, especially time bounds; never remove one during recovery. Avoid leading-wildcard LIKE or ILIKE on large relations. Use a bounded discovery query to find exact values, then use equality or IN. For row retrieval, add or reduce LIMIT. LIMIT does not by itself bound work for DISTINCT, GROUP BY, COUNT, or ORDER BY, so narrow their input in WHERE. Then call the explain tool with analyze=false to inspect scan and index usage without executing the query; do not put EXPLAIN in select. Do not increase the timeout automatically."
+    } else if lower.contains("aggregate functions are not allowed in group by") {
+        " Next suggestion: remove aggregate expressions or their ordinal positions from GROUP BY; group only by non-aggregate columns, or omit GROUP BY for a single aggregate result."
+    } else if lower.contains("operator does not exist")
+        && (lower.contains("jsonb[]") || lower.contains("json[]"))
+    {
+        " Next suggestion: call describe_table and inspect udt_name. A value such as _jsonb identifies a JSONB array; use EXISTS with unnest(array_column), then apply JSON operators such as -> or ->> to each observed element. Never cast the array to text or use LIKE/ILIKE as a fallback."
+    } else if lower.contains("operator does not exist") && lower.contains("json") {
+        " Next suggestion: call describe_table for the target relation and compare data_type and udt_name before retrying with type-compatible operators. For json/jsonb values, use JSON operators such as -> or ->> against observed fields; do not cast blindly."
+    } else if lower.contains("operator does not exist") {
+        " Next suggestion: call describe_table for the target relation and compare data_type and udt_name before retrying with type-compatible operators; do not add casts unless the intended semantics require them."
+    } else {
+        ""
+    };
+    format!("Query execution failed: {message}{suggestion}")
+}
+
+fn document_operation_error_message(operation: &str, message: &str) -> String {
+    let lower = message.to_lowercase();
+    let field_error = (lower.contains("field") || lower.contains("path"))
+        && (lower.contains("unknown")
+            || lower.contains("not found")
+            || lower.contains("does not exist")
+            || lower.contains("unrecognized"));
+    let suggestion = if operation != "discover_document_schema" && field_error {
+        " Next suggestion: call discover_document_schema for the target collection, then retry using observed fields."
+    } else if is_recoverable_connection_error(message) {
+        " Next suggestion: call check, then reconnect once only if check reports a stale existing connection."
+    } else {
+        ""
+    };
+    format!("{operation} failed: {message}{suggestion}")
+}
+
 fn build_explain_sql(sql: &str, args: &serde_json::Value) -> std::result::Result<String, String> {
     let format = match args.get("format").and_then(|v| v.as_str()) {
         Some("json") | None => "JSON",
@@ -3535,6 +4073,414 @@ fn build_explain_sql(sql: &str, args: &serde_json::Value) -> std::result::Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn describe_table_sql_is_a_fixed_read_only_catalog_query() {
+        let sql = build_describe_table_sql("public", "users");
+
+        assert_eq!(
+            sql,
+            "SELECT COALESCE(json_agg(json_build_object('column_name', column_name, 'data_type', data_type, 'udt_name', udt_name, 'is_nullable', is_nullable, 'column_default', column_default, 'ordinal_position', ordinal_position) ORDER BY ordinal_position), '[]'::json)::text AS columns_json FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users'"
+        );
+    }
+
+    #[test]
+    fn describe_table_identifiers_reject_injection() {
+        assert!(is_valid_identifier("public"));
+        assert!(is_valid_identifier("_private"));
+        assert!(!is_valid_identifier("public; DROP TABLE users"));
+        assert!(!is_valid_identifier("public.users"));
+        assert!(!is_valid_identifier("' OR '1'='1"));
+        assert!(!is_valid_identifier(""));
+    }
+
+    #[test]
+    fn describe_table_wildcards_return_an_exact_next_step() {
+        let message = describe_identifier_error("table", "*").unwrap();
+
+        assert!(message.contains("wildcards are not supported"));
+        assert!(message.contains("exactly one table_schema and table_name pair"));
+        assert!(message.contains("list_tables"));
+        assert!(describe_identifier_error("table", "projection").is_none());
+    }
+
+    #[test]
+    fn describe_table_placeholders_return_an_exact_next_step() {
+        let message = describe_identifier_error("schema", "<schema from list_tables>").unwrap();
+
+        assert!(message.contains("placeholders are not accepted"));
+        assert!(message.contains("copy the exact table_schema and table_name values"));
+        assert!(message.contains("literal values"));
+    }
+
+    #[test]
+    fn describe_table_accepts_no_extra_arguments() {
+        assert!(has_only_keys(
+            &serde_json::json!({"schema": "public", "table": "users"}),
+            &["schema", "table"]
+        ));
+        assert!(!has_only_keys(
+            &serde_json::json!({
+                "schema": "public",
+                "table": "users",
+                "sql": "DELETE FROM public.users"
+            }),
+            &["schema", "table"]
+        ));
+    }
+
+    #[test]
+    fn describe_table_target_respects_schema_and_relation_policy() {
+        let security = SecurityEngine::new(
+            crate::config::SecurityPolicy {
+                allowed_schemas: vec!["public".into()],
+                denied_relations: vec!["public.secrets".into()],
+                ..Default::default()
+            },
+            crate::config::LimitsConfig::default(),
+        );
+
+        assert!(validate_describe_target(&security, "public", "users").is_ok());
+        assert!(validate_describe_target(&security, "private", "users").is_err());
+        assert!(validate_describe_target(&security, "public", "secrets").is_err());
+    }
+
+    #[test]
+    fn table_description_includes_next_suggestion() {
+        let result = crate::sidecar::QueryResult {
+            columns: vec!["columns_json".into()],
+            rows: vec![vec![serde_json::json!(
+                r#"[{"column_name":"relations","data_type":"ARRAY","udt_name":"_jsonb","is_nullable":"NO","column_default":null,"ordinal_position":1}]"#
+            )]],
+            row_count: 1,
+            byte_count: 32,
+            elapsed_ms: 1,
+            elapsed: "1ms".into(),
+        };
+
+        let value = add_table_description_guidance(result, "public", "users").unwrap();
+
+        assert_eq!(value["schema"], "public");
+        assert_eq!(value["table"], "users");
+        assert_eq!(value["columns"][0]["column_name"], "relations");
+        assert_eq!(value["columns"][0]["data_type"], "ARRAY");
+        assert_eq!(value["columns"][0]["udt_name"], "_jsonb");
+        assert_eq!(value["column_count"], 1);
+        assert!(value["next_suggestion"]
+            .as_str()
+            .unwrap()
+            .contains("type-compatible operators"));
+    }
+
+    #[test]
+    fn document_schema_is_marked_as_sampled_and_actionable() {
+        let value = add_document_schema_guidance(serde_json::json!({
+            "sampled_documents": 2,
+            "fields": [{"field": "name"}]
+        }));
+
+        assert_eq!(value["schema_inference"], "sampled_not_exhaustive");
+        assert_eq!(value["sample_scope"], "2 document(s) examined");
+        assert!(value["schema_notice"]
+            .as_str()
+            .unwrap()
+            .contains("may still exist"));
+        assert!(value["next_suggestion"]
+            .as_str()
+            .unwrap()
+            .contains("find_documents"));
+    }
+
+    #[test]
+    fn document_fixture_discloses_explicit_redaction_scope() {
+        let value = add_document_fixture_guidance(serde_json::json!({
+            "redacted_fields": ["token"],
+            "documents": [{"name": "unchanged", "token": "[REDACTED]"}]
+        }));
+
+        assert_eq!(value["redaction_scope"], "explicit_fields_only");
+        assert!(value["redaction_notice"]
+            .as_str()
+            .unwrap()
+            .contains("Every other returned field remains unchanged"));
+    }
+
+    #[test]
+    fn empty_document_results_warn_about_unverifiable_field_names() {
+        let value = add_empty_document_result_guidance(serde_json::json!({
+            "documents": [],
+            "document_count": 0
+        }));
+
+        assert!(value["empty_result_notice"]
+            .as_str()
+            .unwrap()
+            .contains("field names"));
+    }
+
+    #[test]
+    fn document_connection_details_report_uri_tls_and_read_preference_semantics() {
+        let uri = "mongodb://host/db?tls=true&readPreference=secondaryPreferred";
+
+        assert_eq!(
+            config_tls_status(crate::backend::BackendKind::Document, uri, None),
+            "TLS: enabled (MongoDB URI)"
+        );
+        let read_preference = document_read_preference_status(uri).join("\n");
+        assert!(read_preference.contains("Mode: secondaryPreferred"));
+        assert!(read_preference.contains("Selection preference only"));
+    }
+
+    #[test]
+    fn document_tls_status_does_not_claim_disabled_when_uri_is_unspecified() {
+        assert_eq!(
+            config_tls_status(
+                crate::backend::BackendKind::Document,
+                "mongodb://host/db",
+                None
+            ),
+            "TLS: not explicitly configured in MongoDB URI"
+        );
+    }
+
+    #[test]
+    fn document_json_arguments_accept_nested_values() {
+        let args = serde_json::json!({
+            "filter": {"name": "expected"},
+            "pipeline": [{"$match": {"active": true}}]
+        });
+
+        let filter = parse_document_json_argument(&args, "filter", DocumentJsonKind::Object, true)
+            .unwrap()
+            .unwrap();
+        let pipeline =
+            parse_document_json_argument(&args, "pipeline", DocumentJsonKind::Array, true)
+                .unwrap()
+                .unwrap();
+
+        assert_eq!(filter, serde_json::json!({"name": "expected"}));
+        assert_eq!(pipeline, serde_json::json!([{"$match": {"active": true}}]));
+    }
+
+    #[test]
+    fn document_json_arguments_accept_json_encoded_fallbacks() {
+        let args = serde_json::json!({
+            "filter": r#"{"name":"expected"}"#,
+            "pipeline": r#"[{"$match":{"active":true}}]"#
+        });
+
+        let filter = parse_document_json_argument(&args, "filter", DocumentJsonKind::Object, true)
+            .unwrap()
+            .unwrap();
+        let pipeline =
+            parse_document_json_argument(&args, "pipeline", DocumentJsonKind::Array, true)
+                .unwrap()
+                .unwrap();
+
+        assert_eq!(filter, serde_json::json!({"name": "expected"}));
+        assert_eq!(pipeline, serde_json::json!([{"$match": {"active": true}}]));
+    }
+
+    #[test]
+    fn document_json_arguments_reject_flattened_keys() {
+        for (args, name, kind) in [
+            (
+                serde_json::json!({"filter.name": "expected"}),
+                "filter",
+                DocumentJsonKind::Object,
+            ),
+            (
+                serde_json::json!({"pipeline[0].$match.name": "expected"}),
+                "pipeline",
+                DocumentJsonKind::Array,
+            ),
+        ] {
+            let error = parse_document_json_argument(&args, name, kind, true).unwrap_err();
+
+            assert!(error.contains("flattened key"));
+            assert!(error.contains("Do not retry this call unchanged"));
+            assert!(error.contains("immediately pass"));
+            assert!(error.contains("JSON-encoded"));
+            assert!(error.contains("never replace it with an empty or unfiltered fallback"));
+        }
+    }
+
+    #[test]
+    fn required_document_json_argument_never_defaults_to_empty() {
+        let error = parse_document_json_argument(
+            &serde_json::json!({}),
+            "filter",
+            DocumentJsonKind::Object,
+            true,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("Missing 'filter' argument"));
+        assert!(error.contains("do not run an unfiltered fallback"));
+    }
+
+    #[test]
+    fn optional_document_json_argument_can_be_absent() {
+        let value = parse_document_json_argument(
+            &serde_json::json!({}),
+            "filter",
+            DocumentJsonKind::Object,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(value, None);
+    }
+
+    #[test]
+    fn document_json_arguments_reject_invalid_json_and_wrong_shapes() {
+        let invalid_json = parse_document_json_argument(
+            &serde_json::json!({"filter": "{"}),
+            "filter",
+            DocumentJsonKind::Object,
+            true,
+        )
+        .unwrap_err();
+        let wrong_shape = parse_document_json_argument(
+            &serde_json::json!({"pipeline": r#"{"$match":{}}"#}),
+            "pipeline",
+            DocumentJsonKind::Array,
+            true,
+        )
+        .unwrap_err();
+
+        assert!(invalid_json.contains("Invalid 'filter' JSON string"));
+        assert!(wrong_shape.contains("expected a JSON array"));
+    }
+
+    #[test]
+    fn document_string_arrays_accept_encoded_values_and_reject_invalid_items() {
+        let values = parse_document_string_array_argument(
+            &serde_json::json!({"redact_fields": r#"["password","token"]"#}),
+            "redact_fields",
+        )
+        .unwrap()
+        .unwrap();
+        let error = parse_document_string_array_argument(
+            &serde_json::json!({"redact_fields": ["password", 42]}),
+            "redact_fields",
+        )
+        .unwrap_err();
+
+        assert_eq!(values, vec!["password", "token"]);
+        assert!(error.contains("every array item must be a string"));
+        assert!(error.contains("do not omit intended redactions"));
+    }
+
+    #[test]
+    fn explicit_empty_document_filter_remains_visible_to_security_policy() {
+        let filter = parse_document_json_argument(
+            &serde_json::json!({"filter": {}}),
+            "filter",
+            DocumentJsonKind::Object,
+            true,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(filter, serde_json::json!({}));
+    }
+
+    #[test]
+    fn missing_column_errors_recommend_schema_discovery() {
+        let message =
+            sql_query_error_message("ERROR: column p.data does not exist at character 279");
+
+        assert!(message.contains("describe_table"));
+        assert!(message.contains("each referenced target relation"));
+        assert!(message.contains("only the returned column names and types"));
+    }
+
+    #[test]
+    fn aggregate_group_by_errors_recommend_a_valid_grouping_shape() {
+        let message = sql_query_error_message(
+            "ERROR: aggregate functions are not allowed in GROUP BY Position: 235",
+        );
+
+        assert!(message.contains("remove aggregate expressions"));
+        assert!(message.contains("group only by non-aggregate columns"));
+        assert!(message.contains("omit GROUP BY"));
+    }
+
+    #[test]
+    fn statement_timeout_errors_recommend_a_bounded_diagnostic_flow() {
+        for error in [
+            "Statement timeout exceeded: 120000ms - the query took too long to execute",
+            "ERROR: canceling statement due to statement timeout",
+        ] {
+            let message = sql_query_error_message(error);
+
+            assert!(message.contains("do not retry unchanged"));
+            assert!(message.contains("broader query"));
+            assert!(message.contains("Preserve or narrow every selective predicate"));
+            assert!(message.contains("especially time bounds"));
+            assert!(message.contains("leading-wildcard LIKE or ILIKE"));
+            assert!(message.contains("bounded discovery query"));
+            assert!(message.contains("add or reduce LIMIT"));
+            assert!(message.contains("equality or IN"));
+            assert!(message.contains(
+                "LIMIT does not by itself bound work for DISTINCT, GROUP BY, COUNT, or ORDER BY"
+            ));
+            assert!(message.contains("explain tool with analyze=false"));
+            assert!(message.contains("do not put EXPLAIN in select"));
+            assert!(message.contains("Do not increase the timeout automatically"));
+        }
+    }
+
+    #[test]
+    fn json_operator_errors_recommend_type_compatible_json_access() {
+        let message = sql_query_error_message(
+            "ERROR: operator does not exist: jsonb ~~ text Hint: You might need to add explicit type casts.",
+        );
+
+        assert!(message.contains("describe_table"));
+        assert!(message.contains("data_type and udt_name"));
+        assert!(message.contains("-> or ->>"));
+        assert!(message.contains("do not cast blindly"));
+    }
+
+    #[test]
+    fn json_array_operator_errors_recommend_structured_element_access() {
+        let message = sql_query_error_message(
+            "ERROR: operator does not exist: jsonb[] @> jsonb Hint: No operator matches the given name and argument types.",
+        );
+
+        assert!(message.contains("udt_name"));
+        assert!(message.contains("_jsonb"));
+        assert!(message.contains("EXISTS with unnest"));
+        assert!(message.contains("-> or ->>"));
+        assert!(message.contains("Never cast the array to text"));
+        assert!(message.contains("LIKE/ILIKE"));
+    }
+
+    #[test]
+    fn generic_operator_errors_do_not_guess_a_cast() {
+        let message =
+            sql_query_error_message("ERROR: operator does not exist: integer = character varying");
+
+        assert!(message.contains("type-compatible operators"));
+        assert!(message.contains("intended semantics"));
+        assert!(!message.contains("JSON operators"));
+    }
+
+    #[test]
+    fn security_and_connection_errors_do_not_suggest_schema_bypasses() {
+        let sql_message = sql_query_error_message("connection is closed");
+        let document_message =
+            document_operation_error_message("find_documents", "connection is closed");
+        let unknown_host_message =
+            document_operation_error_message("find_documents", "unknown host");
+
+        assert!(!sql_message.contains("Next suggestion"));
+        assert!(document_message.contains("call check"));
+        assert!(!document_message.contains("discover_document_schema"));
+        assert!(!unknown_host_message.contains("Next suggestion"));
+    }
 
     #[test]
     fn build_explain_sql_defaults_to_json() {
