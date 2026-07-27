@@ -1,0 +1,23 @@
+src/mcp.rs
+  s_80dee0faf8ca2e::t_97caa59d800066 279-281,315,330,337,341,984,987,1479,1521-1522,1524-1525,3643-3661,3820-3838
+docs/agents.md
+  s_80dee0faf8ca2e::t_5b10a291df5018 91-93,124-128,137-142
+skills/safeselect.md
+  s_80dee0faf8ca2e::t_3fdabe8cb096a5 109-110
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "4c96b3b62277896655c57eeff562354b6ac40a42",
+  "prompts": {},
+  "sessions": {
+    "s_80dee0faf8ca2e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fa317-b0e1-7203-be04-221b52bd780a",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "antonillos <305277+antonillos@users.noreply.github.com>"
+    }
+  }
+}
