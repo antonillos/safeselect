@@ -276,7 +276,9 @@ impl McpServer {
     fn handle_tools_list(&mut self, msg: &JsonRpcMessage) -> Result<()> {
         let mut tools = vec![ToolDefinition {
             name: "database_info".into(),
-            description: self.tool_description("show active database backend and capabilities"),
+            description: self.tool_description(
+                "show active database backend and capabilities; if the user only asked about available capabilities, report them and stop",
+            ),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {}
@@ -310,7 +312,7 @@ impl McpServer {
             tools.push(ToolDefinition {
                 name: "list_tables".into(),
                 description: self.tool_description(
-                    "list database tables, optionally filtered by schema; next call describe_table before querying an unfamiliar relation",
+                    "list database tables, optionally filtered by schema; if the user requested data inspection, choose exactly one returned table_schema and table_name pair, then call describe_table without placeholders or wildcards; otherwise report the result and stop",
                 ),
                 input_schema: serde_json::json!({
                     "type": "object",
@@ -325,18 +327,18 @@ impl McpServer {
             tools.push(ToolDefinition {
                 name: "describe_table".into(),
                 description: self.tool_description(
-                    "describe columns for a database table or view using read-only catalog metadata; use only returned column names in select or explain",
+                    "describe columns for exactly one database table or view using read-only catalog metadata; schema and table must be exact values copied from one list_tables row, and placeholders or wildcards are not accepted",
                 ),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
                         "schema": {
                             "type": "string",
-                            "description": "Schema containing the table or view"
+                            "description": "Exact table_schema value copied from one list_tables row; placeholders and wildcards are not accepted"
                         },
                         "table": {
                             "type": "string",
-                            "description": "Table or view name"
+                            "description": "Exact table_name value copied from the same list_tables row; placeholders and wildcards such as * or % are not accepted"
                         }
                     },
                     "required": ["schema", "table"],
@@ -979,10 +981,10 @@ impl McpServer {
             .collect();
         let next_suggestion = match self.backend.kind {
             crate::backend::BackendKind::Jdbc => {
-                "Call list_tables, then describe_table before select or explain."
+                "If the user requested data inspection, call list_tables, then describe_table before select or explain. Otherwise report the available SQL capabilities and stop."
             }
             crate::backend::BackendKind::Document => {
-                "Call list_databases, then list_collections and discover_document_schema before document reads."
+                "If the user requested data inspection, call list_databases, then list_collections and discover_document_schema before document reads. Otherwise report the available document capabilities and stop."
             }
         };
 
@@ -1474,7 +1476,7 @@ impl McpServer {
                 self.audit.record("PASS", "allow", &sql)?;
                 let result = add_next_suggestion(
                     serde_json::to_value(result)?,
-                    "Choose an existing allowed relation and call describe_table before select or explain.",
+                    "If the user requested data inspection, choose exactly one table_schema and table_name pair from rows, then call describe_table with those exact values. Do not pass placeholders or wildcards such as * or %. Otherwise report the listed relations and stop.",
                 );
                 let resp = JsonRpcResponse {
                     jsonrpc: "2.0",
@@ -1516,19 +1518,11 @@ impl McpServer {
 
         let schema = required_string!(self, id, args, "schema");
         let table = required_string!(self, id, args, "table");
-        if !is_valid_identifier(schema) {
-            return self.send_error(
-                id,
-                -32602,
-                "Invalid schema name: must start with a letter or underscore and contain only alphanumeric characters and underscores",
-            );
+        if let Some(message) = describe_identifier_error("schema", schema) {
+            return self.send_error(id, -32602, message);
         }
-        if !is_valid_identifier(table) {
-            return self.send_error(
-                id,
-                -32602,
-                "Invalid table name: must start with a letter or underscore and contain only alphanumeric characters and underscores",
-            );
+        if let Some(message) = describe_identifier_error("table", table) {
+            return self.send_error(id, -32602, message);
         }
 
         let relation_check = format!("SELECT * FROM {schema}.{table}");
@@ -3646,6 +3640,25 @@ fn has_only_keys(value: &serde_json::Value, allowed: &[&str]) -> bool {
         .is_some_and(|object| object.keys().all(|key| allowed.contains(&key.as_str())))
 }
 
+fn describe_identifier_error(kind: &str, value: &str) -> Option<String> {
+    if is_valid_identifier(value) {
+        return None;
+    }
+    if value.contains('<') || value.contains('>') {
+        return Some(format!(
+            "Invalid {kind} name: placeholders are not accepted. Next suggestion: copy the exact table_schema and table_name values from one list_tables row and call describe_table with those literal values."
+        ));
+    }
+    if value.contains('*') || value.contains('%') {
+        return Some(format!(
+            "Invalid {kind} name: wildcards are not supported. Next suggestion: choose exactly one table_schema and table_name pair from list_tables rows and call describe_table with those exact values."
+        ));
+    }
+    Some(format!(
+        "Invalid {kind} name: must start with a letter or underscore and contain only alphanumeric characters and underscores"
+    ))
+}
+
 fn build_describe_table_sql(schema: &str, table: &str) -> String {
     format!(
         "SELECT COALESCE(json_agg(json_build_object('column_name', column_name, 'data_type', data_type, 'is_nullable', is_nullable, 'column_default', column_default, 'ordinal_position', ordinal_position) ORDER BY ordinal_position), '[]'::json)::text AS columns_json FROM information_schema.columns WHERE table_schema = '{}' AND table_name = '{}'",
@@ -3802,6 +3815,25 @@ mod tests {
         assert!(!is_valid_identifier("public.users"));
         assert!(!is_valid_identifier("' OR '1'='1"));
         assert!(!is_valid_identifier(""));
+    }
+
+    #[test]
+    fn describe_table_wildcards_return_an_exact_next_step() {
+        let message = describe_identifier_error("table", "*").unwrap();
+
+        assert!(message.contains("wildcards are not supported"));
+        assert!(message.contains("exactly one table_schema and table_name pair"));
+        assert!(message.contains("list_tables"));
+        assert!(describe_identifier_error("table", "projection").is_none());
+    }
+
+    #[test]
+    fn describe_table_placeholders_return_an_exact_next_step() {
+        let message = describe_identifier_error("schema", "<schema from list_tables>").unwrap();
+
+        assert!(message.contains("placeholders are not accepted"));
+        assert!(message.contains("copy the exact table_schema and table_name values"));
+        assert!(message.contains("literal values"));
     }
 
     #[test]

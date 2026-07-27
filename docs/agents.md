@@ -88,7 +88,9 @@ The installed entry looks like this in your agent's config:
 
 ## Primary Query Tools
 
-Use `database_info` first when the environment may not be SQL. It returns the active backend, vendor, and capabilities.
+Use `database_info` first when the environment may not be SQL. It returns the
+active backend, vendor, and capabilities. If the user only requested capability
+information, report it and stop; do not continue into discovery or data access.
 
 ### `select`
 
@@ -119,7 +121,11 @@ Arguments:
 - `schema` (optional): schema name filter
 
 The response preserves the standard SQL result fields and adds
-`next_suggestion`, directing the agent to `describe_table`.
+`next_suggestion`. If the user requested data inspection, choose exactly one
+`table_schema`/`table_name` pair and call `describe_table`. If the user only
+requested the available relations or tools, report the result and stop. Do not
+pass placeholders such as `<schema from list_tables>`, `*`, `%`, or another
+wildcard.
 
 ### `describe_table`
 
@@ -128,8 +134,12 @@ generates a fixed read-only `information_schema.columns` query internally; the
 agent cannot provide SQL to this tool.
 
 Arguments:
-- `schema` (required): allowed schema containing the relation
-- `table` (required): table or view name
+- `schema` (required): exact `table_schema` from one `list_tables` row
+- `table` (required): exact `table_name` from the same row
+
+Placeholders and wildcards are not supported. If a value such as
+`<schema from list_tables>`, `*`, or `%` is provided, SafeSelect rejects the
+call and directs the agent to copy one exact relation from `list_tables`.
 
 Successful responses contain:
 - `schema` and `table`: the described relation

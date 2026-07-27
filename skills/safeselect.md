@@ -106,7 +106,8 @@ security:
   - No credentials in JDBC URLs
 agent_guidance:
   - Use database_info before discovery when the backend is unknown
-  - For SQL, use list_tables then describe_table before select or explain; never guess column names
+  - If the user only requested capabilities, tools, or available relations, report the discovery result and stop without reading data
+  - For SQL data inspection, choose exactly one table_schema and table_name pair from list_tables, then call describe_table with those exact literal values; never pass placeholders, use wildcards, or guess column names
   - For MongoDB, use list_databases, list_collections, then discover_document_schema before find or aggregate; never guess field names
   - Treat MongoDB schema discovery as sampled and non-exhaustive; an absent field may still exist outside the sample
   - Follow next_suggestion from discovery results and do not repeat an invalid query without rediscovering the target structure
