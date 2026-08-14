@@ -199,9 +199,21 @@ fn assert_mcp_sql_error_stays_alive(repo_root: &std::path::Path, config_dir: &st
     reader
         .read_line(&mut tools_response)
         .expect("failed to read MCP tools response");
+    let tools_rpc: serde_json::Value =
+        serde_json::from_str(&tools_response).expect("tools/list should return JSON-RPC");
+    let tools = tools_rpc["result"]["tools"]
+        .as_array()
+        .expect("tools/list should return tool definitions");
     assert!(
         tools_response.contains("describe_table")
-            && !tools_response.contains("discover_document_schema"),
+            && !tools_response.contains("discover_document_schema")
+            && tools.iter().all(|tool| {
+                tool["outputSchema"]["required"]
+                    .as_array()
+                    .is_some_and(|required| {
+                        required.contains(&serde_json::json!("next_suggestion"))
+                    })
+            }),
         "unexpected PostgreSQL tools response: {tools_response}"
     );
 
@@ -234,11 +246,7 @@ fn assert_mcp_sql_error_stays_alive(repo_root: &std::path::Path, config_dir: &st
             .expect("failed to read describe_table response");
         let describe_rpc: serde_json::Value = serde_json::from_str(&describe_response)
             .expect("describe_table response should be valid JSON-RPC");
-        let describe_text = describe_rpc["result"]["content"][0]["text"]
-            .as_str()
-            .expect("describe_table response should contain text content");
-        let description: serde_json::Value =
-            serde_json::from_str(describe_text).expect("describe_table text should be valid JSON");
+        let description = &describe_rpc["result"]["structuredContent"];
         let returned_columns = description["columns"]
             .as_array()
             .expect("describe_table should return columns");
@@ -250,11 +258,9 @@ fn assert_mcp_sql_error_stays_alive(repo_root: &std::path::Path, config_dir: &st
                 && returned_columns
                     .iter()
                     .all(|column| column["udt_name"].is_string())
-                && expected_columns
+                && expected_columns.iter().all(|expected| returned_columns
                     .iter()
-                    .all(|expected| returned_columns
-                        .iter()
-                        .any(|column| column["column_name"].as_str() == Some(expected))),
+                    .any(|column| column["column_name"].as_str() == Some(expected))),
             "unexpected describe_table response for {relation}: {describe_response}"
         );
     }
@@ -295,7 +301,9 @@ fn assert_mcp_sql_error_stays_alive(repo_root: &std::path::Path, config_dir: &st
         error_response.contains("Query execution failed")
             && error_response.contains("SQL execution failed [SQL_ERROR]")
             && error_response.contains("does not exist")
-            && error_response.contains("list_tables"),
+            && error_response.contains("list_tables")
+            && error_response.contains("safeselect-untrusted-data-")
+            && error_response.contains("next_suggestion"),
         "SQL error was not visible in MCP response: {error_response}"
     );
 
@@ -330,7 +338,10 @@ fn assert_mcp_sql_error_stays_alive(repo_root: &std::path::Path, config_dir: &st
         .expect("failed to read follow-up MCP response");
 
     assert!(
-        !ok_response.is_empty() && ok_response.contains("ok"),
+        !ok_response.is_empty()
+            && ok_response.contains("ok")
+            && ok_response.contains("structuredContent")
+            && ok_response.contains("next_suggestion"),
         "MCP server did not respond to follow-up query after SQL error: {ok_response}"
     );
 
