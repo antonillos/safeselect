@@ -124,12 +124,19 @@ JSON-encoded object strings and `pipeline` as a JSON-encoded array string.
 rejected so a lost filter or redaction can never become a less constrained
 fallback.
 
+MongoDB server-side JavaScript is never available: `$where`, `$function`, and
+`$accumulator` are rejected recursively in filters, projections, sorts, and
+aggregation pipelines before the MongoDB driver receives them. When rejected,
+rebuild the request with declarative MQL operators; SafeSelect has no setting
+that enables JavaScript.
+
 Query responses include `row_count`, `byte_count`, `elapsed_ms`, and a human-readable `elapsed` value so agents can reason about result size and latency.
 
 ## Security Model
 
 - **Fail closed**: security violations terminate the MCP process.
 - **Read only**: SQL allows `SELECT`, `EXPLAIN`, and `WITH`; NoSQL backends allow discovery and read-only document reads.
+- **No server-side JavaScript**: MongoDB `$where`, `$function`, and `$accumulator` are rejected in Rust and again in the Java sidecar.
 - **Scoped access**: schemas, relations, databases, and collections can be allowed or denied.
 - **Hard limits**: row count, result bytes, and timeouts are enforced.
 - **Secret isolation**: passwords live in macOS Keychain or environment variables, never in project config.

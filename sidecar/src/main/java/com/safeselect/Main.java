@@ -514,6 +514,8 @@ public class Main {
             return;
         }
 
+        if (rejectMongoJavaScript(writer, id, params.get("filter"), params.get("projection"), params.get("sort"))) return;
+
         Document filter = toDocument(params.getOrDefault("filter", Map.of()));
         MongoCollection<Document> collection = mongoClient.getDatabase(databaseName).getCollection(collectionName);
         FindIterable<Document> find = collection.find(filter);
@@ -586,6 +588,7 @@ public class Main {
             sendResponse(writer, id, null, Map.of("code", "MISSING_PARAMS", "message", "Database, collection and pipeline are required"));
             return;
         }
+        if (rejectMongoJavaScript(writer, id, rawPipeline)) return;
 
         List<Document> pipeline = new ArrayList<>();
         for (Object stage : rawPipeline) {
@@ -624,6 +627,7 @@ public class Main {
             sendResponse(writer, id, null, Map.of("code", "MISSING_PARAMS", "message", "Database, collection and field are required"));
             return;
         }
+        if (rejectMongoJavaScript(writer, id, params.get("filter"))) return;
         Document filter = toDocument(params.getOrDefault("filter", Map.of()));
         long limit = numberParam(params, "limit", Math.min(maxRows, 100));
         MongoCollection<Document> collection = mongoClient.getDatabase(databaseName).getCollection(collectionName);
@@ -668,6 +672,7 @@ public class Main {
             sendResponse(writer, id, null, Map.of("code", "MISSING_PARAMS", "message", "Database and collection are required"));
             return;
         }
+        if (rejectMongoJavaScript(writer, id, params.get("filter"))) return;
         Document filter = toDocument(params.getOrDefault("filter", Map.of()));
         var countOptions = new com.mongodb.client.model.CountOptions();
         applyMongoTimeout(countOptions);
@@ -691,6 +696,7 @@ public class Main {
             sendResponse(writer, id, null, Map.of("code", "MISSING_PARAMS", "message", "Database and collection are required"));
             return;
         }
+        if (rejectMongoJavaScript(writer, id, params.get("filter"), params.get("projection"), params.get("sort"))) return;
         Document find = new Document("find", collectionName).append("filter", toDocument(params.getOrDefault("filter", Map.of())));
         if (params.get("projection") != null) {
             find.append("projection", toDocument(params.get("projection")));
@@ -731,6 +737,7 @@ public class Main {
             sendResponse(writer, id, null, Map.of("code", "MISSING_PARAMS", "message", "Database, collection and field are required"));
             return;
         }
+        if (rejectMongoJavaScript(writer, id, params.get("filter"))) return;
         long sampleSize = numberParam(params, "sample_size", Math.min(maxRows, 1000));
         long exampleLimit = numberParam(params, "examples", 5);
         Document filter = toDocument(params.getOrDefault("filter", Map.of()));
@@ -769,6 +776,7 @@ public class Main {
             sendResponse(writer, id, null, Map.of("code", "MISSING_PARAMS", "message", "Database and collection are required"));
             return;
         }
+        if (rejectMongoJavaScript(writer, id, params.get("filter"))) return;
         long sampleSize = numberParam(params, "sample_size", Math.min(maxRows, 1000));
         long exampleLimit = numberParam(params, "examples", 3);
         Document filter = toDocument(params.getOrDefault("filter", Map.of()));
@@ -813,6 +821,7 @@ public class Main {
             sendResponse(writer, id, null, Map.of("code", "MISSING_PARAMS", "message", "Database and collection are required"));
             return;
         }
+        if (rejectMongoJavaScript(writer, id, params.get("filter"), params.get("projection"))) return;
         Document filter = toDocument(params.getOrDefault("filter", Map.of()));
         long limit = numberParam(params, "limit", Math.min(maxRows, 20));
         FindIterable<Document> find = mongoClient.getDatabase(databaseName).getCollection(collectionName)
@@ -864,6 +873,38 @@ public class Main {
             return document;
         }
         return Document.parse(MAPPER.writeValueAsString(value));
+    }
+
+    static String forbiddenMongoJavaScriptOperator(Object value) {
+        if (value instanceof Map<?, ?> values) {
+            for (Map.Entry<?, ?> entry : values.entrySet()) {
+                String key = String.valueOf(entry.getKey());
+                if ("$where".equals(key) || "$function".equals(key) || "$accumulator".equals(key)) {
+                    return key;
+                }
+                String nested = forbiddenMongoJavaScriptOperator(entry.getValue());
+                if (nested != null) return nested;
+            }
+        } else if (value instanceof Iterable<?> values) {
+            for (Object entry : values) {
+                String nested = forbiddenMongoJavaScriptOperator(entry);
+                if (nested != null) return nested;
+            }
+        }
+        return null;
+    }
+
+    private static boolean rejectMongoJavaScript(PrintWriter writer, Object id, Object... values) throws Exception {
+        for (Object value : values) {
+            if (forbiddenMongoJavaScriptOperator(value) != null) {
+                sendResponse(writer, id, null, Map.of(
+                        "code", "JAVASCRIPT_DISABLED",
+                        "message", "MongoDB server-side JavaScript is not allowed; rebuild the query using declarative MQL operators"
+                ));
+                return true;
+            }
+        }
+        return false;
     }
 
     private static String stringParam(Map<String, Object> params, String name) {
