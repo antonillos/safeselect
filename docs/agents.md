@@ -263,7 +263,9 @@ as the JSON-encoded fallback.
 - `aggregate_documents`: run a non-empty array of JSON-object stages; a
   JSON-encoded array string is accepted as a client compatibility fallback.
   Flattened keys such as `pipeline[0].$match.name` are rejected. `$out` and
-  `$merge` are rejected.
+  `$merge` are rejected. `$where`, `$function`, and `$accumulator` are also
+  rejected at any depth; rebuild the request with declarative MQL operators
+  rather than attempting to enable JavaScript.
 - `distinct_documents`: return distinct values for a field, optionally filtered and limited.
 - `count_documents`: count documents matching a required, non-empty filter; `{}` is rejected to avoid accidental full scans.
 - `explain_documents`: explain a bounded find query without executing a write.
@@ -285,6 +287,12 @@ to `pipeline`, using a complete JSON array or JSON-encoded array string.
 array; non-string items are rejected rather than silently ignored.
 SafeSelect parses these strings strictly and validates the resulting structure
 through the same read-only policy.
+
+Server-side JavaScript is not part of SafeSelect's MongoDB tool surface. A
+rejection for `$where`, `$function`, or `$accumulator` is terminal for that
+request: preserve the database and collection constraints, replace only the
+JavaScript expression with declarative MQL, and retry once only after that
+change. Never ask to relax SafeSelect policy or enable JavaScript.
 
 MongoDB collections do not have an authoritative fixed schema. A field absent
 from `discover_document_schema` may still exist outside the selected filter or

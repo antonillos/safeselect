@@ -4699,6 +4699,32 @@ mod tests {
     }
 
     #[test]
+    fn json_encoded_mql_is_rejected_by_the_same_security_policy() {
+        let args = serde_json::json!({
+            "filter": r#"{"nested":{"$where":"never execute"}}"#
+        });
+        let filter = parse_document_json_argument(&args, "filter", DocumentJsonKind::Object, true)
+            .unwrap()
+            .unwrap();
+        let engine = crate::security::SecurityEngine::new(
+            crate::config::SecurityPolicy::default(),
+            crate::config::LimitsConfig::default(),
+        );
+        let request = crate::backend::DocumentFindRequest {
+            database: "app".into(),
+            collection: "users".into(),
+            filter,
+            projection: None,
+            sort: None,
+            limit: 1,
+        };
+
+        let error = engine.validate_document_find(&request).unwrap_err();
+        assert!(error.to_string().contains("$where"));
+        assert!(!error.to_string().contains("never execute"));
+    }
+
+    #[test]
     fn document_json_arguments_reject_flattened_keys() {
         for (args, name, kind) in [
             (
