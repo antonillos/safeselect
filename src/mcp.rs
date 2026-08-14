@@ -3396,6 +3396,10 @@ fn error_next_suggestion(message: &str) -> &'static str {
         "Stop and report this security or startup failure to the user; do not retry or call reconnect."
     } else if lower.contains("timeout") || lower.contains("timed out") {
         "Preserve or narrow the selective predicates and inspect the plan with the appropriate explain tool; do not broaden or repeat the query unchanged."
+    } else if lower.contains("unknown tool") {
+        "Call tools/list and choose an exact available tool name; do not repeat the unknown tool."
+    } else if lower.contains("method not found") {
+        "Use initialize, tools/list, or tools/call as defined by MCP; do not repeat the unknown method."
     } else if lower.contains("missing") || lower.contains("invalid") || lower.contains("required") {
         "Correct the reported arguments using exact values from the preceding SafeSelect discovery response, then retry once."
     } else if lower.contains("connection closed") {
@@ -4429,10 +4433,13 @@ mod tests {
     #[test]
     fn unknown_and_timeout_errors_never_recommend_blind_retry() {
         let unknown = error_next_suggestion("Unexpected backend response");
+        let unknown_tool = error_next_suggestion("Unknown tool: does_not_exist");
         let timeout = error_next_suggestion("statement timed out");
 
         assert!(unknown.contains("Stop and report"));
         assert!(unknown.contains("do not retry"));
+        assert!(unknown_tool.contains("tools/list"));
+        assert!(unknown_tool.contains("do not repeat"));
         assert!(timeout.contains("narrow"));
         assert!(timeout.contains("do not broaden or repeat"));
     }
