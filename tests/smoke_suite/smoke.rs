@@ -246,12 +246,13 @@ fn assert_mcp_sql_error_stays_alive(repo_root: &std::path::Path, config_dir: &st
             .expect("failed to read describe_table response");
         let describe_rpc: serde_json::Value = serde_json::from_str(&describe_response)
             .expect("describe_table response should be valid JSON-RPC");
-        let description = &describe_rpc["result"]["structuredContent"];
+        let structured = &describe_rpc["result"]["structuredContent"];
+        let description = &structured["untrusted_data"]["value"];
         let returned_columns = description["columns"]
             .as_array()
             .expect("describe_table should return columns");
         assert!(
-            description["next_suggestion"].is_string()
+            structured["next_suggestion"].is_string()
                 && returned_columns
                     .iter()
                     .all(|column| column["ordinal_position"].is_number())
