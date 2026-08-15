@@ -3385,17 +3385,19 @@ fn error_next_suggestion(message: &str) -> &'static str {
     {
         "Stop and report this security or startup failure to the user; do not retry or call reconnect."
     } else if lower.contains("timeout") || lower.contains("timed out") {
-        "Preserve or narrow the selective predicates and inspect the plan with the appropriate explain tool; do not broaden or repeat the query unchanged."
+        "Call explain_documents for MongoDB or explain for SQL with the same namespace and predicates; then retry once with narrower predicates while preserving every safety restriction."
     } else if lower.contains("unknown tool") {
         "Call tools/list and choose an exact available tool name; do not repeat the unknown tool."
     } else if lower.contains("method not found") {
         "Use initialize, tools/list, or tools/call as defined by MCP; do not repeat the unknown method."
+    } else if lower.contains("server-side javascript") || lower.contains("javascript operator") {
+        "Keep the same database, collection, and safety limits; replace the JavaScript expression with declarative MQL operators, then retry that corrected request once. Never enable JavaScript."
     } else if lower.contains("missing") || lower.contains("invalid") || lower.contains("required") {
-        "Correct the reported arguments using exact values from the preceding SafeSelect discovery response, then retry once."
+        "Use the exact database, collection, table, or field values from the preceding SafeSelect discovery response, correct only the reported argument, then retry once."
     } else if lower.contains("connection closed") {
-        "Call check, then reconnect once only if check identifies a stale existing connection."
+        "Call check now; call reconnect once only if check reports a stale connection, otherwise report the connection failure."
     } else {
-        "Stop and report the SafeSelect error to the user; do not retry the same call unchanged."
+        "Stop and report this SafeSelect error to the user; no further tool call is safe until the user provides a changed request."
     }
 }
 
@@ -4091,7 +4093,7 @@ fn is_empty_document_result(value: &serde_json::Value) -> bool {
 
 fn document_result_next_suggestion(value: &serde_json::Value) -> &'static str {
     if is_empty_document_result(value) {
-        "Call discover_document_schema and verify the filter fields without removing existing safety restrictions; do not repeat the empty query unchanged."
+        "Call discover_document_schema for the same database and collection, verify the filter fields, then retry once without removing any safety restriction."
     } else {
         "Use the returned documents to answer the user and stop; do not query again unless a specific unanswered question remains."
     }
@@ -4099,17 +4101,17 @@ fn document_result_next_suggestion(value: &serde_json::Value) -> &'static str {
 
 fn document_operation_next_suggestion(operation: &str, value: &serde_json::Value) -> &'static str {
     if is_empty_document_result(value) {
-        return "Call discover_document_schema and verify the filter fields without removing existing safety restrictions; do not repeat the empty query unchanged.";
+        return "Call discover_document_schema for the same database and collection, verify the filter fields, then retry once without removing any safety restriction.";
     }
     match operation {
         "discover_document_schema" => {
-            "Use observed fields in one bounded find_documents, aggregate_documents, or profile_document_field call; do not assume unsampled fields are absent."
+            "Call find_documents once with observed fields and the smallest useful limit; do not assume unsampled fields are absent."
         }
         "profile_document_field" => {
             "Use the bounded profile to choose a type-compatible filter, or report the profile to the user and stop."
         }
         "explain_documents" => {
-            "Use the plan to narrow the query or choose indexed predicates; if it answers the performance question, report it and stop."
+            "Use the returned plan to choose indexed predicates and call the bounded read tool once; if it answers the performance question, report it and stop."
         }
         "generate_document_fixture" => {
             "Use the returned fixture for the user’s stated task and stop; do not fetch additional documents without a specific need."
@@ -4126,7 +4128,7 @@ fn sql_result_next_suggestion(value: &serde_json::Value) -> &'static str {
         .and_then(serde_json::Value::as_u64)
         .is_some_and(|count| count == 0)
     {
-        "Call describe_table and verify the filter columns without removing existing safety restrictions; do not repeat the empty query unchanged."
+        "Call describe_table for the same schema and relation, verify the filter columns, then retry once without removing any safety restriction."
     } else {
         "Use the returned rows to answer the user and stop; do not query again unless a specific unanswered question remains."
     }
@@ -4291,18 +4293,18 @@ fn document_operation_error_message(operation: &str, message: &str) -> String {
 fn document_backend_error_next_suggestion(message: &str) -> &'static str {
     let lower = message.to_ascii_lowercase();
     if lower.contains("timeout") || lower.contains("timed out") {
-        "Narrow the filter while preserving existing restrictions, then call explain_documents; do not broaden or repeat the query unchanged."
+        "Call explain_documents with the same database, collection, and filter; then retry once with a narrower filter while preserving every existing restriction."
     } else if (lower.contains("field") || lower.contains("path"))
         && (lower.contains("unknown")
             || lower.contains("not found")
             || lower.contains("does not exist")
             || lower.contains("unrecognized"))
     {
-        "Call discover_document_schema, then retry once using only observed fields and declarative MQL operators."
+        "Call discover_document_schema for the same database and collection, then retry once using only observed fields and declarative MQL operators."
     } else if is_recoverable_connection_error(message) {
-        "Call check, then reconnect once only if check identifies a stale existing connection."
+        "Call check now; call reconnect once only if check identifies a stale connection, otherwise report the connection failure."
     } else {
-        "Stop and report the document database error to the user; do not retry the same call unchanged."
+        "Stop and report this document database error to the user; no unchanged retry is safe."
     }
 }
 
@@ -4473,13 +4475,37 @@ mod tests {
         let unknown = error_next_suggestion("Unexpected backend response");
         let unknown_tool = error_next_suggestion("Unknown tool: does_not_exist");
         let timeout = error_next_suggestion("statement timed out");
+        let javascript = error_next_suggestion(
+            "MongoDB server-side JavaScript operator '$function' is not allowed",
+        );
 
         assert!(unknown.contains("Stop and report"));
-        assert!(unknown.contains("do not retry"));
+        assert!(unknown.contains("no further tool call"));
         assert!(unknown_tool.contains("tools/list"));
         assert!(unknown_tool.contains("do not repeat"));
         assert!(timeout.contains("narrow"));
-        assert!(timeout.contains("do not broaden or repeat"));
+        assert!(timeout.contains("preserving every safety restriction"));
+        assert!(javascript.contains("declarative MQL"));
+        assert!(javascript.contains("Never enable JavaScript"));
+    }
+
+    #[test]
+    fn error_categories_have_one_safe_next_step() {
+        for message in [
+            "Request rejected: startup security failure",
+            "Invalid filter argument",
+            "connection closed",
+            "Unknown tool: missing_tool",
+            "MongoDB server-side JavaScript operator '$where' is not allowed",
+            "Unexpected backend response",
+        ] {
+            let suggestion = error_next_suggestion(message);
+            assert!(!suggestion.is_empty(), "missing suggestion for {message}");
+            assert!(
+                !suggestion.contains("repeat the same call unchanged"),
+                "blind retry leaked for {message}: {suggestion}"
+            );
+        }
     }
 
     #[test]
