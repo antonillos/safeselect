@@ -78,7 +78,15 @@ Any violation triggers:
 - Format: JSON lines (`.jsonl`) with rotation
 - If audit cannot initialize, the server refuses to start
 
-### 8. Secret Management
+### 8. MCP Error Guidance
+
+Every MCP error carries exactly one contextual `next_suggestion`. Invalid
+arguments identify the correction, timeouts point to a narrower query and
+`explain`, stale connections point to `check`/`reconnect`, and security or
+startup failures are terminal. Database-derived detail remains UUID-delimited;
+agents must not retry an unchanged request.
+
+### 9. Secret Management
 
 - Sources: macOS Keychain or environment variables (never inline)
 - Resolved once at startup, held in memory

@@ -3390,6 +3390,8 @@ fn error_next_suggestion(message: &str) -> &'static str {
         "Call tools/list and choose an exact available tool name; do not repeat the unknown tool."
     } else if lower.contains("method not found") {
         "Use initialize, tools/list, or tools/call as defined by MCP; do not repeat the unknown method."
+    } else if lower.contains("server-side javascript") || lower.contains("javascript operator") {
+        "Rebuild the request using declarative MQL operators; never enable or retry server-side JavaScript."
     } else if lower.contains("missing") || lower.contains("invalid") || lower.contains("required") {
         "Correct the reported arguments using exact values from the preceding SafeSelect discovery response, then retry once."
     } else if lower.contains("connection closed") {
@@ -4473,6 +4475,9 @@ mod tests {
         let unknown = error_next_suggestion("Unexpected backend response");
         let unknown_tool = error_next_suggestion("Unknown tool: does_not_exist");
         let timeout = error_next_suggestion("statement timed out");
+        let javascript = error_next_suggestion(
+            "MongoDB server-side JavaScript operator '$function' is not allowed",
+        );
 
         assert!(unknown.contains("Stop and report"));
         assert!(unknown.contains("do not retry"));
@@ -4480,6 +4485,27 @@ mod tests {
         assert!(unknown_tool.contains("do not repeat"));
         assert!(timeout.contains("narrow"));
         assert!(timeout.contains("do not broaden or repeat"));
+        assert!(javascript.contains("declarative MQL"));
+        assert!(javascript.contains("never enable"));
+    }
+
+    #[test]
+    fn error_categories_have_one_safe_next_step() {
+        for message in [
+            "Request rejected: startup security failure",
+            "Invalid filter argument",
+            "connection closed",
+            "Unknown tool: missing_tool",
+            "MongoDB server-side JavaScript operator '$where' is not allowed",
+            "Unexpected backend response",
+        ] {
+            let suggestion = error_next_suggestion(message);
+            assert!(!suggestion.is_empty(), "missing suggestion for {message}");
+            assert!(
+                !suggestion.contains("repeat the same call unchanged"),
+                "blind retry leaked for {message}: {suggestion}"
+            );
+        }
     }
 
     #[test]

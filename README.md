@@ -132,6 +132,10 @@ that enables JavaScript.
 
 Query responses include `row_count`, `byte_count`, `elapsed_ms`, and a human-readable `elapsed` value so agents can reason about result size and latency.
 
+Every MCP success and error includes one contextual `next_suggestion`. Agents
+should follow that single safe action, never blindly repeat an invalid request,
+and stop when the suggestion is terminal.
+
 ## Security Model
 
 - **Fail closed**: security violations terminate the MCP process.
