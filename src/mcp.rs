@@ -384,6 +384,7 @@ impl McpServer {
             .to_string();
 
         self.client_name = client_name.clone();
+        self.audit.set_mcp_client(&client_name);
 
         // Pre-start the sidecar so it's ready before the first query
         tracing::info!("Pre-starting sidecar during initialize (client: {client_name})");

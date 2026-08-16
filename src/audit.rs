@@ -83,6 +83,10 @@ impl AuditLog {
         self.record_with_details(category, decision, sql, None)
     }
 
+    pub fn set_mcp_client(&mut self, mcp_client: &str) {
+        self.mcp_client = mcp_client.to_string();
+    }
+
     pub fn record_with_details(
         &mut self,
         category: &str,
@@ -227,6 +231,20 @@ mod tests {
         assert_eq!(entry["details"]["tool"], "select");
         assert_eq!(entry["details"]["row_count"], 1);
         assert!(!entry.to_string().contains("SELECT secret FROM users"));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn records_the_initialized_mcp_client_name() {
+        let directory =
+            std::env::temp_dir().join(format!("safeselect-audit-{}", uuid::Uuid::new_v4()));
+        let config = config(&directory);
+        let mut audit = AuditLog::open(&config, "project", "testing", "unknown").unwrap();
+        audit.set_mcp_client("codex");
+        audit.record("PASS", "allow", "SELECT 1").unwrap();
+
+        assert_eq!(audit.recent_session_entries(1)[0].mcp_client, "codex");
+        drop(audit);
         std::fs::remove_dir_all(directory).unwrap();
     }
 
