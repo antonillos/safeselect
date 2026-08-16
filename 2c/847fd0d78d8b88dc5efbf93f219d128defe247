@@ -1,0 +1,21 @@
+src/audit.rs
+  s_19bc6d7541927f::t_e03ce4c93a140a 86-89,237-250
+src/mcp.rs
+  s_19bc6d7541927f::t_5c34d2639d49e1 387
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "2c847fd0d78d8b88dc5efbf93f219d128defe247",
+  "prompts": {},
+  "sessions": {
+    "s_19bc6d7541927f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a00ad6-9481-7af1-b680-735b7056b5e0",
+        "model": "unknown"
+      },
+      "human_author": "antonillos <305277+antonillos@users.noreply.github.com>"
+    }
+  }
+}
