@@ -1,0 +1,21 @@
+src/mcp.rs
+  s_19bc6d7541927f::t_32e476d9478bf4 1860-1870,1883,1929-1933,4347-4350,4813,4817,4822-4829
+tests/smoke_suite/smoke.rs
+  s_19bc6d7541927f::t_b85247e8a8f52a 304-340
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "67eeabf6ce5ce27639270ace5263c7ab7412d63a",
+  "prompts": {},
+  "sessions": {
+    "s_19bc6d7541927f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a00ad6-9481-7af1-b680-735b7056b5e0",
+        "model": "unknown"
+      },
+      "human_author": "antonillos <305277+antonillos@users.noreply.github.com>"
+    }
+  }
+}
