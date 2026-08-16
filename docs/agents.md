@@ -29,6 +29,9 @@ Agents should treat SafeSelect as their database boundary:
   subquery.
 - Use `explain` to inspect query plans, index usage, and bottlenecks.
 - Use `check` or `reconnect` before retrying after connection or SSH tunnel errors.
+- Use `audit_status` to verify the current session audit is healthy and
+  `audit_recent` to inspect recent metadata when the user asks what SafeSelect
+  allowed or rejected. `audit_recent` accepts a `limit` from 1 to 20.
 - Never ask the user for database passwords if `config_set_password` or existing config can resolve them.
 - Prefer SafeSelect guidance output over inventing ad-hoc setup steps.
 
@@ -235,6 +238,21 @@ Arguments: none
 
 The response contains `databases` and a `next_suggestion` to call
 `list_collections`.
+
+### `audit_status` and `audit_recent`
+
+`audit_status` takes no arguments and reports the current session audit health
+and event count. `audit_recent` accepts an optional `limit` between 1 and 20
+and returns only current-session metadata: timestamp, MCP client, project,
+environment, category, decision, query hash, and safe execution details such as
+the tool name and timing.
+
+Audit tools never return SQL text, filters, documents, secrets, local paths, or
+events from earlier sessions. The MCP client name comes from the client's
+`initialize` handshake; if a client does not provide one, it is recorded as
+`unknown`. Calls rejected by MCP argument validation before reaching SafeSelect
+may not create an audit event; use the returned validation error to correct the
+arguments.
 
 ### `list_collections`
 

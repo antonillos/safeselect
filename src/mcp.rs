@@ -15,6 +15,7 @@ use crate::{is_ssh_ready_for_query, setup_ssh_tunnels, update_generated_by};
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 #[derive(Deserialize)]
 struct JsonRpcMessage {
@@ -384,6 +385,7 @@ impl McpServer {
             .to_string();
 
         self.client_name = client_name.clone();
+        self.audit.set_mcp_client(&client_name);
 
         // Pre-start the sidecar so it's ready before the first query
         tracing::info!("Pre-starting sidecar during initialize (client: {client_name})");
@@ -425,6 +427,22 @@ impl McpServer {
                 "properties": {}
             }),
         }];
+        tools.extend([
+            ToolDefinition {
+                name: "audit_status".into(),
+                description: self.tool_description("show audit health and the number of events recorded in this MCP session; no audit entries, SQL, result data, or file paths are returned"),
+                input_schema: serde_json::json!({"type": "object", "properties": {}, "additionalProperties": false}),
+            },
+            ToolDefinition {
+                name: "audit_recent".into(),
+                description: self.tool_description("show up to 20 current-session audit metadata entries; entries contain only timestamp, category, decision, and query hash, never SQL or returned data"),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 20}},
+                    "additionalProperties": false
+                }),
+            },
+        ]);
 
         if self.backend.has(BackendCapability::SqlQuery) {
             tools.push(ToolDefinition {
@@ -1137,6 +1155,8 @@ impl McpServer {
 
         match tool_name {
             "database_info" => self.handle_database_info(msg.id.clone()),
+            "audit_status" => self.handle_audit_status(msg.id.clone(), &args),
+            "audit_recent" => self.handle_audit_recent(msg.id.clone(), &args),
             "select" => self.handle_select(msg.id.clone(), &args),
             "list_tables" => self.handle_list_tables(msg.id.clone(), &args),
             "describe_table" => self.handle_describe_table(msg.id.clone(), &args),
@@ -1185,6 +1205,53 @@ impl McpServer {
         }
     }
 
+    fn handle_audit_status(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        if !has_only_keys(args, &[]) {
+            return self.send_error(id, -32602, "audit_status does not accept arguments");
+        }
+        self.write_response(&trusted_tool_response(
+            id,
+            "ok",
+            format!(
+                "Audit is healthy. {} event(s) recorded in this MCP session.",
+                self.audit.session_entry_count()
+            ),
+            "Use audit_recent only when the user needs current-session audit metadata; otherwise continue the requested database task.",
+        ))
+    }
+
+    fn handle_audit_recent(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        if !has_only_keys(args, &["limit"]) {
+            return self.send_error(
+                id,
+                -32602,
+                "audit_recent accepts only the optional 'limit' argument",
+            );
+        }
+        let limit = match args.get("limit").and_then(|value| value.as_u64()) {
+            Some(limit @ 1..=20) => limit as usize,
+            Some(_) => {
+                return self.send_error(id, -32602, "audit_recent limit must be between 1 and 20")
+            }
+            None => 20,
+        };
+        let entries = self.audit.recent_session_entries(limit);
+        self.write_response(&trusted_tool_response(
+            id,
+            "ok",
+            serde_json::to_string(&entries)?,
+            "Use the audit metadata to answer the user's verification question; it never contains SQL or returned database data.",
+        ))
+    }
+
     fn handle_database_info(&mut self, id: Option<serde_json::Value>) -> Result<()> {
         let capabilities: Vec<&str> = self
             .backend
@@ -1230,9 +1297,16 @@ impl McpServer {
     }
 
     fn handle_list_databases(&mut self, id: Option<serde_json::Value>) -> Result<()> {
+        let started = Instant::now();
         match self.ensure_sidecar()?.list_databases() {
             Ok(databases) => {
                 let databases = self.security.filter_document_databases(databases);
+                self.audit.record_tool(
+                    "PASS",
+                    "allow",
+                    "list_databases",
+                    started.elapsed().as_millis() as u64,
+                )?;
                 self.write_response(&data_tool_response(
                     id,
                     &serde_json::json!({
@@ -1241,12 +1315,20 @@ impl McpServer {
                     "Choose an allowed database and call list_collections.",
                 )?)
             }
-            Err(e) => self.send_backend_error(
-                id,
-                "List databases failed.",
-                &e.to_string(),
-                "Call check; if connectivity is healthy, stop and report the database error without retrying unchanged.",
-            ),
+            Err(e) => {
+                self.audit.record_tool(
+                    "DOCUMENT_ERROR",
+                    "error",
+                    "list_databases",
+                    started.elapsed().as_millis() as u64,
+                )?;
+                self.send_backend_error(
+                    id,
+                    "List databases failed.",
+                    &e.to_string(),
+                    "Call check; if connectivity is healthy, stop and report the database error without retrying unchanged.",
+                )
+            }
         }
     }
 
@@ -1255,11 +1337,26 @@ impl McpServer {
         id: Option<serde_json::Value>,
         args: &serde_json::Value,
     ) -> Result<()> {
+        let started = Instant::now();
         let database = match args.get("database").and_then(|v| v.as_str()) {
             Some(database) => database,
-            None => return self.send_error(id, -32602, "Missing 'database' argument"),
+            None => {
+                self.audit.record_tool(
+                    "REJECT",
+                    "reject",
+                    "list_collections",
+                    started.elapsed().as_millis() as u64,
+                )?;
+                return self.send_error(id, -32602, "Missing 'database' argument");
+            }
         };
         if let Err(e) = self.security.validate_document_database(database) {
+            self.audit.record_tool(
+                "REJECT",
+                "reject",
+                "list_collections",
+                started.elapsed().as_millis() as u64,
+            )?;
             return self.send_error(id, -32000, format!("Request rejected: {e}"));
         }
         match self.ensure_sidecar()?.list_collections(database) {
@@ -1267,6 +1364,12 @@ impl McpServer {
                 let collections = self
                     .security
                     .filter_document_collections(database, collections);
+                self.audit.record_tool(
+                    "PASS",
+                    "allow",
+                    "list_collections",
+                    started.elapsed().as_millis() as u64,
+                )?;
                 self.write_response(&data_tool_response(
                     id,
                     &serde_json::json!({
@@ -1276,12 +1379,20 @@ impl McpServer {
                     "Choose an allowed collection and call discover_document_schema before document reads.",
                 )?)
             }
-            Err(e) => self.send_backend_error(
-                id,
-                "List collections failed.",
-                &e.to_string(),
-                "Call check; if connectivity is healthy, verify the database with list_databases before retrying once.",
-            ),
+            Err(e) => {
+                self.audit.record_tool(
+                    "DOCUMENT_ERROR",
+                    "error",
+                    "list_collections",
+                    started.elapsed().as_millis() as u64,
+                )?;
+                self.send_backend_error(
+                    id,
+                    "List collections failed.",
+                    &e.to_string(),
+                    "Call check; if connectivity is healthy, verify the database with list_databases before retrying once.",
+                )
+            }
         }
     }
 
@@ -1290,6 +1401,7 @@ impl McpServer {
         id: Option<serde_json::Value>,
         args: &serde_json::Value,
     ) -> Result<()> {
+        let started = Instant::now();
         let database = match args.get("database").and_then(|v| v.as_str()) {
             Some(database) => database.to_string(),
             None => return self.send_error(id, -32602, "Missing 'database' argument"),
@@ -1316,13 +1428,23 @@ impl McpServer {
         };
 
         if let Err(e) = self.security.validate_document_find(&request) {
-            self.audit.record("REJECT", "reject", "find_documents")?;
+            self.audit.record_tool(
+                "REJECT",
+                "reject",
+                "find_documents",
+                started.elapsed().as_millis() as u64,
+            )?;
             return self.send_error(id, -32000, format!("Request rejected: {e}"));
         }
 
         match self.ensure_sidecar()?.find_documents(&request) {
             Ok(result) => {
-                self.audit.record("PASS", "allow", "find_documents")?;
+                self.audit.record_tool(
+                    "PASS",
+                    "allow",
+                    "find_documents",
+                    started.elapsed().as_millis() as u64,
+                )?;
                 if let Err(e) = self
                     .security
                     .check_result_size(result.document_count, result.byte_count)
@@ -1334,8 +1456,12 @@ impl McpServer {
                 self.write_response(&data_tool_response(id, &result, next_suggestion)?)
             }
             Err(e) => {
-                self.audit
-                    .record("DOCUMENT_ERROR", "error", "find_documents")?;
+                self.audit.record_tool(
+                    "DOCUMENT_ERROR",
+                    "error",
+                    "find_documents",
+                    started.elapsed().as_millis() as u64,
+                )?;
                 self.send_backend_error(
                     id,
                     "Find documents failed.",
@@ -1541,18 +1667,34 @@ impl McpServer {
         V: FnOnce(&SecurityEngine) -> Result<()>,
         E: FnOnce(&mut SidecarProcess) -> Result<serde_json::Value>,
     {
+        let started = Instant::now();
         if let Err(e) = validate(&self.security) {
-            self.audit.record("REJECT", "reject", operation)?;
+            self.audit.record_tool(
+                "REJECT",
+                "reject",
+                operation,
+                started.elapsed().as_millis() as u64,
+            )?;
             return self.send_error(id, -32000, format!("Request rejected: {e}"));
         }
         match execute(self.ensure_sidecar()?) {
             Ok(result) => {
-                self.audit.record("PASS", "allow", operation)?;
+                self.audit.record_tool(
+                    "PASS",
+                    "allow",
+                    operation,
+                    started.elapsed().as_millis() as u64,
+                )?;
                 let next_suggestion = document_operation_next_suggestion(operation, &result);
                 self.write_response(&data_tool_response(id, &result, next_suggestion)?)
             }
             Err(e) => {
-                self.audit.record("DOCUMENT_ERROR", "error", operation)?;
+                self.audit.record_tool(
+                    "DOCUMENT_ERROR",
+                    "error",
+                    operation,
+                    started.elapsed().as_millis() as u64,
+                )?;
                 let detail = document_operation_error_message(operation, &e.to_string());
                 self.send_backend_error(
                     id,

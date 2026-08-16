@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 use std::io::Write;
 use std::path::PathBuf;
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct AuditEntry {
     pub timestamp: String,
     pub mcp_client: String,
@@ -19,7 +19,7 @@ pub struct AuditEntry {
     pub details: Option<AuditDetails>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct AuditDetails {
     pub tool: String,
     pub elapsed_ms: u64,
@@ -39,6 +39,7 @@ pub struct AuditLog {
     mcp_client: String,
     current_path: PathBuf,
     bytes_written: u64,
+    session_entries: Vec<AuditEntry>,
 }
 
 impl AuditLog {
@@ -74,11 +75,37 @@ impl AuditLog {
             mcp_client: mcp_client.to_string(),
             current_path: path,
             bytes_written: 0,
+            session_entries: Vec::new(),
         })
     }
 
     pub fn record(&mut self, category: &str, decision: &str, sql: &str) -> Result<()> {
         self.record_with_details(category, decision, sql, None)
+    }
+
+    pub fn record_tool(
+        &mut self,
+        category: &str,
+        decision: &str,
+        tool: &str,
+        elapsed_ms: u64,
+    ) -> Result<()> {
+        self.record_with_details(
+            category,
+            decision,
+            tool,
+            Some(AuditDetails {
+                tool: tool.to_string(),
+                elapsed_ms,
+                row_count: None,
+                byte_count: None,
+                error_code: None,
+            }),
+        )
+    }
+
+    pub fn set_mcp_client(&mut self, mcp_client: &str) {
+        self.mcp_client = mcp_client.to_string();
     }
 
     pub fn record_with_details(
@@ -110,8 +137,21 @@ impl AuditLog {
         writeln!(self.writer, "{line}")?;
         self.writer.flush()?;
         self.bytes_written += line_bytes;
+        self.session_entries.push(entry);
+        if self.session_entries.len() > 20 {
+            self.session_entries.remove(0);
+        }
 
         Ok(())
+    }
+
+    pub fn session_entry_count(&self) -> usize {
+        self.session_entries.len()
+    }
+
+    pub fn recent_session_entries(&self, limit: usize) -> Vec<AuditEntry> {
+        let start = self.session_entries.len().saturating_sub(limit.min(20));
+        self.session_entries[start..].to_vec()
     }
 
     fn rotate(&mut self) -> Result<()> {
@@ -170,16 +210,20 @@ fn expand_tilde(path: &str) -> String {
 mod tests {
     use super::*;
 
-    #[test]
-    fn records_execution_metadata_without_query_text() {
-        let directory =
-            std::env::temp_dir().join(format!("safeselect-audit-{}", uuid::Uuid::new_v4()));
-        let config = AuditConfig {
+    fn config(directory: &std::path::Path) -> AuditConfig {
+        AuditConfig {
             enabled: true,
             directory: directory.display().to_string(),
             max_file_bytes: 1_000_000,
             retain_files: 1,
-        };
+        }
+    }
+
+    #[test]
+    fn records_execution_metadata_without_query_text() {
+        let directory =
+            std::env::temp_dir().join(format!("safeselect-audit-{}", uuid::Uuid::new_v4()));
+        let config = config(&directory);
         let mut audit = AuditLog::open(&config, "project", "testing", "test").unwrap();
         audit
             .record_with_details(
@@ -208,7 +252,60 @@ mod tests {
         assert_eq!(entry["details"]["tool"], "select");
         assert_eq!(entry["details"]["row_count"], 1);
         assert!(!entry.to_string().contains("SELECT secret FROM users"));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
+    #[test]
+    fn records_the_initialized_mcp_client_name() {
+        let directory =
+            std::env::temp_dir().join(format!("safeselect-audit-{}", uuid::Uuid::new_v4()));
+        let config = config(&directory);
+        let mut audit = AuditLog::open(&config, "project", "testing", "unknown").unwrap();
+        audit.set_mcp_client("codex");
+        audit.record("PASS", "allow", "SELECT 1").unwrap();
+
+        assert_eq!(audit.recent_session_entries(1)[0].mcp_client, "codex");
+        drop(audit);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn records_the_operation_tool_without_query_text() {
+        let directory =
+            std::env::temp_dir().join(format!("safeselect-audit-{}", uuid::Uuid::new_v4()));
+        let config = config(&directory);
+        let mut audit = AuditLog::open(&config, "project", "testing", "test").unwrap();
+        audit
+            .record_tool("PASS", "allow", "list_collections", 7)
+            .unwrap();
+
+        let entry = &audit.recent_session_entries(1)[0];
+        assert_eq!(entry.details.as_ref().unwrap().tool, "list_collections");
+        assert_eq!(entry.query_hash, audit.hash_sql("list_collections"));
+        assert!(!serde_json::to_string(entry).unwrap().contains("database"));
+        drop(audit);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn retains_only_the_latest_twenty_session_entries() {
+        let directory =
+            std::env::temp_dir().join(format!("safeselect-audit-{}", uuid::Uuid::new_v4()));
+        let config = config(&directory);
+        let mut audit = AuditLog::open(&config, "project", "testing", "test").unwrap();
+        for index in 0..21 {
+            audit
+                .record("PASS", "allow", &format!("SELECT {index}"))
+                .unwrap();
+        }
+
+        let entries = audit.recent_session_entries(20);
+        assert_eq!(audit.session_entry_count(), 20);
+        assert_eq!(entries.len(), 20);
+        assert_eq!(entries[0].query_hash, audit.hash_sql("SELECT 1"));
+        assert!(!serde_json::to_string(&entries).unwrap().contains("SELECT"));
+
+        drop(audit);
         std::fs::remove_dir_all(directory).unwrap();
     }
 }

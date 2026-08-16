@@ -10,6 +10,8 @@ tools:
   - list_tables
   - describe_table
   - explain
+  - audit_status
+  - audit_recent
   - list_databases
   - list_collections
   - find_documents
@@ -131,4 +133,7 @@ agent_guidance:
   - Use check then reconnect to recover stale sidecar/JDBC/SSH tunnel failures
 audit:
   - JSON audit log with query hashes (never full SQL)
+  - audit_status reports the current session health and event count
+  - audit_recent returns at most 20 current-session metadata entries, including the MCP client and operation tool when available
+  - Audit responses never include SQL, returned data, filters, secrets, or local paths
   - Audit location: ~/.local/state/safeselect/audit/
