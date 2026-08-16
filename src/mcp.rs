@@ -1299,6 +1299,7 @@ impl McpServer {
         match self.ensure_sidecar()?.list_databases() {
             Ok(databases) => {
                 let databases = self.security.filter_document_databases(databases);
+                self.audit.record("PASS", "allow", "list_databases")?;
                 self.write_response(&data_tool_response(
                     id,
                     &serde_json::json!({
@@ -1307,12 +1308,16 @@ impl McpServer {
                     "Choose an allowed database and call list_collections.",
                 )?)
             }
-            Err(e) => self.send_backend_error(
-                id,
-                "List databases failed.",
-                &e.to_string(),
-                "Call check; if connectivity is healthy, stop and report the database error without retrying unchanged.",
-            ),
+            Err(e) => {
+                self.audit
+                    .record("DOCUMENT_ERROR", "error", "list_databases")?;
+                self.send_backend_error(
+                    id,
+                    "List databases failed.",
+                    &e.to_string(),
+                    "Call check; if connectivity is healthy, stop and report the database error without retrying unchanged.",
+                )
+            }
         }
     }
 
@@ -1323,9 +1328,13 @@ impl McpServer {
     ) -> Result<()> {
         let database = match args.get("database").and_then(|v| v.as_str()) {
             Some(database) => database,
-            None => return self.send_error(id, -32602, "Missing 'database' argument"),
+            None => {
+                self.audit.record("REJECT", "reject", "list_collections")?;
+                return self.send_error(id, -32602, "Missing 'database' argument");
+            }
         };
         if let Err(e) = self.security.validate_document_database(database) {
+            self.audit.record("REJECT", "reject", "list_collections")?;
             return self.send_error(id, -32000, format!("Request rejected: {e}"));
         }
         match self.ensure_sidecar()?.list_collections(database) {
@@ -1333,6 +1342,7 @@ impl McpServer {
                 let collections = self
                     .security
                     .filter_document_collections(database, collections);
+                self.audit.record("PASS", "allow", "list_collections")?;
                 self.write_response(&data_tool_response(
                     id,
                     &serde_json::json!({
@@ -1342,12 +1352,16 @@ impl McpServer {
                     "Choose an allowed collection and call discover_document_schema before document reads.",
                 )?)
             }
-            Err(e) => self.send_backend_error(
-                id,
-                "List collections failed.",
-                &e.to_string(),
-                "Call check; if connectivity is healthy, verify the database with list_databases before retrying once.",
-            ),
+            Err(e) => {
+                self.audit
+                    .record("DOCUMENT_ERROR", "error", "list_collections")?;
+                self.send_backend_error(
+                    id,
+                    "List collections failed.",
+                    &e.to_string(),
+                    "Call check; if connectivity is healthy, verify the database with list_databases before retrying once.",
+                )
+            }
         }
     }
 
