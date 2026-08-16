@@ -1,0 +1,31 @@
+src/audit.rs
+  s_19bc6d7541927f::t_dee0f4ed3cb507 86-106,272-289
+README.md
+  s_19bc6d7541927f::t_c3f3783be25bc0 148,158
+SECURITY.md
+  s_19bc6d7541927f::t_7cc982e8235295 42
+docs/agents.md
+  s_19bc6d7541927f::t_98686c7937f4d8 32-34,242-256
+docs/security.md
+  s_19bc6d7541927f::t_01abfa0abd792a 76-78,80
+skills/safeselect.md
+  s_19bc6d7541927f::t_69999ca1709eee 13-14,136-138
+src/mcp.rs
+  s_19bc6d7541927f::t_78116054402360 18,1300,1304-1309,1319-1324,1340,1344-1349,1354-1359,1367-1372,1383-1388,1404,1431-1436,1442-1447,1459-1464,1670,1672-1677,1682-1687,1692-1697
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "00cff009cf65bc128bf11da001f79fad23039b8a",
+  "prompts": {},
+  "sessions": {
+    "s_19bc6d7541927f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a00ad6-9481-7af1-b680-735b7056b5e0",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "antonillos <305277+antonillos@users.noreply.github.com>"
+    }
+  }
+}
