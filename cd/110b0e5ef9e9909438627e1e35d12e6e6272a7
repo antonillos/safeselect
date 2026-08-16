@@ -1,0 +1,25 @@
+src/main.rs
+  s_0689b277da1e60::t_b101b6f4ed7ee2 149,3978,3980-3987,4012-4019
+README.md
+  s_0689b277da1e60::t_ce49d7731448f9 181
+docs/install.md
+  s_0689b277da1e60::t_12f320272da890 116-125
+src/cli.rs
+  s_0689b277da1e60::t_8d1f1496b254c1 132-134
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "cd110b0e5ef9e9909438627e1e35d12e6e6272a7",
+  "prompts": {},
+  "sessions": {
+    "s_0689b277da1e60": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a00b48-679c-7b82-a44e-9f86929e2c12",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "antonillos <305277+antonillos@users.noreply.github.com>"
+    }
+  }
+}
