@@ -430,6 +430,8 @@ pub fn run() {
         let timeout_config = std::fs::read_to_string(&project_config)
             .unwrap()
             .replace("statement_timeout_ms = 1000", "statement_timeout_ms = 1");
+        let timeout_config =
+            timeout_config.replace("max_result_bytes = 1000", "max_result_bytes = 10000000");
         std::fs::write(&project_config, timeout_config).unwrap();
         let mut timeout_harness = mongodb::McpHarness::start(&repo_root, &config_dir);
         let timeout = timeout_harness.call_tool(
