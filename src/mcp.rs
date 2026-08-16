@@ -1648,11 +1648,9 @@ impl McpServer {
                         error_code: Some("SQL_ERROR".into()),
                     }),
                 )?;
-                self.write_response(&tool_error_response(
-                    id,
-                    sql_query_error_message(msg),
-                    "Correct the query using exact schema and column names from list_tables and describe_table, then retry once; do not repeat it unchanged.",
-                ))
+                let (message, next_suggestion) =
+                    split_error_message_and_suggestion(sql_query_error_message(msg));
+                self.write_response(&tool_error_response(id, message, &next_suggestion))
             }
             Err(e) => {
                 let elapsed = start.elapsed();
@@ -4806,6 +4804,22 @@ mod tests {
         let message = sql_query_error_message("ERROR: \"array_agg\" is an aggregate function");
         assert!(message.contains("list_functions"));
         assert!(message.contains("pg_aggregate"));
+    }
+
+    #[test]
+    fn aggregate_definition_error_keeps_its_suggestion_trusted() {
+        let (message, next_suggestion) = split_error_message_and_suggestion(
+            sql_query_error_message("ERROR: \"array_agg\" is an aggregate function"),
+        );
+        let response = tool_error_response(Some(serde_json::json!(1)), message, &next_suggestion);
+        let result = response.result.unwrap();
+        let text = result["content"][0]["text"].as_str().unwrap();
+        let boundary_end = text.rfind("</safeselect-untrusted-data-").unwrap();
+        let next_position = text.rfind("Next suggestion:").unwrap();
+
+        assert!(text[boundary_end..next_position].contains("</safeselect-untrusted-data-"));
+        assert!(!text[..boundary_end].contains("list_functions"));
+        assert!(text[next_position..].contains("list_functions"));
     }
 
     #[test]
