@@ -1,0 +1,19 @@
+tests/security_suite/real_mongodb.rs
+  s_0689b277da1e60::t_6f0e4a26720a93 433-434
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "7833ad0aa3a6e5656a7a38c6e9b7000dc36c0d11",
+  "prompts": {},
+  "sessions": {
+    "s_0689b277da1e60": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a00b48-679c-7b82-a44e-9f86929e2c12",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "antonillos <305277+antonillos@users.noreply.github.com>"
+    }
+  }
+}
