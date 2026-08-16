@@ -1,0 +1,19 @@
+src/mcp.rs
+  s_19bc6d7541927f::t_e67d376f6f5d58 1651-1653,4809-4824
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "e0510effcf0ee04debd0f274bf1b5030ecaeaf97",
+  "prompts": {},
+  "sessions": {
+    "s_19bc6d7541927f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a00ad6-9481-7af1-b680-735b7056b5e0",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "antonillos <305277+antonillos@users.noreply.github.com>"
+    }
+  }
+}
