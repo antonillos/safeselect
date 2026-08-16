@@ -425,6 +425,22 @@ impl McpServer {
                 "properties": {}
             }),
         }];
+        tools.extend([
+            ToolDefinition {
+                name: "audit_status".into(),
+                description: self.tool_description("show audit health and the number of events recorded in this MCP session; no audit entries, SQL, result data, or file paths are returned"),
+                input_schema: serde_json::json!({"type": "object", "properties": {}, "additionalProperties": false}),
+            },
+            ToolDefinition {
+                name: "audit_recent".into(),
+                description: self.tool_description("show up to 20 current-session audit metadata entries; entries contain only timestamp, category, decision, and query hash, never SQL or returned data"),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 20}},
+                    "additionalProperties": false
+                }),
+            },
+        ]);
 
         if self.backend.has(BackendCapability::SqlQuery) {
             tools.push(ToolDefinition {
@@ -1137,6 +1153,8 @@ impl McpServer {
 
         match tool_name {
             "database_info" => self.handle_database_info(msg.id.clone()),
+            "audit_status" => self.handle_audit_status(msg.id.clone(), &args),
+            "audit_recent" => self.handle_audit_recent(msg.id.clone(), &args),
             "select" => self.handle_select(msg.id.clone(), &args),
             "list_tables" => self.handle_list_tables(msg.id.clone(), &args),
             "describe_table" => self.handle_describe_table(msg.id.clone(), &args),
@@ -1183,6 +1201,53 @@ impl McpServer {
             "reconnect" => self.handle_reconnect(msg.id.clone()),
             _ => self.send_error(msg.id.clone(), -32602, format!("Unknown tool: {tool_name}")),
         }
+    }
+
+    fn handle_audit_status(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        if !has_only_keys(args, &[]) {
+            return self.send_error(id, -32602, "audit_status does not accept arguments");
+        }
+        self.write_response(&trusted_tool_response(
+            id,
+            "ok",
+            format!(
+                "Audit is healthy. {} event(s) recorded in this MCP session.",
+                self.audit.session_entry_count()
+            ),
+            "Use audit_recent only when the user needs current-session audit metadata; otherwise continue the requested database task.",
+        ))
+    }
+
+    fn handle_audit_recent(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        if !has_only_keys(args, &["limit"]) {
+            return self.send_error(
+                id,
+                -32602,
+                "audit_recent accepts only the optional 'limit' argument",
+            );
+        }
+        let limit = match args.get("limit").and_then(|value| value.as_u64()) {
+            Some(limit @ 1..=20) => limit as usize,
+            Some(_) => {
+                return self.send_error(id, -32602, "audit_recent limit must be between 1 and 20")
+            }
+            None => 20,
+        };
+        let entries = self.audit.recent_session_entries(limit);
+        self.write_response(&trusted_tool_response(
+            id,
+            "ok",
+            serde_json::to_string(&entries)?,
+            "Use the audit metadata to answer the user's verification question; it never contains SQL or returned database data.",
+        ))
     }
 
     fn handle_database_info(&mut self, id: Option<serde_json::Value>) -> Result<()> {
