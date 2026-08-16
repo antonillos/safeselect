@@ -301,6 +301,43 @@ fn assert_mcp_sql_error_stays_alive(repo_root: &std::path::Path, config_dir: &st
         );
     }
 
+    for (id, tool, arguments, expected_message) in [
+        (
+            9,
+            "list_functions",
+            serde_json::json!({"schema": "pg_catalog"}),
+            "does not support PostgreSQL system schemas",
+        ),
+        (
+            10,
+            "list_scheduled_jobs",
+            serde_json::json!({"unexpected": true}),
+            "Call it with an empty arguments object",
+        ),
+    ] {
+        writeln!(
+            stdin,
+            "{}",
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "tools/call",
+                "params": {"name": tool, "arguments": arguments}
+            })
+        )
+        .unwrap();
+        stdin.flush().unwrap();
+
+        let mut response = String::new();
+        reader
+            .read_line(&mut response)
+            .expect("failed to read invalid catalog discovery response");
+        assert!(
+            response.contains(expected_message) && response.contains("\"code\":-32602"),
+            "unexpected invalid {tool} response: {response}"
+        );
+    }
+
     // First query: intentional SQL error (table does not exist)
     writeln!(
         stdin,

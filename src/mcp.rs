@@ -1857,6 +1857,17 @@ impl McpServer {
                 "list_functions accepts only 'schema' and 'name_contains' arguments",
             );
         }
+        if args
+            .get("schema")
+            .and_then(|value| value.as_str())
+            .is_some_and(is_system_catalog_schema)
+        {
+            return self.send_error(
+                id,
+                -32602,
+                "list_functions does not support PostgreSQL system schemas. Choose an application schema such as public.",
+            );
+        }
         let schema = match self.catalog_schema(id.clone(), args) {
             Ok(schema) => schema,
             Err(()) => return Ok(()),
@@ -1869,7 +1880,7 @@ impl McpServer {
             None => String::new(),
         };
         let sql = format!(
-            "SELECT n.nspname AS schema_name, p.proname AS function_name, pg_get_function_identity_arguments(p.oid) AS arguments, pg_get_functiondef(p.oid) AS definition FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE p.prokind = 'f' AND NOT EXISTS (SELECT 1 FROM pg_aggregate a WHERE a.aggfnoid = p.oid){}{} ORDER BY n.nspname, p.proname, p.oid",
+            "SELECT n.nspname AS schema_name, p.proname AS function_name, pg_get_function_identity_arguments(p.oid) AS arguments, pg_get_functiondef(p.oid) AS definition FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE p.prokind = 'f' AND p.prolang <> 0 AND NOT EXISTS (SELECT 1 FROM pg_aggregate a WHERE a.aggfnoid = p.oid){}{} ORDER BY n.nspname, p.proname, p.oid",
             catalog_schema_predicate(schema.as_deref()),
             name_filter,
         );
@@ -1915,7 +1926,11 @@ impl McpServer {
         args: &serde_json::Value,
     ) -> Result<()> {
         if !has_only_keys(args, &[]) {
-            return self.send_error(id, -32602, "list_scheduled_jobs does not accept arguments");
+            return self.send_error(
+                id,
+                -32602,
+                "list_scheduled_jobs does not accept arguments. Call it with an empty arguments object.",
+            );
         }
         let extension_sql =
             "SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') AS installed";
@@ -4329,6 +4344,10 @@ fn catalog_schema_predicate(schema: Option<&str>) -> String {
     }
 }
 
+fn is_system_catalog_schema(schema: &str) -> bool {
+    matches!(schema, "pg_catalog" | "information_schema") || schema.starts_with("pg_")
+}
+
 fn escape_like(value: &str) -> String {
     value
         .replace('\\', "\\\\")
@@ -4791,12 +4810,21 @@ mod tests {
     #[test]
     fn function_catalog_query_excludes_aggregates_before_reading_definitions() {
         let sql = format!(
-            "SELECT n.nspname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE p.prokind = 'f' AND NOT EXISTS (SELECT 1 FROM pg_aggregate a WHERE a.aggfnoid = p.oid){}",
+            "SELECT n.nspname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE p.prokind = 'f' AND p.prolang <> 0 AND NOT EXISTS (SELECT 1 FROM pg_aggregate a WHERE a.aggfnoid = p.oid){}",
             catalog_schema_predicate(Some("public")),
         );
         assert!(sql.contains("p.prokind = 'f'"));
+        assert!(sql.contains("p.prolang <> 0"));
         assert!(sql.contains("pg_aggregate a WHERE a.aggfnoid = p.oid"));
         assert!(sql.contains("n.nspname = 'public'"));
+    }
+
+    #[test]
+    fn function_discovery_rejects_system_schemas() {
+        assert!(is_system_catalog_schema("pg_catalog"));
+        assert!(is_system_catalog_schema("information_schema"));
+        assert!(is_system_catalog_schema("pg_toast"));
+        assert!(!is_system_catalog_schema("public"));
     }
 
     #[test]
