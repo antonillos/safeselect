@@ -1,5 +1,5 @@
 use crate::agents;
-use crate::audit::AuditLog;
+use crate::audit::{AuditDetails, AuditLog};
 use crate::backend::{
     BackendCapability, BackendDescriptor, DocumentAggregateRequest, DocumentCountRequest,
     DocumentDistinctRequest, DocumentExplainRequest, DocumentFieldProfileRequest,
@@ -353,6 +353,11 @@ impl McpServer {
         Ok(())
     }
 
+    fn is_postgres(&self) -> bool {
+        self.backend.vendor.eq_ignore_ascii_case("postgresql")
+            || self.backend.vendor.eq_ignore_ascii_case("postgres")
+    }
+
     fn tool_description(&self, action: &str) -> String {
         format!(
             "SafeSelect database query MCP for project '{}' environment '{}': {action}. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
@@ -481,6 +486,37 @@ impl McpServer {
                     "additionalProperties": false
                 }),
             });
+        }
+
+        if self.is_postgres() {
+            tools.extend([
+                ToolDefinition {
+                    name: "list_functions".into(),
+                    description: self.tool_description("list PostgreSQL functions and definitions without inspecting aggregates; optionally restrict results to one allowed schema or a function-name fragment"),
+                    input_schema: serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "schema": {"type": "string", "description": "Optional exact allowed schema name"},
+                            "name_contains": {"type": "string", "description": "Optional case-insensitive function-name fragment"}
+                        },
+                        "additionalProperties": false
+                    }),
+                },
+                ToolDefinition {
+                    name: "list_triggers".into(),
+                    description: self.tool_description("list PostgreSQL triggers and their definitions; optionally restrict results to one allowed schema"),
+                    input_schema: serde_json::json!({
+                        "type": "object",
+                        "properties": {"schema": {"type": "string", "description": "Optional exact allowed schema name"}},
+                        "additionalProperties": false
+                    }),
+                },
+                ToolDefinition {
+                    name: "list_scheduled_jobs".into(),
+                    description: self.tool_description("list pg_cron scheduled jobs when the pg_cron extension is installed"),
+                    input_schema: serde_json::json!({"type": "object", "properties": {}, "additionalProperties": false}),
+                },
+            ]);
         }
 
         if self.backend.has(BackendCapability::SqlExplain) {
@@ -1104,6 +1140,9 @@ impl McpServer {
             "select" => self.handle_select(msg.id.clone(), &args),
             "list_tables" => self.handle_list_tables(msg.id.clone(), &args),
             "describe_table" => self.handle_describe_table(msg.id.clone(), &args),
+            "list_functions" => self.handle_list_functions(msg.id.clone(), &args),
+            "list_triggers" => self.handle_list_triggers(msg.id.clone(), &args),
+            "list_scheduled_jobs" => self.handle_list_scheduled_jobs(msg.id.clone(), &args),
             "explain" => self.handle_explain(msg.id.clone(), &args),
             "list_databases" => self.handle_list_databases(msg.id.clone()),
             "list_collections" => self.handle_list_collections(msg.id.clone(), &args),
@@ -1564,8 +1603,19 @@ impl McpServer {
                     self.audit.record("LIMIT_EXCEEDED", "reject", sql)?;
                     return self.send_error(id, -32000, format!("{e}"));
                 }
-                self.audit.record("PASS", "allow", sql)?;
                 let elapsed = start.elapsed();
+                self.audit.record_with_details(
+                    "PASS",
+                    "allow",
+                    sql,
+                    Some(AuditDetails {
+                        tool: "select".into(),
+                        elapsed_ms: elapsed.as_millis() as u64,
+                        row_count: Some(query_result.row_count),
+                        byte_count: Some(query_result.byte_count),
+                        error_code: None,
+                    }),
+                )?;
                 if elapsed > std::time::Duration::from_secs(1) {
                     tracing::warn!(
                         "Slow query: {elapsed:?} — {} rows, {} bytes",
@@ -1586,7 +1636,18 @@ impl McpServer {
             Err(SafeselectError::SqlError(ref msg)) => {
                 let elapsed = start.elapsed();
                 tracing::warn!("Query SQL error after {elapsed:?}: {msg}");
-                self.audit.record("JDBC_ERROR", "error", sql)?;
+                self.audit.record_with_details(
+                    "JDBC_ERROR",
+                    "error",
+                    sql,
+                    Some(AuditDetails {
+                        tool: "select".into(),
+                        elapsed_ms: elapsed.as_millis() as u64,
+                        row_count: None,
+                        byte_count: None,
+                        error_code: Some("SQL_ERROR".into()),
+                    }),
+                )?;
                 self.write_response(&tool_error_response(
                     id,
                     sql_query_error_message(msg),
@@ -1596,7 +1657,18 @@ impl McpServer {
             Err(e) => {
                 let elapsed = start.elapsed();
                 tracing::error!("Query failed after {elapsed:?}: {e}");
-                self.audit.record("JDBC_ERROR", "error", sql)?;
+                self.audit.record_with_details(
+                    "JDBC_ERROR",
+                    "error",
+                    sql,
+                    Some(AuditDetails {
+                        tool: "select".into(),
+                        elapsed_ms: elapsed.as_millis() as u64,
+                        row_count: None,
+                        byte_count: None,
+                        error_code: Some("EXECUTION_ERROR".into()),
+                    }),
+                )?;
                 self.write_response(&tool_error_response(
                     id,
                     format!("Query execution failed: {e}"),
@@ -1771,6 +1843,186 @@ impl McpServer {
                     format!("Describe table failed: {e}."),
                     "Call check, then reconnect once only if check reports a stale existing connection.",
                 ))
+            }
+        }
+    }
+
+    fn handle_list_functions(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        if !has_only_keys(args, &["schema", "name_contains"]) {
+            return self.send_error(
+                id,
+                -32602,
+                "list_functions accepts only 'schema' and 'name_contains' arguments",
+            );
+        }
+        let schema = match self.catalog_schema(id.clone(), args) {
+            Ok(schema) => schema,
+            Err(()) => return Ok(()),
+        };
+        let name_filter = match args.get("name_contains").and_then(|value| value.as_str()) {
+            Some(value) if !value.is_empty() => {
+                format!(" AND p.proname ILIKE '%{}%'", escape_like(value))
+            }
+            Some(_) => String::new(),
+            None => String::new(),
+        };
+        let sql = format!(
+            "SELECT n.nspname AS schema_name, p.proname AS function_name, pg_get_function_identity_arguments(p.oid) AS arguments, pg_get_functiondef(p.oid) AS definition FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE p.prokind = 'f' AND NOT EXISTS (SELECT 1 FROM pg_aggregate a WHERE a.aggfnoid = p.oid){}{} ORDER BY n.nspname, p.proname, p.oid",
+            catalog_schema_predicate(schema.as_deref()),
+            name_filter,
+        );
+        self.handle_catalog_query(
+            id,
+            "list_functions",
+            &sql,
+            "Use the returned schema, function name, arguments, and definition to answer the user; do not query pg_proc directly.",
+        )
+    }
+
+    fn handle_list_triggers(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        if !has_only_keys(args, &["schema"]) {
+            return self.send_error(
+                id,
+                -32602,
+                "list_triggers accepts only the optional 'schema' argument",
+            );
+        }
+        let schema = match self.catalog_schema(id.clone(), args) {
+            Ok(schema) => schema,
+            Err(()) => return Ok(()),
+        };
+        let sql = format!(
+            "SELECT n.nspname AS schema_name, c.relname AS relation_name, t.tgname AS trigger_name, pg_get_triggerdef(t.oid) AS trigger_definition FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE NOT t.tgisinternal{} ORDER BY n.nspname, c.relname, t.tgname",
+            catalog_schema_predicate(schema.as_deref()),
+        );
+        self.handle_catalog_query(
+            id,
+            "list_triggers",
+            &sql,
+            "Use the returned trigger definitions to answer the user; do not query pg_trigger directly.",
+        )
+    }
+
+    fn handle_list_scheduled_jobs(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        if !has_only_keys(args, &[]) {
+            return self.send_error(id, -32602, "list_scheduled_jobs does not accept arguments");
+        }
+        let extension_sql =
+            "SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') AS installed";
+        match self.execute_with_reconnect(extension_sql) {
+            Ok(result) if result.rows.first().and_then(|row| row.first()).is_some_and(|value| value == "true") => {
+                let sql = "SELECT jobid, schedule, command, database, username, active FROM cron.job ORDER BY jobid";
+                self.handle_catalog_query(id, "list_scheduled_jobs", sql, "Use the returned pg_cron schedule and command to answer the user.")
+            }
+            Ok(_) => self.write_response(&trusted_tool_response(
+                id,
+                "ok",
+                "pg_cron is not installed in this database.".into(),
+                "Report that no pg_cron schedules are available; inspect another scheduler only if the user asks for it.",
+            )),
+            Err(e) => self.send_backend_error(
+                id,
+                "Scheduled job discovery failed.",
+                &e.to_string(),
+                "Call check; if connectivity is healthy, report the failure without retrying unchanged.",
+            ),
+        }
+    }
+
+    fn catalog_schema(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> std::result::Result<Option<String>, ()> {
+        let schema = match args.get("schema").and_then(|value| value.as_str()) {
+            Some(schema) if is_valid_identifier(schema) => Some(schema.to_string()),
+            Some(_) => {
+                let _ = self.send_error(
+                    id,
+                    -32602,
+                    "Invalid schema name: only alphanumeric and underscores allowed",
+                );
+                return Err(());
+            }
+            None => None,
+        };
+        let allowed = self.security.allowed_schemas();
+        if let Some(schema) = &schema {
+            if !allowed.is_empty()
+                && !allowed
+                    .iter()
+                    .any(|allowed_schema| allowed_schema == schema)
+            {
+                let _ = self.send_error(
+                    id,
+                    -32000,
+                    format!(
+                        "Schema '{schema}' is not in the allowed schemas list ({})",
+                        allowed.join(", ")
+                    ),
+                );
+                return Err(());
+            }
+        }
+        Ok(schema)
+    }
+
+    fn handle_catalog_query(
+        &mut self,
+        id: Option<serde_json::Value>,
+        tool: &str,
+        sql: &str,
+        next_suggestion: &str,
+    ) -> Result<()> {
+        if let Err(error) = self.security.validate_system(sql) {
+            self.audit.record("REJECT", "reject", sql)?;
+            let _ = self.send_error(id, -32000, format!("Query rejected: {error}"));
+            self.fail_closed("Security violation");
+            return Ok(());
+        }
+        let start = std::time::Instant::now();
+        match self.execute_with_reconnect(sql) {
+            Ok(result) => {
+                self.audit.record_with_details(
+                    "PASS",
+                    "allow",
+                    sql,
+                    Some(AuditDetails {
+                        tool: tool.into(),
+                        elapsed_ms: start.elapsed().as_millis() as u64,
+                        row_count: Some(result.row_count),
+                        byte_count: Some(result.byte_count),
+                        error_code: None,
+                    }),
+                )?;
+                self.write_response(&data_tool_response(id, &result, next_suggestion)?)
+            }
+            Err(error) => {
+                self.audit.record_with_details(
+                    "JDBC_ERROR",
+                    "error",
+                    sql,
+                    Some(AuditDetails {
+                        tool: tool.into(),
+                        elapsed_ms: start.elapsed().as_millis() as u64,
+                        row_count: None,
+                        byte_count: None,
+                        error_code: Some("SQL_ERROR".into()),
+                    }),
+                )?;
+                self.send_backend_error(id, "Catalog discovery failed.", &error.to_string(), "Call check; if connectivity is healthy, report the failure without retrying unchanged.")
             }
         }
     }
@@ -4072,6 +4324,21 @@ fn build_describe_table_sql(schema: &str, table: &str) -> String {
     )
 }
 
+fn catalog_schema_predicate(schema: Option<&str>) -> String {
+    match schema {
+        Some(schema) => format!(" AND n.nspname = '{}'", schema.replace('\'', "''")),
+        None => " AND n.nspname NOT IN ('pg_catalog', 'information_schema')".into(),
+    }
+}
+
+fn escape_like(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+        .replace('\'', "''")
+}
+
 fn validate_describe_target(security: &SecurityEngine, schema: &str, table: &str) -> Result<()> {
     security.validate_relation_access(schema, table)?;
     security.validate(&format!("SELECT * FROM {schema}.{table}"))
@@ -4262,6 +4529,8 @@ fn sql_query_error_message(message: &str) -> String {
         " Next suggestion: do not retry unchanged or with a broader query. Preserve or narrow every selective predicate, especially time bounds; never remove one during recovery. Avoid leading-wildcard LIKE or ILIKE on large relations. Use a bounded discovery query to find exact values, then use equality or IN. For row retrieval, add or reduce LIMIT. LIMIT does not by itself bound work for DISTINCT, GROUP BY, COUNT, or ORDER BY, so narrow their input in WHERE. Then call the explain tool with analyze=false to inspect scan and index usage without executing the query; do not put EXPLAIN in select. Do not increase the timeout automatically."
     } else if lower.contains("aggregate functions are not allowed in group by") {
         " Next suggestion: remove aggregate expressions or their ordinal positions from GROUP BY; group only by non-aggregate columns, or omit GROUP BY for a single aggregate result."
+    } else if lower.contains("is an aggregate function") {
+        " Next suggestion: do not call pg_get_functiondef for aggregates. Use list_functions, which excludes pg_aggregate entries, or exclude them with NOT EXISTS (SELECT 1 FROM pg_aggregate WHERE aggfnoid = p.oid)."
     } else if lower.contains("operator does not exist")
         && (lower.contains("jsonb[]") || lower.contains("json[]"))
     {
@@ -4519,6 +4788,24 @@ mod tests {
             sql,
             "SELECT COALESCE(json_agg(json_build_object('column_name', column_name, 'data_type', data_type, 'udt_name', udt_name, 'is_nullable', is_nullable, 'column_default', column_default, 'ordinal_position', ordinal_position) ORDER BY ordinal_position), '[]'::json)::text AS columns_json FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users'"
         );
+    }
+
+    #[test]
+    fn function_catalog_query_excludes_aggregates_before_reading_definitions() {
+        let sql = format!(
+            "SELECT n.nspname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE p.prokind = 'f' AND NOT EXISTS (SELECT 1 FROM pg_aggregate a WHERE a.aggfnoid = p.oid){}",
+            catalog_schema_predicate(Some("public")),
+        );
+        assert!(sql.contains("p.prokind = 'f'"));
+        assert!(sql.contains("pg_aggregate a WHERE a.aggfnoid = p.oid"));
+        assert!(sql.contains("n.nspname = 'public'"));
+    }
+
+    #[test]
+    fn aggregate_definition_error_recommends_catalog_discovery() {
+        let message = sql_query_error_message("ERROR: \"array_agg\" is an aggregate function");
+        assert!(message.contains("list_functions"));
+        assert!(message.contains("pg_aggregate"));
     }
 
     #[test]

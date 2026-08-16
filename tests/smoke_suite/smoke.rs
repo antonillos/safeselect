@@ -206,6 +206,9 @@ fn assert_mcp_sql_error_stays_alive(repo_root: &std::path::Path, config_dir: &st
         .expect("tools/list should return tool definitions");
     assert!(
         tools_response.contains("describe_table")
+            && tools_response.contains("list_functions")
+            && tools_response.contains("list_triggers")
+            && tools_response.contains("list_scheduled_jobs")
             && !tools_response.contains("discover_document_schema")
             && tools.iter().all(|tool| {
                 tool["outputSchema"]["required"]
@@ -263,6 +266,38 @@ fn assert_mcp_sql_error_stays_alive(repo_root: &std::path::Path, config_dir: &st
                     .iter()
                     .any(|column| column["column_name"].as_str() == Some(expected))),
             "unexpected describe_table response for {relation}: {describe_response}"
+        );
+    }
+
+    for (id, tool, expected_value) in [
+        (7, "list_functions", "safe_trigger_function"),
+        (8, "list_triggers", "safe_trigger"),
+    ] {
+        writeln!(
+            stdin,
+            "{}",
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "tools/call",
+                "params": {
+                    "name": tool,
+                    "arguments": {"schema": "public"}
+                }
+            })
+        )
+        .unwrap();
+        stdin.flush().unwrap();
+
+        let mut response = String::new();
+        reader
+            .read_line(&mut response)
+            .expect("failed to read PostgreSQL catalog discovery response");
+        assert!(
+            response.contains(expected_value)
+                && response.contains("structuredContent")
+                && response.contains("next_suggestion"),
+            "unexpected {tool} response: {response}"
         );
     }
 
