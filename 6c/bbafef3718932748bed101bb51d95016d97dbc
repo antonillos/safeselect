@@ -1,0 +1,21 @@
+.github/workflows/prepare-release.yml
+  s_0689b277da1e60::t_44604d184883cb 121,136,141-145,174-178
+CHANGELOG.md
+  s_0689b277da1e60::t_b5ba631f7d9c45 5-34
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "6cbbafef3718932748bed101bb51d95016d97dbc",
+  "prompts": {},
+  "sessions": {
+    "s_0689b277da1e60": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a00b48-679c-7b82-a44e-9f86929e2c12",
+        "model": "unknown"
+      },
+      "human_author": "antonillos <305277+antonillos@users.noreply.github.com>"
+    }
+  }
+}
