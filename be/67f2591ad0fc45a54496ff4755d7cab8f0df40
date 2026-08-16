@@ -1,0 +1,21 @@
+src/audit.rs
+  s_19bc6d7541927f::t_c6df5d1db7a311 9,28,64,90-93,98-106,158-189
+src/mcp.rs
+  s_19bc6d7541927f::t_a27ffc6a801798 423-438,1120-1121,1167-1213
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "be67f2591ad0fc45a54496ff4755d7cab8f0df40",
+  "prompts": {},
+  "sessions": {
+    "s_19bc6d7541927f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a00ad6-9481-7af1-b680-735b7056b5e0",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "antonillos <305277+antonillos@users.noreply.github.com>"
+    }
+  }
+}
