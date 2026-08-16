@@ -2,6 +2,36 @@
 
 All notable changes to this project are documented in this file.
 
+## [v0.7.0] - 2026-08-16
+
+### Added
+
+- feat(mcp): add agent-first response contract (#84)
+- feat(mongodb): block server-side JavaScript (#85)
+- Add PostgreSQL catalog discovery (#88)
+- Expose session audit metadata (#89)
+
+### Fixed
+
+- fix(mcp): make error guidance actionable (#86)
+- fix(mcp): shorten untrusted data warning (#87)
+
+### Build And CI
+
+- ci: add MongoDB integration check
+- test: resolve MongoDB service container dynamically
+- test: isolate MongoDB timeout scenario
+
+### Dependencies
+
+- chore(deps): bump actions/github-script from 8 to 9 (#77)
+- chore(deps): bump thiserror from 2.0.18 to 2.0.19 (#78)
+- chore(deps): bump clap from 4.6.4 to 4.6.5 (#79)
+- chore(deps): bump toml from 1.1.3+spec-1.1.0 to 1.1.4+spec-1.1.0 (#80)
+- chore(deps): bump clap from 4.6.5 to 4.6.6 (#81)
+- chore(deps): bump thiserror from 2.0.19 to 2.0.20 (#82)
+- chore(deps): bump similar from 3.1.1 to 3.1.2 (#83)
+
 ## [v0.6.3] - 2026-07-27
 
 ### Added
