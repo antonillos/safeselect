@@ -1,0 +1,19 @@
+tests/smoke_suite/mongodb.rs
+  s_0689b277da1e60::t_44eb4d5d924904 340,346-355
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "90c0cb6b7e637615f9e1cbd565b470bba296b1e1",
+  "prompts": {},
+  "sessions": {
+    "s_0689b277da1e60": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a00b48-679c-7b82-a44e-9f86929e2c12",
+        "model": "unknown"
+      },
+      "human_author": "antonillos <305277+antonillos@users.noreply.github.com>"
+    }
+  }
+}
