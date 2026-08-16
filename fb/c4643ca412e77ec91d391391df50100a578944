@@ -1,0 +1,19 @@
+.github/workflows/smart-merge.yml
+  s_0689b277da1e60::t_04ae319a01b79b 109
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "fbc4643ca412e77ec91d391391df50100a578944",
+  "prompts": {},
+  "sessions": {
+    "s_0689b277da1e60": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a00b48-679c-7b82-a44e-9f86929e2c12",
+        "model": "unknown"
+      },
+      "human_author": "antonillos <305277+antonillos@users.noreply.github.com>"
+    }
+  }
+}
