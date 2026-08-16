@@ -73,8 +73,11 @@ Any violation triggers:
 
 ### 7. Audit Log
 
-- Every query is logged as a SHA-256 hash
+- Every operation is logged with a SHA-256 query hash and bounded metadata
+- The current MCP session exposes `audit_status` and `audit_recent`; the latter
+  is capped at 20 entries and identifies the operation tool when available
 - Never: full SQL, credentials, secrets, DSN
+- Never: returned documents, filters, local paths, or audit events from earlier sessions
 - Format: JSON lines (`.jsonl`) with rotation
 - If audit cannot initialize, the server refuses to start
 

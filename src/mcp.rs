@@ -15,6 +15,7 @@ use crate::{is_ssh_ready_for_query, setup_ssh_tunnels, update_generated_by};
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 #[derive(Deserialize)]
 struct JsonRpcMessage {
@@ -1296,10 +1297,16 @@ impl McpServer {
     }
 
     fn handle_list_databases(&mut self, id: Option<serde_json::Value>) -> Result<()> {
+        let started = Instant::now();
         match self.ensure_sidecar()?.list_databases() {
             Ok(databases) => {
                 let databases = self.security.filter_document_databases(databases);
-                self.audit.record("PASS", "allow", "list_databases")?;
+                self.audit.record_tool(
+                    "PASS",
+                    "allow",
+                    "list_databases",
+                    started.elapsed().as_millis() as u64,
+                )?;
                 self.write_response(&data_tool_response(
                     id,
                     &serde_json::json!({
@@ -1309,8 +1316,12 @@ impl McpServer {
                 )?)
             }
             Err(e) => {
-                self.audit
-                    .record("DOCUMENT_ERROR", "error", "list_databases")?;
+                self.audit.record_tool(
+                    "DOCUMENT_ERROR",
+                    "error",
+                    "list_databases",
+                    started.elapsed().as_millis() as u64,
+                )?;
                 self.send_backend_error(
                     id,
                     "List databases failed.",
@@ -1326,15 +1337,26 @@ impl McpServer {
         id: Option<serde_json::Value>,
         args: &serde_json::Value,
     ) -> Result<()> {
+        let started = Instant::now();
         let database = match args.get("database").and_then(|v| v.as_str()) {
             Some(database) => database,
             None => {
-                self.audit.record("REJECT", "reject", "list_collections")?;
+                self.audit.record_tool(
+                    "REJECT",
+                    "reject",
+                    "list_collections",
+                    started.elapsed().as_millis() as u64,
+                )?;
                 return self.send_error(id, -32602, "Missing 'database' argument");
             }
         };
         if let Err(e) = self.security.validate_document_database(database) {
-            self.audit.record("REJECT", "reject", "list_collections")?;
+            self.audit.record_tool(
+                "REJECT",
+                "reject",
+                "list_collections",
+                started.elapsed().as_millis() as u64,
+            )?;
             return self.send_error(id, -32000, format!("Request rejected: {e}"));
         }
         match self.ensure_sidecar()?.list_collections(database) {
@@ -1342,7 +1364,12 @@ impl McpServer {
                 let collections = self
                     .security
                     .filter_document_collections(database, collections);
-                self.audit.record("PASS", "allow", "list_collections")?;
+                self.audit.record_tool(
+                    "PASS",
+                    "allow",
+                    "list_collections",
+                    started.elapsed().as_millis() as u64,
+                )?;
                 self.write_response(&data_tool_response(
                     id,
                     &serde_json::json!({
@@ -1353,8 +1380,12 @@ impl McpServer {
                 )?)
             }
             Err(e) => {
-                self.audit
-                    .record("DOCUMENT_ERROR", "error", "list_collections")?;
+                self.audit.record_tool(
+                    "DOCUMENT_ERROR",
+                    "error",
+                    "list_collections",
+                    started.elapsed().as_millis() as u64,
+                )?;
                 self.send_backend_error(
                     id,
                     "List collections failed.",
@@ -1370,6 +1401,7 @@ impl McpServer {
         id: Option<serde_json::Value>,
         args: &serde_json::Value,
     ) -> Result<()> {
+        let started = Instant::now();
         let database = match args.get("database").and_then(|v| v.as_str()) {
             Some(database) => database.to_string(),
             None => return self.send_error(id, -32602, "Missing 'database' argument"),
@@ -1396,13 +1428,23 @@ impl McpServer {
         };
 
         if let Err(e) = self.security.validate_document_find(&request) {
-            self.audit.record("REJECT", "reject", "find_documents")?;
+            self.audit.record_tool(
+                "REJECT",
+                "reject",
+                "find_documents",
+                started.elapsed().as_millis() as u64,
+            )?;
             return self.send_error(id, -32000, format!("Request rejected: {e}"));
         }
 
         match self.ensure_sidecar()?.find_documents(&request) {
             Ok(result) => {
-                self.audit.record("PASS", "allow", "find_documents")?;
+                self.audit.record_tool(
+                    "PASS",
+                    "allow",
+                    "find_documents",
+                    started.elapsed().as_millis() as u64,
+                )?;
                 if let Err(e) = self
                     .security
                     .check_result_size(result.document_count, result.byte_count)
@@ -1414,8 +1456,12 @@ impl McpServer {
                 self.write_response(&data_tool_response(id, &result, next_suggestion)?)
             }
             Err(e) => {
-                self.audit
-                    .record("DOCUMENT_ERROR", "error", "find_documents")?;
+                self.audit.record_tool(
+                    "DOCUMENT_ERROR",
+                    "error",
+                    "find_documents",
+                    started.elapsed().as_millis() as u64,
+                )?;
                 self.send_backend_error(
                     id,
                     "Find documents failed.",
@@ -1621,18 +1667,34 @@ impl McpServer {
         V: FnOnce(&SecurityEngine) -> Result<()>,
         E: FnOnce(&mut SidecarProcess) -> Result<serde_json::Value>,
     {
+        let started = Instant::now();
         if let Err(e) = validate(&self.security) {
-            self.audit.record("REJECT", "reject", operation)?;
+            self.audit.record_tool(
+                "REJECT",
+                "reject",
+                operation,
+                started.elapsed().as_millis() as u64,
+            )?;
             return self.send_error(id, -32000, format!("Request rejected: {e}"));
         }
         match execute(self.ensure_sidecar()?) {
             Ok(result) => {
-                self.audit.record("PASS", "allow", operation)?;
+                self.audit.record_tool(
+                    "PASS",
+                    "allow",
+                    operation,
+                    started.elapsed().as_millis() as u64,
+                )?;
                 let next_suggestion = document_operation_next_suggestion(operation, &result);
                 self.write_response(&data_tool_response(id, &result, next_suggestion)?)
             }
             Err(e) => {
-                self.audit.record("DOCUMENT_ERROR", "error", operation)?;
+                self.audit.record_tool(
+                    "DOCUMENT_ERROR",
+                    "error",
+                    operation,
+                    started.elapsed().as_millis() as u64,
+                )?;
                 let detail = document_operation_error_message(operation, &e.to_string());
                 self.send_backend_error(
                     id,

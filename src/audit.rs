@@ -83,6 +83,27 @@ impl AuditLog {
         self.record_with_details(category, decision, sql, None)
     }
 
+    pub fn record_tool(
+        &mut self,
+        category: &str,
+        decision: &str,
+        tool: &str,
+        elapsed_ms: u64,
+    ) -> Result<()> {
+        self.record_with_details(
+            category,
+            decision,
+            tool,
+            Some(AuditDetails {
+                tool: tool.to_string(),
+                elapsed_ms,
+                row_count: None,
+                byte_count: None,
+                error_code: None,
+            }),
+        )
+    }
+
     pub fn set_mcp_client(&mut self, mcp_client: &str) {
         self.mcp_client = mcp_client.to_string();
     }
@@ -244,6 +265,24 @@ mod tests {
         audit.record("PASS", "allow", "SELECT 1").unwrap();
 
         assert_eq!(audit.recent_session_entries(1)[0].mcp_client, "codex");
+        drop(audit);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn records_the_operation_tool_without_query_text() {
+        let directory =
+            std::env::temp_dir().join(format!("safeselect-audit-{}", uuid::Uuid::new_v4()));
+        let config = config(&directory);
+        let mut audit = AuditLog::open(&config, "project", "testing", "test").unwrap();
+        audit
+            .record_tool("PASS", "allow", "list_collections", 7)
+            .unwrap();
+
+        let entry = &audit.recent_session_entries(1)[0];
+        assert_eq!(entry.details.as_ref().unwrap().tool, "list_collections");
+        assert_eq!(entry.query_hash, audit.hash_sql("list_collections"));
+        assert!(!serde_json::to_string(entry).unwrap().contains("database"));
         drop(audit);
         std::fs::remove_dir_all(directory).unwrap();
     }

@@ -145,7 +145,7 @@ and stop when the suggestion is terminal.
 - **Hard limits**: row count, result bytes, and timeouts are enforced.
 - **Secret isolation**: passwords live in macOS Keychain or environment variables, never in project config.
 - **Driver verification**: JDBC drivers are checked by SHA-256 before use.
-- **Audit trail**: query text is hashed before being recorded.
+- **Audit trail**: query text is hashed before being recorded; the current session exposes bounded audit metadata through `audit_status` and `audit_recent`.
 
 ## MCP Tools
 
@@ -155,6 +155,7 @@ and stop when the suggestion is terminal.
 | MongoDB reads | `list_databases`, `list_collections`, `find_documents`, `aggregate_documents`, `distinct_documents`, `count_documents`, `explain_documents` |
 | MongoDB analysis | `profile_document_field`, `discover_document_schema`, `generate_document_fixture` |
 | Connection | `database_info`, `check`, `connect`, `disconnect`, `reconnect` |
+| Audit | `audit_status`, `audit_recent` |
 | Config | `config_validate`, `config_show`, `config_set_password`, `config_rename_environment`, `config_delete_environment`, `config_reset` |
 | Setup | `import_compose`, `driver_list`, `driver_add`, `driver_download`, `agent_detect`, `agent_install`, `agent_status`, `agent_uninstall` |
 
