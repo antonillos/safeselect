@@ -15,6 +15,20 @@ pub struct AuditEntry {
     pub category: String,
     pub decision: String,
     pub query_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<AuditDetails>,
+}
+
+#[derive(Serialize)]
+pub struct AuditDetails {
+    pub tool: String,
+    pub elapsed_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub row_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub byte_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
 }
 
 pub struct AuditLog {
@@ -64,6 +78,16 @@ impl AuditLog {
     }
 
     pub fn record(&mut self, category: &str, decision: &str, sql: &str) -> Result<()> {
+        self.record_with_details(category, decision, sql, None)
+    }
+
+    pub fn record_with_details(
+        &mut self,
+        category: &str,
+        decision: &str,
+        sql: &str,
+        details: Option<AuditDetails>,
+    ) -> Result<()> {
         let query_hash = self.hash_sql(sql);
         let entry = AuditEntry {
             timestamp: Utc::now().to_rfc3339(),
@@ -73,6 +97,7 @@ impl AuditLog {
             category: category.to_string(),
             decision: decision.to_string(),
             query_hash,
+            details,
         };
 
         let line = serde_json::to_string(&entry)?;
@@ -139,4 +164,51 @@ fn expand_tilde(path: &str) -> String {
         }
     }
     path.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn records_execution_metadata_without_query_text() {
+        let directory =
+            std::env::temp_dir().join(format!("safeselect-audit-{}", uuid::Uuid::new_v4()));
+        let config = AuditConfig {
+            enabled: true,
+            directory: directory.display().to_string(),
+            max_file_bytes: 1_000_000,
+            retain_files: 1,
+        };
+        let mut audit = AuditLog::open(&config, "project", "testing", "test").unwrap();
+        audit
+            .record_with_details(
+                "PASS",
+                "allow",
+                "SELECT secret FROM users",
+                Some(AuditDetails {
+                    tool: "select".into(),
+                    elapsed_ms: 12,
+                    row_count: Some(1),
+                    byte_count: Some(42),
+                    error_code: None,
+                }),
+            )
+            .unwrap();
+        drop(audit);
+
+        let audit_file = std::fs::read_dir(directory.join("project/testing"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let entry: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(audit_file).unwrap()).unwrap();
+        assert_eq!(entry["details"]["tool"], "select");
+        assert_eq!(entry["details"]["row_count"], 1);
+        assert!(!entry.to_string().contains("SELECT secret FROM users"));
+
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 }

@@ -191,6 +191,19 @@ relation is missing or inaccessible, follow the response's suggestion to call
 denylists are checked before catalog access, and security violations remain
 fail-closed.
 
+### `list_functions`, `list_triggers`, and `list_scheduled_jobs`
+
+PostgreSQL catalog discovery is available through fixed read-only tools. Use
+`list_functions` instead of querying `pg_proc`: it excludes aggregates before
+calling `pg_get_functiondef`, avoiding errors such as `array_agg is an aggregate
+function`. `list_functions` accepts optional `schema` and `name_contains`;
+`list_triggers` accepts optional `schema`. Both schema arguments respect the
+project schema allowlist.
+
+`list_scheduled_jobs` reports `pg_cron` jobs when the `pg_cron` extension is
+installed. If it is absent, it reports that no pg_cron schedules are available;
+it does not assume another scheduler is present.
+
 ### `explain`
 
 Show the execution plan for a query. Defaults to:

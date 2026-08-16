@@ -101,6 +101,8 @@ pub fn setup_database() {
              CREATE VIEW public.safe_view AS SELECT id, name FROM public.safe_table; \
              CREATE TABLE public.large_payload (id int primary key, payload text); \
              CREATE TABLE public.secret_table (id int primary key, secret text); \
+             CREATE FUNCTION public.safe_trigger_function() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END; $$; \
+             CREATE TRIGGER safe_trigger BEFORE INSERT ON public.safe_table FOR EACH ROW EXECUTE FUNCTION public.safe_trigger_function(); \
              INSERT INTO public.safe_table VALUES (1, 'alpha', repeat('a', 20)), (2, 'beta', repeat('b', 20)), (3, 'gamma', repeat('c', 200)); \
              INSERT INTO public.large_payload VALUES (1, repeat('z', 2000)); \
              INSERT INTO public.secret_table VALUES (1, 'top-secret'); \
