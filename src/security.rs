@@ -7,10 +7,27 @@ use crate::config::{LimitsConfig, SecurityPolicy};
 use crate::error::{Result, SafeselectError};
 
 const MAX_SQL_BYTES: usize = 102_400;
+const FORBIDDEN_MQL_JAVASCRIPT_OPERATORS: &[&str] = &["$where", "$function", "$accumulator"];
 
 pub struct SecurityEngine {
     policy: SecurityPolicy,
     limits: LimitsConfig,
+}
+
+fn forbidden_mql_javascript_operator(value: &serde_json::Value) -> Option<&'static str> {
+    match value {
+        serde_json::Value::Object(object) => object.iter().find_map(|(key, value)| {
+            FORBIDDEN_MQL_JAVASCRIPT_OPERATORS
+                .iter()
+                .copied()
+                .find(|operator| key == operator)
+                .or_else(|| forbidden_mql_javascript_operator(value))
+        }),
+        serde_json::Value::Array(values) => {
+            values.iter().find_map(forbidden_mql_javascript_operator)
+        }
+        _ => None,
+    }
 }
 
 impl SecurityEngine {
@@ -119,6 +136,13 @@ impl SecurityEngine {
                 self.limits.max_rows
             )));
         }
+        self.validate_document_mql(&request.filter)?;
+        if let Some(projection) = &request.projection {
+            self.validate_document_mql(projection)?;
+        }
+        if let Some(sort) = &request.sort {
+            self.validate_document_mql(sort)?;
+        }
 
         Ok(())
     }
@@ -190,6 +214,7 @@ impl SecurityEngine {
                     )));
                 }
             }
+            self.validate_document_mql(stage)?;
         }
         Ok(())
     }
@@ -211,6 +236,7 @@ impl SecurityEngine {
                 self.limits.max_rows
             )));
         }
+        self.validate_document_mql(&request.filter)?;
         Ok(())
     }
 
@@ -233,6 +259,7 @@ impl SecurityEngine {
                 "Count filter must not be empty; full collection counts are rejected".into(),
             ));
         }
+        self.validate_document_mql(&request.filter)?;
         Ok(())
     }
 
@@ -260,6 +287,13 @@ impl SecurityEngine {
                 "Explain sort must be a JSON object".into(),
             ));
         }
+        self.validate_document_mql(&request.filter)?;
+        if let Some(projection) = &request.projection {
+            self.validate_document_mql(projection)?;
+        }
+        if let Some(sort) = &request.sort {
+            self.validate_document_mql(sort)?;
+        }
         Ok(())
     }
 
@@ -279,6 +313,7 @@ impl SecurityEngine {
                 "Profile filter must be a JSON object".into(),
             ));
         }
+        self.validate_document_mql(&request.filter)?;
         Ok(())
     }
 
@@ -294,6 +329,7 @@ impl SecurityEngine {
                 "Schema filter must be a JSON object".into(),
             ));
         }
+        self.validate_document_mql(&request.filter)?;
         Ok(())
     }
 
@@ -322,8 +358,21 @@ impl SecurityEngine {
                 self.limits.max_rows
             )));
         }
+        self.validate_document_mql(&request.filter)?;
+        if let Some(projection) = &request.projection {
+            self.validate_document_mql(projection)?;
+        }
         for field in &request.redact_fields {
             self.check_document_field(field)?;
+        }
+        Ok(())
+    }
+
+    fn validate_document_mql(&self, value: &serde_json::Value) -> Result<()> {
+        if let Some(operator) = forbidden_mql_javascript_operator(value) {
+            return Err(SafeselectError::QueryRejected(format!(
+                "MongoDB server-side JavaScript operator '{operator}' is not allowed; rebuild the query using declarative MQL operators"
+            )));
         }
         Ok(())
     }
@@ -1584,6 +1633,116 @@ mod tests {
             limit: 10,
         };
         assert!(engine.validate_document_aggregate(&request).is_err());
+    }
+
+    #[test]
+    fn test_document_validation_rejects_javascript_operators_at_any_depth() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        for operator in FORBIDDEN_MQL_JAVASCRIPT_OPERATORS {
+            let value = serde_json::from_str(&format!(
+                r#"{{"$and":[{{"nested":{{"again":{{"{operator}":{{"body":"never execute"}}}}}}}}]}}"#
+            ))
+            .unwrap();
+            let err = engine.validate_document_mql(&value).unwrap_err();
+            assert!(err.to_string().contains(operator));
+            assert!(!err.to_string().contains("never execute"));
+        }
+    }
+
+    #[test]
+    fn test_document_find_rejects_javascript_in_filter_projection_and_sort() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        for (filter, projection, sort) in [
+            (serde_json::json!({"$where": "never execute"}), None, None),
+            (
+                serde_json::json!({"active": true}),
+                Some(serde_json::json!({"nested": {"$function": {}}})),
+                None,
+            ),
+            (
+                serde_json::json!({"active": true}),
+                None,
+                Some(serde_json::json!({"nested": {"$accumulator": {}}})),
+            ),
+        ] {
+            let request = DocumentFindRequest {
+                database: "app".into(),
+                collection: "users".into(),
+                filter,
+                projection,
+                sort,
+                limit: 10,
+            };
+            assert!(engine.validate_document_find(&request).is_err());
+        }
+    }
+
+    #[test]
+    fn test_all_other_document_operations_reject_javascript_operators() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        assert!(engine
+            .validate_document_aggregate(&DocumentAggregateRequest {
+                database: "app".into(),
+                collection: "users".into(),
+                pipeline: serde_json::json!([{"$match": {"nested": {"$function": {}}}}]),
+                limit: 10,
+            })
+            .is_err());
+        assert!(engine
+            .validate_document_distinct(&DocumentDistinctRequest {
+                database: "app".into(),
+                collection: "users".into(),
+                field: "name".into(),
+                filter: serde_json::json!({"$where": "never execute"}),
+                limit: 10,
+            })
+            .is_err());
+        assert!(engine
+            .validate_document_count(&DocumentCountRequest {
+                database: "app".into(),
+                collection: "users".into(),
+                filter: serde_json::json!({"nested": {"$accumulator": {}}}),
+            })
+            .is_err());
+        assert!(engine
+            .validate_document_explain(&DocumentExplainRequest {
+                database: "app".into(),
+                collection: "users".into(),
+                filter: serde_json::json!({}),
+                projection: Some(serde_json::json!({"nested": {"$function": {}}})),
+                sort: None,
+                limit: None,
+            })
+            .is_err());
+        assert!(engine
+            .validate_document_field_profile(&DocumentFieldProfileRequest {
+                database: "app".into(),
+                collection: "users".into(),
+                field: "name".into(),
+                filter: serde_json::json!({"nested": {"$where": "never execute"}}),
+                sample_size: 10,
+                examples: 1,
+            })
+            .is_err());
+        assert!(engine
+            .validate_document_schema(&DocumentSchemaRequest {
+                database: "app".into(),
+                collection: "users".into(),
+                filter: serde_json::json!({"nested": {"$accumulator": {}}}),
+                sample_size: 10,
+                examples: 1,
+            })
+            .is_err());
+        assert!(engine
+            .validate_document_fixture(&DocumentFixtureRequest {
+                database: "app".into(),
+                collection: "users".into(),
+                filter: serde_json::json!({}),
+                projection: Some(serde_json::json!({"nested": {"$function": {}}})),
+                limit: 1,
+                redact_fields: vec![],
+            })
+            .is_err());
     }
 
     #[test]

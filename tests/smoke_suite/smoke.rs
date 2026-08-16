@@ -199,9 +199,24 @@ fn assert_mcp_sql_error_stays_alive(repo_root: &std::path::Path, config_dir: &st
     reader
         .read_line(&mut tools_response)
         .expect("failed to read MCP tools response");
+    let tools_rpc: serde_json::Value =
+        serde_json::from_str(&tools_response).expect("tools/list should return JSON-RPC");
+    let tools = tools_rpc["result"]["tools"]
+        .as_array()
+        .expect("tools/list should return tool definitions");
     assert!(
         tools_response.contains("describe_table")
-            && !tools_response.contains("discover_document_schema"),
+            && tools_response.contains("list_functions")
+            && tools_response.contains("list_triggers")
+            && tools_response.contains("list_scheduled_jobs")
+            && !tools_response.contains("discover_document_schema")
+            && tools.iter().all(|tool| {
+                tool["outputSchema"]["required"]
+                    .as_array()
+                    .is_some_and(|required| {
+                        required.contains(&serde_json::json!("next_suggestion"))
+                    })
+            }),
         "unexpected PostgreSQL tools response: {tools_response}"
     );
 
@@ -234,28 +249,92 @@ fn assert_mcp_sql_error_stays_alive(repo_root: &std::path::Path, config_dir: &st
             .expect("failed to read describe_table response");
         let describe_rpc: serde_json::Value = serde_json::from_str(&describe_response)
             .expect("describe_table response should be valid JSON-RPC");
-        let describe_text = describe_rpc["result"]["content"][0]["text"]
-            .as_str()
-            .expect("describe_table response should contain text content");
-        let description: serde_json::Value =
-            serde_json::from_str(describe_text).expect("describe_table text should be valid JSON");
+        let structured = &describe_rpc["result"]["structuredContent"];
+        let description = &structured["untrusted_data"]["value"];
         let returned_columns = description["columns"]
             .as_array()
             .expect("describe_table should return columns");
         assert!(
-            description["next_suggestion"].is_string()
+            structured["next_suggestion"].is_string()
                 && returned_columns
                     .iter()
                     .all(|column| column["ordinal_position"].is_number())
                 && returned_columns
                     .iter()
                     .all(|column| column["udt_name"].is_string())
-                && expected_columns
+                && expected_columns.iter().all(|expected| returned_columns
                     .iter()
-                    .all(|expected| returned_columns
-                        .iter()
-                        .any(|column| column["column_name"].as_str() == Some(expected))),
+                    .any(|column| column["column_name"].as_str() == Some(expected))),
             "unexpected describe_table response for {relation}: {describe_response}"
+        );
+    }
+
+    for (id, tool, expected_value) in [
+        (7, "list_functions", "safe_trigger_function"),
+        (8, "list_triggers", "safe_trigger"),
+    ] {
+        writeln!(
+            stdin,
+            "{}",
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "tools/call",
+                "params": {
+                    "name": tool,
+                    "arguments": {"schema": "public"}
+                }
+            })
+        )
+        .unwrap();
+        stdin.flush().unwrap();
+
+        let mut response = String::new();
+        reader
+            .read_line(&mut response)
+            .expect("failed to read PostgreSQL catalog discovery response");
+        assert!(
+            response.contains(expected_value)
+                && response.contains("structuredContent")
+                && response.contains("next_suggestion"),
+            "unexpected {tool} response: {response}"
+        );
+    }
+
+    for (id, tool, arguments, expected_message) in [
+        (
+            9,
+            "list_functions",
+            serde_json::json!({"schema": "pg_catalog"}),
+            "does not support PostgreSQL system schemas",
+        ),
+        (
+            10,
+            "list_scheduled_jobs",
+            serde_json::json!({"unexpected": true}),
+            "Call it with an empty arguments object",
+        ),
+    ] {
+        writeln!(
+            stdin,
+            "{}",
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "tools/call",
+                "params": {"name": tool, "arguments": arguments}
+            })
+        )
+        .unwrap();
+        stdin.flush().unwrap();
+
+        let mut response = String::new();
+        reader
+            .read_line(&mut response)
+            .expect("failed to read invalid catalog discovery response");
+        assert!(
+            response.contains(expected_message) && response.contains("\"code\":-32602"),
+            "unexpected invalid {tool} response: {response}"
         );
     }
 
@@ -295,7 +374,9 @@ fn assert_mcp_sql_error_stays_alive(repo_root: &std::path::Path, config_dir: &st
         error_response.contains("Query execution failed")
             && error_response.contains("SQL execution failed [SQL_ERROR]")
             && error_response.contains("does not exist")
-            && error_response.contains("list_tables"),
+            && error_response.contains("list_tables")
+            && error_response.contains("safeselect-untrusted-data-")
+            && error_response.contains("next_suggestion"),
         "SQL error was not visible in MCP response: {error_response}"
     );
 
@@ -330,7 +411,10 @@ fn assert_mcp_sql_error_stays_alive(repo_root: &std::path::Path, config_dir: &st
         .expect("failed to read follow-up MCP response");
 
     assert!(
-        !ok_response.is_empty() && ok_response.contains("ok"),
+        !ok_response.is_empty()
+            && ok_response.contains("ok")
+            && ok_response.contains("structuredContent")
+            && ok_response.contains("next_suggestion"),
         "MCP server did not respond to follow-up query after SQL error: {ok_response}"
     );
 

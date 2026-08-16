@@ -83,6 +83,46 @@ jobs:
           SAFESELECT_INTEGRATION_TEST: "1"
           SAFESELECT_INT_TEST_PASSWORD: testpass
 
+  integration-mongodb:
+    name: Integration (MongoDB)
+    needs: unit
+    runs-on: ubuntu-latest
+    services:
+      mongodb:
+        image: mongo:8
+        env:
+          MONGO_INITDB_ROOT_USERNAME: root
+          MONGO_INITDB_ROOT_PASSWORD: testpass
+          MONGO_INITDB_DATABASE: admin
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh mongodb://root:testpass@localhost:27017/admin --quiet --eval 'db.adminCommand({ ping: 1 })'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+      - name: Install Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Build sidecar
+        run: |
+          mvn -f sidecar/pom.xml package -DskipTests
+          cp sidecar/target/safeselect-sidecar-*.jar sidecar/target/safeselect-sidecar.jar
+      - name: Run real MongoDB security tests
+        run: cargo test --test security real_mongodb_security_rejections_and_limits -- --nocapture
+        env:
+          SAFESELECT_SECURITY_TEST: "1"
+          SAFESELECT_MONGODB_HOST: localhost
+          SAFESELECT_MONGODB_PORT: 27017
+          SAFESELECT_MONGODB_ADMIN_USER: root
+          SAFESELECT_MONGODB_ADMIN_PASSWORD: testpass
+
   security:
     name: Security & Licenses
     needs: unit

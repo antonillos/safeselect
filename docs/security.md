@@ -45,9 +45,13 @@ Raw SQL → Size check → Single statement check → Read-only check
 
 Document operations use fixed, read-only tools rather than arbitrary commands. Database and
 collection policy is checked before execution, aggregation rejects write stages such as `$out`
-and `$merge`, counts require a non-empty filter, and every operation is bounded by result and
-timeout limits. Profiling, schema discovery, and fixture generation operate on bounded samples;
-fixtures are anonymized and returned in memory without writing files.
+and `$merge`, and every filter, projection, sort, and pipeline is recursively checked for
+server-side JavaScript. `$where`, `$function`, and `$accumulator` are rejected before BSON
+conversion in Rust and independently in the Java sidecar; their bodies are neither audited nor
+returned. Counts require a non-empty filter, and every operation is bounded by result and timeout
+limits. Profiling, schema discovery, and fixture generation operate on bounded samples; fixtures
+are anonymized and returned in memory without writing files. There is no configuration switch to
+enable JavaScript: rejected requests must be rebuilt with declarative MQL operators.
 
 ### 5. Backend Security
 
@@ -69,12 +73,23 @@ Any violation triggers:
 
 ### 7. Audit Log
 
-- Every query is logged as a SHA-256 hash
+- Every operation is logged with a SHA-256 query hash and bounded metadata
+- The current MCP session exposes `audit_status` and `audit_recent`; the latter
+  is capped at 20 entries and identifies the operation tool when available
 - Never: full SQL, credentials, secrets, DSN
+- Never: returned documents, filters, local paths, or audit events from earlier sessions
 - Format: JSON lines (`.jsonl`) with rotation
 - If audit cannot initialize, the server refuses to start
 
-### 8. Secret Management
+### 8. MCP Error Guidance
+
+Every MCP error carries exactly one contextual `next_suggestion`. Invalid
+arguments identify the correction, timeouts point to a narrower query and
+`explain`, stale connections point to `check`/`reconnect`, and security or
+startup failures are terminal. Database-derived detail remains UUID-delimited;
+agents must not retry an unchanged request.
+
+### 9. Secret Management
 
 - Sources: macOS Keychain or environment variables (never inline)
 - Resolved once at startup, held in memory
@@ -94,4 +109,5 @@ Any violation triggers:
 | Unauthorized config modification | Permission check + backup |
 | Agent needs query tuning | `EXPLAIN` defaults to JSON plans; `ANALYZE`, `BUFFERS`, and `VERBOSE` are explicit options |
 | Agent attempts a MongoDB write stage | Fixed read-only tools and aggregation-stage validation |
+| Agent attempts MongoDB server-side JavaScript | Recursive `$where`, `$function`, and `$accumulator` rejection in Rust and Java before driver execution |
 | Agent requests an unbounded MongoDB count | Empty count filters are rejected |
