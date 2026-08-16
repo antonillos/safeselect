@@ -113,3 +113,13 @@ safeselect uninstall
 
 The uninstaller removes SafeSelect binaries installed under either `~/.local/bin`
 or `~/.cargo/bin`, together with global config, data, audit logs, and Keychain entries.
+
+To remove only a locally installed development binary before switching to the
+Homebrew release, use:
+
+```bash
+safeselect uninstall --binary-only
+```
+
+This preserves global and project configuration, database drivers, audit data,
+and Keychain entries.

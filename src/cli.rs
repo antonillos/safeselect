@@ -129,6 +129,9 @@ pub enum Command {
         /// Skip confirmation prompt
         #[arg(long, default_value_t = false)]
         force: bool,
+        /// Remove only binaries installed under user-local paths
+        #[arg(long, default_value_t = false)]
+        binary_only: bool,
     },
 }
 

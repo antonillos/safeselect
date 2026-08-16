@@ -178,6 +178,7 @@ When no `.safeselect/` directory exists, `safeselect serve --environment <env>` 
 | `safeselect config set-password --environment <env>` | Store the database password |
 | `safeselect config set-ssh-password --environment <env>` | Store the SSH password |
 | `safeselect uninstall` | Remove installed binaries, global state, audit data, and Keychain entries |
+| `safeselect uninstall --binary-only` | Remove only user-local binaries and preserve configuration |
 
 Use `safeselect --help` or a command-specific `--help` for the full CLI.
 
