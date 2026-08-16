@@ -337,15 +337,22 @@ fn mongo_container() -> String {
     }
 
     let output = Command::new("docker")
-        .args(["ps", "--format", "{{.Names}}"])
+        .args(["ps", "--format", "{{.ID}}\t{{.Image}}\t{{.Names}}"])
         .output()
         .expect("failed to list Docker containers");
     let stdout = String::from_utf8_lossy(&output.stdout);
     stdout
         .lines()
-        .find(|line| line.contains("mongodb"))
-        .unwrap_or("safeselect-mongodb-1")
-        .to_string()
+        .find_map(|line| {
+            let mut fields = line.split('\t');
+            let id = fields.next()?;
+            let image = fields.next()?;
+            let name = fields.next()?;
+            (image == "mongo:8" || image.starts_with("mongo@"))
+                .then(|| id.to_string())
+                .or_else(|| name.contains("mongodb").then(|| id.to_string()))
+        })
+        .unwrap_or_else(|| "safeselect-mongodb-1".to_string())
 }
 
 fn admin_uri() -> String {
