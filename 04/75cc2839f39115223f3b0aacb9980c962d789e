@@ -1,0 +1,27 @@
+src/audit.rs
+  s_19bc6d7541927f::t_bbebb19f4665ec 18-31,81-90,100,168-214
+src/mcp.rs
+  s_19bc6d7541927f::t_64d8a1d0b542dc 2,356-360,491-521,1143-1145,1607-1618,1639-1650,1660-1671,1850-2029,4327-4341,4532-4533,4793-4810
+docs/agents.md
+  s_19bc6d7541927f::t_21e3c2ac791802 194-206
+tests/smoke_suite/postgres.rs
+  s_19bc6d7541927f::t_6badcfb727ad00 104-105
+tests/smoke_suite/smoke.rs
+  s_19bc6d7541927f::t_29ae48b5019cbf 209-211,272-303
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "0475cc2839f39115223f3b0aacb9980c962d789e",
+  "prompts": {},
+  "sessions": {
+    "s_19bc6d7541927f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a00ad6-9481-7af1-b680-735b7056b5e0",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "antonillos <305277+antonillos@users.noreply.github.com>"
+    }
+  }
+}
