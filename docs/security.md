@@ -49,9 +49,20 @@ and `$merge`, and every filter, projection, sort, and pipeline is recursively ch
 server-side JavaScript. `$where`, `$function`, and `$accumulator` are rejected before BSON
 conversion in Rust and independently in the Java sidecar; their bodies are neither audited nor
 returned. Counts require a non-empty filter, and every operation is bounded by result and timeout
-limits. Profiling, schema discovery, and fixture generation operate on bounded samples; fixtures
+limits; MongoDB driver commands receive that timeout as `maxTimeMS`. Profiling, schema discovery, and fixture generation operate on bounded samples; fixtures
 are anonymized and returned in memory without writing files. There is no configuration switch to
 enable JavaScript: rejected requests must be rebuilt with declarative MQL operators.
+
+Index and statistics tools use the same database/collection policy, command timeout, audit trail,
+and result-byte bound. They expose an explicit allowlist of index and storage fields rather than
+forwarding raw `listIndexes`, `listSearchIndexes`, `dbStats`, or `collStats` command documents.
+Atlas Search capability failures are reduced to `unsupported` or `unauthorized`; unexpected
+Search failures fail the tool closed.
+
+PostgreSQL index and statistics tools use fixed read-only catalog queries and
+expose only documented index, size, count, and scan fields. They require an
+exact relation that passes the existing schema allowlist and relation denylist;
+they never accept arbitrary catalog SQL or return raw catalog rows.
 
 ### 5. Backend Security
 
@@ -87,7 +98,9 @@ Every MCP error carries exactly one contextual `next_suggestion`. Invalid
 arguments identify the correction, timeouts point to a narrower query and
 `explain`, stale connections point to `check`/`reconnect`, and security or
 startup failures are terminal. Database-derived detail remains UUID-delimited;
-agents must not retry an unchanged request.
+agents must not retry an unchanged request. The same trusted suggestion is
+also appended to the JSON-RPC error message for MCP clients that render only
+the compact error summary; database-derived detail is never appended there.
 
 ### 9. Secret Management
 

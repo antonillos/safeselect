@@ -106,6 +106,7 @@ jobs:
 
             const requiredChecks = [
               "Unit & Smoke",
+              "Integration (MongoDB)",
               "Integration (PostgreSQL)",
               "Security & Licenses",
             ];

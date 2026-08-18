@@ -134,13 +134,100 @@ pub fn run() {
             collections.text
         );
 
+        log_check("index and stats tools expose bounded metadata only");
+        let indexes = harness.call_tool(
+            130,
+            "list_collection_indexes",
+            json!({ "database": mongodb::test_db(), "collection": "safe_docs" }),
+        );
+        assert!(
+            indexes.success,
+            "list_collection_indexes failed: {}",
+            indexes.text
+        );
+        assert!(
+            indexes.text.contains("active_1")
+                && indexes.text.contains("\"classic_indexes\"")
+                && indexes
+                    .text
+                    .contains("\"search_indexes_status\":\"unsupported\"")
+                && indexes.text.contains("explain_documents"),
+            "unexpected index metadata: {}",
+            indexes.text
+        );
+        let database_stats = harness.call_tool(
+            131,
+            "get_database_stats",
+            json!({ "database": mongodb::test_db() }),
+        );
+        assert!(
+            database_stats.success,
+            "get_database_stats failed: {}",
+            database_stats.text
+        );
+        assert!(
+            database_stats.text.contains("\"collections\"")
+                && database_stats.text.contains("\"index_size\"")
+                && !database_stats.text.contains("\"raw\"")
+                && database_stats.text.contains("list_collections"),
+            "unexpected database stats: {}",
+            database_stats.text
+        );
+        let collection_stats = harness.call_tool(
+            132,
+            "get_collection_stats",
+            json!({ "database": mongodb::test_db(), "collection": "safe_docs" }),
+        );
+        assert!(
+            collection_stats.success,
+            "get_collection_stats failed: {}",
+            collection_stats.text
+        );
+        assert!(
+            collection_stats.text.contains("\"document_count\"")
+                && collection_stats.text.contains("\"total_index_size\"")
+                && collection_stats.text.contains("list_collection_indexes"),
+            "unexpected collection stats: {}",
+            collection_stats.text
+        );
+        assert_eq!(
+            database_state(),
+            baseline,
+            "metadata reads changed MongoDB state"
+        );
+
+        log_check("missing allowed collection returns an actionable index error");
+        let missing_indexes = harness.call_tool(
+            134,
+            "list_collection_indexes",
+            json!({ "database": mongodb::test_db(), "collection": "missing_docs" }),
+        );
+        assert!(
+            !missing_indexes.success,
+            "missing collection index lookup unexpectedly succeeded: {}",
+            missing_indexes.text
+        );
+        assert!(
+            missing_indexes.text.contains("list_collections")
+                && missing_indexes
+                    .text
+                    .contains("retry list_collection_indexes once"),
+            "missing collection guidance was not actionable: {}",
+            missing_indexes.text
+        );
+        assert_eq!(
+            database_state(),
+            baseline,
+            "missing collection lookup changed MongoDB state"
+        );
+
         log_check("disallowed document namespaces fail explicitly");
         let missing_collection = harness.call_tool(
             29,
             "find_documents",
             json!({
                 "database": mongodb::test_db(),
-                "collection": "missing_docs",
+                "collection": "disallowed_docs",
                 "filter": { "active": true },
                 "limit": 1
             }),
@@ -279,6 +366,12 @@ pub fn run() {
                     "filter": {},
                     "limit": 1
                 }),
+            ),
+            (
+                133,
+                "denied index namespace",
+                "list_collection_indexes",
+                json!({ "database": mongodb::test_db(), "collection": "secret_docs" }),
             ),
             (
                 22,
@@ -441,7 +534,13 @@ pub fn run() {
                 "database": mongodb::test_db(),
                 "collection": "timeout_docs",
                 "pipeline": [
-                    { "$group": { "_id": null, "payloads": { "$push": "$payload" } } }
+                    { "$limit": 1 },
+                    { "$lookup": {
+                        "from": "timeout_docs",
+                        "pipeline": [{ "$project": { "payload": 1 } }],
+                        "as": "joined_timeout_docs"
+                    }},
+                    { "$project": { "joined_count": { "$size": "$joined_timeout_docs" } } }
                 ],
                 "limit": 1
             }),

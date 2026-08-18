@@ -45,6 +45,7 @@ db.safe_docs.insertMany([
   {{ _id: 2, name: "beta", active: true, category: "safe" }},
   {{ _id: 3, name: "gamma", active: false, category: "safe" }}
 ]);
+db.safe_docs.createIndex({{ active: 1 }}, {{ name: "active_1" }});
 db.large_docs.insertOne({{ _id: 1, payload: "{large_payload}" }});
 db.timeout_docs.insertMany(Array.from({{ length: 5000 }}, (_, i) => ({{ _id: i, sort_key: 5000 - i, payload: "{timeout_payload}" }})));
 db.secret_docs.insertOne({{ _id: 1, secret: "top-secret" }});
@@ -58,7 +59,10 @@ db.createUser({{
         user_name = test_user(),
         password = TEST_PASSWORD,
         large_payload = "z".repeat(2000),
-        timeout_payload = "t".repeat(256),
+        // Keep the timeout fixture below MongoDB's 16 MiB document limit while
+        // making the read-only lookup used by the real suite consistently exceed
+        // a 1 ms maxTimeMS budget.
+        timeout_payload = "t".repeat(2_000),
     ));
 }
 
@@ -101,7 +105,7 @@ display_name = "SafeSelect Mongo Security Test"
 
 [security]
 allowed_databases = ["{db_name}"]
-allowed_collections = ["{db_name}.safe_docs", "{db_name}.large_docs", "{db_name}.timeout_docs"]
+allowed_collections = ["{db_name}.safe_docs", "{db_name}.large_docs", "{db_name}.timeout_docs", "{db_name}.missing_docs"]
 denied_collections = ["{db_name}.secret_docs"]
 require_single_statement = true
 

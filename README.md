@@ -55,7 +55,7 @@ The product promise is simple: **agents can look, but they cannot mutate**. Even
 
 | Backend | Status | Tools |
 |---|---|---|
-| PostgreSQL | Supported | `list_tables`, `describe_table`, `select`, `explain` |
+| PostgreSQL | Supported | Discovery, indexes/statistics, `select`, and `explain` |
 | MongoDB | Supported | Discovery, find, aggregation, distinct/count, explain, profiling, schema inference, and anonymized fixtures |
 
 ## Architecture
@@ -110,7 +110,7 @@ See [AI agent integration](docs/agents.md) for client-specific setup and manual 
 Agents should use SafeSelect in this order:
 
 1. `database_info`
-2. `list_tables` then `describe_table` for SQL
+2. `list_tables` then `describe_table`; inspect `list_table_indexes` or bounded statistics when useful for SQL
 3. `list_databases`, `list_collections`, then `discover_document_schema` for NoSQL
 4. `select` / `explain`, or the bounded MongoDB read tool that matches the task
 5. `check`, `connect`, or `reconnect` when connectivity is stale
@@ -134,7 +134,9 @@ Query responses include `row_count`, `byte_count`, `elapsed_ms`, and a human-rea
 
 Every MCP success and error includes one contextual `next_suggestion`. Agents
 should follow that single safe action, never blindly repeat an invalid request,
-and stop when the suggestion is terminal.
+and stop when the suggestion is terminal. For clients that only show an MCP
+error summary, SafeSelect also includes the trusted next suggestion in that
+summary without exposing database-derived detail.
 
 ## Security Model
 
@@ -142,7 +144,7 @@ and stop when the suggestion is terminal.
 - **Read only**: SQL allows `SELECT`, `EXPLAIN`, and `WITH`; NoSQL backends allow discovery and read-only document reads.
 - **No server-side JavaScript**: MongoDB `$where`, `$function`, and `$accumulator` are rejected in Rust and again in the Java sidecar.
 - **Scoped access**: schemas, relations, databases, and collections can be allowed or denied.
-- **Hard limits**: row count, result bytes, and timeouts are enforced.
+- **Hard limits**: row count, result bytes, and timeouts are enforced; MongoDB read commands receive the same timeout as `maxTimeMS`.
 - **Secret isolation**: passwords live in macOS Keychain or environment variables, never in project config.
 - **Driver verification**: JDBC drivers are checked by SHA-256 before use.
 - **Audit trail**: query text is hashed before being recorded; the current session exposes bounded audit metadata through `audit_status` and `audit_recent`.
@@ -151,9 +153,9 @@ and stop when the suggestion is terminal.
 
 | Area | Tools |
 |---|---|
-| SQL | `list_tables`, `describe_table`, `select`, `explain` |
+| SQL | `list_tables`, `describe_table`, `list_table_indexes`, `get_database_stats`, `get_table_stats`, `select`, `explain` |
 | MongoDB reads | `list_databases`, `list_collections`, `find_documents`, `aggregate_documents`, `distinct_documents`, `count_documents`, `explain_documents` |
-| MongoDB analysis | `profile_document_field`, `discover_document_schema`, `generate_document_fixture` |
+| MongoDB analysis | `profile_document_field`, `discover_document_schema`, `generate_document_fixture`, `list_collection_indexes`, `get_database_stats`, `get_collection_stats` |
 | Connection | `database_info`, `check`, `connect`, `disconnect`, `reconnect` |
 | Audit | `audit_status`, `audit_recent` |
 | Config | `config_validate`, `config_show`, `config_set_password`, `config_rename_environment`, `config_delete_environment`, `config_reset` |
@@ -178,6 +180,7 @@ When no `.safeselect/` directory exists, `safeselect serve --environment <env>` 
 | `safeselect config set-password --environment <env>` | Store the database password |
 | `safeselect config set-ssh-password --environment <env>` | Store the SSH password |
 | `safeselect uninstall` | Remove installed binaries, global state, audit data, and Keychain entries |
+| `safeselect uninstall --binary-only` | Remove only user-local binaries and preserve configuration |
 
 Use `safeselect --help` or a command-specific `--help` for the full CLI.
 

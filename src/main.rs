@@ -146,7 +146,7 @@ fn run(cli: Cli) -> Result<()> {
                 run_reconnects(&loader, &dir, &env_names)
             }
         }
-        Command::Uninstall { force } => cmd_uninstall(force),
+        Command::Uninstall { force, binary_only } => cmd_uninstall(force, binary_only),
     }
 }
 
@@ -3975,10 +3975,16 @@ fn cmd_reconnect(
     Ok(())
 }
 
-fn cmd_uninstall(force: bool) -> Result<()> {
+fn cmd_uninstall(force: bool, binary_only: bool) -> Result<()> {
     if !force {
-        println!("This will remove: safeselect binary, global config, data, audit logs, and keychain entries.");
-        println!("Local .safeselect/ directories in repos will NOT be removed.");
+        if binary_only {
+            println!(
+                "This will remove only safeselect binaries from ~/.local/bin and ~/.cargo/bin."
+            );
+        } else {
+            println!("This will remove: safeselect binary, global config, data, audit logs, and keychain entries.");
+            println!("Local .safeselect/ directories in repos will NOT be removed.");
+        }
         print!("Continue? [y/N] ");
         use std::io::Write;
         std::io::stdout().flush()?;
@@ -4001,6 +4007,14 @@ fn cmd_uninstall(force: bool) -> Result<()> {
             println!("  ✓ Removed {}", path.display());
             removed_anything = true;
         }
+    }
+
+    if binary_only {
+        if !removed_anything {
+            println!("  No user-local safeselect binaries found.");
+        }
+        println!("  Binary uninstall complete. Configuration was preserved.");
+        return Ok(());
     }
 
     let config_dir = {

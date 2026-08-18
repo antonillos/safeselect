@@ -21,4 +21,27 @@ class MainTest {
         Object declarative = Map.of("$and", List.of(Map.of("active", true), Map.of("score", Map.of("$gte", 10))));
         assertNull(Main.forbiddenMongoJavaScriptOperator(declarative));
     }
+
+    @Test
+    void preservesOnlyKnownSearchIndexTypes() {
+        assertEquals("search", Main.searchIndexType("search"));
+        assertEquals("vectorSearch", Main.searchIndexType("vectorSearch"));
+        assertEquals("autoEmbed", Main.searchIndexType("autoEmbed"));
+        assertEquals("unknown", Main.searchIndexType("futureType"));
+        assertEquals("unknown", Main.searchIndexType(null));
+    }
+
+    @Test
+    void classifiesLocalSearchNotEnabledAsUnsupported() {
+        assertEquals(true, Main.isSearchUnsupported(59, "command not found"));
+        assertEquals(true, Main.isSearchUnsupported(31082, "SearchNotEnabled"));
+        assertEquals(false, Main.isSearchUnsupported(13, "not authorized"));
+    }
+
+    @Test
+    void treatsTheImplicitIdIndexAsUnique() {
+        assertEquals(true, Main.isClassicIndexUnique("_id_", false));
+        assertEquals(true, Main.isClassicIndexUnique("email_1", true));
+        assertEquals(false, Main.isClassicIndexUnique("email_1", false));
+    }
 }

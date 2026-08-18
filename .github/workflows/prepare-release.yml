@@ -118,6 +118,7 @@ jobs:
           tmp_fixes="$(mktemp)"
           tmp_docs="$(mktemp)"
           tmp_ci="$(mktemp)"
+          tmp_dependencies="$(mktemp)"
           tmp_other="$(mktemp)"
           tmp_changelog="$(mktemp)"
 
@@ -132,14 +133,16 @@ jobs:
           : > "${tmp_fixes}"
           : > "${tmp_docs}"
           : > "${tmp_ci}"
+          : > "${tmp_dependencies}"
           : > "${tmp_other}"
 
           while IFS= read -r line; do
             case "${line}" in
-              "- feat:"*|"- perf:"*) printf '%s\n' "${line}" >> "${tmp_features}" ;;
-              "- fix:"*) printf '%s\n' "${line}" >> "${tmp_fixes}" ;;
-              "- docs:"*) printf '%s\n' "${line}" >> "${tmp_docs}" ;;
-              "- ci:"*|"- build:"*|"- chore:"*) printf '%s\n' "${line}" >> "${tmp_ci}" ;;
+              "- feat:"*|"- feat("*|"- perf:"*|"- perf("*|"- Add "*|"- Expose "*) printf '%s\n' "${line}" >> "${tmp_features}" ;;
+              "- fix:"*|"- fix("*) printf '%s\n' "${line}" >> "${tmp_fixes}" ;;
+              "- docs:"*|"- docs("*) printf '%s\n' "${line}" >> "${tmp_docs}" ;;
+              "- chore(deps):"*) printf '%s\n' "${line}" >> "${tmp_dependencies}" ;;
+              "- ci:"*|"- ci("*|"- build:"*|"- build("*|"- test:"*|"- test("*|"- chore:"*|"- chore("*) printf '%s\n' "${line}" >> "${tmp_ci}" ;;
               *) printf '%s\n' "${line}" >> "${tmp_other}" ;;
             esac
           done < "${tmp_changes}"
@@ -166,6 +169,11 @@ jobs:
             if [[ -s "${tmp_ci}" ]]; then
               printf '### Build And CI\n\n'
               cat "${tmp_ci}"
+              printf '\n'
+            fi
+            if [[ -s "${tmp_dependencies}" ]]; then
+              printf '### Dependencies\n\n'
+              cat "${tmp_dependencies}"
               printf '\n'
             fi
             if [[ -s "${tmp_other}" ]]; then

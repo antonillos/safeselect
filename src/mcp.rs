@@ -1,9 +1,10 @@
 use crate::agents;
 use crate::audit::{AuditDetails, AuditLog};
 use crate::backend::{
-    BackendCapability, BackendDescriptor, DocumentAggregateRequest, DocumentCountRequest,
-    DocumentDistinctRequest, DocumentExplainRequest, DocumentFieldProfileRequest,
-    DocumentFindRequest, DocumentFixtureRequest, DocumentSchemaRequest,
+    BackendCapability, BackendDescriptor, BackendKind, DocumentAggregateRequest,
+    DocumentCollectionRequest, DocumentCountRequest, DocumentDistinctRequest,
+    DocumentExplainRequest, DocumentFieldProfileRequest, DocumentFindRequest,
+    DocumentFixtureRequest, DocumentSchemaRequest,
 };
 use crate::compose;
 use crate::config::{ConfigLoader, EnvironmentConfig, ProjectConfig};
@@ -355,8 +356,9 @@ impl McpServer {
     }
 
     fn is_postgres(&self) -> bool {
-        self.backend.vendor.eq_ignore_ascii_case("postgresql")
-            || self.backend.vendor.eq_ignore_ascii_case("postgres")
+        self.backend.kind == BackendKind::Jdbc
+            && (self.backend.vendor.eq_ignore_ascii_case("postgresql")
+                || self.backend.vendor.eq_ignore_ascii_case("postgres"))
     }
 
     fn tool_description(&self, action: &str) -> String {
@@ -499,6 +501,46 @@ impl McpServer {
                             "type": "string",
                             "description": "Exact table_name value copied from the same list_tables row; placeholders and wildcards such as * or % are not accepted"
                         }
+                    },
+                    "required": ["schema", "table"],
+                    "additionalProperties": false
+                }),
+            });
+        }
+
+        if self.backend.has(BackendCapability::TableIndexes) {
+            tools.push(ToolDefinition {
+                name: "list_table_indexes".into(),
+                description: self.tool_description("list safe PostgreSQL index metadata for one exact allowed table or view; copy schema and table from list_tables, then use the returned columns or expressions in explain before any targeted select"),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "schema": {"type": "string", "description": "Exact table_schema copied from list_tables"},
+                        "table": {"type": "string", "description": "Exact table_name copied from the same list_tables row"}
+                    },
+                    "required": ["schema", "table"],
+                    "additionalProperties": false
+                }),
+            });
+        }
+
+        if self.backend.has(BackendCapability::DatabaseStats) {
+            tools.push(ToolDefinition {
+                name: "get_database_stats".into(),
+                description: self.tool_description("show a bounded safe subset of PostgreSQL database activity and size statistics; no raw catalog rows or connection details are returned"),
+                input_schema: serde_json::json!({"type": "object", "properties": {}, "additionalProperties": false}),
+            });
+        }
+
+        if self.backend.has(BackendCapability::TableStats) {
+            tools.push(ToolDefinition {
+                name: "get_table_stats".into(),
+                description: self.tool_description("show a bounded safe subset of PostgreSQL table and index statistics for one exact allowed relation; copy schema and table from list_tables"),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "schema": {"type": "string", "description": "Exact table_schema copied from list_tables"},
+                        "table": {"type": "string", "description": "Exact table_name copied from the same list_tables row"}
                     },
                     "required": ["schema", "table"],
                     "additionalProperties": false
@@ -839,6 +881,42 @@ impl McpServer {
             });
         }
 
+        if self.backend.has(BackendCapability::DocumentIndexes) {
+            tools.push(ToolDefinition {
+                name: "list_collection_indexes".into(),
+                description: self.tool_description("list classic MongoDB indexes and, when available, Atlas Search indexes for one allowed collection; use the returned indexed fields with explain_documents or one bounded read"),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {"database": {"type": "string"}, "collection": {"type": "string"}},
+                    "required": ["database", "collection"],
+                    "additionalProperties": false
+                }),
+            });
+        }
+
+        if self.backend.has(BackendCapability::DocumentDatabaseStats) {
+            tools.push(ToolDefinition {
+                name: "get_database_stats".into(),
+                description: self.tool_description("return bounded aggregate storage statistics for one allowed MongoDB database; no documents or raw dbStats response are returned"),
+                input_schema: serde_json::json!({
+                    "type": "object", "properties": {"database": {"type": "string"}},
+                    "required": ["database"], "additionalProperties": false
+                }),
+            });
+        }
+
+        if self.backend.has(BackendCapability::DocumentCollectionStats) {
+            tools.push(ToolDefinition {
+                name: "get_collection_stats".into(),
+                description: self.tool_description("return bounded aggregate storage statistics for one allowed MongoDB collection; no documents or raw collStats response are returned"),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {"database": {"type": "string"}, "collection": {"type": "string"}},
+                    "required": ["database", "collection"], "additionalProperties": false
+                }),
+            });
+        }
+
         tools.extend([
             ToolDefinition {
                 name: "disconnect".into(),
@@ -1160,12 +1238,29 @@ impl McpServer {
             "select" => self.handle_select(msg.id.clone(), &args),
             "list_tables" => self.handle_list_tables(msg.id.clone(), &args),
             "describe_table" => self.handle_describe_table(msg.id.clone(), &args),
+            "list_table_indexes" => self.handle_list_table_indexes(msg.id.clone(), &args),
+            "get_database_stats" => match self.backend.kind {
+                BackendKind::Document => {
+                    self.handle_get_mongodb_database_stats(msg.id.clone(), &args)
+                }
+                BackendKind::Jdbc if self.is_postgres() => {
+                    self.handle_get_postgres_database_stats(msg.id.clone(), &args)
+                }
+                _ => self.send_error(
+                    msg.id.clone(),
+                    -32601,
+                    "get_database_stats is available only for PostgreSQL and MongoDB backends",
+                ),
+            },
+            "get_table_stats" => self.handle_get_table_stats(msg.id.clone(), &args),
             "list_functions" => self.handle_list_functions(msg.id.clone(), &args),
             "list_triggers" => self.handle_list_triggers(msg.id.clone(), &args),
             "list_scheduled_jobs" => self.handle_list_scheduled_jobs(msg.id.clone(), &args),
             "explain" => self.handle_explain(msg.id.clone(), &args),
             "list_databases" => self.handle_list_databases(msg.id.clone()),
             "list_collections" => self.handle_list_collections(msg.id.clone(), &args),
+            "list_collection_indexes" => self.handle_list_collection_indexes(msg.id.clone(), &args),
+            "get_collection_stats" => self.handle_get_collection_stats(msg.id.clone(), &args),
             "find_documents" => self.handle_find_documents(msg.id.clone(), &args),
             "aggregate_documents" => self.handle_aggregate_documents(msg.id.clone(), &args),
             "distinct_documents" => self.handle_distinct_documents(msg.id.clone(), &args),
@@ -1261,6 +1356,9 @@ impl McpServer {
                 BackendCapability::SqlQuery => "sql_query",
                 BackendCapability::SqlExplain => "sql_explain",
                 BackendCapability::TableDiscovery => "table_discovery",
+                BackendCapability::TableIndexes => "table_indexes",
+                BackendCapability::DatabaseStats => "database_stats",
+                BackendCapability::TableStats => "table_stats",
                 BackendCapability::DatabaseDiscovery => "database_discovery",
                 BackendCapability::CollectionDiscovery => "collection_discovery",
                 BackendCapability::DocumentFind => "document_find",
@@ -1271,6 +1369,9 @@ impl McpServer {
                 BackendCapability::DocumentProfile => "document_profile",
                 BackendCapability::DocumentSchema => "document_schema",
                 BackendCapability::DocumentFixture => "document_fixture",
+                BackendCapability::DocumentIndexes => "document_indexes",
+                BackendCapability::DocumentDatabaseStats => "document_database_stats",
+                BackendCapability::DocumentCollectionStats => "document_collection_stats",
             })
             .collect();
         let next_suggestion = match self.backend.kind {
@@ -1468,6 +1569,140 @@ impl McpServer {
                     &e.to_string(),
                     document_backend_error_next_suggestion(&e.to_string()),
                 )
+            }
+        }
+    }
+
+    fn handle_list_collection_indexes(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        let started = Instant::now();
+        let database = required_string!(self, id, args, "database").to_string();
+        let collection = required_string!(self, id, args, "collection").to_string();
+        if let Err(e) = self
+            .security
+            .validate_document_collection(&DocumentCollectionRequest {
+                database: database.clone(),
+                collection: collection.clone(),
+            })
+        {
+            self.audit.record_tool(
+                "REJECT",
+                "reject",
+                "list_collection_indexes",
+                started.elapsed().as_millis() as u64,
+            )?;
+            return self.send_error(id, -32000, format!("Request rejected: {e}"));
+        }
+        match self
+            .ensure_sidecar()?
+            .list_collection_indexes(&database, &collection)
+        {
+            Ok(result) => {
+                self.audit.record_tool(
+                    "PASS",
+                    "allow",
+                    "list_collection_indexes",
+                    started.elapsed().as_millis() as u64,
+                )?;
+                self.write_response(&data_tool_response(id, &result, "Call explain_documents with the same database and collection using an indexed field, then make one bounded read only if the user still needs data.")?)
+            }
+            Err(e) => {
+                self.audit.record_tool(
+                    "DOCUMENT_ERROR",
+                    "error",
+                    "list_collection_indexes",
+                    started.elapsed().as_millis() as u64,
+                )?;
+                self.send_backend_error(id, "List collection indexes failed.", &e.to_string(), "Call list_collections for the same database, choose one exact returned collection name, then retry list_collection_indexes once.")
+            }
+        }
+    }
+
+    fn handle_get_mongodb_database_stats(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        let started = Instant::now();
+        let database = required_string!(self, id, args, "database");
+        if let Err(e) = self.security.validate_document_database(database) {
+            self.audit.record_tool(
+                "REJECT",
+                "reject",
+                "get_database_stats",
+                started.elapsed().as_millis() as u64,
+            )?;
+            return self.send_error(id, -32000, format!("Request rejected: {e}"));
+        }
+        match self.ensure_sidecar()?.get_database_stats(database) {
+            Ok(result) => {
+                self.audit.record_tool(
+                    "PASS",
+                    "allow",
+                    "get_database_stats",
+                    started.elapsed().as_millis() as u64,
+                )?;
+                self.write_response(&data_tool_response(id, &result, "Call list_collections for this database, then inspect one collection with discover_document_schema or list_collection_indexes.")?)
+            }
+            Err(e) => {
+                self.audit.record_tool(
+                    "DOCUMENT_ERROR",
+                    "error",
+                    "get_database_stats",
+                    started.elapsed().as_millis() as u64,
+                )?;
+                self.send_backend_error(id, "Get database stats failed.", &e.to_string(), "Call check; if MongoDB is reachable, call list_databases once to verify the database before reporting the error.")
+            }
+        }
+    }
+
+    fn handle_get_collection_stats(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        let started = Instant::now();
+        let database = required_string!(self, id, args, "database").to_string();
+        let collection = required_string!(self, id, args, "collection").to_string();
+        if let Err(e) = self
+            .security
+            .validate_document_collection(&DocumentCollectionRequest {
+                database: database.clone(),
+                collection: collection.clone(),
+            })
+        {
+            self.audit.record_tool(
+                "REJECT",
+                "reject",
+                "get_collection_stats",
+                started.elapsed().as_millis() as u64,
+            )?;
+            return self.send_error(id, -32000, format!("Request rejected: {e}"));
+        }
+        match self
+            .ensure_sidecar()?
+            .get_collection_stats(&database, &collection)
+        {
+            Ok(result) => {
+                self.audit.record_tool(
+                    "PASS",
+                    "allow",
+                    "get_collection_stats",
+                    started.elapsed().as_millis() as u64,
+                )?;
+                self.write_response(&data_tool_response(id, &result, "Call list_collection_indexes for this database and collection, then use explain_documents before any bounded read.")?)
+            }
+            Err(e) => {
+                self.audit.record_tool(
+                    "DOCUMENT_ERROR",
+                    "error",
+                    "get_collection_stats",
+                    started.elapsed().as_millis() as u64,
+                )?;
+                self.send_backend_error(id, "Get collection stats failed.", &e.to_string(), "Call check; if MongoDB is reachable, call list_collections once to verify the namespace before reporting the error.")
             }
         }
     }
@@ -1982,6 +2217,148 @@ impl McpServer {
                     id,
                     format!("Describe table failed: {e}."),
                     "Call check, then reconnect once only if check reports a stale existing connection.",
+                ))
+            }
+        }
+    }
+
+    fn handle_list_table_indexes(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        let (schema, table) =
+            match self.exact_catalog_relation(id.clone(), args, "list_table_indexes")? {
+                Some(target) => target,
+                None => return Ok(()),
+            };
+        let sql = build_list_table_indexes_sql(&schema, &table);
+        self.execute_catalog_tool(
+            id,
+            "list_table_indexes",
+            &sql,
+            "Call explain with a SELECT using one returned index column or expression and a selective predicate; only then make a targeted select if the user still needs rows.",
+            "Call list_tables, choose one exact allowed relation, then retry list_table_indexes once.",
+        )
+    }
+
+    fn handle_get_postgres_database_stats(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        if !has_only_keys(args, &[]) {
+            return self.send_error(id, -32602, "get_database_stats accepts no arguments");
+        }
+        let sql = build_database_stats_sql(self.security.allowed_schemas());
+        self.execute_catalog_tool(
+            id,
+            "get_database_stats",
+            &sql,
+            "Call list_tables, then inspect one exact allowed relation with describe_table or list_table_indexes.",
+            "Call check; if connectivity is healthy, report the database statistics failure without retrying unchanged.",
+        )
+    }
+
+    fn handle_get_table_stats(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        let (schema, table) =
+            match self.exact_catalog_relation(id.clone(), args, "get_table_stats")? {
+                Some(target) => target,
+                None => return Ok(()),
+            };
+        let sql = build_table_stats_sql(&schema, &table);
+        self.execute_catalog_tool(
+            id,
+            "get_table_stats",
+            &sql,
+            "Call list_table_indexes for this relation, then use explain with a selective predicate before any targeted select.",
+            "Call list_tables, choose one exact allowed relation, then retry get_table_stats once.",
+        )
+    }
+
+    fn exact_catalog_relation(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+        operation: &str,
+    ) -> Result<Option<(String, String)>> {
+        if !has_only_keys(args, &["schema", "table"]) {
+            self.send_error(
+                id,
+                -32602,
+                format!("{operation} accepts only 'schema' and 'table' arguments"),
+            )?;
+            return Ok(None);
+        }
+        let schema = match args.get("schema").and_then(serde_json::Value::as_str) {
+            Some(value) => value,
+            None => {
+                self.send_error(id, -32602, "Missing 'schema' argument")?;
+                return Ok(None);
+            }
+        };
+        let table = match args.get("table").and_then(serde_json::Value::as_str) {
+            Some(value) => value,
+            None => {
+                self.send_error(id, -32602, "Missing 'table' argument")?;
+                return Ok(None);
+            }
+        };
+        if let Some(message) = describe_identifier_error("schema", schema) {
+            self.send_error(id, -32602, message)?;
+            return Ok(None);
+        }
+        if let Some(message) = describe_identifier_error("table", table) {
+            self.send_error(id, -32602, message)?;
+            return Ok(None);
+        }
+        if let Err(error) = validate_describe_target(&self.security, schema, table) {
+            let relation_check = format!("SELECT * FROM {schema}.{table}");
+            self.audit.record("REJECT", "reject", &relation_check)?;
+            let _ = self.send_error(id, -32000, format!("Request rejected: {error}"));
+            self.fail_closed("Security violation");
+            return Ok(None);
+        }
+        Ok(Some((schema.to_string(), table.to_string())))
+    }
+
+    fn execute_catalog_tool(
+        &mut self,
+        id: Option<serde_json::Value>,
+        operation: &str,
+        sql: &str,
+        next_suggestion: &str,
+        error_suggestion: &str,
+    ) -> Result<()> {
+        if let Err(error) = self.security.validate_system(sql) {
+            self.audit.record("REJECT", "reject", sql)?;
+            let _ = self.write_response(&tool_error_response(
+                id,
+                format!("{operation} rejected: {error}"),
+                "Stop and report this SafeSelect security rejection; do not retry the call unchanged.",
+            ));
+            self.fail_closed("Security violation");
+            return Ok(());
+        }
+        match self.execute_with_reconnect(sql) {
+            Ok(result) => {
+                self.audit.record("PASS", "allow", sql)?;
+                self.write_response(&data_tool_response(
+                    id,
+                    &serde_json::to_value(result)?,
+                    next_suggestion,
+                )?)
+            }
+            Err(_error) => {
+                self.audit.record("JDBC_ERROR", "error", sql)?;
+                self.write_response(&tool_error_response(
+                    id,
+                    format!("{operation} failed."),
+                    error_suggestion,
                 ))
             }
         }
@@ -3756,13 +4133,14 @@ impl McpServer {
     ) -> Result<()> {
         let boundary = format!("safeselect-untrusted-data-{}", uuid::Uuid::new_v4());
         let framed_detail = format!("<{boundary}>\n{detail}\n</{boundary}>");
+        let message = trusted_backend_error_message(trusted_message, next_suggestion);
         let resp = JsonRpcResponse {
             jsonrpc: "2.0",
             id,
             result: None,
             error: Some(JsonRpcError {
                 code: -32000,
-                message: trusted_message.into(),
+                message,
                 data: Some(serde_json::json!({
                     "detail": framed_detail,
                     "next_suggestion": next_suggestion
@@ -3780,6 +4158,10 @@ impl McpServer {
         writer.flush()?;
         Ok(())
     }
+}
+
+fn trusted_backend_error_message(trusted_message: &str, next_suggestion: &str) -> String {
+    format!("{trusted_message} Next suggestion: {next_suggestion}")
 }
 
 fn error_next_suggestion(message: &str) -> &'static str {
@@ -4479,6 +4861,41 @@ fn build_describe_table_sql(schema: &str, table: &str) -> String {
     )
 }
 
+fn build_list_table_indexes_sql(schema: &str, table: &str) -> String {
+    format!(
+        "SELECT i.relname AS index_name, ARRAY(SELECT pg_get_indexdef(x.indexrelid, key_position, true) FROM generate_series(1, x.indnkeyatts) AS key_position ORDER BY key_position) AS columns_or_expressions, x.indisunique AS is_unique, am.amname AS access_method, pg_get_expr(x.indpred, x.indrelid) AS partial_predicate FROM pg_index AS x JOIN pg_class AS t ON t.oid = x.indrelid JOIN pg_namespace AS n ON n.oid = t.relnamespace JOIN pg_class AS i ON i.oid = x.indexrelid JOIN pg_am AS am ON am.oid = i.relam WHERE n.nspname = '{}' AND t.relname = '{}' ORDER BY i.relname",
+        schema.replace('\'', "''"),
+        table.replace('\'', "''")
+    )
+}
+
+fn allowed_catalog_schema_predicate(allowed_schemas: &[String], alias: &str) -> String {
+    if allowed_schemas.is_empty() {
+        format!("{alias}.nspname NOT IN ('pg_catalog', 'information_schema') AND {alias}.nspname NOT LIKE 'pg_%'")
+    } else {
+        let schemas = allowed_schemas
+            .iter()
+            .map(|schema| format!("'{}'", schema.replace('\'', "''")))
+            .collect::<Vec<_>>();
+        format!("{alias}.nspname IN ({})", schemas.join(", "))
+    }
+}
+
+fn build_database_stats_sql(allowed_schemas: &[String]) -> String {
+    let predicate = allowed_catalog_schema_predicate(allowed_schemas, "n");
+    format!(
+        "SELECT pg_database_size(current_database()) AS database_size, COUNT(*) FILTER (WHERE c.relkind IN ('r', 'p')) AS table_count, COUNT(*) FILTER (WHERE c.relkind = 'i') AS index_count, COALESCE(SUM(pg_relation_size(c.oid)) FILTER (WHERE c.relkind IN ('r', 'p')), 0) AS table_size, COALESCE(SUM(pg_relation_size(c.oid)) FILTER (WHERE c.relkind = 'i'), 0) AS index_size FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace WHERE {predicate}"
+    )
+}
+
+fn build_table_stats_sql(schema: &str, table: &str) -> String {
+    format!(
+        "SELECT COALESCE(s.n_live_tup, 0) AS estimated_live_rows, pg_relation_size(c.oid) AS table_size, pg_indexes_size(c.oid) AS index_size, pg_total_relation_size(c.oid) AS total_size, COALESCE(s.seq_scan, 0) AS sequential_scans, COALESCE(s.idx_scan, 0) AS index_scans FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace LEFT JOIN pg_stat_user_tables AS s ON s.relid = c.oid WHERE n.nspname = '{}' AND c.relname = '{}' AND c.relkind IN ('r', 'p')",
+        schema.replace('\'', "''"),
+        table.replace('\'', "''")
+    )
+}
+
 fn catalog_schema_predicate(schema: Option<&str>) -> String {
     match schema {
         Some(schema) => format!(" AND n.nspname = '{}'", schema.replace('\'', "''")),
@@ -4869,6 +5286,20 @@ mod tests {
     }
 
     #[test]
+    fn backend_error_message_exposes_trusted_next_step_for_compact_clients() {
+        let message = trusted_backend_error_message(
+            "List collection indexes failed.",
+            "Call list_collections once, choose an exact returned collection name, then retry once.",
+        );
+
+        assert_eq!(
+            message,
+            "List collection indexes failed. Next suggestion: Call list_collections once, choose an exact returned collection name, then retry once."
+        );
+        assert!(!message.contains("safeselect-untrusted-data-"));
+    }
+
+    #[test]
     fn explicit_argument_guidance_becomes_the_single_canonical_next_step() {
         let (message, next_suggestion) = split_error_message_and_suggestion(
             "Missing 'filter' argument. Next suggestion: pass one nested JSON object.".into(),
@@ -4947,6 +5378,33 @@ mod tests {
             sql,
             "SELECT COALESCE(json_agg(json_build_object('column_name', column_name, 'data_type', data_type, 'udt_name', udt_name, 'is_nullable', is_nullable, 'column_default', column_default, 'ordinal_position', ordinal_position) ORDER BY ordinal_position), '[]'::json)::text AS columns_json FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users'"
         );
+    }
+
+    #[test]
+    fn postgres_index_and_stats_queries_are_fixed_catalog_reads() {
+        let indexes = build_list_table_indexes_sql("public", "users");
+        let database_stats = build_database_stats_sql(&["public".to_string()]);
+        let table_stats = build_table_stats_sql("public", "users");
+
+        for sql in [&indexes, &database_stats, &table_stats] {
+            assert!(sql.starts_with("SELECT "));
+            assert!(!sql.contains(';'));
+            assert!(!sql.contains("INSERT"));
+            assert!(!sql.contains("UPDATE"));
+            assert!(!sql.contains("DELETE"));
+        }
+        assert!(indexes.contains("pg_index"));
+        assert!(indexes.contains("pg_get_indexdef"));
+        assert!(database_stats.contains("pg_database_size"));
+        assert!(table_stats.contains("pg_stat_user_tables"));
+    }
+
+    #[test]
+    fn database_stats_respect_allowed_catalog_schemas() {
+        let sql = build_database_stats_sql(&["app".to_string(), "reporting".to_string()]);
+
+        assert!(sql.contains("n.nspname IN ('app', 'reporting')"));
+        assert!(!sql.contains("pg_catalog"));
     }
 
     #[test]
