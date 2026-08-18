@@ -134,7 +134,9 @@ Query responses include `row_count`, `byte_count`, `elapsed_ms`, and a human-rea
 
 Every MCP success and error includes one contextual `next_suggestion`. Agents
 should follow that single safe action, never blindly repeat an invalid request,
-and stop when the suggestion is terminal.
+and stop when the suggestion is terminal. For clients that only show an MCP
+error summary, SafeSelect also includes the trusted next suggestion in that
+summary without exposing database-derived detail.
 
 ## Security Model
 
@@ -142,7 +144,7 @@ and stop when the suggestion is terminal.
 - **Read only**: SQL allows `SELECT`, `EXPLAIN`, and `WITH`; NoSQL backends allow discovery and read-only document reads.
 - **No server-side JavaScript**: MongoDB `$where`, `$function`, and `$accumulator` are rejected in Rust and again in the Java sidecar.
 - **Scoped access**: schemas, relations, databases, and collections can be allowed or denied.
-- **Hard limits**: row count, result bytes, and timeouts are enforced.
+- **Hard limits**: row count, result bytes, and timeouts are enforced; MongoDB read commands receive the same timeout as `maxTimeMS`.
 - **Secret isolation**: passwords live in macOS Keychain or environment variables, never in project config.
 - **Driver verification**: JDBC drivers are checked by SHA-256 before use.
 - **Audit trail**: query text is hashed before being recorded; the current session exposes bounded audit metadata through `audit_status` and `audit_recent`.

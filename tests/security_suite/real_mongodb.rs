@@ -196,13 +196,38 @@ pub fn run() {
             "metadata reads changed MongoDB state"
         );
 
+        log_check("missing allowed collection returns an actionable index error");
+        let missing_indexes = harness.call_tool(
+            134,
+            "list_collection_indexes",
+            json!({ "database": mongodb::test_db(), "collection": "missing_docs" }),
+        );
+        assert!(
+            !missing_indexes.success,
+            "missing collection index lookup unexpectedly succeeded: {}",
+            missing_indexes.text
+        );
+        assert!(
+            missing_indexes.text.contains("list_collections")
+                && missing_indexes
+                    .text
+                    .contains("retry list_collection_indexes once"),
+            "missing collection guidance was not actionable: {}",
+            missing_indexes.text
+        );
+        assert_eq!(
+            database_state(),
+            baseline,
+            "missing collection lookup changed MongoDB state"
+        );
+
         log_check("disallowed document namespaces fail explicitly");
         let missing_collection = harness.call_tool(
             29,
             "find_documents",
             json!({
                 "database": mongodb::test_db(),
-                "collection": "missing_docs",
+                "collection": "disallowed_docs",
                 "filter": { "active": true },
                 "limit": 1
             }),
@@ -509,7 +534,13 @@ pub fn run() {
                 "database": mongodb::test_db(),
                 "collection": "timeout_docs",
                 "pipeline": [
-                    { "$group": { "_id": null, "payloads": { "$push": "$payload" } } }
+                    { "$limit": 1 },
+                    { "$lookup": {
+                        "from": "timeout_docs",
+                        "pipeline": [{ "$project": { "payload": 1 } }],
+                        "as": "joined_timeout_docs"
+                    }},
+                    { "$project": { "joined_count": { "$size": "$joined_timeout_docs" } } }
                 ],
                 "limit": 1
             }),

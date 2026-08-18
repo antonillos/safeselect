@@ -37,4 +37,11 @@ class MainTest {
         assertEquals(true, Main.isSearchUnsupported(31082, "SearchNotEnabled"));
         assertEquals(false, Main.isSearchUnsupported(13, "not authorized"));
     }
+
+    @Test
+    void treatsTheImplicitIdIndexAsUnique() {
+        assertEquals(true, Main.isClassicIndexUnique("_id_", false));
+        assertEquals(true, Main.isClassicIndexUnique("email_1", true));
+        assertEquals(false, Main.isClassicIndexUnique("email_1", false));
+    }
 }

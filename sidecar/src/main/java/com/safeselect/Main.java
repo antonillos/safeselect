@@ -528,9 +528,10 @@ public class Main {
             while (cursor.hasNext()) {
                 Document index = cursor.next();
                 Map<String, Object> safeIndex = new LinkedHashMap<>();
-                safeIndex.put("name", index.getString("name"));
+                String indexName = index.getString("name");
+                safeIndex.put("name", indexName);
                 safeIndex.put("key", convertBsonValue(index.get("key")));
-                safeIndex.put("unique", index.getBoolean("unique", false));
+                safeIndex.put("unique", isClassicIndexUnique(indexName, index.getBoolean("unique", false)));
                 safeIndex.put("sparse", index.getBoolean("sparse", false));
                 safeIndex.put("partial_filter_expression", convertBsonValue(index.get("partialFilterExpression")));
                 if (!appendBounded(classicIndexes, safeIndex)) {
@@ -657,6 +658,10 @@ public class Main {
             case "search", "vectorSearch", "autoEmbed" -> type;
             default -> "unknown";
         };
+    }
+
+    static boolean isClassicIndexUnique(String name, boolean explicitUnique) {
+        return "_id_".equals(name) || explicitUnique;
     }
 
     static boolean isSearchUnsupported(MongoCommandException error) {

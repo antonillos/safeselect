@@ -49,7 +49,7 @@ and `$merge`, and every filter, projection, sort, and pipeline is recursively ch
 server-side JavaScript. `$where`, `$function`, and `$accumulator` are rejected before BSON
 conversion in Rust and independently in the Java sidecar; their bodies are neither audited nor
 returned. Counts require a non-empty filter, and every operation is bounded by result and timeout
-limits. Profiling, schema discovery, and fixture generation operate on bounded samples; fixtures
+limits; MongoDB driver commands receive that timeout as `maxTimeMS`. Profiling, schema discovery, and fixture generation operate on bounded samples; fixtures
 are anonymized and returned in memory without writing files. There is no configuration switch to
 enable JavaScript: rejected requests must be rebuilt with declarative MQL operators.
 
@@ -93,7 +93,9 @@ Every MCP error carries exactly one contextual `next_suggestion`. Invalid
 arguments identify the correction, timeouts point to a narrower query and
 `explain`, stale connections point to `check`/`reconnect`, and security or
 startup failures are terminal. Database-derived detail remains UUID-delimited;
-agents must not retry an unchanged request.
+agents must not retry an unchanged request. The same trusted suggestion is
+also appended to the JSON-RPC error message for MCP clients that render only
+the compact error summary; database-derived detail is never appended there.
 
 ### 9. Secret Management
 
