@@ -2,6 +2,26 @@
 
 All notable changes to this project are documented in this file.
 
+## [v0.7.1] - 2026-08-18
+
+### Added
+
+- feat(cli): add binary-only uninstall
+- feat(mongodb): add indexes and statistics tools (#93)
+- feat(postgres): add index and statistics tools (#95)
+
+### Fixed
+
+- fix(mongodb): preserve implicit index uniqueness (#94)
+
+### Documentation
+
+- docs: categorize v0.7.0 changelog entries
+
+### Build And CI
+
+- ci: require MongoDB integration before merge
+
 ## [v0.7.0] - 2026-08-16
 
 ### Added
