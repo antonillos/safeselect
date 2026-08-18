@@ -59,6 +59,11 @@ forwarding raw `listIndexes`, `listSearchIndexes`, `dbStats`, or `collStats` com
 Atlas Search capability failures are reduced to `unsupported` or `unauthorized`; unexpected
 Search failures fail the tool closed.
 
+PostgreSQL index and statistics tools use fixed read-only catalog queries and
+expose only documented index, size, count, and scan fields. They require an
+exact relation that passes the existing schema allowlist and relation denylist;
+they never accept arbitrary catalog SQL or return raw catalog rows.
+
 ### 5. Backend Security
 
 - Connection uses `READ ONLY` transaction mode

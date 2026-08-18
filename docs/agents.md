@@ -194,6 +194,20 @@ relation is missing or inaccessible, follow the response's suggestion to call
 denylists are checked before catalog access, and security violations remain
 fail-closed.
 
+### PostgreSQL indexes and statistics
+
+`list_table_indexes` returns only safe metadata for one exact allowed relation:
+the index name, columns or expressions, uniqueness, access method, and optional
+partial predicate. Copy its schema and table values from `list_tables`; then use
+one returned column or expression in `explain` before a targeted `select`.
+
+`get_database_stats` returns aggregate database/table/index sizes and counts.
+`get_table_stats` returns estimated live rows, table/index/total sizes, and scan
+counters for one exact allowed relation. They query fixed read-only PostgreSQL
+catalogs, honour the existing schema and relation policies, and never accept
+arbitrary SQL. After statistics, inspect the specific schema or indexes; do not
+start an unbounded data read solely because statistics are available.
+
 ### `list_functions`, `list_triggers`, and `list_scheduled_jobs`
 
 PostgreSQL catalog discovery is available through fixed read-only tools. Use
