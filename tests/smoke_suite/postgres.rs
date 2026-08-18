@@ -79,6 +79,60 @@ pub fn psql(database: &str, sql: &str) -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
+// This module is compiled by both `smoke` and `security` integration targets;
+// only the latter needs direct role assertions.
+#[allow(dead_code)]
+pub fn psql_as_test_user(database: &str, sql: &str) -> (String, String, bool) {
+    let test_user = test_user();
+    let output = if let Ok(container) = std::env::var("SAFESELECT_SECURITY_DOCKER_CONTAINER") {
+        Command::new("docker")
+            .args([
+                "exec",
+                "-e",
+                &format!("PGPASSWORD={TEST_PASSWORD}"),
+                &container,
+                "psql",
+                "-U",
+                &test_user,
+                "-d",
+                database,
+                "-v",
+                "ON_ERROR_STOP=1",
+                "-At",
+                "-c",
+                sql,
+            ])
+            .output()
+            .expect("failed to run psql as test user in Docker")
+    } else {
+        Command::new("psql")
+            .args([
+                "-h",
+                &pg_host(),
+                "-p",
+                &pg_port(),
+                "-U",
+                &test_user,
+                "-d",
+                database,
+                "-v",
+                "ON_ERROR_STOP=1",
+                "-At",
+                "-c",
+                sql,
+            ])
+            .env("PGPASSWORD", TEST_PASSWORD)
+            .output()
+            .expect("failed to run psql as test user")
+    };
+
+    (
+        String::from_utf8_lossy(&output.stdout).trim().to_string(),
+        String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        output.status.success(),
+    )
+}
+
 pub fn setup_database() {
     wait_for_postgres();
     let test_db = test_db();
@@ -92,7 +146,10 @@ pub fn setup_database() {
     psql("postgres", &format!("CREATE DATABASE {test_db};"));
     psql(
         "postgres",
-        &format!("GRANT ALL PRIVILEGES ON DATABASE {test_db} TO {test_user};"),
+        &format!(
+            "REVOKE ALL ON DATABASE {test_db} FROM PUBLIC; \
+             GRANT CONNECT ON DATABASE {test_db} TO {test_user};"
+        ),
     );
     psql(
         &test_db,
@@ -101,13 +158,20 @@ pub fn setup_database() {
              CREATE VIEW public.safe_view AS SELECT id, name FROM public.safe_table; \
              CREATE TABLE public.large_payload (id int primary key, payload text); \
              CREATE TABLE public.secret_table (id int primary key, secret text); \
+             CREATE FUNCTION public.writer_function() RETURNS void LANGUAGE plpgsql AS $$ BEGIN UPDATE public.safe_table SET name = 'changed' WHERE id = 1; END; $$; \
+             CREATE PROCEDURE public.writer_procedure() LANGUAGE plpgsql AS $$ BEGIN DELETE FROM public.safe_table WHERE id = 1; END; $$; \
              CREATE FUNCTION public.safe_trigger_function() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END; $$; \
              CREATE TRIGGER safe_trigger BEFORE INSERT ON public.safe_table FOR EACH ROW EXECUTE FUNCTION public.safe_trigger_function(); \
              INSERT INTO public.safe_table VALUES (1, 'alpha', repeat('a', 20)), (2, 'beta', repeat('b', 20)), (3, 'gamma', repeat('c', 200)); \
              INSERT INTO public.large_payload VALUES (1, repeat('z', 2000)); \
              INSERT INTO public.secret_table VALUES (1, 'top-secret'); \
+             REVOKE CREATE ON SCHEMA public FROM PUBLIC; \
              GRANT USAGE ON SCHEMA public TO {test_user}; \
-             GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {test_user};"
+             GRANT SELECT ON public.safe_table, public.safe_view, public.large_payload TO {test_user}; \
+             REVOKE EXECUTE ON FUNCTION public.writer_function() FROM PUBLIC; \
+             REVOKE EXECUTE ON PROCEDURE public.writer_procedure() FROM PUBLIC; \
+             CREATE TABLE public.after_grant_table (id int primary key, value text); \
+             INSERT INTO public.after_grant_table VALUES (1, 'not-readable-by-agent');"
         ),
     );
 }
