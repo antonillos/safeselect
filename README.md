@@ -144,7 +144,7 @@ summary without exposing database-derived detail.
 - **Read only**: SQL allows `SELECT`, `EXPLAIN`, and `WITH`; NoSQL backends allow discovery and read-only document reads.
 - **No server-side JavaScript**: MongoDB `$where`, `$function`, and `$accumulator` are rejected in Rust and again in the Java sidecar.
 - **Scoped access**: schemas, relations, databases, and collections can be allowed or denied.
-- **Hard limits**: row count, result bytes, and timeouts are enforced.
+- **Hard limits**: row count, result bytes, and timeouts are enforced; MongoDB read commands receive the same timeout as `maxTimeMS`.
 - **Secret isolation**: passwords live in macOS Keychain or environment variables, never in project config.
 - **Driver verification**: JDBC drivers are checked by SHA-256 before use.
 - **Audit trail**: query text is hashed before being recorded; the current session exposes bounded audit metadata through `audit_status` and `audit_recent`.

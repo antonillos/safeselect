@@ -534,7 +534,13 @@ pub fn run() {
                 "database": mongodb::test_db(),
                 "collection": "timeout_docs",
                 "pipeline": [
-                    { "$group": { "_id": null, "payloads": { "$push": "$payload" } } }
+                    { "$limit": 1 },
+                    { "$lookup": {
+                        "from": "timeout_docs",
+                        "pipeline": [{ "$project": { "payload": 1 } }],
+                        "as": "joined_timeout_docs"
+                    }},
+                    { "$project": { "joined_count": { "$size": "$joined_timeout_docs" } } }
                 ],
                 "limit": 1
             }),

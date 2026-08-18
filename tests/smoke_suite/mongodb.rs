@@ -59,7 +59,10 @@ db.createUser({{
         user_name = test_user(),
         password = TEST_PASSWORD,
         large_payload = "z".repeat(2000),
-        timeout_payload = "t".repeat(256),
+        // Keep the timeout fixture below MongoDB's 16 MiB document limit while
+        // making the read-only lookup used by the real suite consistently exceed
+        // a 1 ms maxTimeMS budget.
+        timeout_payload = "t".repeat(2_000),
     ));
 }
 

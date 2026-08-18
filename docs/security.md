@@ -49,7 +49,7 @@ and `$merge`, and every filter, projection, sort, and pipeline is recursively ch
 server-side JavaScript. `$where`, `$function`, and `$accumulator` are rejected before BSON
 conversion in Rust and independently in the Java sidecar; their bodies are neither audited nor
 returned. Counts require a non-empty filter, and every operation is bounded by result and timeout
-limits. Profiling, schema discovery, and fixture generation operate on bounded samples; fixtures
+limits; MongoDB driver commands receive that timeout as `maxTimeMS`. Profiling, schema discovery, and fixture generation operate on bounded samples; fixtures
 are anonymized and returned in memory without writing files. There is no configuration switch to
 enable JavaScript: rejected requests must be rebuilt with declarative MQL operators.
 
