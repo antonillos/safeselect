@@ -21,4 +21,13 @@ class MainTest {
         Object declarative = Map.of("$and", List.of(Map.of("active", true), Map.of("score", Map.of("$gte", 10))));
         assertNull(Main.forbiddenMongoJavaScriptOperator(declarative));
     }
+
+    @Test
+    void preservesOnlyKnownSearchIndexTypes() {
+        assertEquals("search", Main.searchIndexType("search"));
+        assertEquals("vectorSearch", Main.searchIndexType("vectorSearch"));
+        assertEquals("autoEmbed", Main.searchIndexType("autoEmbed"));
+        assertEquals("unknown", Main.searchIndexType("futureType"));
+        assertEquals("unknown", Main.searchIndexType(null));
+    }
 }

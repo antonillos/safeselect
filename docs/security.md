@@ -53,6 +53,12 @@ limits. Profiling, schema discovery, and fixture generation operate on bounded s
 are anonymized and returned in memory without writing files. There is no configuration switch to
 enable JavaScript: rejected requests must be rebuilt with declarative MQL operators.
 
+Index and statistics tools use the same database/collection policy, command timeout, audit trail,
+and result-byte bound. They expose an explicit allowlist of index and storage fields rather than
+forwarding raw `listIndexes`, `listSearchIndexes`, `dbStats`, or `collStats` command documents.
+Atlas Search capability failures are reduced to `unsupported` or `unauthorized`; unexpected
+Search failures fail the tool closed.
+
 ### 5. Backend Security
 
 - Connection uses `READ ONLY` transaction mode

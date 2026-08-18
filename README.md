@@ -153,7 +153,7 @@ and stop when the suggestion is terminal.
 |---|---|
 | SQL | `list_tables`, `describe_table`, `select`, `explain` |
 | MongoDB reads | `list_databases`, `list_collections`, `find_documents`, `aggregate_documents`, `distinct_documents`, `count_documents`, `explain_documents` |
-| MongoDB analysis | `profile_document_field`, `discover_document_schema`, `generate_document_fixture` |
+| MongoDB analysis | `profile_document_field`, `discover_document_schema`, `generate_document_fixture`, `list_collection_indexes`, `get_database_stats`, `get_collection_stats` |
 | Connection | `database_info`, `check`, `connect`, `disconnect`, `reconnect` |
 | Audit | `audit_status`, `audit_recent` |
 | Config | `config_validate`, `config_show`, `config_set_password`, `config_rename_environment`, `config_delete_environment`, `config_reset` |
