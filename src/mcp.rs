@@ -1,10 +1,10 @@
 use crate::agents;
 use crate::audit::{AuditDetails, AuditLog};
 use crate::backend::{
-    BackendCapability, BackendDescriptor, DocumentAggregateRequest, DocumentCollectionRequest,
-    DocumentCountRequest, DocumentDistinctRequest, DocumentExplainRequest,
-    DocumentFieldProfileRequest, DocumentFindRequest, DocumentFixtureRequest,
-    DocumentSchemaRequest,
+    BackendCapability, BackendDescriptor, BackendKind, DocumentAggregateRequest,
+    DocumentCollectionRequest, DocumentCountRequest, DocumentDistinctRequest,
+    DocumentExplainRequest, DocumentFieldProfileRequest, DocumentFindRequest,
+    DocumentFixtureRequest, DocumentSchemaRequest,
 };
 use crate::compose;
 use crate::config::{ConfigLoader, EnvironmentConfig, ProjectConfig};
@@ -356,8 +356,9 @@ impl McpServer {
     }
 
     fn is_postgres(&self) -> bool {
-        self.backend.vendor.eq_ignore_ascii_case("postgresql")
-            || self.backend.vendor.eq_ignore_ascii_case("postgres")
+        self.backend.kind == BackendKind::Jdbc
+            && (self.backend.vendor.eq_ignore_ascii_case("postgresql")
+                || self.backend.vendor.eq_ignore_ascii_case("postgres"))
     }
 
     fn tool_description(&self, action: &str) -> String {
