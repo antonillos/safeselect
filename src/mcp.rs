@@ -324,10 +324,11 @@ impl McpServer {
                 }
             };
 
-            let method = match msg.method.as_deref() {
-                Some(m) => m,
-                None => continue,
-            };
+            if msg.jsonrpc.as_deref() != Some("2.0") || msg.method.is_none() {
+                self.send_error(msg.id.clone(), -32600, "Invalid Request")?;
+                continue;
+            }
+            let method = msg.method.as_deref().expect("validated above");
 
             match method {
                 "initialize" => self.handle_initialize(&msg)?,
