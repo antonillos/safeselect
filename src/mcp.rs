@@ -1558,7 +1558,7 @@ impl McpServer {
                     "list_collection_indexes",
                     started.elapsed().as_millis() as u64,
                 )?;
-                self.send_backend_error(id, "List collection indexes failed.", &e.to_string(), "Call check; if MongoDB is reachable, call list_collections once to verify the namespace before reporting the error.")
+                self.send_backend_error(id, "List collection indexes failed.", &e.to_string(), "Call list_collections for the same database, choose one exact returned collection name, then retry list_collection_indexes once.")
             }
         }
     }

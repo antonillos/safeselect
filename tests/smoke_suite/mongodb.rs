@@ -102,7 +102,7 @@ display_name = "SafeSelect Mongo Security Test"
 
 [security]
 allowed_databases = ["{db_name}"]
-allowed_collections = ["{db_name}.safe_docs", "{db_name}.large_docs", "{db_name}.timeout_docs"]
+allowed_collections = ["{db_name}.safe_docs", "{db_name}.large_docs", "{db_name}.timeout_docs", "{db_name}.missing_docs"]
 denied_collections = ["{db_name}.secret_docs"]
 require_single_statement = true
 
