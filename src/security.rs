@@ -1315,6 +1315,28 @@ mod tests {
     }
 
     #[test]
+    fn test_stacked_query_variants_are_rejected_before_execution() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+
+        for sql in [
+            "COMMIT; DROP TABLE public.users",
+            "ROLLBACK; CREATE TABLE public.evil_copy (id int)",
+            "SELECT 1; DELETE FROM public.users",
+            "/* harmless prefix */\nCoMmIt ;\nDrOp TABLE public.users",
+            "WITH x AS (SELECT 1) SELECT * FROM x; DELETE FROM public.users",
+            "DO $$ BEGIN PERFORM 1; END $$; DELETE FROM public.users",
+        ] {
+            let error = engine
+                .validate(sql)
+                .expect_err("stacked query must be rejected before sidecar execution");
+            assert!(
+                error.to_string().contains("Single statement required"),
+                "unexpected rejection for {sql:?}: {error}"
+            );
+        }
+    }
+
+    #[test]
     fn test_semicolon_in_string() {
         assert_eq!(count_statements("SELECT 'hello;world'"), 1);
     }
