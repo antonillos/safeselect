@@ -306,6 +306,13 @@ as the JSON-encoded fallback.
   `schema_inference: "sampled_not_exhaustive"`, an explicit notice, and
   `next_suggestion`.
 - `generate_document_fixture`: return anonymized samples in the response; it never writes fixture files.
+- `list_collection_indexes`: return classic index metadata first, plus Atlas
+  Search/Vector metadata when the server permits it. If
+  `search_indexes_status` is `unsupported` or `unauthorized`, use classic
+  indexes and do not retry the Search request.
+- `get_database_stats` and `get_collection_stats`: return only bounded storage
+  counters, never raw `dbStats`/`collStats` documents or collection data. Use
+  their `next_suggestion` to inspect schema or indexes before a query.
 
 All document tools enforce configured database/collection allowlists and denylists,
 statement timeouts, and result-size limits.

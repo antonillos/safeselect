@@ -134,6 +134,68 @@ pub fn run() {
             collections.text
         );
 
+        log_check("index and stats tools expose bounded metadata only");
+        let indexes = harness.call_tool(
+            130,
+            "list_collection_indexes",
+            json!({ "database": mongodb::test_db(), "collection": "safe_docs" }),
+        );
+        assert!(
+            indexes.success,
+            "list_collection_indexes failed: {}",
+            indexes.text
+        );
+        assert!(
+            indexes.text.contains("active_1")
+                && indexes.text.contains("\"classic_indexes\"")
+                && indexes
+                    .text
+                    .contains("\"search_indexes_status\":\"unsupported\"")
+                && indexes.text.contains("explain_documents"),
+            "unexpected index metadata: {}",
+            indexes.text
+        );
+        let database_stats = harness.call_tool(
+            131,
+            "get_database_stats",
+            json!({ "database": mongodb::test_db() }),
+        );
+        assert!(
+            database_stats.success,
+            "get_database_stats failed: {}",
+            database_stats.text
+        );
+        assert!(
+            database_stats.text.contains("\"collections\"")
+                && database_stats.text.contains("\"index_size\"")
+                && !database_stats.text.contains("\"raw\"")
+                && database_stats.text.contains("list_collections"),
+            "unexpected database stats: {}",
+            database_stats.text
+        );
+        let collection_stats = harness.call_tool(
+            132,
+            "get_collection_stats",
+            json!({ "database": mongodb::test_db(), "collection": "safe_docs" }),
+        );
+        assert!(
+            collection_stats.success,
+            "get_collection_stats failed: {}",
+            collection_stats.text
+        );
+        assert!(
+            collection_stats.text.contains("\"document_count\"")
+                && collection_stats.text.contains("\"total_index_size\"")
+                && collection_stats.text.contains("list_collection_indexes"),
+            "unexpected collection stats: {}",
+            collection_stats.text
+        );
+        assert_eq!(
+            database_state(),
+            baseline,
+            "metadata reads changed MongoDB state"
+        );
+
         log_check("disallowed document namespaces fail explicitly");
         let missing_collection = harness.call_tool(
             29,
@@ -279,6 +341,12 @@ pub fn run() {
                     "filter": {},
                     "limit": 1
                 }),
+            ),
+            (
+                133,
+                "denied index namespace",
+                "list_collection_indexes",
+                json!({ "database": mongodb::test_db(), "collection": "secret_docs" }),
             ),
             (
                 22,

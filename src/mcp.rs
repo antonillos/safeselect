@@ -1,9 +1,10 @@
 use crate::agents;
 use crate::audit::{AuditDetails, AuditLog};
 use crate::backend::{
-    BackendCapability, BackendDescriptor, DocumentAggregateRequest, DocumentCountRequest,
-    DocumentDistinctRequest, DocumentExplainRequest, DocumentFieldProfileRequest,
-    DocumentFindRequest, DocumentFixtureRequest, DocumentSchemaRequest,
+    BackendCapability, BackendDescriptor, DocumentAggregateRequest, DocumentCollectionRequest,
+    DocumentCountRequest, DocumentDistinctRequest, DocumentExplainRequest,
+    DocumentFieldProfileRequest, DocumentFindRequest, DocumentFixtureRequest,
+    DocumentSchemaRequest,
 };
 use crate::compose;
 use crate::config::{ConfigLoader, EnvironmentConfig, ProjectConfig};
@@ -839,6 +840,42 @@ impl McpServer {
             });
         }
 
+        if self.backend.has(BackendCapability::DocumentIndexes) {
+            tools.push(ToolDefinition {
+                name: "list_collection_indexes".into(),
+                description: self.tool_description("list classic MongoDB indexes and, when available, Atlas Search indexes for one allowed collection; use the returned indexed fields with explain_documents or one bounded read"),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {"database": {"type": "string"}, "collection": {"type": "string"}},
+                    "required": ["database", "collection"],
+                    "additionalProperties": false
+                }),
+            });
+        }
+
+        if self.backend.has(BackendCapability::DocumentDatabaseStats) {
+            tools.push(ToolDefinition {
+                name: "get_database_stats".into(),
+                description: self.tool_description("return bounded aggregate storage statistics for one allowed MongoDB database; no documents or raw dbStats response are returned"),
+                input_schema: serde_json::json!({
+                    "type": "object", "properties": {"database": {"type": "string"}},
+                    "required": ["database"], "additionalProperties": false
+                }),
+            });
+        }
+
+        if self.backend.has(BackendCapability::DocumentCollectionStats) {
+            tools.push(ToolDefinition {
+                name: "get_collection_stats".into(),
+                description: self.tool_description("return bounded aggregate storage statistics for one allowed MongoDB collection; no documents or raw collStats response are returned"),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {"database": {"type": "string"}, "collection": {"type": "string"}},
+                    "required": ["database", "collection"], "additionalProperties": false
+                }),
+            });
+        }
+
         tools.extend([
             ToolDefinition {
                 name: "disconnect".into(),
@@ -1166,6 +1203,9 @@ impl McpServer {
             "explain" => self.handle_explain(msg.id.clone(), &args),
             "list_databases" => self.handle_list_databases(msg.id.clone()),
             "list_collections" => self.handle_list_collections(msg.id.clone(), &args),
+            "list_collection_indexes" => self.handle_list_collection_indexes(msg.id.clone(), &args),
+            "get_database_stats" => self.handle_get_database_stats(msg.id.clone(), &args),
+            "get_collection_stats" => self.handle_get_collection_stats(msg.id.clone(), &args),
             "find_documents" => self.handle_find_documents(msg.id.clone(), &args),
             "aggregate_documents" => self.handle_aggregate_documents(msg.id.clone(), &args),
             "distinct_documents" => self.handle_distinct_documents(msg.id.clone(), &args),
@@ -1271,6 +1311,9 @@ impl McpServer {
                 BackendCapability::DocumentProfile => "document_profile",
                 BackendCapability::DocumentSchema => "document_schema",
                 BackendCapability::DocumentFixture => "document_fixture",
+                BackendCapability::DocumentIndexes => "document_indexes",
+                BackendCapability::DocumentDatabaseStats => "document_database_stats",
+                BackendCapability::DocumentCollectionStats => "document_collection_stats",
             })
             .collect();
         let next_suggestion = match self.backend.kind {
@@ -1468,6 +1511,140 @@ impl McpServer {
                     &e.to_string(),
                     document_backend_error_next_suggestion(&e.to_string()),
                 )
+            }
+        }
+    }
+
+    fn handle_list_collection_indexes(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        let started = Instant::now();
+        let database = required_string!(self, id, args, "database").to_string();
+        let collection = required_string!(self, id, args, "collection").to_string();
+        if let Err(e) = self
+            .security
+            .validate_document_collection(&DocumentCollectionRequest {
+                database: database.clone(),
+                collection: collection.clone(),
+            })
+        {
+            self.audit.record_tool(
+                "REJECT",
+                "reject",
+                "list_collection_indexes",
+                started.elapsed().as_millis() as u64,
+            )?;
+            return self.send_error(id, -32000, format!("Request rejected: {e}"));
+        }
+        match self
+            .ensure_sidecar()?
+            .list_collection_indexes(&database, &collection)
+        {
+            Ok(result) => {
+                self.audit.record_tool(
+                    "PASS",
+                    "allow",
+                    "list_collection_indexes",
+                    started.elapsed().as_millis() as u64,
+                )?;
+                self.write_response(&data_tool_response(id, &result, "Call explain_documents with the same database and collection using an indexed field, then make one bounded read only if the user still needs data.")?)
+            }
+            Err(e) => {
+                self.audit.record_tool(
+                    "DOCUMENT_ERROR",
+                    "error",
+                    "list_collection_indexes",
+                    started.elapsed().as_millis() as u64,
+                )?;
+                self.send_backend_error(id, "List collection indexes failed.", &e.to_string(), "Call check; if MongoDB is reachable, call list_collections once to verify the namespace before reporting the error.")
+            }
+        }
+    }
+
+    fn handle_get_database_stats(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        let started = Instant::now();
+        let database = required_string!(self, id, args, "database");
+        if let Err(e) = self.security.validate_document_database(database) {
+            self.audit.record_tool(
+                "REJECT",
+                "reject",
+                "get_database_stats",
+                started.elapsed().as_millis() as u64,
+            )?;
+            return self.send_error(id, -32000, format!("Request rejected: {e}"));
+        }
+        match self.ensure_sidecar()?.get_database_stats(database) {
+            Ok(result) => {
+                self.audit.record_tool(
+                    "PASS",
+                    "allow",
+                    "get_database_stats",
+                    started.elapsed().as_millis() as u64,
+                )?;
+                self.write_response(&data_tool_response(id, &result, "Call list_collections for this database, then inspect one collection with discover_document_schema or list_collection_indexes.")?)
+            }
+            Err(e) => {
+                self.audit.record_tool(
+                    "DOCUMENT_ERROR",
+                    "error",
+                    "get_database_stats",
+                    started.elapsed().as_millis() as u64,
+                )?;
+                self.send_backend_error(id, "Get database stats failed.", &e.to_string(), "Call check; if MongoDB is reachable, call list_databases once to verify the database before reporting the error.")
+            }
+        }
+    }
+
+    fn handle_get_collection_stats(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        let started = Instant::now();
+        let database = required_string!(self, id, args, "database").to_string();
+        let collection = required_string!(self, id, args, "collection").to_string();
+        if let Err(e) = self
+            .security
+            .validate_document_collection(&DocumentCollectionRequest {
+                database: database.clone(),
+                collection: collection.clone(),
+            })
+        {
+            self.audit.record_tool(
+                "REJECT",
+                "reject",
+                "get_collection_stats",
+                started.elapsed().as_millis() as u64,
+            )?;
+            return self.send_error(id, -32000, format!("Request rejected: {e}"));
+        }
+        match self
+            .ensure_sidecar()?
+            .get_collection_stats(&database, &collection)
+        {
+            Ok(result) => {
+                self.audit.record_tool(
+                    "PASS",
+                    "allow",
+                    "get_collection_stats",
+                    started.elapsed().as_millis() as u64,
+                )?;
+                self.write_response(&data_tool_response(id, &result, "Call list_collection_indexes for this database and collection, then use explain_documents before any bounded read.")?)
+            }
+            Err(e) => {
+                self.audit.record_tool(
+                    "DOCUMENT_ERROR",
+                    "error",
+                    "get_collection_stats",
+                    started.elapsed().as_millis() as u64,
+                )?;
+                self.send_backend_error(id, "Get collection stats failed.", &e.to_string(), "Call check; if MongoDB is reachable, call list_collections once to verify the namespace before reporting the error.")
             }
         }
     }

@@ -467,6 +467,44 @@ impl SidecarProcess {
         self.list_collections_unchecked(database)
     }
 
+    pub fn list_collection_indexes(
+        &mut self,
+        database: &str,
+        collection: &str,
+    ) -> Result<serde_json::Value> {
+        self.document_value_request(
+            "list_collection_indexes",
+            serde_json::json!({ "database": database, "collection": collection }),
+        )
+    }
+
+    pub fn get_database_stats(&mut self, database: &str) -> Result<serde_json::Value> {
+        self.ensure_document_database_exists(database)?;
+        let resp = self.send_request(
+            "get_database_stats",
+            Some(serde_json::json!({ "database": database })),
+        )?;
+        if let Some(err) = resp.error {
+            return Err(SafeselectError::Sidecar(format!(
+                "get_database_stats failed [{}]: {}",
+                err.code, err.message
+            )));
+        }
+        resp.ok
+            .ok_or_else(|| SafeselectError::Sidecar("empty response from sidecar".into()))
+    }
+
+    pub fn get_collection_stats(
+        &mut self,
+        database: &str,
+        collection: &str,
+    ) -> Result<serde_json::Value> {
+        self.document_value_request(
+            "get_collection_stats",
+            serde_json::json!({ "database": database, "collection": collection }),
+        )
+    }
+
     fn list_collections_unchecked(&mut self, database: &str) -> Result<Vec<String>> {
         let resp = self.send_request(
             "list_collections",

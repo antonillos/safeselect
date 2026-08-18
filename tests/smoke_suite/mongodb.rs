@@ -45,6 +45,7 @@ db.safe_docs.insertMany([
   {{ _id: 2, name: "beta", active: true, category: "safe" }},
   {{ _id: 3, name: "gamma", active: false, category: "safe" }}
 ]);
+db.safe_docs.createIndex({{ active: 1 }}, {{ name: "active_1" }});
 db.large_docs.insertOne({{ _id: 1, payload: "{large_payload}" }});
 db.timeout_docs.insertMany(Array.from({{ length: 5000 }}, (_, i) => ({{ _id: i, sort_key: 5000 - i, payload: "{timeout_payload}" }})));
 db.secret_docs.insertOne({{ _id: 1, secret: "top-secret" }});

@@ -23,6 +23,9 @@ pub enum BackendCapability {
     DocumentProfile,
     DocumentSchema,
     DocumentFixture,
+    DocumentIndexes,
+    DocumentDatabaseStats,
+    DocumentCollectionStats,
 }
 
 #[derive(Debug, Clone)]
@@ -163,11 +166,28 @@ impl BackendDescriptor {
                 BackendCapability::DocumentProfile,
                 BackendCapability::DocumentSchema,
                 BackendCapability::DocumentFixture,
+                BackendCapability::DocumentIndexes,
+                BackendCapability::DocumentDatabaseStats,
+                BackendCapability::DocumentCollectionStats,
             ],
         }
     }
 
     pub fn has(&self, capability: BackendCapability) -> bool {
         self.capabilities.contains(&capability)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn document_backend_advertises_indexes_and_bounded_stats() {
+        let backend = BackendDescriptor::document("mongodb");
+
+        assert!(backend.has(BackendCapability::DocumentIndexes));
+        assert!(backend.has(BackendCapability::DocumentDatabaseStats));
+        assert!(backend.has(BackendCapability::DocumentCollectionStats));
     }
 }

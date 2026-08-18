@@ -9,6 +9,7 @@ import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoCursor;
 import com.mongodb.client.MongoDatabase;
 import com.mongodb.ReadPreference;
+import com.mongodb.MongoCommandException;
 import org.bson.BsonArray;
 import org.bson.BsonBinary;
 import org.bson.BsonDocument;
@@ -182,6 +183,18 @@ public class Main {
                         case "list_collections" -> {
                             touchActivity();
                             handleListCollections(writer, id, request);
+                        }
+                        case "list_collection_indexes" -> {
+                            touchActivity();
+                            handleListCollectionIndexes(writer, id, request);
+                        }
+                        case "get_database_stats" -> {
+                            touchActivity();
+                            handleGetDatabaseStats(writer, id, request);
+                        }
+                        case "get_collection_stats" -> {
+                            touchActivity();
+                            handleGetCollectionStats(writer, id, request);
                         }
                         case "find_documents" -> {
                             touchActivity();
@@ -471,7 +484,7 @@ public class Main {
         final var result = mongoClient
                 .getDatabase("admin")
                 .runCommand(new Document("ping", 1), ReadPreference.secondaryPreferred());
-        sendResponse(writer, id, result, null);
+        sendBoundedResponse(writer, id, result);
     }
 
     @SuppressWarnings("unchecked")
@@ -492,6 +505,174 @@ public class Main {
             collections.add(name);
         }
         sendResponse(writer, id, collections, null);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void handleListCollectionIndexes(PrintWriter writer, Object id, Map<String, Object> request) throws Exception {
+        try {
+            ensureMongoConnected(writer, id);
+        } catch (IllegalStateException e) {
+            return;
+        }
+        Map<String, Object> params = (Map<String, Object>) request.get("params");
+        if (params == null || params.get("database") == null || params.get("collection") == null) {
+            sendResponse(writer, id, null, Map.of("code", "MISSING_NAMESPACE", "message", "Database and collection are required"));
+            return;
+        }
+        String databaseName = (String) params.get("database");
+        String collectionName = (String) params.get("collection");
+        MongoCollection<Document> collection = mongoClient.getDatabase(databaseName).getCollection(collectionName);
+
+        List<Object> classicIndexes = new ArrayList<>();
+        try (MongoCursor<Document> cursor = collection.listIndexes().iterator()) {
+            while (cursor.hasNext()) {
+                Document index = cursor.next();
+                Map<String, Object> safeIndex = new LinkedHashMap<>();
+                safeIndex.put("name", index.getString("name"));
+                safeIndex.put("key", convertBsonValue(index.get("key")));
+                safeIndex.put("unique", index.getBoolean("unique", false));
+                safeIndex.put("sparse", index.getBoolean("sparse", false));
+                safeIndex.put("partial_filter_expression", convertBsonValue(index.get("partialFilterExpression")));
+                if (!appendBounded(classicIndexes, safeIndex)) {
+                    sendLimitExceeded(writer, id, "max_result_bytes", maxResultBytes);
+                    return;
+                }
+            }
+        }
+
+        List<Object> searchIndexes = new ArrayList<>();
+        String searchStatus = "available";
+        try (MongoCursor<Document> cursor = collection.listSearchIndexes().iterator()) {
+            while (cursor.hasNext()) {
+                Document index = cursor.next();
+                Map<String, Object> safeIndex = new LinkedHashMap<>();
+                safeIndex.put("name", index.getString("name"));
+                safeIndex.put("type", searchIndexType(index.getString("type")));
+                safeIndex.put("status", index.getString("status"));
+                safeIndex.put("queryable", index.getBoolean("queryable", false));
+                safeIndex.put("definition", convertBsonValue(index.get("latestDefinition")));
+                if (!appendBounded(searchIndexes, safeIndex)) {
+                    sendLimitExceeded(writer, id, "max_result_bytes", maxResultBytes);
+                    return;
+                }
+            }
+        } catch (MongoCommandException e) {
+            if (isSearchUnsupported(e)) {
+                searchStatus = "unsupported";
+            } else if (isSearchUnauthorized(e)) {
+                searchStatus = "unauthorized";
+            } else {
+                throw e;
+            }
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("database", databaseName);
+        result.put("collection", collectionName);
+        result.put("classic_indexes", classicIndexes);
+        result.put("search_indexes", searchIndexes);
+        result.put("search_indexes_status", searchStatus);
+        sendBoundedResponse(writer, id, result);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void handleGetDatabaseStats(PrintWriter writer, Object id, Map<String, Object> request) throws Exception {
+        try {
+            ensureMongoConnected(writer, id);
+        } catch (IllegalStateException e) {
+            return;
+        }
+        Map<String, Object> params = (Map<String, Object>) request.get("params");
+        if (params == null || params.get("database") == null) {
+            sendResponse(writer, id, null, Map.of("code", "MISSING_DATABASE", "message", "No database provided"));
+            return;
+        }
+        String databaseName = (String) params.get("database");
+        Document command = new Document("dbStats", 1);
+        applyMongoTimeout(command);
+        Document stats = mongoClient.getDatabase(databaseName).runCommand(command);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("database", databaseName);
+        result.put("collections", stats.get("collections"));
+        result.put("views", stats.get("views"));
+        result.put("objects", stats.get("objects"));
+        result.put("average_object_size", stats.get("avgObjSize"));
+        result.put("data_size", stats.get("dataSize"));
+        result.put("storage_size", stats.get("storageSize"));
+        result.put("index_count", stats.get("indexes"));
+        result.put("index_size", stats.get("indexSize"));
+        result.put("total_size", stats.get("totalSize"));
+        sendBoundedResponse(writer, id, result);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void handleGetCollectionStats(PrintWriter writer, Object id, Map<String, Object> request) throws Exception {
+        try {
+            ensureMongoConnected(writer, id);
+        } catch (IllegalStateException e) {
+            return;
+        }
+        Map<String, Object> params = (Map<String, Object>) request.get("params");
+        if (params == null || params.get("database") == null || params.get("collection") == null) {
+            sendResponse(writer, id, null, Map.of("code", "MISSING_NAMESPACE", "message", "Database and collection are required"));
+            return;
+        }
+        String databaseName = (String) params.get("database");
+        String collectionName = (String) params.get("collection");
+        Document command = new Document("collStats", collectionName);
+        applyMongoTimeout(command);
+        Document stats = mongoClient.getDatabase(databaseName).runCommand(command);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("database", databaseName);
+        result.put("collection", collectionName);
+        result.put("document_count", stats.get("count"));
+        result.put("average_object_size", stats.get("avgObjSize"));
+        result.put("data_size", stats.get("size"));
+        result.put("storage_size", stats.get("storageSize"));
+        result.put("index_count", stats.get("nindexes"));
+        result.put("total_index_size", stats.get("totalIndexSize"));
+        sendBoundedResponse(writer, id, result);
+    }
+
+    private static boolean appendBounded(List<Object> values, Object value) throws Exception {
+        long currentBytes = MAPPER.writeValueAsBytes(values).length;
+        long valueBytes = MAPPER.writeValueAsBytes(value).length;
+        if (currentBytes + valueBytes > maxResultBytes) {
+            return false;
+        }
+        values.add(value);
+        return true;
+    }
+
+    private static void sendBoundedResponse(PrintWriter writer, Object id, Object result) throws Exception {
+        if (MAPPER.writeValueAsBytes(result).length > maxResultBytes) {
+            sendLimitExceeded(writer, id, "max_result_bytes", maxResultBytes);
+            return;
+        }
+        sendResponse(writer, id, result, null);
+    }
+
+    static String searchIndexType(String type) {
+        return switch (type == null ? "" : type) {
+            case "search", "vectorSearch", "autoEmbed" -> type;
+            default -> "unknown";
+        };
+    }
+
+    static boolean isSearchUnsupported(MongoCommandException error) {
+        return isSearchUnsupported(error.getErrorCode(), error.getErrorMessage());
+    }
+
+    static boolean isSearchUnsupported(int errorCode, String errorMessage) {
+        String message = errorMessage == null ? "" : errorMessage.toLowerCase(Locale.ROOT);
+        return errorCode == 59
+                || errorCode == 31082 // SearchNotEnabled on local MongoDB deployments
+                || message.contains("command not found")
+                || message.contains("searchnotenabled");
+    }
+
+    static boolean isSearchUnauthorized(MongoCommandException error) {
+        return error.getErrorCode() == 13 || error.getErrorMessage().toLowerCase(Locale.ROOT).contains("not authorized");
     }
 
     @SuppressWarnings("unchecked")
