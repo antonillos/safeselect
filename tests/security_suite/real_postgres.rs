@@ -156,6 +156,30 @@ pub fn run() {
             ("transaction begin", "BEGIN"),
             ("transaction commit", "COMMIT"),
             ("transaction rollback", "ROLLBACK"),
+            (
+                "stacked commit drop",
+                "COMMIT; DROP TABLE public.safe_table",
+            ),
+            (
+                "stacked rollback create",
+                "ROLLBACK; CREATE TABLE public.evil_copy (id int)",
+            ),
+            (
+                "stacked select delete",
+                "SELECT 1; DELETE FROM public.safe_table WHERE id = 1",
+            ),
+            (
+                "stacked mixed case with comment",
+                "/* harmless prefix */\nCoMmIt ;\nDrOp TABLE public.safe_table",
+            ),
+            (
+                "stacked cte delete",
+                "WITH x AS (SELECT 1) SELECT * FROM x; DELETE FROM public.safe_table",
+            ),
+            (
+                "stacked do delete",
+                "DO $$ BEGIN PERFORM 1; END $$; DELETE FROM public.safe_table",
+            ),
             ("denied relation", "SELECT * FROM public.secret_table"),
             (
                 "session change",
