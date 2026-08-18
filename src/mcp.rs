@@ -1240,7 +1240,9 @@ impl McpServer {
             "describe_table" => self.handle_describe_table(msg.id.clone(), &args),
             "list_table_indexes" => self.handle_list_table_indexes(msg.id.clone(), &args),
             "get_database_stats" => match self.backend.kind {
-                BackendKind::Document => self.handle_get_database_stats(msg.id.clone(), &args),
+                BackendKind::Document => {
+                    self.handle_get_mongodb_database_stats(msg.id.clone(), &args)
+                }
                 BackendKind::Jdbc if self.is_postgres() => {
                     self.handle_get_postgres_database_stats(msg.id.clone(), &args)
                 }
@@ -1619,7 +1621,7 @@ impl McpServer {
         }
     }
 
-    fn handle_get_postgres_database_stats(
+    fn handle_get_mongodb_database_stats(
         &mut self,
         id: Option<serde_json::Value>,
         args: &serde_json::Value,
@@ -2240,7 +2242,7 @@ impl McpServer {
         )
     }
 
-    fn handle_get_database_stats(
+    fn handle_get_postgres_database_stats(
         &mut self,
         id: Option<serde_json::Value>,
         args: &serde_json::Value,
