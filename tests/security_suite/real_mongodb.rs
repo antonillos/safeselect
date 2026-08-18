@@ -227,7 +227,7 @@ pub fn run() {
             "find_documents",
             json!({
                 "database": mongodb::test_db(),
-                "collection": "missing_docs",
+                "collection": "disallowed_docs",
                 "filter": { "active": true },
                 "limit": 1
             }),
