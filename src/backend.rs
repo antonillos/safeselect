@@ -13,6 +13,9 @@ pub enum BackendCapability {
     SqlQuery,
     SqlExplain,
     TableDiscovery,
+    TableIndexes,
+    DatabaseStats,
+    TableStats,
     DatabaseDiscovery,
     CollectionDiscovery,
     DocumentFind,
@@ -140,14 +143,23 @@ pub struct DocumentResult {
 
 impl BackendDescriptor {
     pub fn jdbc(vendor: impl Into<String>) -> Self {
+        let vendor = vendor.into();
+        let mut capabilities = vec![
+            BackendCapability::SqlQuery,
+            BackendCapability::SqlExplain,
+            BackendCapability::TableDiscovery,
+        ];
+        if vendor.eq_ignore_ascii_case("postgresql") || vendor.eq_ignore_ascii_case("postgres") {
+            capabilities.extend([
+                BackendCapability::TableIndexes,
+                BackendCapability::DatabaseStats,
+                BackendCapability::TableStats,
+            ]);
+        }
         Self {
             kind: BackendKind::Jdbc,
-            vendor: vendor.into(),
-            capabilities: vec![
-                BackendCapability::SqlQuery,
-                BackendCapability::SqlExplain,
-                BackendCapability::TableDiscovery,
-            ],
+            vendor,
+            capabilities,
         }
     }
 
@@ -189,5 +201,18 @@ mod tests {
         assert!(backend.has(BackendCapability::DocumentIndexes));
         assert!(backend.has(BackendCapability::DocumentDatabaseStats));
         assert!(backend.has(BackendCapability::DocumentCollectionStats));
+    }
+
+    #[test]
+    fn only_postgres_advertises_postgres_catalog_tools() {
+        let postgres = BackendDescriptor::jdbc("postgresql");
+        let mysql = BackendDescriptor::jdbc("mysql");
+
+        assert!(postgres.has(BackendCapability::TableIndexes));
+        assert!(postgres.has(BackendCapability::DatabaseStats));
+        assert!(postgres.has(BackendCapability::TableStats));
+        assert!(!mysql.has(BackendCapability::TableIndexes));
+        assert!(!mysql.has(BackendCapability::DatabaseStats));
+        assert!(!mysql.has(BackendCapability::TableStats));
     }
 }

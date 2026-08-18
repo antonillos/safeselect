@@ -209,6 +209,9 @@ fn assert_mcp_sql_error_stays_alive(repo_root: &std::path::Path, config_dir: &st
             && tools_response.contains("list_functions")
             && tools_response.contains("list_triggers")
             && tools_response.contains("list_scheduled_jobs")
+            && tools_response.contains("list_table_indexes")
+            && tools_response.contains("get_database_stats")
+            && tools_response.contains("get_table_stats")
             && !tools_response.contains("discover_document_schema")
             && tools.iter().all(|tool| {
                 tool["outputSchema"]["required"]
@@ -335,6 +338,55 @@ fn assert_mcp_sql_error_stays_alive(repo_root: &std::path::Path, config_dir: &st
         assert!(
             response.contains(expected_message) && response.contains("\"code\":-32602"),
             "unexpected invalid {tool} response: {response}"
+        );
+    }
+
+    for (id, tool, arguments, expected_value, expected_next_step) in [
+        (
+            11,
+            "list_table_indexes",
+            serde_json::json!({"schema": "public", "table": "safe_table"}),
+            "index_name",
+            "explain",
+        ),
+        (
+            12,
+            "get_database_stats",
+            serde_json::json!({}),
+            "database_size",
+            "list_tables",
+        ),
+        (
+            13,
+            "get_table_stats",
+            serde_json::json!({"schema": "public", "table": "safe_table"}),
+            "estimated_live_rows",
+            "list_table_indexes",
+        ),
+    ] {
+        writeln!(
+            stdin,
+            "{}",
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "tools/call",
+                "params": {"name": tool, "arguments": arguments}
+            })
+        )
+        .unwrap();
+        stdin.flush().unwrap();
+
+        let mut response = String::new();
+        reader
+            .read_line(&mut response)
+            .expect("failed to read PostgreSQL index/statistics response");
+        assert!(
+            response.contains(expected_value)
+                && response.contains("structuredContent")
+                && response.contains("next_suggestion")
+                && response.contains(expected_next_step),
+            "unexpected {tool} response: {response}"
         );
     }
 

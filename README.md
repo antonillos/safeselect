@@ -55,7 +55,7 @@ The product promise is simple: **agents can look, but they cannot mutate**. Even
 
 | Backend | Status | Tools |
 |---|---|---|
-| PostgreSQL | Supported | `list_tables`, `describe_table`, `select`, `explain` |
+| PostgreSQL | Supported | Discovery, indexes/statistics, `select`, and `explain` |
 | MongoDB | Supported | Discovery, find, aggregation, distinct/count, explain, profiling, schema inference, and anonymized fixtures |
 
 ## Architecture
@@ -110,7 +110,7 @@ See [AI agent integration](docs/agents.md) for client-specific setup and manual 
 Agents should use SafeSelect in this order:
 
 1. `database_info`
-2. `list_tables` then `describe_table` for SQL
+2. `list_tables` then `describe_table`; inspect `list_table_indexes` or bounded statistics when useful for SQL
 3. `list_databases`, `list_collections`, then `discover_document_schema` for NoSQL
 4. `select` / `explain`, or the bounded MongoDB read tool that matches the task
 5. `check`, `connect`, or `reconnect` when connectivity is stale
@@ -153,7 +153,7 @@ summary without exposing database-derived detail.
 
 | Area | Tools |
 |---|---|
-| SQL | `list_tables`, `describe_table`, `select`, `explain` |
+| SQL | `list_tables`, `describe_table`, `list_table_indexes`, `get_database_stats`, `get_table_stats`, `select`, `explain` |
 | MongoDB reads | `list_databases`, `list_collections`, `find_documents`, `aggregate_documents`, `distinct_documents`, `count_documents`, `explain_documents` |
 | MongoDB analysis | `profile_document_field`, `discover_document_schema`, `generate_document_fixture`, `list_collection_indexes`, `get_database_stats`, `get_collection_stats` |
 | Connection | `database_info`, `check`, `connect`, `disconnect`, `reconnect` |
