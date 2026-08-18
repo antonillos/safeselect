@@ -660,7 +660,15 @@ public class Main {
     }
 
     static boolean isSearchUnsupported(MongoCommandException error) {
-        return error.getErrorCode() == 59 || error.getErrorMessage().toLowerCase(Locale.ROOT).contains("command not found");
+        return isSearchUnsupported(error.getErrorCode(), error.getErrorMessage());
+    }
+
+    static boolean isSearchUnsupported(int errorCode, String errorMessage) {
+        String message = errorMessage == null ? "" : errorMessage.toLowerCase(Locale.ROOT);
+        return errorCode == 59
+                || errorCode == 31082 // SearchNotEnabled on local MongoDB deployments
+                || message.contains("command not found")
+                || message.contains("searchnotenabled");
     }
 
     static boolean isSearchUnauthorized(MongoCommandException error) {

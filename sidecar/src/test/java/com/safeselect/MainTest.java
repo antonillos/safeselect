@@ -30,4 +30,11 @@ class MainTest {
         assertEquals("unknown", Main.searchIndexType("futureType"));
         assertEquals("unknown", Main.searchIndexType(null));
     }
+
+    @Test
+    void classifiesLocalSearchNotEnabledAsUnsupported() {
+        assertEquals(true, Main.isSearchUnsupported(59, "command not found"));
+        assertEquals(true, Main.isSearchUnsupported(31082, "SearchNotEnabled"));
+        assertEquals(false, Main.isSearchUnsupported(13, "not authorized"));
+    }
 }
