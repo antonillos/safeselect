@@ -1239,10 +1239,17 @@ impl McpServer {
             "list_tables" => self.handle_list_tables(msg.id.clone(), &args),
             "describe_table" => self.handle_describe_table(msg.id.clone(), &args),
             "list_table_indexes" => self.handle_list_table_indexes(msg.id.clone(), &args),
-            "get_database_stats" if self.is_postgres() => {
-                self.handle_get_postgres_database_stats(msg.id.clone(), &args)
-            }
-            "get_database_stats" => self.handle_get_database_stats(msg.id.clone(), &args),
+            "get_database_stats" => match self.backend.kind {
+                BackendKind::Document => self.handle_get_database_stats(msg.id.clone(), &args),
+                BackendKind::Jdbc if self.is_postgres() => {
+                    self.handle_get_postgres_database_stats(msg.id.clone(), &args)
+                }
+                _ => self.send_error(
+                    msg.id.clone(),
+                    -32601,
+                    "get_database_stats is available only for PostgreSQL and MongoDB backends",
+                ),
+            },
             "get_table_stats" => self.handle_get_table_stats(msg.id.clone(), &args),
             "list_functions" => self.handle_list_functions(msg.id.clone(), &args),
             "list_triggers" => self.handle_list_triggers(msg.id.clone(), &args),
