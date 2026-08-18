@@ -93,7 +93,9 @@ Every MCP error carries exactly one contextual `next_suggestion`. Invalid
 arguments identify the correction, timeouts point to a narrower query and
 `explain`, stale connections point to `check`/`reconnect`, and security or
 startup failures are terminal. Database-derived detail remains UUID-delimited;
-agents must not retry an unchanged request.
+agents must not retry an unchanged request. The same trusted suggestion is
+also appended to the JSON-RPC error message for MCP clients that render only
+the compact error summary; database-derived detail is never appended there.
 
 ### 9. Secret Management
 

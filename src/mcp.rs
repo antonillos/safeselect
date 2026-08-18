@@ -3933,13 +3933,14 @@ impl McpServer {
     ) -> Result<()> {
         let boundary = format!("safeselect-untrusted-data-{}", uuid::Uuid::new_v4());
         let framed_detail = format!("<{boundary}>\n{detail}\n</{boundary}>");
+        let message = trusted_backend_error_message(trusted_message, next_suggestion);
         let resp = JsonRpcResponse {
             jsonrpc: "2.0",
             id,
             result: None,
             error: Some(JsonRpcError {
                 code: -32000,
-                message: trusted_message.into(),
+                message,
                 data: Some(serde_json::json!({
                     "detail": framed_detail,
                     "next_suggestion": next_suggestion
@@ -3957,6 +3958,10 @@ impl McpServer {
         writer.flush()?;
         Ok(())
     }
+}
+
+fn trusted_backend_error_message(trusted_message: &str, next_suggestion: &str) -> String {
+    format!("{trusted_message} Next suggestion: {next_suggestion}")
 }
 
 fn error_next_suggestion(message: &str) -> &'static str {
@@ -5043,6 +5048,20 @@ mod tests {
             "Send one valid JSON-RPC request; do not repeat the malformed payload unchanged."
         );
         assert!(value["error"]["data"].get("detail").is_none());
+    }
+
+    #[test]
+    fn backend_error_message_exposes_trusted_next_step_for_compact_clients() {
+        let message = trusted_backend_error_message(
+            "List collection indexes failed.",
+            "Call list_collections once, choose an exact returned collection name, then retry once.",
+        );
+
+        assert_eq!(
+            message,
+            "List collection indexes failed. Next suggestion: Call list_collections once, choose an exact returned collection name, then retry once."
+        );
+        assert!(!message.contains("safeselect-untrusted-data-"));
     }
 
     #[test]

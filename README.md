@@ -134,7 +134,9 @@ Query responses include `row_count`, `byte_count`, `elapsed_ms`, and a human-rea
 
 Every MCP success and error includes one contextual `next_suggestion`. Agents
 should follow that single safe action, never blindly repeat an invalid request,
-and stop when the suggestion is terminal.
+and stop when the suggestion is terminal. For clients that only show an MCP
+error summary, SafeSelect also includes the trusted next suggestion in that
+summary without exposing database-derived detail.
 
 ## Security Model
 
