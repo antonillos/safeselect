@@ -686,15 +686,19 @@ impl SecurityEngine {
     }
 
     fn check_document_name(&self, kind: &str, name: &str) -> Result<()> {
-        if name.is_empty()
-            || name.len() > 255
-            || name.starts_with("system.")
-            || name.contains('\0')
-            || name.contains('$')
-            || name.contains('/')
-            || name.contains('\\')
-            || name.contains(' ')
-        {
+        let invalid = [
+            name.is_empty(),
+            name.len() > 255,
+            name.starts_with("system."),
+            name.contains('\0'),
+            name.contains('$'),
+            name.contains('/'),
+            name.contains('\\'),
+            name.contains(' '),
+        ]
+        .into_iter()
+        .any(std::convert::identity);
+        if invalid {
             return Err(SafeselectError::QueryRejected(format!(
                 "Invalid document {kind} name: {name}"
             )));
@@ -703,15 +707,19 @@ impl SecurityEngine {
     }
 
     fn check_document_field(&self, field: &str) -> Result<()> {
-        if field.is_empty()
-            || field.len() > 512
-            || field.contains('\0')
-            || field.contains('$')
-            || field.contains(' ')
-            || field.starts_with('.')
-            || field.ends_with('.')
-            || field.split('.').any(str::is_empty)
-        {
+        let invalid = [
+            field.is_empty(),
+            field.len() > 512,
+            field.contains('\0'),
+            field.contains('$'),
+            field.contains(' '),
+            field.starts_with('.'),
+            field.ends_with('.'),
+            field.split('.').any(str::is_empty),
+        ]
+        .into_iter()
+        .any(std::convert::identity);
+        if invalid {
             return Err(SafeselectError::QueryRejected(format!(
                 "Invalid document field path: {field}"
             )));

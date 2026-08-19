@@ -3305,7 +3305,6 @@ pub(crate) fn extract_tcp_host_port(url: &str) -> Option<(String, u16)> {
         return Some((host, port));
     }
 
-    let is_srv = url.starts_with("mongodb+srv://");
     let without_prefix = url
         .strip_prefix("mongodb://")
         .or_else(|| url.strip_prefix("mongodb+srv://"))?;
@@ -3313,7 +3312,6 @@ pub(crate) fn extract_tcp_host_port(url: &str) -> Option<(String, u16)> {
     let first_host = authority.split(',').next()?;
     match first_host.split_once(':') {
         Some((host, port)) => Some((host.to_string(), port.parse().ok()?)),
-        None if !is_srv => Some((first_host.to_string(), 27017)),
         None => Some((first_host.to_string(), 27017)),
     }
 }

@@ -360,6 +360,10 @@ version = 1
 host = "bastion.example"
 port = 2222
 username = "jump"
+secret_account = "jump-account"
+identity_file = "/tmp/jump.key"
+known_hosts = "/tmp/known_hosts"
+auth_type = "key"
 "#,
         )
         .unwrap();
@@ -381,6 +385,10 @@ bastion = "dev"
         assert_eq!(ssh.host.as_deref(), Some("bastion.example"));
         assert_eq!(ssh.port, Some(2222));
         assert_eq!(ssh.username.as_deref(), Some("jump"));
+        assert_eq!(ssh.secret_account.as_deref(), Some("jump-account"));
+        assert_eq!(ssh.identity_file.as_deref(), Some("/tmp/jump.key"));
+        assert_eq!(ssh.known_hosts.as_deref(), Some("/tmp/known_hosts"));
+        assert_eq!(ssh.auth_type.as_deref(), Some("key"));
     }
 
     #[test]
@@ -405,5 +413,51 @@ bastion = "dev"
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].0, "postgresql");
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn lists_no_drivers_when_directory_is_missing() {
+        let root =
+            std::env::temp_dir().join(format!("safeselect-empty-drivers-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let loader = ConfigLoader {
+            drivers_dir: root.join("missing"),
+            config_dir: root.clone(),
+        };
+
+        assert!(loader.list_drivers().unwrap().is_empty());
+    }
+
+    #[test]
+    fn leaves_environment_ssh_unchanged_when_no_bastion_is_configured() {
+        let project = ProjectConfig::default();
+        let mut environment: EnvironmentConfig = toml::from_str(
+            r#"
+version = 1
+[database]
+url = "jdbc:postgresql://db/app"
+"#,
+        )
+        .unwrap();
+        merge_project_ssh(&project, &mut environment).unwrap();
+        assert!(environment.ssh.is_none());
+
+        environment.ssh = Some(SshConfig {
+            enabled: true,
+            bastion: None,
+            host: None,
+            port: None,
+            username: None,
+            secret_account: None,
+            identity_file: None,
+            known_hosts: None,
+            local_host: None,
+            local_port: None,
+            forward_host: None,
+            forward_port: None,
+            auth_type: None,
+        });
+        merge_project_ssh(&project, &mut environment).unwrap();
+        assert!(environment.ssh.unwrap().host.is_none());
     }
 }
