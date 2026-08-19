@@ -261,12 +261,17 @@ fn cmd_config_show(
     println!("Environment: {environment}");
     println!("Backend: {:?}", resolved.environment.database.kind);
     println!("Vendor: {}", resolved.environment.database.vendor());
-    if let Some(driver) = resolved.driver.as_ref() {
-        println!("Driver: {} ({})", driver.vendor, driver.class);
-        println!("JDBC URL: {}", resolved.environment.database.url);
-    } else {
-        println!("URL: {}", resolved.environment.database.url);
-    }
+    let connection_details = resolved
+        .driver
+        .as_ref()
+        .map(|driver| {
+            format!(
+                "Driver: {} ({})\nJDBC URL: {}",
+                driver.vendor, driver.class, resolved.environment.database.url
+            )
+        })
+        .unwrap_or_else(|| format!("URL: {}", resolved.environment.database.url));
+    println!("{connection_details}");
     println!("Username: {}", resolved.environment.database.username);
     println!("Password: [redacted]");
     println!();
@@ -297,16 +302,22 @@ fn cmd_config_show(
     );
     println!();
     println!("--- TLS ---");
-    match resolved.environment.tls {
-        Some(ref tls) => println!("Mode: {}", tls.mode),
-        None => println!("TLS: disabled"),
-    }
+    let tls_details = resolved
+        .environment
+        .tls
+        .as_ref()
+        .map(|tls| format!("Mode: {}", tls.mode))
+        .unwrap_or_else(|| "TLS: disabled".to_string());
+    println!("{tls_details}");
     println!();
     println!("--- SSH ---");
-    match resolved.environment.ssh {
-        Some(ref ssh) => println!("Enabled: {}", ssh.enabled),
-        None => println!("SSH: not configured"),
-    }
+    let ssh_details = resolved
+        .environment
+        .ssh
+        .as_ref()
+        .map(|ssh| format!("Enabled: {}", ssh.enabled))
+        .unwrap_or_else(|| "SSH: not configured".to_string());
+    println!("{ssh_details}");
 
     Ok(())
 }
@@ -4058,6 +4069,50 @@ pub(crate) fn uninstall_binary_paths() -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn config_show_displays_document_environment() {
+        let repo_root = std::env::temp_dir().join(format!(
+            "safeselect-config-show-test-{}",
+            std::process::id()
+        ));
+        let env_dir = repo_root.join(".safeselect/environments");
+        let _ = std::fs::remove_dir_all(&repo_root);
+        std::fs::create_dir_all(&env_dir).unwrap();
+        std::fs::write(
+            repo_root.join(".safeselect/project.toml"),
+            "version = 1\ndisplay_name = \"Config Show Test\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            env_dir.join("local.toml"),
+            r#"
+version = 1
+
+[database]
+kind = "document"
+vendor = "mongodb"
+url = "mongodb://localhost:27017/test"
+username = "test-user"
+
+[tls]
+mode = "REQUIRED"
+
+[ssh]
+enabled = true
+"#,
+        )
+        .unwrap();
+
+        let result = cmd_config_show(
+            &ConfigLoader::new(),
+            Some(repo_root.clone()),
+            "local".to_string(),
+        );
+
+        assert!(result.is_ok());
+        let _ = std::fs::remove_dir_all(repo_root);
+    }
 
     #[test]
     fn uninstall_checks_supported_user_binary_locations() {
