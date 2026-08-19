@@ -863,4 +863,29 @@ services:
         assert_eq!(files.len(), 2);
         let _ = std::fs::remove_dir_all(root);
     }
+
+    #[test]
+    fn recognizes_postgres_image_variants() {
+        assert!(is_postgres_image("postgres:17"));
+        assert!(is_postgres_image("postgis/postgis:latest"));
+        assert!(is_postgres_image("timescale/timescaledb:latest"));
+        assert!(!is_postgres_image("mysql:8"));
+    }
+
+    #[test]
+    fn parses_unquoted_dotenv_values() {
+        assert_eq!(
+            parse_dotenv_line("export PORT=5432"),
+            Some(("PORT".into(), "5432".into()))
+        );
+        assert_eq!(parse_dotenv_line("# comment"), None);
+    }
+
+    #[test]
+    fn preserves_empty_environment_values() {
+        assert_eq!(
+            parse_env_list(&["EMPTY=".into()]).get("EMPTY"),
+            Some(&String::new())
+        );
+    }
 }

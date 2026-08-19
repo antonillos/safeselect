@@ -4216,6 +4216,28 @@ mod tests {
     }
 
     #[test]
+    fn displays_database_target_from_urls() {
+        assert_eq!(
+            display_database_target("postgresql://db/app?sslmode=require"),
+            "app"
+        );
+        assert_eq!(display_database_target("postgresql://db/"), "?");
+    }
+
+    #[test]
+    fn rewrites_mongodb_url_for_local_endpoint() {
+        let rewritten = rewrite_mongodb_url_for_local_endpoint(
+            "mongodb://user:secret@remote:27017/app",
+            "localhost",
+            2222,
+        )
+        .unwrap();
+        assert!(rewritten.contains("localhost:2222"));
+        assert!(rewritten.contains("user:secret@localhost:2222"));
+        assert!(rewritten.contains("directConnection=true"));
+    }
+
+    #[test]
     fn extracts_tcp_host_and_port_variants() {
         assert_eq!(
             extract_tcp_host_port("mongodb://db.example:27018/app"),

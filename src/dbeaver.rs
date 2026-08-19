@@ -295,4 +295,19 @@ mod tests {
         assert!(list.is_empty());
         assert!(map.is_empty());
     }
+
+    #[test]
+    fn parses_postgres_jdbc_url_with_optional_port() {
+        let parsed = parse_postgres_jdbc_url("jdbc:postgresql://db.example:5433/app").unwrap();
+        assert_eq!(parsed.host, "db.example");
+        assert_eq!(parsed.port, 5433);
+        assert_eq!(parsed.database, "app");
+        assert!(parse_postgres_jdbc_url("jdbc:mysql://db/app").is_none());
+    }
+
+    #[test]
+    fn rejects_incomplete_postgres_jdbc_url() {
+        assert!(parse_postgres_jdbc_url("jdbc:postgresql://").is_none());
+        assert!(parse_postgres_jdbc_url("jdbc:postgresql://db").is_none());
+    }
 }

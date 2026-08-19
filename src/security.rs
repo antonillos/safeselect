@@ -1975,4 +1975,28 @@ mod tests {
             assert!(engine.validate_document_find(&request).is_err());
         }
     }
+
+    #[test]
+    fn strips_sql_comments_without_changing_literals() {
+        assert_eq!(
+            SecurityEngine::strip_sql_comments("SELECT 1 -- note\n"),
+            "SELECT 1 \n"
+        );
+        assert_eq!(
+            SecurityEngine::strip_sql_comments("SELECT 1 /* remove */"),
+            "SELECT 1 "
+        );
+    }
+
+    #[test]
+    fn counts_sql_statements_and_ignores_trailing_semicolons() {
+        assert_eq!(count_statements("SELECT 1"), 1);
+        assert_eq!(count_statements("SELECT 1; SELECT 2"), 2);
+        assert_eq!(strip_trailing_semicolons("SELECT 1;;;"), "SELECT 1");
+    }
+
+    #[test]
+    fn rejects_unbalanced_sql_parentheses() {
+        assert_eq!(count_statements("SELECT (1"), 1);
+    }
 }
