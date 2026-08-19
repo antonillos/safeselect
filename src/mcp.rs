@@ -6150,4 +6150,89 @@ services:
 
         let _ = std::fs::remove_dir_all(&temp);
     }
+
+    #[test]
+    fn suggests_safe_recovery_for_document_backend_errors() {
+        assert!(
+            document_backend_error_next_suggestion("query timed out").contains("explain_documents")
+        );
+        assert!(document_backend_error_next_suggestion("unknown field name")
+            .contains("discover_document_schema"));
+        assert!(document_backend_error_next_suggestion("connection refused").contains("check"));
+        assert!(document_backend_error_next_suggestion("invalid operator").contains("Stop"));
+    }
+
+    #[test]
+    fn suggests_schema_for_document_operations_with_unknown_fields() {
+        let value = serde_json::json!({"documents": []});
+        assert!(document_operation_next_suggestion("find", &value).contains("schema"));
+        assert!(
+            document_operation_next_suggestion("discover_document_schema", &value)
+                .contains("retry")
+        );
+    }
+
+    #[test]
+    fn covers_document_operation_suggestions_for_each_supported_operation() {
+        let value = serde_json::json!({"documents": [{"id": 1}]});
+        for operation in [
+            "discover_document_schema",
+            "profile_document_field",
+            "explain_documents",
+            "generate_document_fixture",
+            "other",
+        ] {
+            assert!(!document_operation_next_suggestion(operation, &value).is_empty());
+        }
+    }
+
+    #[test]
+    fn covers_document_backend_operator_and_aggregate_guidance() {
+        for message in [
+            "operator does not exist for jsonb[]",
+            "operator does not exist for json",
+            "operator does not exist",
+            "aggregate functions are not allowed in group by",
+            "is an aggregate function",
+        ] {
+            assert!(!document_backend_error_next_suggestion(message).is_empty());
+        }
+    }
+
+    #[test]
+    fn validates_catalog_schema_arguments_and_allowlist() {
+        let root =
+            std::env::temp_dir().join(format!("safeselect-catalog-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut server = test_server(&root);
+        assert_eq!(
+            server.catalog_schema(None, &serde_json::json!({})).unwrap(),
+            None
+        );
+        assert_eq!(
+            server
+                .catalog_schema(
+                    Some(serde_json::json!(1)),
+                    &serde_json::json!({"schema":"public"})
+                )
+                .unwrap(),
+            Some("public".into())
+        );
+        assert!(server
+            .catalog_schema(
+                Some(serde_json::json!(1)),
+                &serde_json::json!({"schema":"bad-name"})
+            )
+            .is_err());
+        let mut policy = crate::config::SecurityPolicy::default();
+        policy.allowed_schemas = vec!["public".into()];
+        server.security = SecurityEngine::new(policy, crate::config::LimitsConfig::default());
+        assert!(server
+            .catalog_schema(
+                Some(serde_json::json!(1)),
+                &serde_json::json!({"schema":"private"})
+            )
+            .is_err());
+        let _ = std::fs::remove_dir_all(root);
+    }
 }
