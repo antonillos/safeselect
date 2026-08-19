@@ -66,9 +66,11 @@ workflow: its documented contract was Maven-only, used a fixed threshold of
 provides the required JSON and external-report modes, so the shell wrapper does
 not need to parse an unstable human table.
 
-The upstream tool launches Maven internally. The fork's `--jacoco-xml` mode
-separates coverage generation from analysis, so coverage is now owned by
-makevn and the report input is explicit.
+The upstream tool launches Maven internally. The fork now supports both
+`--jacoco-xml` for externally generated coverage and `--build-tool makevn` for
+native coverage execution through `makevn verify-ut-coverage --compact`.
+Coverage generation remains explicit and the default Maven mode remains
+backward compatible.
 
 Preferred Java implementation order:
 
@@ -78,8 +80,10 @@ Preferred Java implementation order:
 3. normalize that JSON into the common report schema;
 4. keep the fork's README explicit about the differences from upstream.
 
-The fork currently has the initial implementation commit
-`e410496` (`feat: add machine-readable report mode`).
+The fork currently has these implementation commits:
+
+- `e410496` (`feat: add machine-readable report mode`);
+- `1d049a2` (`feat: support makevn coverage execution`).
 
 ## Proposed command interface
 
