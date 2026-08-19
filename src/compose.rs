@@ -605,12 +605,9 @@ pub fn read_password_from_keychain(account: &str) -> Result<String> {
 }
 
 pub fn delete_password_from_keychain(account: &str) -> Result<()> {
-    let output = std::process::Command::new("security")
-        .args(["delete-generic-password", "-a", account, "-s", "safeselect"])
+    let output = delete_keychain_command(account)
         .output()
-        .map_err(|e| {
-            crate::error::SafeselectError::Secret(format!("security delete failed: {e}"))
-        })?;
+        .map_err(delete_keychain_command_error)?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -618,6 +615,16 @@ pub fn delete_password_from_keychain(account: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn delete_keychain_command(account: &str) -> std::process::Command {
+    let mut command = std::process::Command::new("security");
+    command.args(["delete-generic-password", "-a", account, "-s", "safeselect"]);
+    command
+}
+
+fn delete_keychain_command_error(error: std::io::Error) -> crate::error::SafeselectError {
+    crate::error::SafeselectError::Secret(format!("security delete failed: {error}"))
 }
 
 pub fn store_password_in_keychain(account: &str, password: &str) -> Result<()> {
@@ -802,5 +809,26 @@ services:
         assert_eq!(values.get("DB_HOST").map(String::as_str), Some("localhost"));
         assert_eq!(values.get("DB_PORT").map(String::as_str), Some("5432"));
         assert_eq!(values.len(), 2);
+    }
+
+    #[test]
+    fn builds_keychain_delete_command() {
+        let command = delete_keychain_command("project/local");
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(command.get_program(), "security");
+        assert_eq!(
+            args,
+            [
+                "delete-generic-password",
+                "-a",
+                "project/local",
+                "-s",
+                "safeselect"
+            ]
+        );
     }
 }
