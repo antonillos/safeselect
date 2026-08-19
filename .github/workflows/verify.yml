@@ -164,15 +164,19 @@ jobs:
         run: |
           curl -fsSL https://raw.githubusercontent.com/antonillos/makevn/main/packaging/install/install-release.sh | sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - name: Build crap4java fork through makevn
+      - name: Download pinned crap4java release
         run: |
-          git clone --depth 1 https://github.com/antonillos/crap4java.git ../crap4java
-          makevn --repo "${GITHUB_WORKSPACE}/../crap4java" init --force
-          makevn --repo "${GITHUB_WORKSPACE}/../crap4java" package
+          curl -fsSL \
+            -o "${GITHUB_WORKSPACE}/../crap4java-0.1.0.jar" \
+            "https://github.com/antonillos/crap4java/releases/download/v0.1.0/crap4java-0.1.0.jar"
+          printf '%s  %s\n' \
+            "b996434078d560d52a058e3d9ffb0d07a9469ecdc57c8b4fa241fa70252bf68e" \
+            "${GITHUB_WORKSPACE}/../crap4java-0.1.0.jar" \
+            | sha256sum --check
       - name: Run report-only CRAP analysis
         run: ./tools/crap/run.sh --summary
         env:
-          CRAP4JAVA_JAR: ${{ github.workspace }}/../crap4java/target/crap4java-0.1.0-SNAPSHOT.jar
+          CRAP4JAVA_JAR: ${{ github.workspace }}/../crap4java-0.1.0.jar
       - name: Upload CRAP artifacts
         uses: actions/upload-artifact@v4
         with:

@@ -74,16 +74,17 @@ backward compatible.
 
 Preferred Java implementation order:
 
-1. maintain the upstream-compatible fork at
+1. consume the pinned release from
    `https://github.com/antonillos/crap4java`;
 2. use its JSON and external-report modes from the local shell wrapper;
 3. normalize that JSON into the common report schema;
 4. keep the fork's README explicit about the differences from upstream.
 
-The fork currently has these implementation commits:
+The fork currently has these implementation commits and release:
 
 - `e410496` (`feat: add machine-readable report mode`);
-- `1d049a2` (`feat: support makevn coverage execution`).
+- `1d049a2` (`feat: support makevn coverage execution`);
+- `v0.1.0`, published with a SHA-256-verified executable JAR.
 
 ## Proposed command interface
 
