@@ -1920,4 +1920,54 @@ mod tests {
         assert!(engine.check_result_size(501, 1).is_err());
         assert!(engine.check_result_size(1, 2_000_001).is_err());
     }
+
+    #[test]
+    fn extracts_explain_targets_and_options() {
+        assert_eq!(extract_explain_target("EXPLAIN SELECT 1"), Some("SELECT 1"));
+        assert_eq!(
+            extract_explain_target("EXPLAIN (ANALYZE, BUFFERS) SELECT 1"),
+            Some("SELECT 1")
+        );
+        assert_eq!(
+            extract_explain_target("EXPLAIN ANALYZE SELECT 1"),
+            Some("SELECT 1")
+        );
+        assert_eq!(extract_explain_target("SELECT 1"), None);
+        assert_eq!(extract_explain_target("EXPLAIN (ANALYZE SELECT 1"), None);
+    }
+
+    #[test]
+    fn validates_document_find_projection_sort_and_limits() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        let valid = DocumentFindRequest {
+            database: "app".into(),
+            collection: "users".into(),
+            filter: serde_json::json!({"active": true}),
+            projection: Some(serde_json::json!({"name": 1})),
+            sort: Some(serde_json::json!({"name": 1})),
+            limit: 10,
+        };
+        assert!(engine.validate_document_find(&valid).is_ok());
+
+        for request in [
+            DocumentFindRequest {
+                projection: Some(serde_json::json!("name")),
+                ..valid.clone()
+            },
+            DocumentFindRequest {
+                sort: Some(serde_json::json!("name")),
+                ..valid.clone()
+            },
+            DocumentFindRequest {
+                limit: 0,
+                ..valid.clone()
+            },
+            DocumentFindRequest {
+                limit: 501,
+                ..valid
+            },
+        ] {
+            assert!(engine.validate_document_find(&request).is_err());
+        }
+    }
 }

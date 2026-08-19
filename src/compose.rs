@@ -831,4 +831,25 @@ services:
             ]
         );
     }
+
+    #[test]
+    fn finds_compose_files_recursively_without_build_directories() {
+        let root =
+            std::env::temp_dir().join(format!("safeselect-compose-files-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("nested")).unwrap();
+        std::fs::create_dir_all(root.join("target")).unwrap();
+        std::fs::create_dir_all(root.join("node_modules")).unwrap();
+        std::fs::create_dir_all(root.join(".hidden")).unwrap();
+        std::fs::write(root.join("compose.yml"), "").unwrap();
+        std::fs::write(root.join("nested/docker-compose.yaml"), "").unwrap();
+        std::fs::write(root.join("target/compose.yml"), "").unwrap();
+        std::fs::write(root.join("node_modules/compose.yml"), "").unwrap();
+        std::fs::write(root.join(".hidden/compose.yml"), "").unwrap();
+
+        let files = find_compose_files(&root);
+
+        assert_eq!(files.len(), 2);
+        let _ = std::fs::remove_dir_all(root);
+    }
 }
