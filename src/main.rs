@@ -249,6 +249,68 @@ fn cmd_serve(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
     Ok(())
 }
 
+fn cmd_config_show(
+    loader: &ConfigLoader,
+    project: Option<PathBuf>,
+    environment: String,
+) -> Result<()> {
+    let dir = resolve_project_dir(loader, project)?;
+    let resolved = loader.resolve_local(&dir, &environment)?;
+    let name = project_display_name(&dir);
+    println!("Project: {name}");
+    println!("Environment: {environment}");
+    println!("Backend: {:?}", resolved.environment.database.kind);
+    println!("Vendor: {}", resolved.environment.database.vendor());
+    if let Some(driver) = resolved.driver.as_ref() {
+        println!("Driver: {} ({})", driver.vendor, driver.class);
+        println!("JDBC URL: {}", resolved.environment.database.url);
+    } else {
+        println!("URL: {}", resolved.environment.database.url);
+    }
+    println!("Username: {}", resolved.environment.database.username);
+    println!("Password: [redacted]");
+    println!();
+    println!("--- Security Policy ---");
+    println!("Read only: enforced (cannot be disabled)");
+    println!(
+        "Allowed schemas: {}",
+        resolved.project.security.allowed_schemas.join(", ")
+    );
+    println!(
+        "Denied relations: {}",
+        resolved.project.security.denied_relations.join(", ")
+    );
+    println!(
+        "Single statement: {}",
+        resolved.project.security.require_single_statement
+    );
+    println!();
+    println!("--- Limits ---");
+    println!(
+        "Statement timeout: {}ms",
+        resolved.project.limits.statement_timeout_ms
+    );
+    println!("Max rows: {}", resolved.project.limits.max_rows);
+    println!(
+        "Max result bytes: {}",
+        resolved.project.limits.max_result_bytes
+    );
+    println!();
+    println!("--- TLS ---");
+    match resolved.environment.tls {
+        Some(ref tls) => println!("Mode: {}", tls.mode),
+        None => println!("TLS: disabled"),
+    }
+    println!();
+    println!("--- SSH ---");
+    match resolved.environment.ssh {
+        Some(ref ssh) => println!("Enabled: {}", ssh.enabled),
+        None => println!("SSH: not configured"),
+    }
+
+    Ok(())
+}
+
 fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
     match action {
         ConfigAction::Validate {
@@ -323,71 +385,7 @@ fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
         ConfigAction::Show {
             project,
             environment,
-        } => {
-            let dir = match project {
-                Some(d) => d,
-                None => {
-                    let cwd = std::env::current_dir()?;
-                    loader
-                        .find_local_project(&cwd)
-                        .ok_or_else(|| SafeselectError::LocalProjectNotFound(cwd))?
-                }
-            };
-            let resolved = loader.resolve_local(&dir, &environment)?;
-            let name = project_display_name(&dir);
-            println!("Project: {name}");
-            println!("Environment: {environment}");
-            println!("Backend: {:?}", resolved.environment.database.kind);
-            println!("Vendor: {}", resolved.environment.database.vendor());
-            if let Some(driver) = resolved.driver.as_ref() {
-                println!("Driver: {} ({})", driver.vendor, driver.class);
-                println!("JDBC URL: {}", resolved.environment.database.url);
-            } else {
-                println!("URL: {}", resolved.environment.database.url);
-            }
-            println!("Username: {}", resolved.environment.database.username);
-            println!("Password: [redacted]");
-            println!();
-            println!("--- Security Policy ---");
-            println!("Read only: enforced (cannot be disabled)");
-            println!(
-                "Allowed schemas: {}",
-                resolved.project.security.allowed_schemas.join(", ")
-            );
-            println!(
-                "Denied relations: {}",
-                resolved.project.security.denied_relations.join(", ")
-            );
-            println!(
-                "Single statement: {}",
-                resolved.project.security.require_single_statement
-            );
-            println!();
-            println!("--- Limits ---");
-            println!(
-                "Statement timeout: {}ms",
-                resolved.project.limits.statement_timeout_ms
-            );
-            println!("Max rows: {}", resolved.project.limits.max_rows);
-            println!(
-                "Max result bytes: {}",
-                resolved.project.limits.max_result_bytes
-            );
-            println!();
-            println!("--- TLS ---");
-            match resolved.environment.tls {
-                Some(ref tls) => println!("Mode: {}", tls.mode),
-                None => println!("TLS: disabled"),
-            }
-            println!();
-            println!("--- SSH ---");
-            match resolved.environment.ssh {
-                Some(ref ssh) => println!("Enabled: {}", ssh.enabled),
-                None => println!("SSH: not configured"),
-            }
-
-            Ok(())
-        }
+        } => cmd_config_show(loader, project, environment),
         ConfigAction::RenameEnvironment { old, new, project } => {
             let dir = resolve_project_dir(loader, project)?;
 
