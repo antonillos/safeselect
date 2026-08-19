@@ -4139,6 +4139,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn builds_default_agent_entry_name() {
+        assert_eq!(
+            default_agent_entry_name("demo", "local"),
+            "safeselect-demo-local"
+        );
+    }
+
+    #[test]
+    fn slugs_environment_names() {
+        assert_eq!(slug_env_name(" Production / EU "), "production-eu");
+        assert_eq!(slug_env_name("already-valid"), "already-valid");
+    }
+
+    #[test]
+    fn resolves_default_compass_path() {
+        assert!(default_compass_path().ends_with("MongoDB Compass"));
+    }
+
+    #[test]
+    fn extracts_tcp_host_and_port_variants() {
+        assert_eq!(
+            extract_tcp_host_port("mongodb://db.example:27018/app"),
+            Some(("db.example".to_string(), 27018))
+        );
+        assert_eq!(
+            extract_tcp_host_port("mongodb://db.example/app"),
+            Some(("db.example".to_string(), 27017))
+        );
+        assert_eq!(extract_tcp_host_port("not-a-mongodb-url"), None);
+    }
+
+    #[test]
     fn config_show_displays_document_environment() {
         let repo_root = std::env::temp_dir().join(format!(
             "safeselect-config-show-test-{}",

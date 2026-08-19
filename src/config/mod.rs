@@ -346,3 +346,64 @@ fn resolve_keychain(service: &str, account: &str) -> Result<String> {
         .trim()
         .to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn merges_shared_ssh_settings_into_environment() {
+        let project: ProjectConfig = toml::from_str(
+            r#"
+version = 1
+[ssh_bastions.dev]
+host = "bastion.example"
+port = 2222
+username = "jump"
+"#,
+        )
+        .unwrap();
+        let mut environment: EnvironmentConfig = toml::from_str(
+            r#"
+version = 1
+[database]
+url = "jdbc:postgresql://db/app"
+[ssh]
+enabled = true
+bastion = "dev"
+"#,
+        )
+        .unwrap();
+
+        merge_project_ssh(&project, &mut environment).unwrap();
+
+        let ssh = environment.ssh.unwrap();
+        assert_eq!(ssh.host.as_deref(), Some("bastion.example"));
+        assert_eq!(ssh.port, Some(2222));
+        assert_eq!(ssh.username.as_deref(), Some("jump"));
+    }
+
+    #[test]
+    fn lists_only_toml_driver_files() {
+        let root = std::env::temp_dir().join(format!("safeselect-drivers-{}", std::process::id()));
+        let drivers = root.join("drivers");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&drivers).unwrap();
+        std::fs::write(
+            drivers.join("postgresql.toml"),
+            "version = 1\nvendor = \"postgresql\"\npath = \"/tmp/driver.jar\"\nclass = \"org.postgresql.Driver\"\nsha256 = \"abc\"\n",
+        )
+        .unwrap();
+        std::fs::write(drivers.join("ignored.txt"), "ignored").unwrap();
+
+        let loader = ConfigLoader {
+            drivers_dir: drivers,
+            config_dir: root.clone(),
+        };
+        let listed = loader.list_drivers().unwrap();
+
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].0, "postgresql");
+        let _ = std::fs::remove_dir_all(root);
+    }
+}

@@ -1193,4 +1193,59 @@ value = true
 
         assert!(global_has_entry);
     }
+
+    #[test]
+    fn strips_jsonc_comments_without_touching_strings() {
+        let input = r#"{
+  // single-line comment
+  "url": "https://example.test/*not a comment*/",
+  "escaped": "quote: \" and slash: \\", /* block comment */
+  "value": 1
+}"#;
+
+        let cleaned = strip_jsonc_comments(input);
+
+        assert!(!cleaned.contains("single-line comment"));
+        assert!(!cleaned.contains("block comment"));
+        assert!(cleaned.contains("https://example.test/*not a comment*/"));
+        assert!(cleaned.contains("quote:"));
+        assert!(cleaned.contains("slash:"));
+        assert!(cleaned.contains("\"value\": 1"));
+    }
+
+    #[test]
+    fn removes_matching_text_blocks() {
+        let content = "keep\nsafeselect-entry\nother-entry";
+
+        assert_eq!(
+            remove_text_block(content, "safeselect-entry"),
+            "keep\nother-entry"
+        );
+    }
+
+    #[test]
+    fn extracts_ini_entry_names() {
+        let content = "[mcpServers.alpha]\nkey = value\n[mcpServers.beta]\n";
+
+        assert_eq!(ini_entry_names(content), vec!["alpha", "beta"]);
+    }
+
+    #[test]
+    fn detects_unknown_uninstall_client() {
+        let result = detect_uninstall_target("unknown-client", None);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn checks_entries_for_json_and_ini_clients() {
+        let json = r#"{"mcp": {"alpha": {}}, "mcpServers": {"beta": {}}}"#;
+        let ini = "[mcpServers.gamma]\ncommand = safeselect\n";
+
+        assert!(config_has_entry("opencode", json, "alpha").unwrap());
+        assert!(config_has_entry("cursor", json, "beta").unwrap());
+        assert!(config_has_entry("copilot", ini, "gamma").unwrap());
+        assert!(config_has_entry("gemini-cli", ini, "gamma").unwrap());
+        assert!(config_has_entry("unknown-client", json, "alpha").is_err());
+    }
 }
