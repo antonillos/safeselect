@@ -168,6 +168,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn collects_connections_from_nested_arrays() {
+        let value = serde_json::json!({
+            "items": [
+                {"connectionString": "mongodb://nested"},
+                null,
+                "ignored"
+            ]
+        });
+        let mut connections = Vec::new();
+
+        collect_connections(&value, &mut connections);
+
+        assert_eq!(connections.len(), 1);
+        assert_eq!(connections[0].url, "mongodb://nested");
+    }
+
+    #[test]
     fn imports_connection_strings_from_json_file() {
         let dir =
             std::env::temp_dir().join(format!("safeselect-compass-test-{}", std::process::id()));

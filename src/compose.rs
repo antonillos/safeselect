@@ -631,6 +631,11 @@ mod tests {
     use super::*;
 
     #[test]
+    fn builds_secret_environment_variable_name() {
+        assert_eq!(secret_env_var("local-db"), "SAFESELECT_PASSWORD_LOCAL_DB");
+    }
+
+    #[test]
     fn resolves_dotenv_defaults_in_environment() {
         let env = Some(EnvValue::Map(HashMap::from([
             (
@@ -713,5 +718,27 @@ services:
         assert!(guidance
             .text
             .contains("safeselect agent install opencode --environment testing"));
+    }
+
+    #[test]
+    fn explains_empty_import_without_agent_step() {
+        let guidance = build_guidance_from_parts("project", &[], &[], false);
+
+        assert!(guidance
+            .text
+            .contains("All environments already exist. Nothing imported."));
+        assert!(!guidance.text.contains("agent install"));
+    }
+
+    #[test]
+    fn parses_dotenv_comments_exports_and_quotes() {
+        let values = parse_dotenv(
+            "\n# ignored\nexport USER=reader\nPASSWORD=\"secret\"\nEMPTY_KEY=\ninvalid\n=missing\n",
+        );
+
+        assert_eq!(values.get("USER").map(String::as_str), Some("reader"));
+        assert_eq!(values.get("PASSWORD").map(String::as_str), Some("secret"));
+        assert_eq!(values.get("EMPTY_KEY").map(String::as_str), Some(""));
+        assert!(!values.contains_key("invalid"));
     }
 }

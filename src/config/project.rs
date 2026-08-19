@@ -150,3 +150,20 @@ fn default_audit_max_bytes() -> u64 {
 fn default_audit_retain() -> u32 {
     10
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_values_are_stable() {
+        assert!(default_true());
+        assert_eq!(default_stmt_timeout(), 5_000);
+        assert_eq!(default_conn_timeout(), 5_000);
+        assert_eq!(default_max_rows(), 500);
+        assert_eq!(default_max_bytes(), 2_000_000);
+        assert_eq!(default_audit_dir(), "~/.local/state/safeselect/audit");
+        assert_eq!(default_audit_max_bytes(), 10_000_000);
+        assert_eq!(default_audit_retain(), 10);
+    }
+}
