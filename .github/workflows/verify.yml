@@ -190,3 +190,29 @@ jobs:
         with:
           name: crap-report
           path: target/crap/
+      - name: Prepare CRAP badge
+        if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+        run: |
+          mkdir -p target/crap-pages
+          cp target/crap/badge.json target/crap-pages/crap-badge.json
+      - name: Upload CRAP badge Pages artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: target/crap-pages/
+
+  deploy-crap-badge:
+    name: Publish CRAP badge
+    needs: crap-report
+    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy CRAP badge
+        id: deployment
+        uses: actions/deploy-pages@v4
