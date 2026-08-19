@@ -4325,7 +4325,15 @@ fn tool_error_response(
 
 pub fn run_setup_server(repo_root: &Path) -> Result<()> {
     let stdin = std::io::stdin();
-    let mut reader = BufReader::new(stdin.lock());
+    let stdout = std::io::stdout();
+    run_setup_server_with_io(repo_root, BufReader::new(stdin.lock()), stdout.lock())
+}
+
+fn run_setup_server_with_io<R: BufRead, W: Write>(
+    repo_root: &Path,
+    mut reader: R,
+    mut writer: W,
+) -> Result<()> {
     let mut line = String::new();
 
     loop {
@@ -4344,7 +4352,7 @@ pub fn run_setup_server(repo_root: &Path) -> Result<()> {
             Ok(m) => m,
             Err(_) => {
                 let resp = parse_error_response();
-                write_setup_response(&resp)?;
+                write_setup_response_to(&mut writer, &resp)?;
                 continue;
             }
         };
@@ -4380,7 +4388,7 @@ pub fn run_setup_server(repo_root: &Path) -> Result<()> {
                     })),
                     error: None,
                 };
-                write_setup_response(&resp)?;
+                write_setup_response_to(&mut writer, &resp)?;
             }
             "tools/list" => {
                 let tools = vec![
@@ -4439,7 +4447,7 @@ pub fn run_setup_server(repo_root: &Path) -> Result<()> {
                     result: Some(serde_json::json!({ "tools": tools })),
                     error: None,
                 };
-                write_setup_response(&resp)?;
+                write_setup_response_to(&mut writer, &resp)?;
             }
             "tools/call" => {
                 let params = match msg.params.as_ref() {
@@ -4457,7 +4465,7 @@ pub fn run_setup_server(repo_root: &Path) -> Result<()> {
                                 })),
                             }),
                         };
-                        write_setup_response(&resp)?;
+                        write_setup_response_to(&mut writer, &resp)?;
                         continue;
                     }
                 };
@@ -4477,7 +4485,7 @@ pub fn run_setup_server(repo_root: &Path) -> Result<()> {
                                 })),
                             }),
                         };
-                        write_setup_response(&resp)?;
+                        write_setup_response_to(&mut writer, &resp)?;
                         continue;
                     }
                 };
@@ -4507,7 +4515,7 @@ pub fn run_setup_server(repo_root: &Path) -> Result<()> {
                                         "No PostgreSQL services found in docker-compose files.".into(),
                                         "Stop and ask the user for the correct compose scan path; do not repeat the same scan unchanged.",
                                     );
-                                    write_setup_response(&resp)?;
+                                    write_setup_response_to(&mut writer, &resp)?;
                                 } else {
                                     let project_name = scan_path
                                         .file_name()
@@ -4526,7 +4534,7 @@ pub fn run_setup_server(repo_root: &Path) -> Result<()> {
                                                 text,
                                                 "Review the discovered settings, complete any indicated secret setup, then call config_validate.",
                                             );
-                                            write_setup_response(&resp)?;
+                                            write_setup_response_to(&mut writer, &resp)?;
                                         }
                                         Err(e) => {
                                             let resp = JsonRpcResponse {
@@ -4541,7 +4549,7 @@ pub fn run_setup_server(repo_root: &Path) -> Result<()> {
                                                     })),
                                                 }),
                                             };
-                                            write_setup_response(&resp)?;
+                                            write_setup_response_to(&mut writer, &resp)?;
                                         }
                                     }
                                 }
@@ -4559,7 +4567,7 @@ pub fn run_setup_server(repo_root: &Path) -> Result<()> {
                                         })),
                                     }),
                                 };
-                                write_setup_response(&resp)?;
+                                write_setup_response_to(&mut writer, &resp)?;
                             }
                         }
                     }
@@ -4584,7 +4592,7 @@ pub fn run_setup_server(repo_root: &Path) -> Result<()> {
                                         })),
                                     }),
                                 };
-                                write_setup_response(&resp)?;
+                                write_setup_response_to(&mut writer, &resp)?;
                                 continue;
                             }
                         };
@@ -4625,7 +4633,7 @@ pub fn run_setup_server(repo_root: &Path) -> Result<()> {
                             text,
                             "Call config_validate for a remaining environment, or stop if deletion completed the user’s request.",
                         );
-                        write_setup_response(&resp)?;
+                        write_setup_response_to(&mut writer, &resp)?;
                     }
                     "rename_environment" => {
                         let args = params
@@ -4648,7 +4656,7 @@ pub fn run_setup_server(repo_root: &Path) -> Result<()> {
                                         })),
                                     }),
                                 };
-                                write_setup_response(&resp)?;
+                                write_setup_response_to(&mut writer, &resp)?;
                                 continue;
                             }
                         };
@@ -4667,7 +4675,7 @@ pub fn run_setup_server(repo_root: &Path) -> Result<()> {
                                         })),
                                     }),
                                 };
-                                write_setup_response(&resp)?;
+                                write_setup_response_to(&mut writer, &resp)?;
                                 continue;
                             }
                         };
@@ -4746,7 +4754,7 @@ pub fn run_setup_server(repo_root: &Path) -> Result<()> {
                             text,
                             "Call config_validate for the renamed environment before using it.",
                         );
-                        write_setup_response(&resp)?;
+                        write_setup_response_to(&mut writer, &resp)?;
                     }
                     _ => {
                         let resp = JsonRpcResponse {
@@ -4761,7 +4769,7 @@ pub fn run_setup_server(repo_root: &Path) -> Result<()> {
                                 })),
                             }),
                         };
-                        write_setup_response(&resp)?;
+                        write_setup_response_to(&mut writer, &resp)?;
                     }
                 }
             }
@@ -4779,7 +4787,7 @@ pub fn run_setup_server(repo_root: &Path) -> Result<()> {
                         })),
                     }),
                 };
-                write_setup_response(&resp)?;
+                write_setup_response_to(&mut writer, &resp)?;
             }
         }
     }
@@ -4787,9 +4795,7 @@ pub fn run_setup_server(repo_root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn write_setup_response(resp: &JsonRpcResponse) -> Result<()> {
-    let stdout = std::io::stdout();
-    let mut writer = stdout.lock();
+fn write_setup_response_to<W: Write>(writer: &mut W, resp: &JsonRpcResponse) -> Result<()> {
     let line = serde_json::to_string(resp)?;
     writeln!(writer, "{line}")?;
     writer.flush()?;
@@ -5197,6 +5203,34 @@ fn build_explain_sql(sql: &str, args: &serde_json::Value) -> std::result::Result
 
 #[cfg(test)]
 mod tests {
+    use std::io::Cursor;
+
+    #[test]
+    fn setup_server_handles_protocol_lifecycle_requests() {
+        let input = concat!(
+            "\n",
+            "not-json\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\"}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"unknown\"}\n",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n",
+        );
+        let mut output = Vec::new();
+
+        run_setup_server_with_io(
+            Path::new("/tmp/safeselect-setup-test"),
+            Cursor::new(input.as_bytes()),
+            &mut output,
+        )
+        .unwrap();
+
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("Parse error"));
+        assert!(output.contains("safeselect-setup"));
+        assert!(output.contains("import_compose"));
+        assert!(output.contains("Method not found: unknown"));
+    }
+
     use super::*;
 
     fn response_json(response: &JsonRpcResponse) -> serde_json::Value {
