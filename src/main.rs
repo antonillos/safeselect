@@ -502,12 +502,7 @@ where
     let env_config: config::EnvironmentConfig = toml::from_str(&content)
         .map_err(|e| SafeselectError::Config(format!("invalid {}: {e}", env_file.display())))?;
     let account = config::preferred_keychain_account(&dir, &environment, &env_config);
-    let password = password.map(Ok).unwrap_or_else(|| {
-        inquire::Password::new(&format!("Password for '{account}'"))
-            .without_confirmation()
-            .prompt()
-            .map_err(|e| SafeselectError::Other(format!("Failed to read password: {e}")))
-    })?;
+    let password = resolve_password(password, &account)?;
 
     store_password(&account, &password)?;
     println!("  ✓ Password stored in Keychain ({account})");
@@ -515,6 +510,15 @@ where
     println!("  ✓ Updated {}", env_file.display());
     println!("\nDone. Run: safeselect check --environment {environment}");
     Ok(())
+}
+
+fn resolve_password(password: Option<String>, account: &str) -> Result<String> {
+    password.map(Ok).unwrap_or_else(|| {
+        inquire::Password::new(&format!("Password for '{account}'"))
+            .without_confirmation()
+            .prompt()
+            .map_err(|e| SafeselectError::Other(format!("Failed to read password: {e}")))
+    })
 }
 
 fn set_ssh_password_for_environment(
@@ -3301,11 +3305,10 @@ pub(crate) fn extract_host_port(url: &str) -> Option<(String, u16)> {
 }
 
 pub(crate) fn extract_tcp_host_port(url: &str) -> Option<(String, u16)> {
-    if let Some((host, port)) = extract_host_port(url) {
-        return Some((host, port));
-    }
+    extract_host_port(url).or_else(|| parse_mongodb_tcp_host_port(url))
+}
 
-    let is_srv = url.starts_with("mongodb+srv://");
+fn parse_mongodb_tcp_host_port(url: &str) -> Option<(String, u16)> {
     let without_prefix = url
         .strip_prefix("mongodb://")
         .or_else(|| url.strip_prefix("mongodb+srv://"))?;
@@ -3313,7 +3316,6 @@ pub(crate) fn extract_tcp_host_port(url: &str) -> Option<(String, u16)> {
     let first_host = authority.split(',').next()?;
     match first_host.split_once(':') {
         Some((host, port)) => Some((host.to_string(), port.parse().ok()?)),
-        None if !is_srv => Some((first_host.to_string(), 27017)),
         None => Some((first_host.to_string(), 27017)),
     }
 }

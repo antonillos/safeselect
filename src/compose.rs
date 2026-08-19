@@ -110,32 +110,36 @@ fn parse_env_list(items: &[String]) -> HashMap<String, String> {
 fn parse_dotenv(content: &str) -> HashMap<String, String> {
     let mut vars = HashMap::new();
     for raw_line in content.lines() {
-        let line = raw_line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
+        if let Some((key, value)) = parse_dotenv_line(raw_line) {
+            vars.insert(key, value);
         }
-
-        let line = line.strip_prefix("export ").unwrap_or(line);
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-
-        let key = key.trim();
-        if key.is_empty() {
-            continue;
-        }
-
-        let mut value = value.trim().to_string();
-        if value.len() >= 2 {
-            let quoted = (value.starts_with('"') && value.ends_with('"'))
-                || (value.starts_with('\'') && value.ends_with('\''));
-            if quoted {
-                value = value[1..value.len() - 1].to_string();
-            }
-        }
-        vars.insert(key.to_string(), value);
     }
     vars
+}
+
+fn parse_dotenv_line(raw_line: &str) -> Option<(String, String)> {
+    let line = raw_line.trim();
+    if line.is_empty() || line.starts_with('#') {
+        return None;
+    }
+    let line = line.strip_prefix("export ").unwrap_or(line);
+    let (key, value) = line.split_once('=')?;
+    let key = key.trim();
+    if key.is_empty() {
+        return None;
+    }
+    Some((key.to_string(), unquote_dotenv_value(value.trim())))
+}
+
+fn unquote_dotenv_value(value: &str) -> String {
+    let quoted = value.len() >= 2
+        && ((value.starts_with('"') && value.ends_with('"'))
+            || (value.starts_with('\'') && value.ends_with('\'')));
+    if quoted {
+        value[1..value.len() - 1].to_string()
+    } else {
+        value.to_string()
+    }
 }
 
 fn load_dotenv(dir: &Path) -> HashMap<String, String> {
@@ -505,6 +509,23 @@ pub fn build_guidance_from_parts(
     include_agent_step: bool,
 ) -> ImportGuidance {
     let mut parts = vec![];
+    append_import_summary(&mut parts, env_names);
+
+    parts.push(String::new());
+    parts.push("Next steps:".to_string());
+    parts.push("1. Ensure the PostgreSQL JDBC driver is available: safeselect driver download --vendor postgresql".to_string());
+
+    append_password_summary(&mut parts, project_name, no_password_envs);
+    append_connectivity_summary(&mut parts, env_names);
+    append_agent_summary(&mut parts, env_names, include_agent_step);
+
+    ImportGuidance {
+        text: parts.join("\n"),
+        imported_env_names: env_names.to_vec(),
+    }
+}
+
+fn append_import_summary(parts: &mut Vec<String>, env_names: &[String]) {
     if env_names.is_empty() {
         parts.push("All environments already exist. Nothing imported.".to_string());
     } else {
@@ -514,23 +535,23 @@ pub fn build_guidance_from_parts(
             env_names.join(", ")
         ));
     }
+}
 
-    parts.push(String::new());
-    parts.push("Next steps:".to_string());
-    parts.push("1. Ensure the PostgreSQL JDBC driver is available: safeselect driver download --vendor postgresql".to_string());
-
-    if no_password_envs.is_empty() {
+fn append_password_summary(parts: &mut Vec<String>, project_name: &str, env_names: &[String]) {
+    if env_names.is_empty() {
         parts.push("2. Passwords were imported or are already configured.".to_string());
     } else {
         parts.push("2. Configure missing passwords:".to_string());
-        for env_name in no_password_envs {
+        for env_name in env_names {
             parts.push(format!(
                 "   - {}",
                 secret_setup_hint(project_name, env_name)
             ));
         }
     }
+}
 
+fn append_connectivity_summary(parts: &mut Vec<String>, env_names: &[String]) {
     if env_names.is_empty() {
         parts.push("3. Run safeselect check --environment <env> after you add one.".to_string());
     } else {
@@ -539,23 +560,21 @@ pub fn build_guidance_from_parts(
             parts.push(format!("   - safeselect check --environment {env_name}"));
         }
     }
+}
 
-    if include_agent_step {
-        if env_names.is_empty() {
-            parts.push("4. Install the MCP entry after you have an environment: safeselect agent install opencode --environment <env>".to_string());
-        } else {
-            parts.push("4. Install SafeSelect in your AI agent:".to_string());
-            for env_name in env_names {
-                parts.push(format!(
-                    "   - safeselect agent install opencode --environment {env_name}"
-                ));
-            }
-        }
+fn append_agent_summary(parts: &mut Vec<String>, env_names: &[String], include: bool) {
+    if !include {
+        return;
     }
-
-    ImportGuidance {
-        text: parts.join("\n"),
-        imported_env_names: env_names.to_vec(),
+    if env_names.is_empty() {
+        parts.push("4. Install the MCP entry after you have an environment: safeselect agent install opencode --environment <env>".to_string());
+    } else {
+        parts.push("4. Install SafeSelect in your AI agent:".to_string());
+        for env_name in env_names {
+            parts.push(format!(
+                "   - safeselect agent install opencode --environment {env_name}"
+            ));
+        }
     }
 }
 
