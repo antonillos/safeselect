@@ -2783,7 +2783,7 @@ fn display_database_target(url: &str) -> String {
 
 fn setup_driver_if_missing() -> Result<()> {
     let loader = config::ConfigLoader::new();
-    if !loader.list_drivers().map(|d| d.is_empty()).unwrap_or(true) {
+    if !drivers_missing(&loader) {
         return Ok(());
     }
     println!();
@@ -2796,6 +2796,13 @@ fn setup_driver_if_missing() -> Result<()> {
         },
     )?;
     Ok(())
+}
+
+fn drivers_missing(loader: &ConfigLoader) -> bool {
+    loader
+        .list_drivers()
+        .map(|drivers| drivers.is_empty())
+        .unwrap_or(true)
 }
 
 fn setup_passwords_for_missing(repo_root: &std::path::Path, env_names: &[String]) -> Result<()> {
@@ -4212,6 +4219,47 @@ mod tests {
         let project: config::ProjectConfig =
             toml::from_str(&std::fs::read_to_string(root.join("project.toml")).unwrap()).unwrap();
         assert_eq!(project.version, 1);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn skips_driver_setup_when_a_driver_is_available() {
+        let root =
+            std::env::temp_dir().join(format!("safeselect-driver-setup-{}", std::process::id()));
+        let drivers = root.join("drivers");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&drivers).unwrap();
+        std::fs::write(
+            drivers.join("postgresql.toml"),
+            "version = 1\nvendor = \"postgresql\"\npath = \"/tmp/driver.jar\"\nclass = \"org.postgresql.Driver\"\nsha256 = \"abc\"\n",
+        )
+        .unwrap();
+        let previous = std::env::var_os("SAFESELECT_CONFIG_DIR");
+        std::env::set_var("SAFESELECT_CONFIG_DIR", &root);
+
+        assert!(setup_driver_if_missing().is_ok());
+
+        if let Some(value) = previous {
+            std::env::set_var("SAFESELECT_CONFIG_DIR", value);
+        } else {
+            std::env::remove_var("SAFESELECT_CONFIG_DIR");
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn checks_gitignore_variants_without_failing() {
+        let root =
+            std::env::temp_dir().join(format!("safeselect-gitignore-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        check_gitignore(&root);
+        std::fs::write(root.join(".gitignore"), "target/\n").unwrap();
+        check_gitignore(&root);
+        std::fs::write(root.join(".gitignore"), ".safeselect/\n").unwrap();
+        check_gitignore(&root);
+
         let _ = std::fs::remove_dir_all(root);
     }
 

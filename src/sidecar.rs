@@ -743,20 +743,18 @@ impl SidecarProcess {
 
     pub fn disconnect(&mut self) -> Result<()> {
         let resp = self.send_request("disconnect", None)?;
-        if let Some(err) = resp.error {
-            return Err(SafeselectError::Sidecar(format!(
-                "disconnect failed [{}]: {}",
-                err.code, err.message
-            )));
-        }
-        Ok(())
+        Self::check_sidecar_operation_response(resp, "disconnect")
     }
 
     pub fn connect(&mut self) -> Result<()> {
         let resp = self.send_request("connect", None)?;
+        Self::check_sidecar_operation_response(resp, "connect")
+    }
+
+    fn check_sidecar_operation_response(resp: Response, operation: &str) -> Result<()> {
         if let Some(err) = resp.error {
             return Err(SafeselectError::Sidecar(format!(
-                "connect failed [{}]: {}",
+                "{operation} failed [{}]: {}",
                 err.code, err.message
             )));
         }

@@ -111,11 +111,29 @@ impl SecurityEngine {
             collection: request.collection.clone(),
         })?;
 
-        if !request.filter.is_object() {
+        self.validate_document_find_filter(&request.filter)?;
+        self.validate_document_find_options(request)?;
+        self.validate_document_mql(&request.filter)?;
+        if let Some(projection) = &request.projection {
+            self.validate_document_mql(projection)?;
+        }
+        if let Some(sort) = &request.sort {
+            self.validate_document_mql(sort)?;
+        }
+
+        Ok(())
+    }
+
+    fn validate_document_find_filter(&self, filter: &serde_json::Value) -> Result<()> {
+        if !filter.is_object() {
             return Err(SafeselectError::QueryRejected(
                 "Document filter must be a JSON object".into(),
             ));
         }
+        Ok(())
+    }
+
+    fn validate_document_find_options(&self, request: &DocumentFindRequest) -> Result<()> {
         if request
             .projection
             .as_ref()
@@ -136,14 +154,6 @@ impl SecurityEngine {
                 self.limits.max_rows
             )));
         }
-        self.validate_document_mql(&request.filter)?;
-        if let Some(projection) = &request.projection {
-            self.validate_document_mql(projection)?;
-        }
-        if let Some(sort) = &request.sort {
-            self.validate_document_mql(sort)?;
-        }
-
         Ok(())
     }
 

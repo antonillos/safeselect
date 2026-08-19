@@ -619,13 +619,15 @@ pub fn delete_password_from_keychain(account: &str) -> Result<()> {
     let output = delete_keychain_command(account)
         .output()
         .map_err(delete_keychain_command_error)?;
+    report_keychain_delete_result(&output);
+    Ok(())
+}
 
+fn report_keychain_delete_result(output: &std::process::Output) {
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         eprintln!("WARN: could not delete old Keychain entry: {stderr}");
     }
-
-    Ok(())
 }
 
 fn delete_keychain_command(account: &str) -> std::process::Command {
