@@ -2783,7 +2783,7 @@ fn display_database_target(url: &str) -> String {
 
 fn setup_driver_if_missing() -> Result<()> {
     let loader = config::ConfigLoader::new();
-    if !loader.list_drivers().map(|d| d.is_empty()).unwrap_or(true) {
+    if !drivers_missing(&loader) {
         return Ok(());
     }
     println!();
@@ -2796,6 +2796,13 @@ fn setup_driver_if_missing() -> Result<()> {
         },
     )?;
     Ok(())
+}
+
+fn drivers_missing(loader: &ConfigLoader) -> bool {
+    loader
+        .list_drivers()
+        .map(|drivers| drivers.is_empty())
+        .unwrap_or(true)
 }
 
 fn setup_passwords_for_missing(repo_root: &std::path::Path, env_names: &[String]) -> Result<()> {
@@ -4216,6 +4223,69 @@ mod tests {
     }
 
     #[test]
+    fn skips_driver_setup_when_a_driver_is_available() {
+        let root =
+            std::env::temp_dir().join(format!("safeselect-driver-setup-{}", std::process::id()));
+        let drivers = root.join("drivers");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&drivers).unwrap();
+        std::fs::write(
+            drivers.join("postgresql.toml"),
+            "version = 1\nvendor = \"postgresql\"\npath = \"/tmp/driver.jar\"\nclass = \"org.postgresql.Driver\"\nsha256 = \"abc\"\n",
+        )
+        .unwrap();
+        let previous = std::env::var_os("SAFESELECT_CONFIG_DIR");
+        std::env::set_var("SAFESELECT_CONFIG_DIR", &root);
+
+        assert!(setup_driver_if_missing().is_ok());
+
+        if let Some(value) = previous {
+            std::env::set_var("SAFESELECT_CONFIG_DIR", value);
+        } else {
+            std::env::remove_var("SAFESELECT_CONFIG_DIR");
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn checks_gitignore_variants_without_failing() {
+        let root =
+            std::env::temp_dir().join(format!("safeselect-gitignore-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        check_gitignore(&root);
+        std::fs::write(root.join(".gitignore"), "target/\n").unwrap();
+        check_gitignore(&root);
+        std::fs::write(root.join(".gitignore"), ".safeselect/\n").unwrap();
+        check_gitignore(&root);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn displays_database_target_from_urls() {
+        assert_eq!(
+            display_database_target("postgresql://db/app?sslmode=require"),
+            "app"
+        );
+        assert_eq!(display_database_target("postgresql://db/"), "?");
+    }
+
+    #[test]
+    fn rewrites_mongodb_url_for_local_endpoint() {
+        let rewritten = rewrite_mongodb_url_for_local_endpoint(
+            "mongodb://user:secret@remote:27017/app",
+            "localhost",
+            2222,
+        )
+        .unwrap();
+        assert!(rewritten.contains("localhost:2222"));
+        assert!(rewritten.contains("user:secret@localhost:2222"));
+        assert!(rewritten.contains("directConnection=true"));
+    }
+
+    #[test]
     fn extracts_tcp_host_and_port_variants() {
         assert_eq!(
             extract_tcp_host_port("mongodb://db.example:27018/app"),
@@ -4415,6 +4485,43 @@ enabled = true
         assert!(database.contains("source = \"macos-keychain\""));
         assert!(ssh.contains("auth_type = \"PASSWORD\""));
         assert!(ssh.contains("secret_account"));
+
+        let _ = std::fs::remove_dir_all(repo_root);
+    }
+
+    #[test]
+    fn ssh_password_command_rejects_missing_or_unconfigured_ssh() {
+        let repo_root = std::env::temp_dir().join(format!(
+            "safeselect-ssh-password-errors-{}",
+            std::process::id()
+        ));
+        let env_dir = repo_root.join(".safeselect/environments");
+        let _ = std::fs::remove_dir_all(&repo_root);
+        std::fs::create_dir_all(&env_dir).unwrap();
+        std::fs::write(repo_root.join(".safeselect/project.toml"), "version = 1\n").unwrap();
+        std::fs::write(
+            env_dir.join("no-ssh.toml"),
+            "version = 1\n[database]\nkind = \"document\"\nurl = \"mongodb://localhost\"\n",
+        )
+        .unwrap();
+
+        let loader = ConfigLoader::new();
+        assert!(set_ssh_password_for_environment_with_store(
+            &loader,
+            "missing".into(),
+            Some("secret".into()),
+            Some(repo_root.clone()),
+            |_, _| Ok(())
+        )
+        .is_err());
+        assert!(set_ssh_password_for_environment_with_store(
+            &loader,
+            "no-ssh".into(),
+            Some("secret".into()),
+            Some(repo_root.clone()),
+            |_, _| Ok(())
+        )
+        .is_err());
 
         let _ = std::fs::remove_dir_all(repo_root);
     }

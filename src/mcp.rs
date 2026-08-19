@@ -4808,18 +4808,22 @@ fn is_sidecar_timeout(message: &str) -> bool {
 
 fn is_recoverable_connection_error(message: &str) -> bool {
     let msg = message.to_lowercase();
-    msg.contains("sqlstate 08")
-        || msg.contains("sql_state\":\"08")
-        || msg.contains("08006")
-        || msg.contains("08001")
-        || msg.contains("57p01")
-        || msg.contains("connection refused")
-        || msg.contains("connection is closed")
-        || msg.contains("broken pipe")
-        || msg.contains("eof")
-        || msg.contains("sidecar process terminated")
-        || msg.contains("not_connected")
-        || msg.contains("database not connected")
+    [
+        "sqlstate 08",
+        "sql_state\":\"08",
+        "08006",
+        "08001",
+        "57p01",
+        "connection refused",
+        "connection is closed",
+        "broken pipe",
+        "eof",
+        "sidecar process terminated",
+        "not_connected",
+        "database not connected",
+    ]
+    .iter()
+    .any(|needle| msg.contains(needle))
 }
 
 fn is_valid_identifier(s: &str) -> bool {

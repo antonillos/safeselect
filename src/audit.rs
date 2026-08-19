@@ -308,4 +308,26 @@ mod tests {
         drop(audit);
         std::fs::remove_dir_all(directory).unwrap();
     }
+
+    #[test]
+    fn rotates_and_retains_only_configured_audit_files() {
+        let directory =
+            std::env::temp_dir().join(format!("safeselect-audit-{}", uuid::Uuid::new_v4()));
+        let mut audit_config = config(&directory);
+        audit_config.max_file_bytes = 1;
+        audit_config.retain_files = 1;
+        let mut audit = AuditLog::open(&audit_config, "project", "testing", "test").unwrap();
+
+        audit.record("PASS", "allow", "SELECT 1").unwrap();
+        audit.record("PASS", "allow", "SELECT 2").unwrap();
+
+        let files = std::fs::read_dir(directory.join("project/testing"))
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "jsonl"))
+            .count();
+        assert_eq!(files, 1);
+        drop(audit);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 }
