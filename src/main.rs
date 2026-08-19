@@ -470,6 +470,25 @@ fn set_password_for_environment(
     password: Option<String>,
     project: Option<PathBuf>,
 ) -> Result<()> {
+    set_password_for_environment_with_store(
+        loader,
+        environment,
+        password,
+        project,
+        compose::store_password_in_keychain,
+    )
+}
+
+fn set_password_for_environment_with_store<F>(
+    loader: &ConfigLoader,
+    environment: String,
+    password: Option<String>,
+    project: Option<PathBuf>,
+    store_password: F,
+) -> Result<()>
+where
+    F: FnOnce(&str, &str) -> Result<()>,
+{
     let dir = resolve_project_dir(loader, project)?;
     let env_file = environment_config_file(&dir, &environment);
     if !env_file.exists() {
@@ -490,7 +509,7 @@ fn set_password_for_environment(
             .map_err(|e| SafeselectError::Other(format!("Failed to read password: {e}")))
     })?;
 
-    compose::store_password_in_keychain(&account, &password)?;
+    store_password(&account, &password)?;
     println!("  ✓ Password stored in Keychain ({account})");
     config::write_keychain_secret_to_env_file(&env_file, &account)?;
     println!("  ✓ Updated {}", env_file.display());
@@ -504,6 +523,25 @@ fn set_ssh_password_for_environment(
     password: Option<String>,
     project: Option<PathBuf>,
 ) -> Result<()> {
+    set_ssh_password_for_environment_with_store(
+        loader,
+        environment,
+        password,
+        project,
+        compose::store_password_in_keychain,
+    )
+}
+
+fn set_ssh_password_for_environment_with_store<F>(
+    loader: &ConfigLoader,
+    environment: String,
+    password: Option<String>,
+    project: Option<PathBuf>,
+    store_password: F,
+) -> Result<()>
+where
+    F: FnOnce(&str, &str) -> Result<()>,
+{
     let dir = resolve_project_dir(loader, project)?;
     let env_file = environment_config_file(&dir, &environment);
     if !env_file.exists() {
@@ -532,7 +570,7 @@ fn set_ssh_password_for_environment(
             .map_err(|e| SafeselectError::Other(format!("Failed to read SSH password: {e}")))
     })?;
 
-    compose::store_password_in_keychain(&account, &password)?;
+    store_password(&account, &password)?;
     ssh.secret_account = Some(account.clone());
     ssh.auth_type = Some("PASSWORD".to_string());
     ssh.identity_file = None;
@@ -4231,6 +4269,62 @@ enabled = true
             Some(repo_root.clone()),
         )
         .is_err());
+
+        let _ = std::fs::remove_dir_all(repo_root);
+    }
+
+    #[test]
+    fn password_commands_store_explicit_passwords_through_injected_keychain() {
+        let repo_root = std::env::temp_dir().join(format!(
+            "safeselect-password-store-test-{}",
+            std::process::id()
+        ));
+        let env_dir = repo_root.join(".safeselect/environments");
+        let _ = std::fs::remove_dir_all(&repo_root);
+        std::fs::create_dir_all(&env_dir).unwrap();
+        std::fs::write(repo_root.join(".safeselect/project.toml"), "version = 1\n").unwrap();
+        std::fs::write(
+            env_dir.join("database.toml"),
+            "version = 1\n[database]\nkind = \"document\"\nurl = \"mongodb://localhost\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            env_dir.join("ssh.toml"),
+            "version = 1\n[database]\nkind = \"document\"\nurl = \"mongodb://localhost\"\n[ssh]\nenabled = true\n",
+        )
+        .unwrap();
+
+        let loader = ConfigLoader::new();
+        set_password_for_environment_with_store(
+            &loader,
+            "database".to_string(),
+            Some("database-secret".to_string()),
+            Some(repo_root.clone()),
+            |account, password| {
+                assert!(account.ends_with("/database"));
+                assert_eq!(password, "database-secret");
+                Ok(())
+            },
+        )
+        .unwrap();
+        set_ssh_password_for_environment_with_store(
+            &loader,
+            "ssh".to_string(),
+            Some("ssh-secret".to_string()),
+            Some(repo_root.clone()),
+            |account, password| {
+                assert!(account.ends_with("/ssh/ssh"));
+                assert_eq!(password, "ssh-secret");
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        let database = std::fs::read_to_string(env_dir.join("database.toml")).unwrap();
+        let ssh = std::fs::read_to_string(env_dir.join("ssh.toml")).unwrap();
+        assert!(database.contains("source = \"macos-keychain\""));
+        assert!(ssh.contains("auth_type = \"PASSWORD\""));
+        assert!(ssh.contains("secret_account"));
 
         let _ = std::fs::remove_dir_all(repo_root);
     }
