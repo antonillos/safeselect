@@ -454,6 +454,16 @@ fn append_deleted_secret_message(
     Ok(())
 }
 
+fn cmd_config_reset(loader: &ConfigLoader, project: Option<PathBuf>) -> Result<()> {
+    let dir = resolve_project_dir(loader, project)?;
+    reset_project_config(&dir)
+}
+
+fn cmd_config_uninstall(loader: &ConfigLoader, project: Option<PathBuf>) -> Result<()> {
+    let dir = resolve_project_dir(loader, project)?;
+    uninstall_project_config(&dir)
+}
+
 fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
     match action {
         ConfigAction::Validate {
@@ -637,14 +647,8 @@ fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
             println!("\nDone. Run: safeselect check --environment {environment}");
             Ok(())
         }
-        ConfigAction::Reset { project } => {
-            let dir = resolve_project_dir(loader, project)?;
-            reset_project_config(&dir)
-        }
-        ConfigAction::Uninstall { project } => {
-            let dir = resolve_project_dir(loader, project)?;
-            uninstall_project_config(&dir)
-        }
+        ConfigAction::Reset { project } => cmd_config_reset(loader, project),
+        ConfigAction::Uninstall { project } => cmd_config_uninstall(loader, project),
     }
 }
 
