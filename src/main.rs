@@ -399,6 +399,61 @@ fn validate_current_project(loader: &ConfigLoader, cwd: &Path) -> Result<()> {
     Ok(())
 }
 
+fn delete_environment_config(
+    loader: &ConfigLoader,
+    name: String,
+    project: Option<PathBuf>,
+) -> Result<()> {
+    let dir = resolve_project_dir(loader, project)?;
+    let env_dir = dir.join(".safeselect").join("environments");
+    let env_file = env_dir.join(format!("{name}.toml"));
+
+    if !env_file.exists() {
+        return Err(SafeselectError::EnvironmentNotFound(
+            name,
+            env_dir.display().to_string(),
+        ));
+    }
+
+    let old_content = std::fs::read_to_string(&env_file).ok();
+    let secret_source = old_content.as_ref().and_then(|content| {
+        let env_config: config::EnvironmentConfig = toml::from_str(content).ok()?;
+        env_config
+            .database
+            .secret
+            .map(|secret| (secret.source, secret.account, secret.variable))
+    });
+
+    std::fs::remove_file(&env_file)?;
+    let mut removed = format!("Deleted environment '{name}'");
+    removed.push_str(&format!("\n  File: {}", env_file.display()));
+    append_deleted_secret_message(&mut removed, secret_source)?;
+    println!("{removed}");
+    Ok(())
+}
+
+fn append_deleted_secret_message(
+    removed: &mut String,
+    secret_source: Option<(String, Option<String>, Option<String>)>,
+) -> Result<()> {
+    let Some((source, account, _variable)) = secret_source else {
+        return Ok(());
+    };
+    match source.as_str() {
+        "macos-keychain" if cfg!(target_os = "macos") => {
+            if let Some(account) = account {
+                compose::delete_password_from_keychain(&account)?;
+                removed.push_str("\n  Keychain entry deleted.");
+            }
+        }
+        "env" => removed.push_str(
+            "\n  Environment variable was not removed — delete it manually if no longer needed.",
+        ),
+        _ => {}
+    }
+    Ok(())
+}
+
 fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
     match action {
         ConfigAction::Validate {
@@ -484,50 +539,7 @@ fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
             Ok(())
         }
         ConfigAction::DeleteEnvironment { name, project } => {
-            let dir = resolve_project_dir(loader, project)?;
-
-            let env_dir = dir.join(".safeselect").join("environments");
-            let env_file = env_dir.join(format!("{name}.toml"));
-
-            if !env_file.exists() {
-                return Err(SafeselectError::EnvironmentNotFound(
-                    name.clone(),
-                    env_dir.display().to_string(),
-                ));
-            }
-
-            // Try to read the secret before deleting the file
-            let old_content = std::fs::read_to_string(&env_file).ok();
-            let secret_source = old_content.as_ref().and_then(|c| {
-                let env_config: config::EnvironmentConfig = toml::from_str(c).ok()?;
-                env_config
-                    .database
-                    .secret
-                    .map(|s| (s.source, s.account, s.variable))
-            });
-
-            std::fs::remove_file(&env_file)?;
-
-            let mut removed = format!("Deleted environment '{name}'");
-            removed.push_str(&format!("\n  File: {}", env_file.display()));
-
-            if let Some((source, account, _variable)) = secret_source {
-                match source.as_str() {
-                    "macos-keychain" if cfg!(target_os = "macos") => {
-                        if let Some(acct) = account {
-                            compose::delete_password_from_keychain(&acct)?;
-                            removed.push_str("\n  Keychain entry deleted.");
-                        }
-                    }
-                    "env" => {
-                        removed.push_str("\n  Environment variable was not removed — delete it manually if no longer needed.");
-                    }
-                    _ => {}
-                }
-            }
-
-            println!("{removed}");
-            Ok(())
+            delete_environment_config(loader, name, project)
         }
         ConfigAction::SetPassword {
             environment,
@@ -4148,6 +4160,36 @@ enabled = true
         assert!(validate_current_project(&loader, &repo_root).is_ok());
         assert!(validate_current_project(&loader, &repo_root.join("missing")).is_ok());
         assert!(validate_explicit_project(&loader, &repo_root.join("missing"), None).is_err());
+
+        let _ = std::fs::remove_dir_all(repo_root);
+    }
+
+    #[test]
+    fn delete_environment_removes_file_and_preserves_env_secret_notice() {
+        let repo_root = std::env::temp_dir().join(format!(
+            "safeselect-config-delete-test-{}",
+            std::process::id()
+        ));
+        let env_dir = repo_root.join(".safeselect/environments");
+        let _ = std::fs::remove_dir_all(&repo_root);
+        std::fs::create_dir_all(&env_dir).unwrap();
+        std::fs::write(repo_root.join(".safeselect/project.toml"), "version = 1\n").unwrap();
+        std::fs::write(
+            env_dir.join("local.toml"),
+            "version = 1\n[database]\nkind = \"document\"\nurl = \"mongodb://localhost\"\n[database.secret]\nsource = \"env\"\nvariable = \"SAFESELECT_TEST_PASSWORD\"\n",
+        )
+        .unwrap();
+
+        let loader = ConfigLoader::new();
+        assert!(
+            delete_environment_config(&loader, "local".to_string(), Some(repo_root.clone()))
+                .is_ok()
+        );
+        assert!(!env_dir.join("local.toml").exists());
+        assert!(
+            delete_environment_config(&loader, "missing".to_string(), Some(repo_root.clone()))
+                .is_err()
+        );
 
         let _ = std::fs::remove_dir_all(repo_root);
     }
