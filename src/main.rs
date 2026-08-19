@@ -322,77 +322,280 @@ fn cmd_config_show(
     Ok(())
 }
 
+fn cmd_config_validate(
+    loader: &ConfigLoader,
+    project: Option<PathBuf>,
+    environment: Option<String>,
+) -> Result<()> {
+    match project {
+        Some(dir) => validate_explicit_project(loader, &dir, environment.as_deref()),
+        None => {
+            let cwd = std::env::current_dir()?;
+            validate_current_project(loader, &cwd)
+        }
+    }
+}
+
+fn validate_explicit_project(
+    loader: &ConfigLoader,
+    dir: &Path,
+    environment: Option<&str>,
+) -> Result<()> {
+    if !dir.join(".safeselect").is_dir() {
+        return Err(SafeselectError::LocalProjectNotFound(dir.to_path_buf()));
+    }
+    if let Some(env) = environment {
+        let _ = loader.resolve_local(dir, env)?;
+        println!("Config valid: {}/{}", project_display_name(dir), env);
+        return Ok(());
+    }
+
+    let safeselect_dir = dir.join(".safeselect");
+    if safeselect_dir.join("project.toml").exists() || safeselect_dir.join("environments").is_dir()
+    {
+        println!("Config valid: {}", project_display_name(dir));
+        return Ok(());
+    }
+    Err(SafeselectError::Config(format!(
+        "incomplete .safeselect/ in {}",
+        dir.display()
+    )))
+}
+
+fn validate_current_project(loader: &ConfigLoader, cwd: &Path) -> Result<()> {
+    let Some(dir) = loader.find_local_project(&cwd) else {
+        println!("No .safeselect/ directory found. Create one with:");
+        println!("  safeselect import-dbeaver <export.zip>");
+        println!("  mkdir -p .safeselect/environments && touch .safeselect/project.toml");
+        return Ok(());
+    };
+
+    println!(
+        ".safeselect/ found at {} ({})",
+        dir.display(),
+        project_display_name(&dir)
+    );
+    println!("Use --environment <name> to validate a specific environment.");
+    let envs_dir = dir.join(".safeselect").join("environments");
+    if !envs_dir.is_dir() {
+        return Ok(());
+    }
+
+    let mut entries: Vec<_> = std::fs::read_dir(envs_dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "toml"))
+        .filter_map(|e| {
+            e.path()
+                .file_stem()
+                .and_then(|s| s.to_str().map(String::from))
+        })
+        .collect();
+    entries.sort();
+    if !entries.is_empty() {
+        println!("  Environments: {}", entries.join(", "));
+    }
+    Ok(())
+}
+
+fn delete_environment_config(
+    loader: &ConfigLoader,
+    name: String,
+    project: Option<PathBuf>,
+) -> Result<()> {
+    let dir = resolve_project_dir(loader, project)?;
+    let env_dir = dir.join(".safeselect").join("environments");
+    let env_file = env_dir.join(format!("{name}.toml"));
+
+    if !env_file.exists() {
+        return Err(SafeselectError::EnvironmentNotFound(
+            name,
+            env_dir.display().to_string(),
+        ));
+    }
+
+    let old_content = std::fs::read_to_string(&env_file).ok();
+    let secret_source = old_content.as_ref().and_then(|content| {
+        let env_config: config::EnvironmentConfig = toml::from_str(content).ok()?;
+        env_config
+            .database
+            .secret
+            .map(|secret| (secret.source, secret.account, secret.variable))
+    });
+
+    std::fs::remove_file(&env_file)?;
+    let mut removed = format!("Deleted environment '{name}'");
+    removed.push_str(&format!("\n  File: {}", env_file.display()));
+    append_deleted_secret_message(&mut removed, secret_source)?;
+    println!("{removed}");
+    Ok(())
+}
+
+fn append_deleted_secret_message(
+    removed: &mut String,
+    secret_source: Option<(String, Option<String>, Option<String>)>,
+) -> Result<()> {
+    let Some((source, account, _variable)) = secret_source else {
+        return Ok(());
+    };
+    match source.as_str() {
+        "macos-keychain" if cfg!(target_os = "macos") => {
+            if let Some(account) = account {
+                compose::delete_password_from_keychain(&account)?;
+                removed.push_str("\n  Keychain entry deleted.");
+            }
+        }
+        "env" => removed.push_str(
+            "\n  Environment variable was not removed — delete it manually if no longer needed.",
+        ),
+        _ => {}
+    }
+    Ok(())
+}
+
+fn cmd_config_reset(loader: &ConfigLoader, project: Option<PathBuf>) -> Result<()> {
+    let dir = resolve_project_dir(loader, project)?;
+    reset_project_config(&dir)
+}
+
+fn cmd_config_uninstall(loader: &ConfigLoader, project: Option<PathBuf>) -> Result<()> {
+    let dir = resolve_project_dir(loader, project)?;
+    uninstall_project_config(&dir)
+}
+
+fn set_password_for_environment(
+    loader: &ConfigLoader,
+    environment: String,
+    password: Option<String>,
+    project: Option<PathBuf>,
+) -> Result<()> {
+    set_password_for_environment_with_store(
+        loader,
+        environment,
+        password,
+        project,
+        compose::store_password_in_keychain,
+    )
+}
+
+fn set_password_for_environment_with_store<F>(
+    loader: &ConfigLoader,
+    environment: String,
+    password: Option<String>,
+    project: Option<PathBuf>,
+    store_password: F,
+) -> Result<()>
+where
+    F: FnOnce(&str, &str) -> Result<()>,
+{
+    let dir = resolve_project_dir(loader, project)?;
+    let env_file = environment_config_file(&dir, &environment);
+    if !env_file.exists() {
+        return Err(SafeselectError::EnvironmentNotFound(
+            environment,
+            env_file.display().to_string(),
+        ));
+    }
+
+    let content = std::fs::read_to_string(&env_file)?;
+    let env_config: config::EnvironmentConfig = toml::from_str(&content)
+        .map_err(|e| SafeselectError::Config(format!("invalid {}: {e}", env_file.display())))?;
+    let account = config::preferred_keychain_account(&dir, &environment, &env_config);
+    let password = password.map(Ok).unwrap_or_else(|| {
+        inquire::Password::new(&format!("Password for '{account}'"))
+            .without_confirmation()
+            .prompt()
+            .map_err(|e| SafeselectError::Other(format!("Failed to read password: {e}")))
+    })?;
+
+    store_password(&account, &password)?;
+    println!("  ✓ Password stored in Keychain ({account})");
+    config::write_keychain_secret_to_env_file(&env_file, &account)?;
+    println!("  ✓ Updated {}", env_file.display());
+    println!("\nDone. Run: safeselect check --environment {environment}");
+    Ok(())
+}
+
+fn set_ssh_password_for_environment(
+    loader: &ConfigLoader,
+    environment: String,
+    password: Option<String>,
+    project: Option<PathBuf>,
+) -> Result<()> {
+    set_ssh_password_for_environment_with_store(
+        loader,
+        environment,
+        password,
+        project,
+        compose::store_password_in_keychain,
+    )
+}
+
+fn set_ssh_password_for_environment_with_store<F>(
+    loader: &ConfigLoader,
+    environment: String,
+    password: Option<String>,
+    project: Option<PathBuf>,
+    store_password: F,
+) -> Result<()>
+where
+    F: FnOnce(&str, &str) -> Result<()>,
+{
+    let dir = resolve_project_dir(loader, project)?;
+    let env_file = environment_config_file(&dir, &environment);
+    if !env_file.exists() {
+        return Err(SafeselectError::EnvironmentNotFound(
+            environment,
+            env_file.display().to_string(),
+        ));
+    }
+
+    let content = std::fs::read_to_string(&env_file)?;
+    let mut env_config: config::EnvironmentConfig = toml::from_str(&content)
+        .map_err(|e| SafeselectError::Config(format!("invalid {}: {e}", env_file.display())))?;
+    let ssh = env_config.ssh.as_mut().ok_or_else(|| {
+        SafeselectError::Config(format!(
+            "environment '{environment}' has no SSH configuration"
+        ))
+    })?;
+    let account = ssh
+        .secret_account
+        .clone()
+        .unwrap_or_else(|| format!("{}/{environment}/ssh", project_display_name(&dir)));
+    let password = password.map(Ok).unwrap_or_else(|| {
+        inquire::Password::new(&format!("SSH password for '{account}'"))
+            .without_confirmation()
+            .prompt()
+            .map_err(|e| SafeselectError::Other(format!("Failed to read SSH password: {e}")))
+    })?;
+
+    store_password(&account, &password)?;
+    ssh.secret_account = Some(account.clone());
+    ssh.auth_type = Some("PASSWORD".to_string());
+    ssh.identity_file = None;
+    let env_toml =
+        toml::to_string_pretty(&env_config).map_err(|e| SafeselectError::TomlSer(e.to_string()))?;
+    std::fs::write(&env_file, env_toml)?;
+    println!("  ✓ SSH password stored in Keychain ({account})");
+    println!("  ✓ Updated {}", env_file.display());
+    println!("\nDone. Run: safeselect check --environment {environment}");
+    Ok(())
+}
+
+fn environment_config_file(project: &Path, environment: &str) -> PathBuf {
+    project
+        .join(".safeselect")
+        .join("environments")
+        .join(format!("{environment}.toml"))
+}
+
 fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
     match action {
         ConfigAction::Validate {
             project,
             environment,
-        } => {
-            match project {
-                Some(dir) => {
-                    if !dir.join(".safeselect").is_dir() {
-                        return Err(SafeselectError::LocalProjectNotFound(dir));
-                    }
-                    if let Some(ref env) = environment {
-                        let _ = loader.resolve_local(&dir, env)?;
-                        println!("Config valid: {}/{}", project_display_name(&dir), env);
-                    } else {
-                        let safeselect_dir = dir.join(".safeselect");
-                        if safeselect_dir.join("project.toml").exists()
-                            || safeselect_dir.join("environments").is_dir()
-                        {
-                            println!("Config valid: {}", project_display_name(&dir));
-                        } else {
-                            return Err(SafeselectError::Config(format!(
-                                "incomplete .safeselect/ in {}",
-                                dir.display()
-                            )));
-                        }
-                    }
-                }
-                None => {
-                    let cwd = std::env::current_dir()?;
-                    match loader.find_local_project(&cwd) {
-                        Some(dir) => {
-                            println!(
-                                ".safeselect/ found at {} ({})",
-                                dir.display(),
-                                project_display_name(&dir)
-                            );
-                            println!(
-                                "Use --environment <name> to validate a specific environment."
-                            );
-                            let envs_dir = dir.join(".safeselect").join("environments");
-                            if envs_dir.is_dir() {
-                                let mut entries: Vec<_> = std::fs::read_dir(&envs_dir)
-                                    .into_iter()
-                                    .flatten()
-                                    .flatten()
-                                    .filter(|e| {
-                                        e.path().extension().is_some_and(|ext| ext == "toml")
-                                    })
-                                    .filter_map(|e| {
-                                        e.path()
-                                            .file_stem()
-                                            .and_then(|s| s.to_str().map(String::from))
-                                    })
-                                    .collect();
-                                entries.sort();
-                                if !entries.is_empty() {
-                                    println!("  Environments: {}", entries.join(", "));
-                                }
-                            }
-                        }
-                        None => {
-                            println!("No .safeselect/ directory found. Create one with:");
-                            println!("  safeselect import-dbeaver <export.zip>");
-                            println!("  mkdir -p .safeselect/environments && touch .safeselect/project.toml");
-                        }
-                    }
-                }
-            }
-            Ok(())
-        }
+        } => cmd_config_validate(loader, project, environment),
         ConfigAction::Show {
             project,
             environment,
@@ -472,155 +675,20 @@ fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
             Ok(())
         }
         ConfigAction::DeleteEnvironment { name, project } => {
-            let dir = resolve_project_dir(loader, project)?;
-
-            let env_dir = dir.join(".safeselect").join("environments");
-            let env_file = env_dir.join(format!("{name}.toml"));
-
-            if !env_file.exists() {
-                return Err(SafeselectError::EnvironmentNotFound(
-                    name.clone(),
-                    env_dir.display().to_string(),
-                ));
-            }
-
-            // Try to read the secret before deleting the file
-            let old_content = std::fs::read_to_string(&env_file).ok();
-            let secret_source = old_content.as_ref().and_then(|c| {
-                let env_config: config::EnvironmentConfig = toml::from_str(c).ok()?;
-                env_config
-                    .database
-                    .secret
-                    .map(|s| (s.source, s.account, s.variable))
-            });
-
-            std::fs::remove_file(&env_file)?;
-
-            let mut removed = format!("Deleted environment '{name}'");
-            removed.push_str(&format!("\n  File: {}", env_file.display()));
-
-            if let Some((source, account, _variable)) = secret_source {
-                match source.as_str() {
-                    "macos-keychain" if cfg!(target_os = "macos") => {
-                        if let Some(acct) = account {
-                            compose::delete_password_from_keychain(&acct)?;
-                            removed.push_str("\n  Keychain entry deleted.");
-                        }
-                    }
-                    "env" => {
-                        removed.push_str("\n  Environment variable was not removed — delete it manually if no longer needed.");
-                    }
-                    _ => {}
-                }
-            }
-
-            println!("{removed}");
-            Ok(())
+            delete_environment_config(loader, name, project)
         }
         ConfigAction::SetPassword {
             environment,
             password,
             project,
-        } => {
-            let dir = resolve_project_dir(loader, project)?;
-
-            let env_file = dir
-                .join(".safeselect")
-                .join("environments")
-                .join(format!("{environment}.toml"));
-            if !env_file.exists() {
-                return Err(SafeselectError::EnvironmentNotFound(
-                    environment.clone(),
-                    env_file.display().to_string(),
-                ));
-            }
-
-            let content = std::fs::read_to_string(&env_file)?;
-            let env_config: config::EnvironmentConfig = toml::from_str(&content).map_err(|e| {
-                SafeselectError::Config(format!("invalid {}: {e}", env_file.display()))
-            })?;
-            let account = config::preferred_keychain_account(&dir, &environment, &env_config);
-
-            let pw = match password {
-                Some(p) => p,
-                None => inquire::Password::new(&format!("Password for '{account}'"))
-                    .without_confirmation()
-                    .prompt()
-                    .map_err(|e| SafeselectError::Other(format!("Failed to read password: {e}")))?,
-            };
-
-            compose::store_password_in_keychain(&account, &pw)?;
-            println!("  ✓ Password stored in Keychain ({account})");
-
-            config::write_keychain_secret_to_env_file(&env_file, &account)?;
-            println!("  ✓ Updated {}", env_file.display());
-            println!("\nDone. Run: safeselect check --environment {environment}");
-            Ok(())
-        }
+        } => set_password_for_environment(loader, environment, password, project),
         ConfigAction::SetSshPassword {
             environment,
             password,
             project,
-        } => {
-            let dir = resolve_project_dir(loader, project)?;
-
-            let env_file = dir
-                .join(".safeselect")
-                .join("environments")
-                .join(format!("{environment}.toml"));
-            if !env_file.exists() {
-                return Err(SafeselectError::EnvironmentNotFound(
-                    environment.clone(),
-                    env_file.display().to_string(),
-                ));
-            }
-
-            let content = std::fs::read_to_string(&env_file)?;
-            let mut env_config: config::EnvironmentConfig =
-                toml::from_str(&content).map_err(|e| {
-                    SafeselectError::Config(format!("invalid {}: {e}", env_file.display()))
-                })?;
-            let Some(ssh) = env_config.ssh.as_mut() else {
-                return Err(SafeselectError::Config(format!(
-                    "environment '{environment}' has no SSH configuration"
-                )));
-            };
-
-            let account = ssh
-                .secret_account
-                .clone()
-                .unwrap_or_else(|| format!("{}/{environment}/ssh", project_display_name(&dir)));
-            let pw = match password {
-                Some(p) => p,
-                None => inquire::Password::new(&format!("SSH password for '{account}'"))
-                    .without_confirmation()
-                    .prompt()
-                    .map_err(|e| {
-                        SafeselectError::Other(format!("Failed to read SSH password: {e}"))
-                    })?,
-            };
-
-            compose::store_password_in_keychain(&account, &pw)?;
-            ssh.secret_account = Some(account.clone());
-            ssh.auth_type = Some("PASSWORD".to_string());
-            ssh.identity_file = None;
-
-            let env_toml = toml::to_string_pretty(&env_config)
-                .map_err(|e| SafeselectError::TomlSer(e.to_string()))?;
-            std::fs::write(&env_file, env_toml)?;
-            println!("  ✓ SSH password stored in Keychain ({account})");
-            println!("  ✓ Updated {}", env_file.display());
-            println!("\nDone. Run: safeselect check --environment {environment}");
-            Ok(())
-        }
-        ConfigAction::Reset { project } => {
-            let dir = resolve_project_dir(loader, project)?;
-            reset_project_config(&dir)
-        }
-        ConfigAction::Uninstall { project } => {
-            let dir = resolve_project_dir(loader, project)?;
-            uninstall_project_config(&dir)
-        }
+        } => set_ssh_password_for_environment(loader, environment, password, project),
+        ConfigAction::Reset { project } => cmd_config_reset(loader, project),
+        ConfigAction::Uninstall { project } => cmd_config_uninstall(loader, project),
     }
 }
 
@@ -4111,6 +4179,153 @@ enabled = true
         );
 
         assert!(result.is_ok());
+        let _ = std::fs::remove_dir_all(repo_root);
+    }
+
+    #[test]
+    fn config_validate_handles_explicit_and_current_projects() {
+        let repo_root = std::env::temp_dir().join(format!(
+            "safeselect-config-validate-test-{}",
+            std::process::id()
+        ));
+        let env_dir = repo_root.join(".safeselect/environments");
+        let _ = std::fs::remove_dir_all(&repo_root);
+        std::fs::create_dir_all(&env_dir).unwrap();
+        std::fs::write(repo_root.join(".safeselect/project.toml"), "version = 1\n").unwrap();
+        std::fs::write(
+            env_dir.join("local.toml"),
+            "version = 1\n[database]\nkind = \"document\"\nurl = \"mongodb://localhost\"\n",
+        )
+        .unwrap();
+
+        let loader = ConfigLoader::new();
+        assert!(validate_explicit_project(&loader, &repo_root, None).is_ok());
+        assert!(validate_explicit_project(&loader, &repo_root, Some("local")).is_ok());
+        assert!(validate_current_project(&loader, &repo_root).is_ok());
+        assert!(validate_current_project(&loader, &repo_root.join("missing")).is_ok());
+        assert!(validate_explicit_project(&loader, &repo_root.join("missing"), None).is_err());
+
+        let _ = std::fs::remove_dir_all(repo_root);
+    }
+
+    #[test]
+    fn delete_environment_removes_file_and_preserves_env_secret_notice() {
+        let repo_root = std::env::temp_dir().join(format!(
+            "safeselect-config-delete-test-{}",
+            std::process::id()
+        ));
+        let env_dir = repo_root.join(".safeselect/environments");
+        let _ = std::fs::remove_dir_all(&repo_root);
+        std::fs::create_dir_all(&env_dir).unwrap();
+        std::fs::write(repo_root.join(".safeselect/project.toml"), "version = 1\n").unwrap();
+        std::fs::write(
+            env_dir.join("local.toml"),
+            "version = 1\n[database]\nkind = \"document\"\nurl = \"mongodb://localhost\"\n[database.secret]\nsource = \"env\"\nvariable = \"SAFESELECT_TEST_PASSWORD\"\n",
+        )
+        .unwrap();
+
+        let loader = ConfigLoader::new();
+        assert!(
+            delete_environment_config(&loader, "local".to_string(), Some(repo_root.clone()))
+                .is_ok()
+        );
+        assert!(!env_dir.join("local.toml").exists());
+        assert!(
+            delete_environment_config(&loader, "missing".to_string(), Some(repo_root.clone()))
+                .is_err()
+        );
+
+        let _ = std::fs::remove_dir_all(repo_root);
+    }
+
+    #[test]
+    fn password_commands_validate_environment_before_keychain_access() {
+        let repo_root = std::env::temp_dir().join(format!(
+            "safeselect-password-validation-test-{}",
+            std::process::id()
+        ));
+        let env_dir = repo_root.join(".safeselect/environments");
+        let _ = std::fs::remove_dir_all(&repo_root);
+        std::fs::create_dir_all(&env_dir).unwrap();
+        std::fs::write(repo_root.join(".safeselect/project.toml"), "version = 1\n").unwrap();
+        std::fs::write(
+            env_dir.join("without-ssh.toml"),
+            "version = 1\n[database]\nkind = \"document\"\nurl = \"mongodb://localhost\"\n",
+        )
+        .unwrap();
+
+        let loader = ConfigLoader::new();
+        assert!(set_password_for_environment(
+            &loader,
+            "missing".to_string(),
+            Some("secret".to_string()),
+            Some(repo_root.clone()),
+        )
+        .is_err());
+        assert!(set_ssh_password_for_environment(
+            &loader,
+            "without-ssh".to_string(),
+            Some("secret".to_string()),
+            Some(repo_root.clone()),
+        )
+        .is_err());
+
+        let _ = std::fs::remove_dir_all(repo_root);
+    }
+
+    #[test]
+    fn password_commands_store_explicit_passwords_through_injected_keychain() {
+        let repo_root = std::env::temp_dir().join(format!(
+            "safeselect-password-store-test-{}",
+            std::process::id()
+        ));
+        let env_dir = repo_root.join(".safeselect/environments");
+        let _ = std::fs::remove_dir_all(&repo_root);
+        std::fs::create_dir_all(&env_dir).unwrap();
+        std::fs::write(repo_root.join(".safeselect/project.toml"), "version = 1\n").unwrap();
+        std::fs::write(
+            env_dir.join("database.toml"),
+            "version = 1\n[database]\nkind = \"document\"\nurl = \"mongodb://localhost\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            env_dir.join("ssh.toml"),
+            "version = 1\n[database]\nkind = \"document\"\nurl = \"mongodb://localhost\"\n[ssh]\nenabled = true\n",
+        )
+        .unwrap();
+
+        let loader = ConfigLoader::new();
+        set_password_for_environment_with_store(
+            &loader,
+            "database".to_string(),
+            Some("database-secret".to_string()),
+            Some(repo_root.clone()),
+            |account, password| {
+                assert!(account.ends_with("/database"));
+                assert_eq!(password, "database-secret");
+                Ok(())
+            },
+        )
+        .unwrap();
+        set_ssh_password_for_environment_with_store(
+            &loader,
+            "ssh".to_string(),
+            Some("ssh-secret".to_string()),
+            Some(repo_root.clone()),
+            |account, password| {
+                assert!(account.ends_with("/ssh/ssh"));
+                assert_eq!(password, "ssh-secret");
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        let database = std::fs::read_to_string(env_dir.join("database.toml")).unwrap();
+        let ssh = std::fs::read_to_string(env_dir.join("ssh.toml")).unwrap();
+        assert!(database.contains("source = \"macos-keychain\""));
+        assert!(ssh.contains("auth_type = \"PASSWORD\""));
+        assert!(ssh.contains("secret_account"));
+
         let _ = std::fs::remove_dir_all(repo_root);
     }
 
