@@ -621,21 +621,9 @@ pub fn delete_password_from_keychain(account: &str) -> Result<()> {
 }
 
 pub fn store_password_in_keychain(account: &str, password: &str) -> Result<()> {
-    let output = std::process::Command::new("security")
-        .args([
-            "add-generic-password",
-            "-a",
-            account,
-            "-s",
-            "safeselect",
-            "-w",
-            password,
-            "-U",
-        ])
+    let output = keychain_command(account, password)
         .output()
-        .map_err(|e| {
-            crate::error::SafeselectError::Secret(format!("security command failed: {e}"))
-        })?;
+        .map_err(keychain_command_error)?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -645,6 +633,25 @@ pub fn store_password_in_keychain(account: &str, password: &str) -> Result<()> {
     Ok(())
 }
 
+fn keychain_command(account: &str, password: &str) -> std::process::Command {
+    let mut command = std::process::Command::new("security");
+    command.args([
+        "add-generic-password",
+        "-a",
+        account,
+        "-s",
+        "safeselect",
+        "-w",
+        password,
+        "-U",
+    ]);
+    command
+}
+
+fn keychain_command_error(error: std::io::Error) -> crate::error::SafeselectError {
+    crate::error::SafeselectError::Secret(format!("security command failed: {error}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -652,6 +659,30 @@ mod tests {
     #[test]
     fn builds_secret_environment_variable_name() {
         assert_eq!(secret_env_var("local-db"), "SAFESELECT_PASSWORD_LOCAL_DB");
+    }
+
+    #[test]
+    fn builds_keychain_command_with_account_and_password() {
+        let command = keychain_command("project/local", "secret");
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(command.get_program(), "security");
+        assert_eq!(
+            args,
+            [
+                "add-generic-password",
+                "-a",
+                "project/local",
+                "-s",
+                "safeselect",
+                "-w",
+                "secret",
+                "-U",
+            ]
+        );
     }
 
     #[test]
