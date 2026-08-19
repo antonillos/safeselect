@@ -4115,6 +4115,66 @@ enabled = true
     }
 
     #[test]
+    fn all_diagnostic_codes_have_stable_names() {
+        let codes = [
+            DiagnosticCode::ConfigResolved,
+            DiagnosticCode::DriverVerified,
+            DiagnosticCode::SecretResolved,
+            DiagnosticCode::SshBastionReachable,
+            DiagnosticCode::SshBastionUnreachable,
+            DiagnosticCode::SshBastionUnresolved,
+            DiagnosticCode::SshIdentityMissing,
+            DiagnosticCode::SshTunnelAttempt,
+            DiagnosticCode::SshTunnelFailed,
+            DiagnosticCode::PostgresReachable,
+            DiagnosticCode::PostgresUnreachable,
+            DiagnosticCode::SidecarStartAttempt,
+            DiagnosticCode::SidecarBackendOk,
+            DiagnosticCode::SidecarConnectionFailed,
+            DiagnosticCode::BackendVerificationOk,
+            DiagnosticCode::BackendVerificationFailed,
+            DiagnosticCode::AllChecksPassed,
+            DiagnosticCode::ConnectionLost,
+            DiagnosticCode::SshTunnelRecoveryAttempt,
+            DiagnosticCode::JdbcReconnectAttempt,
+            DiagnosticCode::SidecarRestartAttempt,
+            DiagnosticCode::RecoveryOk,
+            DiagnosticCode::RecoveryFailed,
+        ];
+
+        let expected = [
+            "SAFESELECT_CONFIG_RESOLVED",
+            "SAFESELECT_DRIVER_VERIFIED",
+            "SAFESELECT_SECRET_RESOLVED",
+            "SAFESELECT_SSH_BASTION_REACHABLE",
+            "SAFESELECT_SSH_BASTION_UNREACHABLE",
+            "SAFESELECT_SSH_BASTION_UNRESOLVED",
+            "SAFESELECT_SSH_IDENTITY_MISSING",
+            "SAFESELECT_SSH_TUNNEL_ATTEMPT",
+            "SAFESELECT_SSH_TUNNEL_FAILED",
+            "SAFESELECT_POSTGRES_REACHABLE",
+            "SAFESELECT_POSTGRES_UNREACHABLE",
+            "SAFESELECT_SIDECAR_START_ATTEMPT",
+            "SAFESELECT_SIDECAR_BACKEND_OK",
+            "SAFESELECT_SIDECAR_CONNECTION_FAILED",
+            "SAFESELECT_BACKEND_VERIFICATION_OK",
+            "SAFESELECT_BACKEND_VERIFICATION_FAILED",
+            "SAFESELECT_ALL_CHECKS_PASSED",
+            "SAFESELECT_CONNECTION_LOST",
+            "SAFESELECT_SSH_TUNNEL_RECOVERY_ATTEMPT",
+            "SAFESELECT_JDBC_RECONNECT_ATTEMPT",
+            "SAFESELECT_SIDECAR_RESTART_ATTEMPT",
+            "SAFESELECT_RECOVERY_OK",
+            "SAFESELECT_RECOVERY_FAILED",
+        ];
+
+        assert_eq!(codes.len(), expected.len());
+        for (code, expected_name) in codes.iter().zip(expected) {
+            assert_eq!(code.as_str(), expected_name);
+        }
+    }
+
+    #[test]
     fn uninstall_checks_supported_user_binary_locations() {
         let home = dirs::home_dir().expect("home directory should be available");
 
