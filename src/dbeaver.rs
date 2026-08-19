@@ -276,3 +276,15 @@ fn parse_postgres_jdbc_url(url: &str) -> Option<ParsedJdbcUrl> {
         database,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalizes_postgres_driver_aliases() {
+        assert_eq!(normalize_driver("postgres"), "postgresql");
+        assert_eq!(normalize_driver("POSTGRES-JDBC"), "postgresql");
+        assert_eq!(normalize_driver("mysql"), "mysql");
+    }
+}

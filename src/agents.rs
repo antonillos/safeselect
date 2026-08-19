@@ -1248,4 +1248,29 @@ value = true
         assert!(config_has_entry("gemini-cli", ini, "gamma").unwrap());
         assert!(config_has_entry("unknown-client", json, "alpha").is_err());
     }
+
+    #[test]
+    fn creates_default_opencode_config() {
+        let path =
+            std::env::temp_dir().join(format!("safeselect-opencode-{}.json", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        create_opencode_config(&path).unwrap();
+        let value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(value, serde_json::json!({"mcp": {}}));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn replaces_existing_mcp_json_entry() {
+        let updated = replace_mcp_json(
+            r#"{"mcpServers":{"old":{"command":"old"}}}"#,
+            &serde_json::json!({"command": "new"}),
+            "old",
+            "new",
+        )
+        .unwrap();
+        assert!(updated.contains("\"new\""));
+        assert!(!updated.contains("\"old\""));
+    }
 }
