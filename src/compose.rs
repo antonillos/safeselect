@@ -290,6 +290,11 @@ fn project_label(compose_path: &Path, scan_root: &Path) -> String {
 
 fn find_compose_files(dir: &Path) -> Vec<std::path::PathBuf> {
     let mut files = vec![];
+    collect_compose_files(dir, &mut files);
+    files
+}
+
+fn collect_compose_files(dir: &Path, files: &mut Vec<std::path::PathBuf>) {
     let candidates = [
         "docker-compose.yml",
         "docker-compose.yaml",
@@ -299,25 +304,31 @@ fn find_compose_files(dir: &Path) -> Vec<std::path::PathBuf> {
 
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                // skip hidden dirs, node_modules, target
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if !name.starts_with('.') && name != "node_modules" && name != "target" {
-                        files.extend(find_compose_files(&path));
-                    }
-                }
-            } else if path.is_file() {
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if candidates.contains(&name) {
-                        files.push(path);
-                    }
-                }
-            }
+            collect_compose_entry(entry.path(), &candidates, files);
         }
     }
+}
 
-    files
+fn collect_compose_entry(
+    path: std::path::PathBuf,
+    candidates: &[&str],
+    files: &mut Vec<std::path::PathBuf>,
+) {
+    if path.is_dir() {
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            return;
+        };
+        if !name.starts_with('.') && name != "node_modules" && name != "target" {
+            collect_compose_files(&path, files);
+        }
+    } else if path.is_file()
+        && path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| candidates.contains(&name))
+    {
+        files.push(path);
+    }
 }
 
 fn parse_compose_file(path: &Path, content: &str) -> Result<Vec<ComposeConnection>> {
