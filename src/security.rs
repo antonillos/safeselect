@@ -411,20 +411,20 @@ impl SecurityEngine {
             )));
         }
 
+        self.validate_policy_constraints(trimmed)?;
+        self.check_read_only(trimmed)
+    }
+
+    fn validate_policy_constraints(&self, query: &str) -> Result<()> {
         if self.policy.require_single_statement {
-            self.check_single_statement(trimmed)?;
+            self.check_single_statement(query)?;
         }
-
-        self.check_read_only(trimmed)?;
-
         if !self.policy.allowed_schemas.is_empty() {
-            self.check_allowed_schemas(trimmed)?;
+            self.check_allowed_schemas(query)?;
         }
-
         if !self.policy.denied_relations.is_empty() {
-            self.check_denied_relations(trimmed)?;
+            self.check_denied_relations(query)?;
         }
-
         Ok(())
     }
 
@@ -1836,6 +1836,25 @@ mod tests {
     }
 
     #[test]
+    fn test_document_aggregate_rejects_write_stage_and_invalid_limit() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        let write_stage = DocumentAggregateRequest {
+            database: "app".into(),
+            collection: "users".into(),
+            pipeline: serde_json::json!([{"$out": "archive"}]),
+            limit: 10,
+        };
+        assert!(engine.validate_document_aggregate(&write_stage).is_err());
+
+        let invalid_limit = DocumentAggregateRequest {
+            pipeline: serde_json::json!([]),
+            limit: 0,
+            ..write_stage
+        };
+        assert!(engine.validate_document_aggregate(&invalid_limit).is_err());
+    }
+
+    #[test]
     fn test_document_distinct_rejects_invalid_field_path() {
         let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
         let request = DocumentDistinctRequest {
@@ -1846,6 +1865,40 @@ mod tests {
             limit: 10,
         };
         assert!(engine.validate_document_distinct(&request).is_err());
+    }
+
+    #[test]
+    fn test_document_distinct_accepts_valid_request() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        let request = DocumentDistinctRequest {
+            database: "app".into(),
+            collection: "users".into(),
+            field: "profile.name".into(),
+            filter: serde_json::json!({"active": true}),
+            limit: 10,
+        };
+
+        assert!(engine.validate_document_distinct(&request).is_ok());
+    }
+
+    #[test]
+    fn test_document_distinct_rejects_invalid_filter_and_limit() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        let invalid_filter = DocumentDistinctRequest {
+            database: "app".into(),
+            collection: "users".into(),
+            field: "name".into(),
+            filter: serde_json::json!("active"),
+            limit: 10,
+        };
+        assert!(engine.validate_document_distinct(&invalid_filter).is_err());
+
+        let invalid_limit = DocumentDistinctRequest {
+            filter: serde_json::json!({}),
+            limit: 0,
+            ..invalid_filter
+        };
+        assert!(engine.validate_document_distinct(&invalid_limit).is_err());
     }
 
     #[test]

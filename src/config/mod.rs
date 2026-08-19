@@ -52,14 +52,8 @@ impl ConfigLoader {
             return Ok(drivers);
         }
         for entry in std::fs::read_dir(&self.drivers_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.extension().is_some_and(|e| e == "toml") {
-                let content = std::fs::read_to_string(&path)?;
-                let config: DriverConfig = toml::from_str(&content)?;
-                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                    drivers.push((stem.to_string(), config));
-                }
+            if let Some(driver) = load_driver_entry(&entry?.path())? {
+                drivers.push(driver);
             }
         }
         drivers.sort_by(|a, b| a.0.cmp(&b.0));
@@ -226,6 +220,18 @@ impl ConfigLoader {
     }
 }
 
+fn load_driver_entry(path: &Path) -> Result<Option<(String, DriverConfig)>> {
+    if path.extension().is_none_or(|extension| extension != "toml") {
+        return Ok(None);
+    }
+    let content = std::fs::read_to_string(path)?;
+    let config: DriverConfig = toml::from_str(&content)?;
+    Ok(path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(|stem| (stem.to_string(), config)))
+}
+
 pub fn merge_project_ssh(
     project: &ProjectConfig,
     environment: &mut EnvironmentConfig,
@@ -242,6 +248,11 @@ pub fn merge_project_ssh(
         )));
     };
 
+    merge_shared_ssh_fields(ssh, shared);
+    Ok(())
+}
+
+fn merge_shared_ssh_fields(ssh: &mut SshConfig, shared: &SharedSshConfig) {
     if ssh.host.is_none() {
         ssh.host = shared.host.clone();
     }
@@ -263,8 +274,6 @@ pub fn merge_project_ssh(
     if ssh.auth_type.is_none() {
         ssh.auth_type = shared.auth_type.clone();
     }
-
-    Ok(())
 }
 
 impl Default for ConfigLoader {

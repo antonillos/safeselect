@@ -128,16 +128,18 @@ fn parse_dotenv_line(raw_line: &str) -> Option<(String, String)> {
     if key.is_empty() {
         return None;
     }
-    let value = value.trim();
-    let value = if value.len() >= 2
+    Some((key.to_string(), unquote_dotenv_value(value.trim())))
+}
+
+fn unquote_dotenv_value(value: &str) -> String {
+    let quoted = value.len() >= 2
         && ((value.starts_with('"') && value.ends_with('"'))
-            || (value.starts_with('\'') && value.ends_with('\'')))
-    {
-        &value[1..value.len() - 1]
+            || (value.starts_with('\'') && value.ends_with('\'')));
+    if quoted {
+        value[1..value.len() - 1].to_string()
     } else {
-        value
-    };
-    Some((key.to_string(), value.to_string()))
+        value.to_string()
+    }
 }
 
 fn load_dotenv(dir: &Path) -> HashMap<String, String> {
