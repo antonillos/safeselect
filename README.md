@@ -3,6 +3,7 @@
 **Fail-closed, read-only SQL and NoSQL database access for AI agents over MCP.**
 
 [![CI](https://github.com/antonillos/safeselect/actions/workflows/verify.yml/badge.svg)](https://github.com/antonillos/safeselect/actions/workflows/verify.yml)
+[![CRAP](https://img.shields.io/github/actions/workflow/status/antonillos/safeselect/verify.yml?branch=develop&job=crap-report&label=CRAP&logo=github)](https://github.com/antonillos/safeselect/actions/workflows/verify.yml)
 [![Security](https://img.shields.io/badge/Security-fail--closed-success?logo=trustpilot&logoColor=white)]()
 [![Rust](https://img.shields.io/badge/Rust-1.81%2B-dea584?logo=rust&logoColor=white)]()
 [![Java](https://img.shields.io/badge/Java-17%2B-5382a1?logo=openjdk&logoColor=white)]()
