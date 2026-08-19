@@ -164,6 +164,11 @@ jobs:
         run: |
           curl -fsSL https://raw.githubusercontent.com/antonillos/makevn/main/packaging/install/install-release.sh | sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Build sidecar for Rust embedding
+        run: |
+          makevn --repo "${GITHUB_WORKSPACE}/sidecar" init --force
+          makevn --repo "${GITHUB_WORKSPACE}/sidecar" package -- -DskipTests
+          cp sidecar/target/safeselect-sidecar-*.jar sidecar/target/safeselect-sidecar.jar
       - name: Download pinned crap4java release
         run: |
           curl -fsSL \

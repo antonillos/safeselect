@@ -20,6 +20,12 @@ if ! cargo crap --help >/dev/null 2>&1; then
 fi
 
 mkdir -p "${OUT_DIR}"
-cargo llvm-cov --lcov --output-path "${OUT_DIR}/rust-coverage.lcov" >"${OUT_DIR}/rust-coverage.log" 2>&1
-cargo crap --lcov "${OUT_DIR}/rust-coverage.lcov" --workspace --format json --output "${OUT_DIR}/rust-report.json" >"${OUT_DIR}/rust-crap.log" 2>&1
+if ! cargo llvm-cov --lcov --output-path "${OUT_DIR}/rust-coverage.lcov" >"${OUT_DIR}/rust-coverage.log" 2>&1; then
+  tail -n 80 "${OUT_DIR}/rust-coverage.log" >&2
+  exit 1
+fi
+if ! cargo crap --lcov "${OUT_DIR}/rust-coverage.lcov" --workspace --format json --output "${OUT_DIR}/rust-report.json" >"${OUT_DIR}/rust-crap.log" 2>&1; then
+  tail -n 80 "${OUT_DIR}/rust-crap.log" >&2
+  exit 1
+fi
 jq -e '.entries and (.entries | type == "array")' "${OUT_DIR}/rust-report.json" >/dev/null
