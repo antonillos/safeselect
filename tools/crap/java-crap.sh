@@ -19,6 +19,7 @@ makevn exec -- java -jar "${CRAP4JAVA_JAR}" \
   --format json \
   --jacoco-xml "${ROOT_DIR}/sidecar/target/site/jacoco/jacoco.xml" \
   --report-only \
+  sidecar \
   >"${OUT_DIR}/java-crap.raw.log" 2>&1
 
 awk '/^\{/{started=1} started {print} /^\}$/{exit}' \
