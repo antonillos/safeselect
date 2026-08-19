@@ -33,6 +33,9 @@ jobs:
             const actor = context.actor.toLowerCase();
             const command = context.payload.comment.body.trim().split(/\s+/);
             const allowedOverrides = new Set(["merge", "squash", "rebase"]);
+            const githubApiRequest = {
+              headers: { "X-GitHub-Api-Version": "2026-03-10" },
+            };
             const requestedMethod = command[1] || "";
             const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -164,6 +167,7 @@ jobs:
                 repo,
                 workflow_id: "verify.yml",
                 ref: pull.head.ref,
+                request: githubApiRequest,
               });
 
               while (Date.now() < deadline && !verifyRun) {
@@ -393,6 +397,27 @@ jobs:
                 await comment(
                   `⚠️ Merge completed, but Release could not be dispatched for \`${version}\`. ` +
                   "Run the Release workflow manually."
+                );
+              }
+            }
+
+            // GITHUB_TOKEN merges do not trigger downstream push workflows.
+            // Dispatch Verify explicitly so develop publishes the latest CRAP badge.
+            if (base === "develop") {
+              try {
+                await github.rest.actions.createWorkflowDispatch({
+                  owner,
+                  repo,
+                  workflow_id: "verify.yml",
+                  ref: "develop",
+                  request: githubApiRequest,
+                });
+                await comment("📊 Verify dispatched on `develop` to refresh the CRAP badge.");
+              } catch (error) {
+                core.warning(`Could not dispatch Verify on develop: ${error.message}`);
+                await comment(
+                  "⚠️ Merge completed, but Verify could not be dispatched on `develop`; " +
+                  "run the Verify workflow manually to refresh the CRAP badge."
                 );
               }
             }
