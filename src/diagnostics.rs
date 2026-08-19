@@ -18,6 +18,7 @@ impl DiagnosticStatus {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[repr(u8)]
 pub enum DiagnosticCode {
     ConfigResolved,
     DriverVerified,
@@ -46,31 +47,32 @@ pub enum DiagnosticCode {
 
 impl DiagnosticCode {
     pub fn as_str(self) -> &'static str {
-        match self {
-            Self::ConfigResolved => "SAFESELECT_CONFIG_RESOLVED",
-            Self::DriverVerified => "SAFESELECT_DRIVER_VERIFIED",
-            Self::SecretResolved => "SAFESELECT_SECRET_RESOLVED",
-            Self::SshBastionReachable => "SAFESELECT_SSH_BASTION_REACHABLE",
-            Self::SshBastionUnreachable => "SAFESELECT_SSH_BASTION_UNREACHABLE",
-            Self::SshBastionUnresolved => "SAFESELECT_SSH_BASTION_UNRESOLVED",
-            Self::SshIdentityMissing => "SAFESELECT_SSH_IDENTITY_MISSING",
-            Self::SshTunnelAttempt => "SAFESELECT_SSH_TUNNEL_ATTEMPT",
-            Self::SshTunnelFailed => "SAFESELECT_SSH_TUNNEL_FAILED",
-            Self::PostgresReachable => "SAFESELECT_POSTGRES_REACHABLE",
-            Self::PostgresUnreachable => "SAFESELECT_POSTGRES_UNREACHABLE",
-            Self::SidecarStartAttempt => "SAFESELECT_SIDECAR_START_ATTEMPT",
-            Self::SidecarBackendOk => "SAFESELECT_SIDECAR_BACKEND_OK",
-            Self::SidecarConnectionFailed => "SAFESELECT_SIDECAR_CONNECTION_FAILED",
-            Self::BackendVerificationOk => "SAFESELECT_BACKEND_VERIFICATION_OK",
-            Self::BackendVerificationFailed => "SAFESELECT_BACKEND_VERIFICATION_FAILED",
-            Self::AllChecksPassed => "SAFESELECT_ALL_CHECKS_PASSED",
-            Self::ConnectionLost => "SAFESELECT_CONNECTION_LOST",
-            Self::SshTunnelRecoveryAttempt => "SAFESELECT_SSH_TUNNEL_RECOVERY_ATTEMPT",
-            Self::JdbcReconnectAttempt => "SAFESELECT_JDBC_RECONNECT_ATTEMPT",
-            Self::SidecarRestartAttempt => "SAFESELECT_SIDECAR_RESTART_ATTEMPT",
-            Self::RecoveryOk => "SAFESELECT_RECOVERY_OK",
-            Self::RecoveryFailed => "SAFESELECT_RECOVERY_FAILED",
-        }
+        const NAMES: [&str; 23] = [
+            "SAFESELECT_CONFIG_RESOLVED",
+            "SAFESELECT_DRIVER_VERIFIED",
+            "SAFESELECT_SECRET_RESOLVED",
+            "SAFESELECT_SSH_BASTION_REACHABLE",
+            "SAFESELECT_SSH_BASTION_UNREACHABLE",
+            "SAFESELECT_SSH_BASTION_UNRESOLVED",
+            "SAFESELECT_SSH_IDENTITY_MISSING",
+            "SAFESELECT_SSH_TUNNEL_ATTEMPT",
+            "SAFESELECT_SSH_TUNNEL_FAILED",
+            "SAFESELECT_POSTGRES_REACHABLE",
+            "SAFESELECT_POSTGRES_UNREACHABLE",
+            "SAFESELECT_SIDECAR_START_ATTEMPT",
+            "SAFESELECT_SIDECAR_BACKEND_OK",
+            "SAFESELECT_SIDECAR_CONNECTION_FAILED",
+            "SAFESELECT_BACKEND_VERIFICATION_OK",
+            "SAFESELECT_BACKEND_VERIFICATION_FAILED",
+            "SAFESELECT_ALL_CHECKS_PASSED",
+            "SAFESELECT_CONNECTION_LOST",
+            "SAFESELECT_SSH_TUNNEL_RECOVERY_ATTEMPT",
+            "SAFESELECT_JDBC_RECONNECT_ATTEMPT",
+            "SAFESELECT_SIDECAR_RESTART_ATTEMPT",
+            "SAFESELECT_RECOVERY_OK",
+            "SAFESELECT_RECOVERY_FAILED",
+        ];
+        NAMES[self as usize]
     }
 }
 

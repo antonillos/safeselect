@@ -249,6 +249,79 @@ fn cmd_serve(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
     Ok(())
 }
 
+fn cmd_config_show(
+    loader: &ConfigLoader,
+    project: Option<PathBuf>,
+    environment: String,
+) -> Result<()> {
+    let dir = resolve_project_dir(loader, project)?;
+    let resolved = loader.resolve_local(&dir, &environment)?;
+    let name = project_display_name(&dir);
+    println!("Project: {name}");
+    println!("Environment: {environment}");
+    println!("Backend: {:?}", resolved.environment.database.kind);
+    println!("Vendor: {}", resolved.environment.database.vendor());
+    let connection_details = resolved
+        .driver
+        .as_ref()
+        .map(|driver| {
+            format!(
+                "Driver: {} ({})\nJDBC URL: {}",
+                driver.vendor, driver.class, resolved.environment.database.url
+            )
+        })
+        .unwrap_or_else(|| format!("URL: {}", resolved.environment.database.url));
+    println!("{connection_details}");
+    println!("Username: {}", resolved.environment.database.username);
+    println!("Password: [redacted]");
+    println!();
+    println!("--- Security Policy ---");
+    println!("Read only: enforced (cannot be disabled)");
+    println!(
+        "Allowed schemas: {}",
+        resolved.project.security.allowed_schemas.join(", ")
+    );
+    println!(
+        "Denied relations: {}",
+        resolved.project.security.denied_relations.join(", ")
+    );
+    println!(
+        "Single statement: {}",
+        resolved.project.security.require_single_statement
+    );
+    println!();
+    println!("--- Limits ---");
+    println!(
+        "Statement timeout: {}ms",
+        resolved.project.limits.statement_timeout_ms
+    );
+    println!("Max rows: {}", resolved.project.limits.max_rows);
+    println!(
+        "Max result bytes: {}",
+        resolved.project.limits.max_result_bytes
+    );
+    println!();
+    println!("--- TLS ---");
+    let tls_details = resolved
+        .environment
+        .tls
+        .as_ref()
+        .map(|tls| format!("Mode: {}", tls.mode))
+        .unwrap_or_else(|| "TLS: disabled".to_string());
+    println!("{tls_details}");
+    println!();
+    println!("--- SSH ---");
+    let ssh_details = resolved
+        .environment
+        .ssh
+        .as_ref()
+        .map(|ssh| format!("Enabled: {}", ssh.enabled))
+        .unwrap_or_else(|| "SSH: not configured".to_string());
+    println!("{ssh_details}");
+
+    Ok(())
+}
+
 fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
     match action {
         ConfigAction::Validate {
@@ -323,81 +396,9 @@ fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
         ConfigAction::Show {
             project,
             environment,
-        } => {
-            let dir = match project {
-                Some(d) => d,
-                None => {
-                    let cwd = std::env::current_dir()?;
-                    loader
-                        .find_local_project(&cwd)
-                        .ok_or_else(|| SafeselectError::LocalProjectNotFound(cwd))?
-                }
-            };
-            let resolved = loader.resolve_local(&dir, &environment)?;
-            let name = project_display_name(&dir);
-            println!("Project: {name}");
-            println!("Environment: {environment}");
-            println!("Backend: {:?}", resolved.environment.database.kind);
-            println!("Vendor: {}", resolved.environment.database.vendor());
-            if let Some(driver) = resolved.driver.as_ref() {
-                println!("Driver: {} ({})", driver.vendor, driver.class);
-                println!("JDBC URL: {}", resolved.environment.database.url);
-            } else {
-                println!("URL: {}", resolved.environment.database.url);
-            }
-            println!("Username: {}", resolved.environment.database.username);
-            println!("Password: [redacted]");
-            println!();
-            println!("--- Security Policy ---");
-            println!("Read only: enforced (cannot be disabled)");
-            println!(
-                "Allowed schemas: {}",
-                resolved.project.security.allowed_schemas.join(", ")
-            );
-            println!(
-                "Denied relations: {}",
-                resolved.project.security.denied_relations.join(", ")
-            );
-            println!(
-                "Single statement: {}",
-                resolved.project.security.require_single_statement
-            );
-            println!();
-            println!("--- Limits ---");
-            println!(
-                "Statement timeout: {}ms",
-                resolved.project.limits.statement_timeout_ms
-            );
-            println!("Max rows: {}", resolved.project.limits.max_rows);
-            println!(
-                "Max result bytes: {}",
-                resolved.project.limits.max_result_bytes
-            );
-            println!();
-            println!("--- TLS ---");
-            match resolved.environment.tls {
-                Some(ref tls) => println!("Mode: {}", tls.mode),
-                None => println!("TLS: disabled"),
-            }
-            println!();
-            println!("--- SSH ---");
-            match resolved.environment.ssh {
-                Some(ref ssh) => println!("Enabled: {}", ssh.enabled),
-                None => println!("SSH: not configured"),
-            }
-
-            Ok(())
-        }
+        } => cmd_config_show(loader, project, environment),
         ConfigAction::RenameEnvironment { old, new, project } => {
-            let dir = match project {
-                Some(d) => d,
-                None => {
-                    let cwd = std::env::current_dir()?;
-                    loader
-                        .find_local_project(&cwd)
-                        .ok_or_else(|| SafeselectError::LocalProjectNotFound(cwd))?
-                }
-            };
+            let dir = resolve_project_dir(loader, project)?;
 
             let env_dir = dir.join(".safeselect").join("environments");
             let old_file = env_dir.join(format!("{old}.toml"));
@@ -471,15 +472,7 @@ fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
             Ok(())
         }
         ConfigAction::DeleteEnvironment { name, project } => {
-            let dir = match project {
-                Some(d) => d,
-                None => {
-                    let cwd = std::env::current_dir()?;
-                    loader
-                        .find_local_project(&cwd)
-                        .ok_or_else(|| SafeselectError::LocalProjectNotFound(cwd))?
-                }
-            };
+            let dir = resolve_project_dir(loader, project)?;
 
             let env_dir = dir.join(".safeselect").join("environments");
             let env_file = env_dir.join(format!("{name}.toml"));
@@ -529,15 +522,7 @@ fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
             password,
             project,
         } => {
-            let dir = match project {
-                Some(d) => d,
-                None => {
-                    let cwd = std::env::current_dir()?;
-                    loader
-                        .find_local_project(&cwd)
-                        .ok_or_else(|| SafeselectError::LocalProjectNotFound(cwd))?
-                }
-            };
+            let dir = resolve_project_dir(loader, project)?;
 
             let env_file = dir
                 .join(".safeselect")
@@ -577,15 +562,7 @@ fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
             password,
             project,
         } => {
-            let dir = match project {
-                Some(d) => d,
-                None => {
-                    let cwd = std::env::current_dir()?;
-                    loader
-                        .find_local_project(&cwd)
-                        .ok_or_else(|| SafeselectError::LocalProjectNotFound(cwd))?
-                }
-            };
+            let dir = resolve_project_dir(loader, project)?;
 
             let env_file = dir
                 .join(".safeselect")
@@ -637,27 +614,11 @@ fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
             Ok(())
         }
         ConfigAction::Reset { project } => {
-            let dir = match project {
-                Some(d) => d,
-                None => {
-                    let cwd = std::env::current_dir()?;
-                    loader
-                        .find_local_project(&cwd)
-                        .ok_or_else(|| SafeselectError::LocalProjectNotFound(cwd))?
-                }
-            };
+            let dir = resolve_project_dir(loader, project)?;
             reset_project_config(&dir)
         }
         ConfigAction::Uninstall { project } => {
-            let dir = match project {
-                Some(d) => d,
-                None => {
-                    let cwd = std::env::current_dir()?;
-                    loader
-                        .find_local_project(&cwd)
-                        .ok_or_else(|| SafeselectError::LocalProjectNotFound(cwd))?
-                }
-            };
+            let dir = resolve_project_dir(loader, project)?;
             uninstall_project_config(&dir)
         }
     }
@@ -4108,6 +4069,110 @@ pub(crate) fn uninstall_binary_paths() -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn config_show_displays_document_environment() {
+        let repo_root = std::env::temp_dir().join(format!(
+            "safeselect-config-show-test-{}",
+            std::process::id()
+        ));
+        let env_dir = repo_root.join(".safeselect/environments");
+        let _ = std::fs::remove_dir_all(&repo_root);
+        std::fs::create_dir_all(&env_dir).unwrap();
+        std::fs::write(
+            repo_root.join(".safeselect/project.toml"),
+            "version = 1\ndisplay_name = \"Config Show Test\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            env_dir.join("local.toml"),
+            r#"
+version = 1
+
+[database]
+kind = "document"
+vendor = "mongodb"
+url = "mongodb://localhost:27017/test"
+username = "test-user"
+
+[tls]
+mode = "REQUIRED"
+
+[ssh]
+enabled = true
+"#,
+        )
+        .unwrap();
+
+        let result = cmd_config_show(
+            &ConfigLoader::new(),
+            Some(repo_root.clone()),
+            "local".to_string(),
+        );
+
+        assert!(result.is_ok());
+        let _ = std::fs::remove_dir_all(repo_root);
+    }
+
+    #[test]
+    fn all_diagnostic_codes_have_stable_names() {
+        let codes = [
+            DiagnosticCode::ConfigResolved,
+            DiagnosticCode::DriverVerified,
+            DiagnosticCode::SecretResolved,
+            DiagnosticCode::SshBastionReachable,
+            DiagnosticCode::SshBastionUnreachable,
+            DiagnosticCode::SshBastionUnresolved,
+            DiagnosticCode::SshIdentityMissing,
+            DiagnosticCode::SshTunnelAttempt,
+            DiagnosticCode::SshTunnelFailed,
+            DiagnosticCode::PostgresReachable,
+            DiagnosticCode::PostgresUnreachable,
+            DiagnosticCode::SidecarStartAttempt,
+            DiagnosticCode::SidecarBackendOk,
+            DiagnosticCode::SidecarConnectionFailed,
+            DiagnosticCode::BackendVerificationOk,
+            DiagnosticCode::BackendVerificationFailed,
+            DiagnosticCode::AllChecksPassed,
+            DiagnosticCode::ConnectionLost,
+            DiagnosticCode::SshTunnelRecoveryAttempt,
+            DiagnosticCode::JdbcReconnectAttempt,
+            DiagnosticCode::SidecarRestartAttempt,
+            DiagnosticCode::RecoveryOk,
+            DiagnosticCode::RecoveryFailed,
+        ];
+
+        let expected = [
+            "SAFESELECT_CONFIG_RESOLVED",
+            "SAFESELECT_DRIVER_VERIFIED",
+            "SAFESELECT_SECRET_RESOLVED",
+            "SAFESELECT_SSH_BASTION_REACHABLE",
+            "SAFESELECT_SSH_BASTION_UNREACHABLE",
+            "SAFESELECT_SSH_BASTION_UNRESOLVED",
+            "SAFESELECT_SSH_IDENTITY_MISSING",
+            "SAFESELECT_SSH_TUNNEL_ATTEMPT",
+            "SAFESELECT_SSH_TUNNEL_FAILED",
+            "SAFESELECT_POSTGRES_REACHABLE",
+            "SAFESELECT_POSTGRES_UNREACHABLE",
+            "SAFESELECT_SIDECAR_START_ATTEMPT",
+            "SAFESELECT_SIDECAR_BACKEND_OK",
+            "SAFESELECT_SIDECAR_CONNECTION_FAILED",
+            "SAFESELECT_BACKEND_VERIFICATION_OK",
+            "SAFESELECT_BACKEND_VERIFICATION_FAILED",
+            "SAFESELECT_ALL_CHECKS_PASSED",
+            "SAFESELECT_CONNECTION_LOST",
+            "SAFESELECT_SSH_TUNNEL_RECOVERY_ATTEMPT",
+            "SAFESELECT_JDBC_RECONNECT_ATTEMPT",
+            "SAFESELECT_SIDECAR_RESTART_ATTEMPT",
+            "SAFESELECT_RECOVERY_OK",
+            "SAFESELECT_RECOVERY_FAILED",
+        ];
+
+        assert_eq!(codes.len(), expected.len());
+        for (code, expected_name) in codes.iter().zip(expected) {
+            assert_eq!(code.as_str(), expected_name);
+        }
+    }
 
     #[test]
     fn uninstall_checks_supported_user_binary_locations() {
