@@ -1912,4 +1912,12 @@ mod tests {
             engine.filter_document_collections("app", vec!["users".into(), "secrets".into()]);
         assert_eq!(collections, vec!["users"]);
     }
+
+    #[test]
+    fn test_result_size_accepts_limits_and_rejects_overages() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        assert!(engine.check_result_size(1, 1).is_ok());
+        assert!(engine.check_result_size(501, 1).is_err());
+        assert!(engine.check_result_size(1, 2_000_001).is_err());
+    }
 }

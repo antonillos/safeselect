@@ -4160,6 +4160,48 @@ mod tests {
     }
 
     #[test]
+    fn chooses_unique_environment_names() {
+        let dir = std::env::temp_dir().join(format!("safeselect-env-name-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("mongodb.toml"), "").unwrap();
+        std::fs::write(dir.join("mongodb-2.toml"), "").unwrap();
+
+        assert_eq!(unique_env_name(&dir, ""), "mongodb-3");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn compares_shared_bastion_identity() {
+        let shared = config::SharedSshConfig {
+            host: Some("bastion".into()),
+            port: Some(22),
+            username: Some("jump".into()),
+            secret_account: None,
+            identity_file: None,
+            known_hosts: None,
+            auth_type: None,
+        };
+        let ssh = config::SshConfig {
+            enabled: true,
+            bastion: None,
+            host: shared.host.clone(),
+            port: shared.port,
+            username: shared.username.clone(),
+            secret_account: None,
+            identity_file: None,
+            known_hosts: None,
+            local_host: None,
+            local_port: None,
+            forward_host: None,
+            forward_port: None,
+            auth_type: None,
+        };
+
+        assert!(same_bastion_identity(&shared, &ssh));
+    }
+
+    #[test]
     fn extracts_tcp_host_and_port_variants() {
         assert_eq!(
             extract_tcp_host_port("mongodb://db.example:27018/app"),

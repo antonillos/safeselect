@@ -791,4 +791,16 @@ services:
         assert_eq!(values.get("EMPTY_KEY").map(String::as_str), Some(""));
         assert!(!values.contains_key("invalid"));
     }
+
+    #[test]
+    fn parses_environment_key_value_list() {
+        let values = parse_env_list(&[
+            "DB_HOST=localhost".into(),
+            " DB_PORT = 5432 ".into(),
+            "invalid".into(),
+        ]);
+        assert_eq!(values.get("DB_HOST").map(String::as_str), Some("localhost"));
+        assert_eq!(values.get("DB_PORT").map(String::as_str), Some("5432"));
+        assert_eq!(values.len(), 2);
+    }
 }
