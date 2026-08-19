@@ -4420,6 +4420,43 @@ enabled = true
     }
 
     #[test]
+    fn ssh_password_command_rejects_missing_or_unconfigured_ssh() {
+        let repo_root = std::env::temp_dir().join(format!(
+            "safeselect-ssh-password-errors-{}",
+            std::process::id()
+        ));
+        let env_dir = repo_root.join(".safeselect/environments");
+        let _ = std::fs::remove_dir_all(&repo_root);
+        std::fs::create_dir_all(&env_dir).unwrap();
+        std::fs::write(repo_root.join(".safeselect/project.toml"), "version = 1\n").unwrap();
+        std::fs::write(
+            env_dir.join("no-ssh.toml"),
+            "version = 1\n[database]\nkind = \"document\"\nurl = \"mongodb://localhost\"\n",
+        )
+        .unwrap();
+
+        let loader = ConfigLoader::new();
+        assert!(set_ssh_password_for_environment_with_store(
+            &loader,
+            "missing".into(),
+            Some("secret".into()),
+            Some(repo_root.clone()),
+            |_, _| Ok(())
+        )
+        .is_err());
+        assert!(set_ssh_password_for_environment_with_store(
+            &loader,
+            "no-ssh".into(),
+            Some("secret".into()),
+            Some(repo_root.clone()),
+            |_, _| Ok(())
+        )
+        .is_err());
+
+        let _ = std::fs::remove_dir_all(repo_root);
+    }
+
+    #[test]
     fn all_diagnostic_codes_have_stable_names() {
         let codes = [
             DiagnosticCode::ConfigResolved,
