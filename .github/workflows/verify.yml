@@ -158,8 +158,10 @@ jobs:
           java-version: 17
       - name: Install coverage tools
         uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Install cargo-binstall
+        run: curl -fsSL https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
       - name: Install cargo-crap
-        run: cargo install cargo-crap --locked
+        run: cargo binstall cargo-crap --locked -q
       - name: Install makevn
         run: |
           curl -fsSL https://raw.githubusercontent.com/antonillos/makevn/main/packaging/install/install-release.sh | sh

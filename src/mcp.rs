@@ -5207,28 +5207,75 @@ mod tests {
 
     #[test]
     fn setup_server_handles_protocol_lifecycle_requests() {
-        let input = concat!(
+        let repo_root =
+            std::env::temp_dir().join(format!("safeselect-setup-test-{}", uuid::Uuid::new_v4()));
+        let environments = repo_root.join(".safeselect/environments");
+        std::fs::create_dir_all(&environments).unwrap();
+        std::fs::write(environments.join("delete-me.toml"), "not valid toml").unwrap();
+        std::fs::write(environments.join("old.toml"), "not valid toml").unwrap();
+        std::fs::write(environments.join("occupied.toml"), "not valid toml").unwrap();
+        let empty_scan_path = repo_root.join("empty");
+        std::fs::create_dir(&empty_scan_path).unwrap();
+        let bad_scan_path =
+            std::env::temp_dir().join(format!("safeselect-bad-compose-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&bad_scan_path).unwrap();
+        std::fs::write(bad_scan_path.join("docker-compose.yml"), "services: [").unwrap();
+        std::fs::write(
+            repo_root.join("docker-compose.yml"),
+            "services:\n  database:\n    image: postgres:17\n    environment:\n      POSTGRES_DB: app\n      POSTGRES_USER: agent\n      POSTGRES_PASSWORD: test-password\n    ports:\n      - '15432:5432'\n",
+        )
+        .unwrap();
+
+        let input = format!(
+            "{}{{\"jsonrpc\":\"2.0\",\"id\":14,\"method\":\"tools/call\",\"params\":{{\"name\":\"import_compose\",\"arguments\":{{\"scan_path\":\"{}\"}}}}}}\n{{\"jsonrpc\":\"2.0\",\"id\":15,\"method\":\"tools/call\",\"params\":{{\"name\":\"import_compose\",\"arguments\":{{}}}}}}\n{{\"jsonrpc\":\"2.0\",\"id\":16,\"method\":\"tools/call\",\"params\":{{\"name\":\"import_compose\",\"arguments\":{{\"scan_path\":\"{}\"}}}}}}\n{{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}}\n",
+            concat!(
             "\n",
             "not-json\n",
             "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\"}}\n",
             "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}\n",
             "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"unknown\"}\n",
-            "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\"}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"unknown\"}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\",\"params\":{\"name\":\"delete_environment\",\"arguments\":{}}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"tools/call\",\"params\":{\"name\":\"rename_environment\",\"arguments\":{\"old_name\":\"old\"}}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"tools/call\",\"params\":{\"name\":\"delete_environment\",\"arguments\":{\"name\":\"delete-me\"}}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"tools/call\",\"params\":{\"name\":\"delete_environment\",\"arguments\":{\"name\":\"missing\"}}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"tools/call\",\"params\":{\"name\":\"rename_environment\",\"arguments\":{\"old_name\":\"old\",\"new_name\":\"new\"}}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":12,\"method\":\"tools/call\",\"params\":{\"name\":\"rename_environment\",\"arguments\":{\"old_name\":\"missing\",\"new_name\":\"other\"}}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":13,\"method\":\"tools/call\",\"params\":{\"name\":\"rename_environment\",\"arguments\":{\"old_name\":\"new\",\"new_name\":\"occupied\"}}}\n",
+            ),
+            empty_scan_path.display(),
+            bad_scan_path.display(),
         );
         let mut output = Vec::new();
 
-        run_setup_server_with_io(
-            Path::new("/tmp/safeselect-setup-test"),
-            Cursor::new(input.as_bytes()),
-            &mut output,
-        )
-        .unwrap();
+        run_setup_server_with_io(&repo_root, Cursor::new(input.as_bytes()), &mut output).unwrap();
 
         let output = String::from_utf8(output).unwrap();
         assert!(output.contains("Parse error"));
         assert!(output.contains("safeselect-setup"));
         assert!(output.contains("import_compose"));
         assert!(output.contains("Method not found: unknown"));
+        assert!(output.contains("Missing params"));
+        assert!(output.contains("Missing tool name"));
+        assert!(output.contains("Unknown tool: unknown"));
+        assert!(output.contains("Missing 'name'"));
+        assert!(output.contains("Missing 'new_name'"));
+        assert!(output.contains("Deleted environment 'delete-me'"));
+        assert!(output.contains("Environment 'missing' not found"));
+        assert!(output.contains("Renamed 'old' → 'new'"));
+        assert!(output.contains("Environment 'occupied' already exists"));
+        assert!(output.contains("No PostgreSQL services found"));
+        assert!(
+            output.contains("Imported 1 connection(s): database"),
+            "{output}"
+        );
+        assert!(output.contains("Scan failed"));
+        assert!(!environments.join("delete-me.toml").exists());
+        assert!(environments.join("new.toml").exists());
+        std::fs::remove_dir_all(repo_root).unwrap();
+        std::fs::remove_dir_all(bad_scan_path).unwrap();
     }
 
     use super::*;
