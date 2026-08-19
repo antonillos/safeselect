@@ -166,8 +166,8 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Build sidecar for Rust embedding
         run: |
-          makevn --repo "${GITHUB_WORKSPACE}/sidecar" init --force
-          makevn --repo "${GITHUB_WORKSPACE}/sidecar" package -- -DskipTests
+          makevn init --force
+          makevn exec -- mvn -f sidecar/pom.xml package -DskipTests
           cp sidecar/target/safeselect-sidecar-*.jar sidecar/target/safeselect-sidecar.jar
       - name: Download pinned crap4java release
         run: |
