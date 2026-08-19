@@ -322,77 +322,89 @@ fn cmd_config_show(
     Ok(())
 }
 
+fn cmd_config_validate(
+    loader: &ConfigLoader,
+    project: Option<PathBuf>,
+    environment: Option<String>,
+) -> Result<()> {
+    match project {
+        Some(dir) => validate_explicit_project(loader, &dir, environment.as_deref()),
+        None => {
+            let cwd = std::env::current_dir()?;
+            validate_current_project(loader, &cwd)
+        }
+    }
+}
+
+fn validate_explicit_project(
+    loader: &ConfigLoader,
+    dir: &Path,
+    environment: Option<&str>,
+) -> Result<()> {
+    if !dir.join(".safeselect").is_dir() {
+        return Err(SafeselectError::LocalProjectNotFound(dir.to_path_buf()));
+    }
+    if let Some(env) = environment {
+        let _ = loader.resolve_local(dir, env)?;
+        println!("Config valid: {}/{}", project_display_name(dir), env);
+        return Ok(());
+    }
+
+    let safeselect_dir = dir.join(".safeselect");
+    if safeselect_dir.join("project.toml").exists() || safeselect_dir.join("environments").is_dir()
+    {
+        println!("Config valid: {}", project_display_name(dir));
+        return Ok(());
+    }
+    Err(SafeselectError::Config(format!(
+        "incomplete .safeselect/ in {}",
+        dir.display()
+    )))
+}
+
+fn validate_current_project(loader: &ConfigLoader, cwd: &Path) -> Result<()> {
+    let Some(dir) = loader.find_local_project(&cwd) else {
+        println!("No .safeselect/ directory found. Create one with:");
+        println!("  safeselect import-dbeaver <export.zip>");
+        println!("  mkdir -p .safeselect/environments && touch .safeselect/project.toml");
+        return Ok(());
+    };
+
+    println!(
+        ".safeselect/ found at {} ({})",
+        dir.display(),
+        project_display_name(&dir)
+    );
+    println!("Use --environment <name> to validate a specific environment.");
+    let envs_dir = dir.join(".safeselect").join("environments");
+    if !envs_dir.is_dir() {
+        return Ok(());
+    }
+
+    let mut entries: Vec<_> = std::fs::read_dir(envs_dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "toml"))
+        .filter_map(|e| {
+            e.path()
+                .file_stem()
+                .and_then(|s| s.to_str().map(String::from))
+        })
+        .collect();
+    entries.sort();
+    if !entries.is_empty() {
+        println!("  Environments: {}", entries.join(", "));
+    }
+    Ok(())
+}
+
 fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
     match action {
         ConfigAction::Validate {
             project,
             environment,
-        } => {
-            match project {
-                Some(dir) => {
-                    if !dir.join(".safeselect").is_dir() {
-                        return Err(SafeselectError::LocalProjectNotFound(dir));
-                    }
-                    if let Some(ref env) = environment {
-                        let _ = loader.resolve_local(&dir, env)?;
-                        println!("Config valid: {}/{}", project_display_name(&dir), env);
-                    } else {
-                        let safeselect_dir = dir.join(".safeselect");
-                        if safeselect_dir.join("project.toml").exists()
-                            || safeselect_dir.join("environments").is_dir()
-                        {
-                            println!("Config valid: {}", project_display_name(&dir));
-                        } else {
-                            return Err(SafeselectError::Config(format!(
-                                "incomplete .safeselect/ in {}",
-                                dir.display()
-                            )));
-                        }
-                    }
-                }
-                None => {
-                    let cwd = std::env::current_dir()?;
-                    match loader.find_local_project(&cwd) {
-                        Some(dir) => {
-                            println!(
-                                ".safeselect/ found at {} ({})",
-                                dir.display(),
-                                project_display_name(&dir)
-                            );
-                            println!(
-                                "Use --environment <name> to validate a specific environment."
-                            );
-                            let envs_dir = dir.join(".safeselect").join("environments");
-                            if envs_dir.is_dir() {
-                                let mut entries: Vec<_> = std::fs::read_dir(&envs_dir)
-                                    .into_iter()
-                                    .flatten()
-                                    .flatten()
-                                    .filter(|e| {
-                                        e.path().extension().is_some_and(|ext| ext == "toml")
-                                    })
-                                    .filter_map(|e| {
-                                        e.path()
-                                            .file_stem()
-                                            .and_then(|s| s.to_str().map(String::from))
-                                    })
-                                    .collect();
-                                entries.sort();
-                                if !entries.is_empty() {
-                                    println!("  Environments: {}", entries.join(", "));
-                                }
-                            }
-                        }
-                        None => {
-                            println!("No .safeselect/ directory found. Create one with:");
-                            println!("  safeselect import-dbeaver <export.zip>");
-                            println!("  mkdir -p .safeselect/environments && touch .safeselect/project.toml");
-                        }
-                    }
-                }
-            }
-            Ok(())
-        }
+        } => cmd_config_validate(loader, project, environment),
         ConfigAction::Show {
             project,
             environment,
@@ -4111,6 +4123,32 @@ enabled = true
         );
 
         assert!(result.is_ok());
+        let _ = std::fs::remove_dir_all(repo_root);
+    }
+
+    #[test]
+    fn config_validate_handles_explicit_and_current_projects() {
+        let repo_root = std::env::temp_dir().join(format!(
+            "safeselect-config-validate-test-{}",
+            std::process::id()
+        ));
+        let env_dir = repo_root.join(".safeselect/environments");
+        let _ = std::fs::remove_dir_all(&repo_root);
+        std::fs::create_dir_all(&env_dir).unwrap();
+        std::fs::write(repo_root.join(".safeselect/project.toml"), "version = 1\n").unwrap();
+        std::fs::write(
+            env_dir.join("local.toml"),
+            "version = 1\n[database]\nkind = \"document\"\nurl = \"mongodb://localhost\"\n",
+        )
+        .unwrap();
+
+        let loader = ConfigLoader::new();
+        assert!(validate_explicit_project(&loader, &repo_root, None).is_ok());
+        assert!(validate_explicit_project(&loader, &repo_root, Some("local")).is_ok());
+        assert!(validate_current_project(&loader, &repo_root).is_ok());
+        assert!(validate_current_project(&loader, &repo_root.join("missing")).is_ok());
+        assert!(validate_explicit_project(&loader, &repo_root.join("missing"), None).is_err());
+
         let _ = std::fs::remove_dir_all(repo_root);
     }
 
