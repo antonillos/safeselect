@@ -17,25 +17,7 @@ jq -n \
   -f "${ROOT_DIR}/tools/crap/merge-reports.jq" \
   >"${OUT_DIR}/report.json"
 
-jq -r '
-  (.threshold) as $threshold |
-  "# CRAP Report\n",
-  "Generated locally; report-only mode does not block CI.\n",
-  "## Summary\n",
-  ("- Functions/methods: " + ((.entries | length) | tostring)),
-  ("- Threshold warnings: " + (([.entries[] | select(.crap != null and .crap > $threshold)] | length) | tostring)),
-  ("- Missing coverage: " + (([.entries[] | select(.coverage_percent == null)] | length) | tostring)),
-  "\n## Actionable findings\n",
-  (if ([.entries[] | select(.crap != null and .crap > $threshold)] | length) == 0 then
-     "No findings exceed the report threshold."
-   else
-     ([.entries[] | select(.crap != null and .crap > $threshold)] | map(
-       "- **" + (.language + " " + .symbol) + "** — " + .file + ":" + (.line | tostring) +
-       " — CRAP " + (.crap | tostring) + ", CC " + (.complexity | tostring) +
-       ", coverage " + ((.coverage_percent // 0) | tostring) + "%.\n  - " + .remediation
-     ) | join("\n"))
-   end)
-' "${OUT_DIR}/report.json" >"${OUT_DIR}/report.md"
+jq -r -f "${ROOT_DIR}/tools/crap/render-report.jq" "${OUT_DIR}/report.json" >"${OUT_DIR}/report.md"
 
 jq -n --slurpfile report "${OUT_DIR}/report.json" '
   {
@@ -53,4 +35,19 @@ jq -n --slurpfile report "${OUT_DIR}/report.json" '
   }
 ' >"${OUT_DIR}/report.sarif"
 
-jq -r '(.threshold) as $threshold | "CRAP report completed", ("Functions: " + ((.entries | length) | tostring)), ("Warnings: " + (([.entries[] | select(.crap != null and .crap > $threshold)] | length) | tostring)), ("Missing coverage: " + (([.entries[] | select(.coverage_percent == null)] | length) | tostring)), "Report: target/crap/report.md", "JSON: target/crap/report.json"' "${OUT_DIR}/report.json" | tee "${OUT_DIR}/summary.txt"
+jq -r '
+  (.threshold) as $threshold |
+  (.entries) as $entries |
+  ($entries | map(select(.crap != null and .crap > $threshold))) as $warnings |
+  ($entries | group_by(.language) | map({language: .[0].language, total: length, warnings: (map(select(.crap != null and .crap > $threshold)) | length)})) as $languages |
+  "CRAP report completed",
+  ("Functions: " + (($entries | length) | tostring)),
+  ("Warnings: " + (($warnings | length) | tostring)),
+  ("Missing coverage: " + (($entries | map(select(.coverage_percent == null)) | length) | tostring)),
+  ("By language: " + ($languages | map(.language + "=" + (.total | tostring) + " (warnings=" + (.warnings | tostring) + ")") | join(", "))),
+  (if ($warnings | length) > 0 then
+     ("Top finding: " + ($warnings | sort_by(-.crap) | .[0] | (.file + ":" + (.line | tostring) + " " + .symbol + " CRAP=" + ((.crap * 100 | round) / 100 | tostring))))
+   else "Top finding: none" end),
+  "Report: target/crap/report.md",
+  "JSON: target/crap/report.json"
+' "${OUT_DIR}/report.json" | tee "${OUT_DIR}/summary.txt"

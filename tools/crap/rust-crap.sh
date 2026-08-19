@@ -28,4 +28,8 @@ if ! cargo crap --lcov "${OUT_DIR}/rust-coverage.lcov" --workspace --format json
   tail -n 80 "${OUT_DIR}/rust-crap.log" >&2
   exit 1
 fi
+jq --arg root "${ROOT_DIR}/" \
+  '.entries |= map(.file |= if startswith($root) then .[($root | length):] else . end)' \
+  "${OUT_DIR}/rust-report.json" >"${OUT_DIR}/rust-report.normalized.json"
+mv "${OUT_DIR}/rust-report.normalized.json" "${OUT_DIR}/rust-report.json"
 jq -e '.entries and (.entries | type == "array")' "${OUT_DIR}/rust-report.json" >/dev/null
