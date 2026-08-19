@@ -5280,6 +5280,16 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn recognizes_recoverable_connection_errors() {
+        assert!(is_recoverable_connection_error("connection refused"));
+        assert!(is_recoverable_connection_error("SQLSTATE 08006"));
+        assert!(is_recoverable_connection_error(
+            "sidecar process terminated"
+        ));
+        assert!(!is_recoverable_connection_error("syntax error"));
+    }
+
     fn response_json(response: &JsonRpcResponse) -> serde_json::Value {
         serde_json::to_value(response).unwrap()
     }

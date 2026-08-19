@@ -287,4 +287,12 @@ mod tests {
         assert_eq!(normalize_driver("POSTGRES-JDBC"), "postgresql");
         assert_eq!(normalize_driver("mysql"), "mysql");
     }
+
+    #[test]
+    fn converts_connection_lists_and_maps_to_vectors() {
+        let list = ConnectionsField::List(vec![]).into_vec();
+        let map = ConnectionsField::Map(HashMap::new()).into_vec();
+        assert!(list.is_empty());
+        assert!(map.is_empty());
+    }
 }
