@@ -197,26 +197,31 @@ impl SecurityEngine {
             )));
         }
         for stage in request.pipeline.as_array().into_iter().flatten() {
-            let Some(stage_object) = stage.as_object() else {
-                return Err(SafeselectError::QueryRejected(
-                    "Aggregation stages must be JSON objects. Correct the pipeline argument before retrying; do not repeat the same call. Example: [{\"$match\":{\"active\":true}}]".into(),
-                ));
-            };
-            if stage_object.len() != 1 {
-                return Err(SafeselectError::QueryRejected(
-                    "Aggregation stages must contain exactly one operator. Correct the pipeline argument before retrying; do not repeat the same call. Example: [{\"$match\":{\"active\":true}}]".into(),
-                ));
-            }
-            for name in stage_object.keys() {
-                if matches!(name.as_str(), "$out" | "$merge" | "$currentOp") {
-                    return Err(SafeselectError::QueryRejected(format!(
-                        "Aggregation stage '{name}' is not read-only"
-                    )));
-                }
-            }
-            self.validate_document_mql(stage)?;
+            self.validate_aggregate_stage(stage)?;
         }
         Ok(())
+    }
+
+    fn validate_aggregate_stage(&self, stage: &serde_json::Value) -> Result<()> {
+        let Some(stage_object) = stage.as_object() else {
+            return Err(SafeselectError::QueryRejected(
+                "Aggregation stages must be JSON objects. Correct the pipeline argument before retrying; do not repeat the same call. Example: [{\"$match\":{\"active\":true}}]".into(),
+            ));
+        };
+        if stage_object.len() != 1 {
+            return Err(SafeselectError::QueryRejected(
+                "Aggregation stages must contain exactly one operator. Correct the pipeline argument before retrying; do not repeat the same call. Example: [{\"$match\":{\"active\":true}}]".into(),
+            ));
+        }
+        if let Some(name) = stage_object
+            .keys()
+            .find(|name| matches!(name.as_str(), "$out" | "$merge" | "$currentOp"))
+        {
+            return Err(SafeselectError::QueryRejected(format!(
+                "Aggregation stage '{name}' is not read-only"
+            )));
+        }
+        self.validate_document_mql(stage)
     }
 
     pub fn validate_document_distinct(&self, request: &DocumentDistinctRequest) -> Result<()> {
@@ -1919,5 +1924,55 @@ mod tests {
         assert!(engine.check_result_size(1, 1).is_ok());
         assert!(engine.check_result_size(501, 1).is_err());
         assert!(engine.check_result_size(1, 2_000_001).is_err());
+    }
+
+    #[test]
+    fn extracts_explain_targets_and_options() {
+        assert_eq!(extract_explain_target("EXPLAIN SELECT 1"), Some("SELECT 1"));
+        assert_eq!(
+            extract_explain_target("EXPLAIN (ANALYZE, BUFFERS) SELECT 1"),
+            Some("SELECT 1")
+        );
+        assert_eq!(
+            extract_explain_target("EXPLAIN ANALYZE SELECT 1"),
+            Some("SELECT 1")
+        );
+        assert_eq!(extract_explain_target("SELECT 1"), None);
+        assert_eq!(extract_explain_target("EXPLAIN (ANALYZE SELECT 1"), None);
+    }
+
+    #[test]
+    fn validates_document_find_projection_sort_and_limits() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        let valid = DocumentFindRequest {
+            database: "app".into(),
+            collection: "users".into(),
+            filter: serde_json::json!({"active": true}),
+            projection: Some(serde_json::json!({"name": 1})),
+            sort: Some(serde_json::json!({"name": 1})),
+            limit: 10,
+        };
+        assert!(engine.validate_document_find(&valid).is_ok());
+
+        for request in [
+            DocumentFindRequest {
+                projection: Some(serde_json::json!("name")),
+                ..valid.clone()
+            },
+            DocumentFindRequest {
+                sort: Some(serde_json::json!("name")),
+                ..valid.clone()
+            },
+            DocumentFindRequest {
+                limit: 0,
+                ..valid.clone()
+            },
+            DocumentFindRequest {
+                limit: 501,
+                ..valid
+            },
+        ] {
+            assert!(engine.validate_document_find(&request).is_err());
+        }
     }
 }

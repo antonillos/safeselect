@@ -4202,6 +4202,20 @@ mod tests {
     }
 
     #[test]
+    fn writes_default_project_configuration() {
+        let root = std::env::temp_dir().join(format!("safeselect-project-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        write_project_toml(&root).unwrap();
+
+        let project: config::ProjectConfig =
+            toml::from_str(&std::fs::read_to_string(root.join("project.toml")).unwrap()).unwrap();
+        assert_eq!(project.version, 1);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn extracts_tcp_host_and_port_variants() {
         assert_eq!(
             extract_tcp_host_port("mongodb://db.example:27018/app"),
