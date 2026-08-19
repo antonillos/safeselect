@@ -333,34 +333,30 @@ impl SidecarProcess {
     }
 
     fn java_executable() -> Result<PathBuf> {
+        let mut candidates = Vec::new();
         if let Ok(java_home) = std::env::var("JAVA_HOME") {
-            let java = PathBuf::from(java_home).join("bin").join("java");
-            if java.exists() {
-                return Self::validate_java(java);
-            }
+            candidates.push(PathBuf::from(java_home).join("bin").join("java"));
         }
         if let Ok(homebrew_prefix) = std::env::var("HOMEBREW_PREFIX") {
-            let java = PathBuf::from(homebrew_prefix).join("opt/java/bin/java");
-            if java.exists() {
-                return Self::validate_java(java);
-            }
+            candidates.push(PathBuf::from(homebrew_prefix).join("opt/java/bin/java"));
         }
-        for java in [
-            "/opt/homebrew/opt/java/bin/java",
-            "/usr/local/opt/java/bin/java",
-        ] {
-            let java = PathBuf::from(java);
-            if java.exists() {
-                return Self::validate_java(java);
-            }
-        }
+        candidates.extend(
+            [
+                "/opt/homebrew/opt/java/bin/java",
+                "/usr/local/opt/java/bin/java",
+            ]
+            .into_iter()
+            .map(PathBuf::from),
+        );
         if let Ok(home) = std::env::var("HOME") {
-            let java = PathBuf::from(home).join("homebrew/opt/java/bin/java");
-            if java.exists() {
-                return Self::validate_java(java);
-            }
+            candidates.push(PathBuf::from(home).join("homebrew/opt/java/bin/java"));
         }
-        Self::validate_java(PathBuf::from("java"))
+        Self::validate_java(
+            candidates
+                .into_iter()
+                .find(|java| java.exists())
+                .unwrap_or_else(|| PathBuf::from("java")),
+        )
     }
 
     fn validate_java(java: PathBuf) -> Result<PathBuf> {
@@ -804,7 +800,7 @@ fn java_major_version(version_output: &str) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use super::java_major_version;
+    use super::{java_major_version, SidecarProcess};
 
     #[test]
     fn parses_modern_java_versions() {
@@ -821,5 +817,11 @@ mod tests {
     #[test]
     fn parses_legacy_java_versions() {
         assert_eq!(java_major_version("java version \"1.8.0_451\""), Some(8));
+    }
+
+    #[test]
+    fn locates_a_usable_java_executable() {
+        let java = SidecarProcess::java_executable().unwrap();
+        assert!(java.ends_with("java") || java.ends_with("java.exe"));
     }
 }

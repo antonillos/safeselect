@@ -2009,4 +2009,48 @@ mod tests {
     fn rejects_unbalanced_sql_parentheses() {
         assert_eq!(count_statements("SELECT (1"), 1);
     }
+
+    #[test]
+    fn detects_schema_references_and_allowed_patterns() {
+        assert!(!has_schema_reference("public.", &["public".into()]));
+        assert!(!has_schema_reference("private.x.y.", &[]));
+        assert!(!has_schema_reference("select a.b from users", &[]));
+    }
+
+    #[test]
+    fn sanitizes_keyword_scan_comments_and_literals() {
+        let sanitized =
+            sanitize_for_keyword_scan("SELECT 'FROM x' /* hidden */ FROM users -- end\n");
+        assert!(sanitized.contains("SELECT"));
+        assert!(sanitized.contains("FROM USERS"));
+        assert!(!sanitized.contains("hidden"));
+        assert!(!sanitized.contains("end"));
+    }
+
+    #[test]
+    fn finds_only_top_level_keywords() {
+        let sql = "SELECT (SELECT 1 AS nested) AS value FROM users";
+        assert_eq!(find_top_level_keyword(sql, 0, "AS"), Some(28));
+        assert_eq!(find_top_level_keyword(sql, 0, "FROM"), Some(37));
+        assert_eq!(find_top_level_keyword("SELECT 'FROM'", 0, "FROM"), None);
+    }
+
+    #[test]
+    fn scans_keywords_across_comments_quotes_and_nested_parentheses() {
+        let sql = "SELECT (1 /* FROM */), \"FROM\" -- FROM\nFROM users";
+        assert_eq!(find_top_level_keyword(sql, 0, "FROM"), sql.rfind("FROM"));
+        let sanitized = sanitize_for_keyword_scan("SELECT \"secret\" -- comment\nFROM users");
+        assert!(sanitized.contains("SELECT"));
+        assert!(sanitized.contains("FROM USERS"));
+    }
+
+    #[test]
+    fn validates_system_queries_without_schema_allowlist() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        assert!(engine
+            .validate_system("SELECT * FROM information_schema.tables")
+            .is_ok());
+        assert!(engine.validate_system("").is_err());
+        assert!(engine.validate_system("DROP TABLE users").is_err());
+    }
 }

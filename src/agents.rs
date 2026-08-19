@@ -265,7 +265,7 @@ pub fn uninstall_entry(client: &str, entry_name: &str, repo_root: Option<&Path>)
     let config_path = resolve_uninstall_target(client, entry_name, repo_root)?;
     let content = std::fs::read_to_string(&config_path)?;
 
-    if !content.contains(entry_name) && !content.contains("safeselect") {
+    if !contains_safeselect_entry(&content, entry_name) {
         return Err(SafeselectError::Other(format!(
             "No safeselect entry found in {client} config"
         )));
@@ -279,6 +279,10 @@ pub fn uninstall_entry(client: &str, entry_name: &str, repo_root: Option<&Path>)
 
     println!("Entry '{entry_name}' uninstalled from {client}");
     Ok(())
+}
+
+fn contains_safeselect_entry(content: &str, entry_name: &str) -> bool {
+    content.contains(entry_name) || content.contains("safeselect")
 }
 
 pub fn detect_uninstall_target(
@@ -1272,5 +1276,44 @@ value = true
         .unwrap();
         assert!(updated.contains("\"new\""));
         assert!(!updated.contains("\"old\""));
+    }
+
+    #[test]
+    fn selects_candidate_entries_for_supported_clients_and_environments() {
+        let json = r#"{"mcpServers":{"safeselect-demo-pre":{},"demo-dev":{},"other":{}}}"#;
+        assert_eq!(
+            candidate_entry_names("cursor", json, "demo", Some("pre")).unwrap(),
+            vec!["safeselect-demo-pre"]
+        );
+        assert_eq!(
+            candidate_entry_names("cursor", json, "demo", None)
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(candidate_entry_names("unknown", json, "demo", None).is_err());
+    }
+
+    #[test]
+    fn uninstalls_a_local_opencode_entry_and_creates_backup() {
+        let root = std::env::temp_dir().join(format!("safeselect-agent-{}", uuid::Uuid::new_v4()));
+        let dir = root.join(".opencode");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("opencode.json");
+        std::fs::write(
+            &path,
+            r#"{"mcp":{"safeselect-demo-pre":{"command":"safeselect"}}}"#,
+        )
+        .unwrap();
+        uninstall_entry("opencode", "safeselect-demo-pre", Some(&root)).unwrap();
+        assert!(!std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("safeselect-demo-pre"));
+        assert!(path.with_extension("safeselect.bak").exists());
+        std::fs::write(&path, "{}").unwrap();
+        assert!(uninstall_entry("opencode", "missing", Some(&root)).is_err());
+        std::fs::write(&path, r#"{"mcp":{"safeselect-demo-pre":{"command":}}}"#).unwrap();
+        assert!(uninstall_entry("opencode", "safeselect-demo-pre", Some(&root)).is_err());
+        let _ = std::fs::remove_dir_all(root);
     }
 }

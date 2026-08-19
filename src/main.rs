@@ -5011,4 +5011,89 @@ username = "usr_app"
             "mongodb://user:__SAFESELECT_PASSWORD__@localhost:2222/app?retryWrites=true"
         );
     }
+
+    #[test]
+    fn builds_ssh_command_with_defaults_and_optional_arguments() {
+        let config = config::SshConfig {
+            enabled: true,
+            bastion: None,
+            host: Some("bastion".into()),
+            username: Some("user".into()),
+            port: Some(2200),
+            secret_account: None,
+            identity_file: Some("/tmp/key".into()),
+            known_hosts: None,
+            forward_host: Some("db.internal".into()),
+            forward_port: Some(5432),
+            local_host: None,
+            local_port: None,
+            auth_type: None,
+        };
+        assert_eq!(
+            build_ssh_command(&config, "postgresql://db"),
+            Some("ssh -L localhost:15432:db.internal:5432 user@bastion -p 2200 -i /tmp/key".into())
+        );
+    }
+
+    #[test]
+    fn rejects_incomplete_ssh_command_configuration() {
+        let config = config::SshConfig {
+            enabled: true,
+            bastion: None,
+            host: Some("bastion".into()),
+            username: None,
+            port: None,
+            secret_account: None,
+            identity_file: None,
+            known_hosts: None,
+            forward_host: Some("db.internal".into()),
+            forward_port: Some(5432),
+            local_host: None,
+            local_port: None,
+            auth_type: None,
+        };
+        assert!(build_ssh_command(&config, "postgresql://db").is_none());
+    }
+
+    #[test]
+    fn builds_ssh_command_with_custom_local_endpoint_and_default_port() {
+        let config = config::SshConfig {
+            enabled: true,
+            bastion: None,
+            host: Some("bastion".into()),
+            username: Some("user".into()),
+            port: Some(22),
+            secret_account: None,
+            identity_file: None,
+            known_hosts: None,
+            forward_host: Some("db.internal".into()),
+            forward_port: Some(5432),
+            local_host: Some("127.0.0.1".into()),
+            local_port: Some(15433),
+            auth_type: None,
+        };
+        assert_eq!(
+            build_ssh_command(&config, "postgresql://db").as_deref(),
+            Some("ssh -L 127.0.0.1:15433:db.internal:5432 user@bastion")
+        );
+    }
+
+    #[test]
+    fn lists_only_environment_toml_files() {
+        let root = std::env::temp_dir().join(format!("safeselect-envs-{}", uuid::Uuid::new_v4()));
+        let env_dir = root.join(".safeselect/environments");
+        std::fs::create_dir_all(&env_dir).unwrap();
+        std::fs::write(env_dir.join("prod.toml"), "").unwrap();
+        std::fs::write(env_dir.join("dev.toml"), "").unwrap();
+        std::fs::write(env_dir.join("README.md"), "").unwrap();
+        assert_eq!(list_environment_names(&root).unwrap(), vec!["dev", "prod"]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn reports_missing_environment_directory() {
+        let root =
+            std::env::temp_dir().join(format!("safeselect-missing-{}", uuid::Uuid::new_v4()));
+        assert!(list_environment_names(&root).is_err());
+    }
 }
