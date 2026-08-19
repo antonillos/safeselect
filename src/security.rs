@@ -197,26 +197,31 @@ impl SecurityEngine {
             )));
         }
         for stage in request.pipeline.as_array().into_iter().flatten() {
-            let Some(stage_object) = stage.as_object() else {
-                return Err(SafeselectError::QueryRejected(
-                    "Aggregation stages must be JSON objects. Correct the pipeline argument before retrying; do not repeat the same call. Example: [{\"$match\":{\"active\":true}}]".into(),
-                ));
-            };
-            if stage_object.len() != 1 {
-                return Err(SafeselectError::QueryRejected(
-                    "Aggregation stages must contain exactly one operator. Correct the pipeline argument before retrying; do not repeat the same call. Example: [{\"$match\":{\"active\":true}}]".into(),
-                ));
-            }
-            for name in stage_object.keys() {
-                if matches!(name.as_str(), "$out" | "$merge" | "$currentOp") {
-                    return Err(SafeselectError::QueryRejected(format!(
-                        "Aggregation stage '{name}' is not read-only"
-                    )));
-                }
-            }
-            self.validate_document_mql(stage)?;
+            self.validate_aggregate_stage(stage)?;
         }
         Ok(())
+    }
+
+    fn validate_aggregate_stage(&self, stage: &serde_json::Value) -> Result<()> {
+        let Some(stage_object) = stage.as_object() else {
+            return Err(SafeselectError::QueryRejected(
+                "Aggregation stages must be JSON objects. Correct the pipeline argument before retrying; do not repeat the same call. Example: [{\"$match\":{\"active\":true}}]".into(),
+            ));
+        };
+        if stage_object.len() != 1 {
+            return Err(SafeselectError::QueryRejected(
+                "Aggregation stages must contain exactly one operator. Correct the pipeline argument before retrying; do not repeat the same call. Example: [{\"$match\":{\"active\":true}}]".into(),
+            ));
+        }
+        if let Some(name) = stage_object
+            .keys()
+            .find(|name| matches!(name.as_str(), "$out" | "$merge" | "$currentOp"))
+        {
+            return Err(SafeselectError::QueryRejected(format!(
+                "Aggregation stage '{name}' is not read-only"
+            )));
+        }
+        self.validate_document_mql(stage)
     }
 
     pub fn validate_document_distinct(&self, request: &DocumentDistinctRequest) -> Result<()> {
