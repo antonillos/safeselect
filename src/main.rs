@@ -389,15 +389,7 @@ fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
             Ok(())
         }
         ConfigAction::RenameEnvironment { old, new, project } => {
-            let dir = match project {
-                Some(d) => d,
-                None => {
-                    let cwd = std::env::current_dir()?;
-                    loader
-                        .find_local_project(&cwd)
-                        .ok_or_else(|| SafeselectError::LocalProjectNotFound(cwd))?
-                }
-            };
+            let dir = resolve_project_dir(loader, project)?;
 
             let env_dir = dir.join(".safeselect").join("environments");
             let old_file = env_dir.join(format!("{old}.toml"));
@@ -471,15 +463,7 @@ fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
             Ok(())
         }
         ConfigAction::DeleteEnvironment { name, project } => {
-            let dir = match project {
-                Some(d) => d,
-                None => {
-                    let cwd = std::env::current_dir()?;
-                    loader
-                        .find_local_project(&cwd)
-                        .ok_or_else(|| SafeselectError::LocalProjectNotFound(cwd))?
-                }
-            };
+            let dir = resolve_project_dir(loader, project)?;
 
             let env_dir = dir.join(".safeselect").join("environments");
             let env_file = env_dir.join(format!("{name}.toml"));
@@ -529,15 +513,7 @@ fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
             password,
             project,
         } => {
-            let dir = match project {
-                Some(d) => d,
-                None => {
-                    let cwd = std::env::current_dir()?;
-                    loader
-                        .find_local_project(&cwd)
-                        .ok_or_else(|| SafeselectError::LocalProjectNotFound(cwd))?
-                }
-            };
+            let dir = resolve_project_dir(loader, project)?;
 
             let env_file = dir
                 .join(".safeselect")
@@ -577,15 +553,7 @@ fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
             password,
             project,
         } => {
-            let dir = match project {
-                Some(d) => d,
-                None => {
-                    let cwd = std::env::current_dir()?;
-                    loader
-                        .find_local_project(&cwd)
-                        .ok_or_else(|| SafeselectError::LocalProjectNotFound(cwd))?
-                }
-            };
+            let dir = resolve_project_dir(loader, project)?;
 
             let env_file = dir
                 .join(".safeselect")
@@ -637,27 +605,11 @@ fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
             Ok(())
         }
         ConfigAction::Reset { project } => {
-            let dir = match project {
-                Some(d) => d,
-                None => {
-                    let cwd = std::env::current_dir()?;
-                    loader
-                        .find_local_project(&cwd)
-                        .ok_or_else(|| SafeselectError::LocalProjectNotFound(cwd))?
-                }
-            };
+            let dir = resolve_project_dir(loader, project)?;
             reset_project_config(&dir)
         }
         ConfigAction::Uninstall { project } => {
-            let dir = match project {
-                Some(d) => d,
-                None => {
-                    let cwd = std::env::current_dir()?;
-                    loader
-                        .find_local_project(&cwd)
-                        .ok_or_else(|| SafeselectError::LocalProjectNotFound(cwd))?
-                }
-            };
+            let dir = resolve_project_dir(loader, project)?;
             uninstall_project_config(&dir)
         }
     }
