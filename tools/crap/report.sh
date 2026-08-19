@@ -17,6 +17,18 @@ jq -n \
   -f "${ROOT_DIR}/tools/crap/merge-reports.jq" \
   >"${OUT_DIR}/report.json"
 
+jq -n --slurpfile report "${OUT_DIR}/report.json" '
+  ($report[0].entries) as $entries |
+  ($entries | map(select(.crap != null and .crap > $report[0].threshold)) | length) as $warnings |
+  {
+    schemaVersion: 1,
+    label: "CRAP",
+    message: (($warnings | tostring) + " warnings"),
+    color: (if $warnings == 0 then "brightgreen" elif $warnings <= 50 then "yellow" elif $warnings <= 100 then "orange" else "red" end),
+    cacheSeconds: 300
+  }
+' >"${OUT_DIR}/badge.json"
+
 jq -r -f "${ROOT_DIR}/tools/crap/render-report.jq" "${OUT_DIR}/report.json" >"${OUT_DIR}/report.md"
 
 jq -n --slurpfile report "${OUT_DIR}/report.json" '

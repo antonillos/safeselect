@@ -5284,6 +5284,95 @@ mod tests {
         serde_json::to_value(response).unwrap()
     }
 
+    fn test_server(repo_root: &Path) -> McpServer {
+        let project = crate::config::ProjectConfig {
+            audit: crate::config::AuditConfig {
+                enabled: true,
+                directory: repo_root.join("audit").display().to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let environment = crate::config::EnvironmentConfig {
+            version: 1,
+            database: crate::config::DatabaseConfig {
+                kind: crate::backend::BackendKind::Jdbc,
+                vendor: Some("postgresql".into()),
+                driver: Some("postgresql".into()),
+                url: "jdbc:postgresql://127.0.0.1:5432/app".into(),
+                username: "agent".into(),
+                secret: None,
+            },
+            tls: None,
+            ssh: None,
+            limits: Default::default(),
+        };
+
+        McpServer::new(
+            project,
+            environment,
+            "test-project",
+            "test",
+            "driver.jar",
+            "org.postgresql.Driver",
+            "jdbc:postgresql://127.0.0.1:5432/app",
+            "agent",
+            "password",
+            repo_root,
+            &repo_root.join(".safeselect"),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn handle_import_compose_covers_empty_success_and_scan_error_paths() {
+        let repo_root = std::env::temp_dir().join(format!(
+            "safeselect-mcp-import-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let empty_path = repo_root.join("empty");
+        let bad_path = std::env::temp_dir().join(format!(
+            "safeselect-mcp-bad-compose-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&empty_path).unwrap();
+        std::fs::create_dir_all(&bad_path).unwrap();
+        std::fs::write(bad_path.join("docker-compose.yml"), "services: [").unwrap();
+
+        let mut server = test_server(&repo_root);
+        server
+            .handle_import_compose(
+                Some(serde_json::json!(1)),
+                &serde_json::json!({
+                    "scan_path": empty_path
+                }),
+            )
+            .unwrap();
+        server
+            .handle_import_compose(
+                Some(serde_json::json!(2)),
+                &serde_json::json!({
+                    "scan_path": bad_path
+                }),
+            )
+            .unwrap();
+
+        std::fs::write(
+            repo_root.join("docker-compose.yml"),
+            "services:\n  database:\n    image: postgres:17\n    environment:\n      POSTGRES_DB: app\n      POSTGRES_USER: agent\n      POSTGRES_PASSWORD: test-password\n    ports:\n      - '15432:5432'\n",
+        )
+        .unwrap();
+        server
+            .handle_import_compose(Some(serde_json::json!(3)), &serde_json::json!({}))
+            .unwrap();
+
+        assert!(repo_root
+            .join(".safeselect/environments/database.toml")
+            .exists());
+        std::fs::remove_dir_all(repo_root).unwrap();
+        std::fs::remove_dir_all(bad_path).unwrap();
+    }
+
     #[test]
     fn tool_definitions_require_next_suggestion_in_output_schema() {
         let definition = ToolDefinition {
