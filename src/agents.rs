@@ -1279,6 +1279,31 @@ value = true
     }
 
     #[test]
+    fn appends_entries_to_json_and_ini_configs() {
+        let entry = serde_json::json!({"command": "safeselect"});
+        let opencode = append_opencode_json("{}", &entry, "safe").unwrap();
+        assert!(opencode.contains("\"safe\""));
+        let mcp = append_mcp_json("{}", &entry, "safe").unwrap();
+        assert!(mcp.contains("\"safe\""));
+        let ini = append_ini_entry("[mcpServers.old]", "safe", "dev").unwrap();
+        assert!(ini.contains("[mcpServers.safe]"));
+    }
+
+    #[test]
+    fn rejects_unsafe_agent_config_permissions() {
+        let path =
+            std::env::temp_dir().join(format!("safeselect-permissions-{}", std::process::id()));
+        std::fs::write(&path, "{}").unwrap();
+        verify_permissions(&path).unwrap();
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn renders_agent_diff_changes() {
+        show_diff("old\n", "new\n");
+    }
+
+    #[test]
     fn selects_candidate_entries_for_supported_clients_and_environments() {
         let json = r#"{"mcpServers":{"safeselect-demo-pre":{},"demo-dev":{},"other":{}}}"#;
         assert_eq!(

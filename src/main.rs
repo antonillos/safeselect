@@ -4148,6 +4148,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn covers_small_configuration_helpers() {
+        let root = std::env::temp_dir().join(format!("safeselect-config-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(".safeselect/environments")).unwrap();
+        std::fs::write(
+            root.join(".safeselect/environments/dev.toml"),
+            "version = 1\n[database]\nurl = \"jdbc:postgresql://localhost/db\"\n",
+        )
+        .unwrap();
+        assert!(environment_config_file(&root, "dev").exists());
+        assert!(load_environment_config(&root, "dev").is_ok());
+        assert!(check_version_and_maybe_reset(&root).is_ok());
+        let mut removed = String::new();
+        append_deleted_secret_message(
+            &mut removed,
+            Some(("env".into(), Some("SAFESELECT_PASSWORD".into()), None)),
+        )
+        .unwrap();
+        assert!(removed.contains("not removed"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn builds_default_agent_entry_name() {
         assert_eq!(
             default_agent_entry_name("demo", "local"),

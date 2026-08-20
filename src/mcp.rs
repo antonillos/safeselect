@@ -5408,6 +5408,37 @@ mod tests {
     }
 
     #[test]
+    fn rejects_invalid_catalog_arguments_without_touching_backend() {
+        let repo_root =
+            std::env::temp_dir().join(format!("safeselect-mcp-args-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&repo_root).unwrap();
+        let mut server = test_server(&repo_root);
+        let id = Some(serde_json::json!(1));
+        let invalid = serde_json::json!({"unexpected": true});
+        server
+            .handle_list_collections(id.clone(), &invalid)
+            .unwrap();
+        server
+            .handle_list_table_indexes(id.clone(), &invalid)
+            .unwrap();
+        server.handle_get_table_stats(id.clone(), &invalid).unwrap();
+        server.handle_list_triggers(id.clone(), &invalid).unwrap();
+        server.handle_list_scheduled_jobs(id, &invalid).unwrap();
+        let id = Some(serde_json::json!(2));
+        server.handle_list_functions(id.clone(), &invalid).unwrap();
+        server
+            .handle_list_collection_indexes(id.clone(), &serde_json::json!({}))
+            .unwrap();
+        server
+            .handle_get_mongodb_database_stats(id.clone(), &serde_json::json!({}))
+            .unwrap();
+        server
+            .handle_get_collection_stats(id, &serde_json::json!({}))
+            .unwrap();
+        std::fs::remove_dir_all(repo_root).unwrap();
+    }
+
+    #[test]
     fn trusted_success_response_has_required_next_suggestion() {
         let value = response_json(&trusted_tool_response(
             Some(serde_json::json!(1)),
