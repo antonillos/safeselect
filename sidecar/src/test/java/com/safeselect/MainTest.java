@@ -19,6 +19,12 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class MainTest {
+    public static final class ValueHolder {
+        public Object getValue() {
+            return "legacy";
+        }
+    }
+
     private static Object invoke(String name, Class<?>[] types, Object... args) throws Exception {
         Method method = Main.class.getDeclaredMethod(name, types);
         method.setAccessible(true);
@@ -212,6 +218,141 @@ class MainTest {
     }
 
     @Test
+    void coversMongoReadHandlersWithEmptyConnectedProxies() throws Exception {
+        var writer = new PrintWriter(new StringWriter());
+        java.util.function.Supplier<com.mongodb.client.MongoCursor<org.bson.Document>> documentCursor = () -> {
+            boolean[] available = {true};
+            return (com.mongodb.client.MongoCursor<org.bson.Document>) Proxy.newProxyInstance(
+                    MainTest.class.getClassLoader(),
+                    new Class<?>[]{com.mongodb.client.MongoCursor.class},
+                    (proxy, method, args) -> switch (method.getName()) {
+                        case "hasNext" -> available[0];
+                        case "next" -> {
+                            available[0] = false;
+                            yield new org.bson.Document("name", "Ada")
+                                    .append("age", 42).append("active", true);
+                        }
+                        case "close" -> null;
+                        default -> null;
+                    });
+        };
+        java.util.function.Supplier<com.mongodb.client.MongoCursor<org.bson.BsonValue>> valueCursor = () -> {
+            boolean[] available = {true};
+            return (com.mongodb.client.MongoCursor<org.bson.BsonValue>) Proxy.newProxyInstance(
+                    MainTest.class.getClassLoader(),
+                    new Class<?>[]{com.mongodb.client.MongoCursor.class},
+                    (proxy, method, args) -> switch (method.getName()) {
+                        case "hasNext" -> available[0];
+                        case "next" -> {
+                            available[0] = false;
+                            yield new org.bson.BsonString("Ada");
+                        }
+                        case "close" -> null;
+                        default -> null;
+                    });
+        };
+        var stringCursor = (com.mongodb.client.MongoCursor<String>) Proxy.newProxyInstance(
+                MainTest.class.getClassLoader(),
+                new Class<?>[]{com.mongodb.client.MongoCursor.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "hasNext" -> false;
+                    case "close" -> null;
+                    default -> null;
+                });
+        var collectionNames = Proxy.newProxyInstance(MainTest.class.getClassLoader(),
+                new Class<?>[]{com.mongodb.client.ListCollectionNamesIterable.class},
+                (proxy, method, args) -> method.getName().equals("iterator") ? stringCursor : null);
+        var indexes = Proxy.newProxyInstance(MainTest.class.getClassLoader(),
+                new Class<?>[]{com.mongodb.client.ListIndexesIterable.class},
+                (proxy, method, args) -> method.getName().equals("iterator") ? documentCursor.get() : null);
+        var searchIndexes = Proxy.newProxyInstance(MainTest.class.getClassLoader(),
+                new Class<?>[]{com.mongodb.client.ListSearchIndexesIterable.class},
+                (proxy, method, args) -> method.getName().equals("iterator") ? documentCursor.get() : null);
+        var find = Proxy.newProxyInstance(MainTest.class.getClassLoader(),
+                new Class<?>[]{com.mongodb.client.FindIterable.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "iterator" -> documentCursor.get();
+                    case "limit", "projection", "sort" -> proxy;
+                    default -> null;
+                });
+        var aggregate = Proxy.newProxyInstance(MainTest.class.getClassLoader(),
+                new Class<?>[]{com.mongodb.client.AggregateIterable.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "iterator" -> documentCursor.get();
+                    case "allowDiskUse" -> proxy;
+                    default -> null;
+                });
+        var distinct = Proxy.newProxyInstance(MainTest.class.getClassLoader(),
+                new Class<?>[]{com.mongodb.client.DistinctIterable.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "iterator" -> valueCursor.get();
+                    default -> null;
+                });
+        var collection = Proxy.newProxyInstance(MainTest.class.getClassLoader(),
+                new Class<?>[]{com.mongodb.client.MongoCollection.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "listIndexes" -> indexes;
+                    case "listSearchIndexes" -> searchIndexes;
+                    case "find" -> find;
+                    case "aggregate" -> aggregate;
+                    case "distinct" -> distinct;
+                    case "countDocuments" -> 0L;
+                    default -> null;
+                });
+        var database = Proxy.newProxyInstance(MainTest.class.getClassLoader(),
+                new Class<?>[]{com.mongodb.client.MongoDatabase.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "getCollection" -> collection;
+                    case "listCollectionNames" -> collectionNames;
+                    case "runCommand" -> new org.bson.Document();
+                    default -> null;
+                });
+        var client = Proxy.newProxyInstance(MainTest.class.getClassLoader(),
+                new Class<?>[]{com.mongodb.client.MongoClient.class},
+                (proxy, method, args) -> method.getName().equals("getDatabase") ? database : null);
+
+        setStatic("backend", "mongodb");
+        setStatic("mongoClient", client);
+        Map<String, Object> params = new HashMap<>();
+        params.put("database", "app");
+        params.put("collection", "safe");
+        params.put("field", "name");
+        params.put("filter", Map.of("active", true));
+        params.put("projection", Map.of("name", 1));
+        params.put("sort", Map.of("name", 1));
+        params.put("limit", 1);
+        params.put("sample_size", 1);
+        params.put("examples", 1);
+        params.put("redact_fields", List.of("name"));
+        params.put("pipeline", List.of(Map.of("$match", Map.of("active", true))));
+        setStatic("statementTimeoutMs", 100L);
+        setStatic("maxRows", 10L);
+        setStatic("maxResultBytes", 100_000L);
+        for (String name : List.of("handleListCollectionIndexes", "handleFindDocuments", "handleAggregateDocuments",
+                "handleDistinctDocuments", "handleCountDocuments", "handleExplainDocuments", "handleProfileDocumentField",
+                "handleDiscoverDocumentSchema", "handleGenerateDocumentFixture")) {
+            try {
+                invoke(name, new Class<?>[]{PrintWriter.class, Object.class, Map.class}, writer, "id", Map.of("params", params));
+            } catch (InvocationTargetException ignored) {
+                // Empty driver proxies are only used to exercise request validation and bounded loops.
+            }
+        }
+        setStatic("maxResultBytes", 1L);
+        for (String name : List.of("handleFindDocuments", "handleDistinctDocuments", "handleGenerateDocumentFixture")) {
+            try {
+                invoke(name, new Class<?>[]{PrintWriter.class, Object.class, Map.class}, writer, "limit", Map.of("params", params));
+            } catch (InvocationTargetException ignored) {
+                // The bounded response path is expected to terminate the handler early.
+            }
+        }
+        setStatic("mongoClient", null);
+        setStatic("statementTimeoutMs", 0L);
+        setStatic("maxRows", Long.MAX_VALUE);
+        setStatic("maxResultBytes", Long.MAX_VALUE);
+        setStatic("backend", "jdbc");
+    }
+
+    @Test
     void coversEmptyDocumentStreamingAndJdbcTimeout() throws Exception {
         var writer = new PrintWriter(new StringWriter());
         var cursor = (com.mongodb.client.MongoCursor<org.bson.Document>) Proxy.newProxyInstance(
@@ -251,6 +392,54 @@ class MainTest {
     }
 
     @Test
+    void coversJdbcConnectWhenExistingConnectionIsValid() throws Exception {
+        var connection = Proxy.newProxyInstance(MainTest.class.getClassLoader(), new Class<?>[]{java.sql.Connection.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "isClosed" -> false;
+                    case "isValid" -> true;
+                    default -> null;
+                });
+        setStatic("backend", "jdbc");
+        setStatic("connection", connection);
+        invoke("handleConnect", new Class<?>[]{PrintWriter.class, Object.class}, new PrintWriter(new StringWriter()), "id");
+        setStatic("connection", null);
+    }
+
+    @Test
+    void coversJdbcReconnectWhenExistingConnectionIsStale() throws Exception {
+        var connection = Proxy.newProxyInstance(MainTest.class.getClassLoader(), new Class<?>[]{java.sql.Connection.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "isClosed" -> false;
+                    case "isValid" -> false;
+                    case "close" -> null;
+                    default -> null;
+                });
+        setStatic("backend", "jdbc");
+        setStatic("connection", connection);
+        setStatic("databaseUrl", "jdbc:invalid://127.0.0.1:1/app");
+        try {
+            invoke("handleConnect", new Class<?>[]{PrintWriter.class, Object.class},
+                    new PrintWriter(new StringWriter()), "id");
+        } catch (InvocationTargetException ignored) {
+            // DriverManager failure is expected; the stale-connection branch is the subject of this test.
+        }
+        var failingConnection = Proxy.newProxyInstance(MainTest.class.getClassLoader(), new Class<?>[]{java.sql.Connection.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "isClosed" -> false;
+                    case "isValid", "close" -> throw new java.sql.SQLException("stale connection");
+                    default -> null;
+                });
+        setStatic("connection", failingConnection);
+        try {
+            invoke("handleConnect", new Class<?>[]{PrintWriter.class, Object.class},
+                    new PrintWriter(new StringWriter()), "id");
+        } catch (InvocationTargetException ignored) {
+            // Both validation and close failures are intentionally exercised.
+        }
+        setStatic("connection", null);
+    }
+
+    @Test
     void coversMongoBackendConnectionSetup() throws Exception {
         setStatic("backend", "mongodb");
         setStatic("databaseUrl", "mongodb://localhost:27017/test");
@@ -264,11 +453,41 @@ class MainTest {
     }
 
     @Test
+    void coversPostgresObjectConversions() throws Exception {
+        var clob = new javax.sql.rowset.serial.SerialClob(new char[]{'s', 'a', 'f', 'e'});
+        assertEquals("safe", invoke("convertPgObject", new Class<?>[]{Object.class}, clob));
+        var array = Proxy.newProxyInstance(MainTest.class.getClassLoader(), new Class<?>[]{java.sql.Array.class},
+                (proxy, method, args) -> method.getName().equals("getArray") ? new Object[]{"one", "two"} : null);
+        assertEquals(List.of("one", "two"), invoke("convertPgObject", new Class<?>[]{Object.class}, array));
+        assertEquals("legacy", invoke("convertPgObject", new Class<?>[]{Object.class}, new ValueHolder()));
+        var pgObject = new org.postgresql.util.PGobject();
+        pgObject.setType("jsonb");
+        pgObject.setValue("{\"safe\":true}");
+        assertEquals(Map.of("safe", true), invoke("convertPgObject", new Class<?>[]{Object.class}, pgObject));
+    }
+
+    @Test
     void initializesLogWriterInTemporaryHome() throws Exception {
         String previous = System.getProperty("user.home");
         var home = java.nio.file.Files.createTempDirectory("safeselect-home");
         System.setProperty("user.home", home.toString());
         invoke("initializeLogWriter", new Class<?>[]{});
+        var logWriterField = Main.class.getDeclaredField("logWriter");
+        logWriterField.setAccessible(true);
+        if (logWriterField.get(null) instanceof PrintWriter writer) {
+            writer.close();
+        }
+        var rotatedHome = java.nio.file.Files.createTempDirectory("safeselect-rotated-home");
+        var logDirectory = java.nio.file.Files.createDirectories(rotatedHome.resolve(".local/state/safeselect/logs"));
+        var activeLog = logDirectory.resolve("sidecar.log");
+        try (var file = new java.io.RandomAccessFile(activeLog.toFile(), "rw")) {
+            file.setLength(10L * 1024 * 1024);
+        }
+        System.setProperty("user.home", rotatedHome.toString());
+        invoke("initializeLogWriter", new Class<?>[]{});
+        if (logWriterField.get(null) instanceof PrintWriter writer) {
+            writer.close();
+        }
         if (previous == null) System.clearProperty("user.home"); else System.setProperty("user.home", previous);
     }
 
@@ -299,6 +518,16 @@ class MainTest {
         assertEquals(Map.of("name", "safe"), converted);
         assertEquals(List.of(1, "two"), invoke("convertBsonValue", new Class<?>[]{org.bson.BsonValue.class},
                 new org.bson.BsonArray(List.of(new org.bson.BsonInt32(1), new org.bson.BsonString("two")))));
+        for (org.bson.BsonValue value : List.of(
+                new org.bson.BsonNull(), new org.bson.BsonUndefined(), new org.bson.BsonString("text"),
+                new org.bson.BsonBoolean(true), new org.bson.BsonInt32(1), new org.bson.BsonInt64(2L),
+                new org.bson.BsonDouble(3.0), new org.bson.BsonDecimal128(new org.bson.types.Decimal128(java.math.BigDecimal.ONE)),
+                new org.bson.BsonObjectId(), new org.bson.BsonDateTime(4L), new org.bson.BsonTimestamp(5),
+                new org.bson.BsonRegularExpression("safe", "i"), new org.bson.BsonBinary(new byte[]{1, 2}),
+                new org.bson.BsonSymbol("symbol"))) {
+            assertTrue(invoke("convertBsonValue", new Class<?>[]{org.bson.BsonValue.class}, value) != null
+                    || value.isNull() || value.getBsonType() == org.bson.BsonType.UNDEFINED);
+        }
 
         Map<String, Object> nested = new HashMap<>(Map.of("user", new HashMap<>(Map.of("token", "secret", "name", "Ada"))));
         invoke("redactValue", new Class<?>[]{Object.class, String.class, List.class}, nested, "", List.of("user.token"));
@@ -308,6 +537,8 @@ class MainTest {
         invoke("redactValue", new Class<?>[]{Object.class, String.class, List.class}, list, "", List.of("token"));
         assertEquals("[REDACTED]", ((Map<?, ?>) list.get(0)).get("token"));
         assertEquals("Ada", invoke("resolvePath", new Class<?>[]{Object.class, String.class}, nested, "user.name"));
+        assertEquals("Ada", invoke("resolvePath", new Class<?>[]{Object.class, String.class},
+                new org.bson.Document("user", new org.bson.Document("name", "Ada")), "user.name"));
         assertTrue(invoke("resolvePath", new Class<?>[]{Object.class, String.class}, nested, "user.missing").toString().contains("INSTANCE"));
     }
 

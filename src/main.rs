@@ -3235,16 +3235,17 @@ fn run_reconnects(
     repo_root: &std::path::Path,
     env_names: &[String],
 ) -> Result<()> {
-    let mut failures = Vec::new();
-    for env_name in env_names {
-        match cmd_reconnect(loader, repo_root, env_name) {
-            Ok(()) => {}
-            Err(e) => {
-                println!("Reconnect failed for {env_name}: {e}");
-                failures.push(format!("{env_name}: {e}"));
-            }
-        }
-    }
+    let failures: Vec<String> = env_names
+        .iter()
+        .filter_map(|env_name| {
+            cmd_reconnect(loader, repo_root, env_name)
+                .err()
+                .map(|error| {
+                    println!("Reconnect failed for {env_name}: {error}");
+                    format!("{env_name}: {error}")
+                })
+        })
+        .collect();
     if failures.is_empty() {
         Ok(())
     } else {
@@ -4168,6 +4169,13 @@ mod tests {
         .unwrap();
         assert!(removed.contains("not removed"));
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn covers_local_connectivity_failure_helpers() {
+        let addr: std::net::SocketAddr = "127.0.0.1:1".parse().unwrap();
+        assert!(!check_postgres(&addr));
+        assert!(!kill_process_on_port(65534));
     }
 
     #[test]

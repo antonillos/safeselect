@@ -602,6 +602,10 @@ pub fn read_password_from_keychain(account: &str) -> Result<String> {
         .output()
         .map_err(|e| crate::error::SafeselectError::Secret(format!("security find failed: {e}")))?;
 
+    parse_password_output(account, output)
+}
+
+fn parse_password_output(account: &str, output: std::process::Output) -> Result<String> {
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(crate::error::SafeselectError::KeychainNotFound(format!(
@@ -609,10 +613,9 @@ pub fn read_password_from_keychain(account: &str) -> Result<String> {
         )));
     }
 
-    Ok(String::from_utf8(output.stdout)
-        .map_err(|_| crate::error::SafeselectError::Secret("invalid UTF-8 from keychain".into()))?
-        .trim()
-        .to_string())
+    String::from_utf8(output.stdout)
+        .map(|password| password.trim().to_string())
+        .map_err(|_| crate::error::SafeselectError::Secret("invalid UTF-8 from keychain".into()))
 }
 
 pub fn delete_password_from_keychain(account: &str) -> Result<()> {

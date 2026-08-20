@@ -43,47 +43,7 @@ pub fn install_entry(
     mcp_timeout_ms: u64,
     local: bool,
 ) -> Result<()> {
-    let config_path = if local {
-        get_local_client_config(client, repo_root)?
-    } else {
-        // Prefer local project config when available; fall back to global only by confirmation.
-        if let Some(root) = repo_root {
-            if let Some(local_path) = detect_local_client_config(client, root) {
-                println!("Found local config: {}", local_path.display());
-                let jsonc_path = opencode_jsonc_alternative(client, &local_path);
-                let local_option = format!("Use local config ({})", local_path.display());
-                let jsonc_option = jsonc_path
-                    .as_ref()
-                    .map(|path| format!("Create local JSONC config ({})", path.display()));
-                let global_option = "Use global config".to_string();
-                let mut options = vec![local_option.clone()];
-                if let Some(option) = &jsonc_option {
-                    options.push(option.clone());
-                }
-                options.push(global_option.clone());
-
-                let selected =
-                    inquire::Select::new("Where should SafeSelect be installed?", options)
-                        .prompt()
-                        .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?;
-
-                if selected == global_option {
-                    get_client_config(client)?
-                } else if jsonc_option.as_ref() == Some(&selected) {
-                    let jsonc_path = jsonc_path.expect("JSONC option requires a path");
-                    create_opencode_config(&jsonc_path)?;
-                    jsonc_path
-                } else {
-                    println!("Installing to local config...");
-                    local_path
-                }
-            } else {
-                get_client_config(client)?
-            }
-        } else {
-            get_client_config(client)?
-        }
-    };
+    let config_path = select_install_config(client, repo_root, local)?;
     let content = std::fs::read_to_string(&config_path)?;
 
     verify_permissions(&config_path)?;
@@ -91,37 +51,17 @@ pub fn install_entry(
     let backup_path = config_path.with_extension("safeselect.bak");
     std::fs::copy(&config_path, &backup_path)?;
 
-    let entry = serde_json::json!({
-        "command": "safeselect",
-        "args": ["serve", "--environment", environment],
-        "timeout": mcp_timeout_ms
-    });
-
-    let mut opencode_entry = serde_json::json!({
-        "type": "local",
-        "command": ["safeselect", "serve", "--environment", environment],
-        "timeout": mcp_timeout_ms,
-        "enabled": true
-    });
-
-    if let Some(root) = repo_root {
-        opencode_entry["cwd"] = serde_json::json!(root.to_string_lossy().to_string());
-    }
-
-    if let Some(dir) = config_dir {
-        opencode_entry["environment"] = serde_json::json!({
-            "SAFESELECT_CONFIG_DIR": dir.to_string_lossy().to_string()
-        });
-    }
-
-    let new_content = match client {
-        "opencode" => append_opencode_json(&content, &opencode_entry, entry_name)?,
-        "cursor" | "windsurf" | "codex" | "claude-code" => {
-            append_mcp_json(&content, &entry, entry_name)?
-        }
-        "copilot" | "gemini-cli" => append_ini_entry(&content, entry_name, environment)?,
-        _ => return Err(SafeselectError::Other(format!("Unknown client: {client}"))),
-    };
+    let new_content = build_entry_content(
+        client,
+        &content,
+        entry_name,
+        environment,
+        repo_root,
+        config_dir,
+        mcp_timeout_ms,
+        false,
+        None,
+    )?;
 
     println!(
         "--- Config diff for {client} ({}) ---",
@@ -130,15 +70,7 @@ pub fn install_entry(
     show_diff(&content, &new_content);
     println!("\nBackup saved to: {}", backup_path.display());
 
-    std::fs::write(&config_path, &new_content)?;
-
-    let verify = std::fs::read_to_string(&config_path)?;
-    if verify != new_content {
-        std::fs::write(&config_path, &content)?;
-        return Err(SafeselectError::Other(
-            "Write verification failed, rolled back".into(),
-        ));
-    }
+    write_config_and_verify(&config_path, &content, &new_content)?;
 
     println!("Entry '{entry_name}' installed for {client}");
     Ok(())
@@ -151,6 +83,113 @@ fn opencode_jsonc_alternative(client: &str, local_path: &Path) -> Option<PathBuf
 
     let jsonc_path = local_path.with_extension("jsonc");
     (!jsonc_path.exists()).then_some(jsonc_path)
+}
+
+fn select_install_config(client: &str, repo_root: Option<&Path>, local: bool) -> Result<PathBuf> {
+    if local {
+        return get_local_client_config(client, repo_root);
+    }
+    let Some(root) = repo_root else {
+        return get_client_config(client);
+    };
+    let Some(local_path) = detect_local_client_config(client, root) else {
+        return get_client_config(client);
+    };
+
+    println!("Found local config: {}", local_path.display());
+    let jsonc_path = opencode_jsonc_alternative(client, &local_path);
+    let local_option = format!("Use local config ({})", local_path.display());
+    let jsonc_option = jsonc_path
+        .as_ref()
+        .map(|path| format!("Create local JSONC config ({})", path.display()));
+    let global_option = "Use global config".to_string();
+    let mut options = vec![local_option];
+    if let Some(option) = &jsonc_option {
+        options.push(option.clone());
+    }
+    options.push(global_option.clone());
+    let selected = inquire::Select::new("Where should SafeSelect be installed?", options)
+        .prompt()
+        .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?;
+
+    if selected == global_option {
+        get_client_config(client)
+    } else if jsonc_option.as_ref() == Some(&selected) {
+        let jsonc_path = jsonc_path.expect("JSONC option requires a path");
+        create_opencode_config(&jsonc_path)?;
+        Ok(jsonc_path)
+    } else {
+        println!("Installing to local config...");
+        Ok(local_path)
+    }
+}
+
+fn build_entry_content(
+    client: &str,
+    content: &str,
+    entry_name: &str,
+    environment: &str,
+    repo_root: Option<&Path>,
+    config_dir: Option<&Path>,
+    mcp_timeout_ms: u64,
+    upgrade: bool,
+    old_entry_name: Option<&str>,
+) -> Result<String> {
+    let entry = serde_json::json!({
+        "command": "safeselect",
+        "args": ["serve", "--environment", environment],
+        "timeout": mcp_timeout_ms
+    });
+    let mut opencode_entry = serde_json::json!({
+        "type": "local",
+        "command": ["safeselect", "serve", "--environment", environment],
+        "timeout": mcp_timeout_ms,
+        "enabled": true
+    });
+    if let Some(root) = repo_root {
+        opencode_entry["cwd"] = serde_json::json!(root.to_string_lossy().to_string());
+    }
+    if let Some(dir) = config_dir {
+        opencode_entry["environment"] = serde_json::json!({
+            "SAFESELECT_CONFIG_DIR": dir.to_string_lossy().to_string()
+        });
+    }
+
+    if upgrade {
+        let old_entry_name = old_entry_name.expect("upgrade requires the previous entry name");
+        match client {
+            "opencode" => {
+                replace_opencode_json(content, &opencode_entry, old_entry_name, entry_name)
+            }
+            "cursor" | "windsurf" | "codex" | "claude-code" => {
+                replace_mcp_json(content, &entry, old_entry_name, entry_name)
+            }
+            "copilot" | "gemini-cli" => {
+                replace_ini_entry(content, old_entry_name, entry_name, environment)
+            }
+            _ => Err(SafeselectError::Other(format!("Unknown client: {client}"))),
+        }
+    } else {
+        match client {
+            "opencode" => append_opencode_json(content, &opencode_entry, entry_name),
+            "cursor" | "windsurf" | "codex" | "claude-code" => {
+                append_mcp_json(content, &entry, entry_name)
+            }
+            "copilot" | "gemini-cli" => append_ini_entry(content, entry_name, environment),
+            _ => Err(SafeselectError::Other(format!("Unknown client: {client}"))),
+        }
+    }
+}
+
+fn write_config_and_verify(path: &Path, original: &str, updated: &str) -> Result<()> {
+    std::fs::write(path, updated)?;
+    if std::fs::read_to_string(path)? != updated {
+        std::fs::write(path, original)?;
+        return Err(SafeselectError::Other(
+            "Write verification failed, rolled back".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn create_opencode_config(path: &Path) -> Result<()> {
@@ -176,81 +215,81 @@ pub fn upgrade_entry(
 
     verify_permissions(&config_path)?;
 
-    let environment = match environment {
-        Some(env) => env.to_string(),
-        None => {
-            detect_entry_environment(client, &content, &resolved_entry_name)?.ok_or_else(|| {
-                SafeselectError::Other(format!(
-                "Cannot detect environment for entry '{resolved_entry_name}'; use --environment"
-            ))
-            })?
-        }
-    };
-    let target_entry_name = canonical_entry_name(repo_root, &environment)
-        .unwrap_or_else(|| resolved_entry_name.to_string());
+    let environment =
+        resolve_upgrade_environment(client, environment, &content, &resolved_entry_name)?;
+    let target_entry_name =
+        resolve_upgrade_entry_name(repo_root, &environment, &resolved_entry_name);
 
+    write_upgrade_config(
+        client,
+        &config_path,
+        &content,
+        &resolved_entry_name,
+        &target_entry_name,
+        &environment,
+        repo_root,
+        config_dir,
+        mcp_timeout_ms,
+    )?;
+
+    print_upgrade_result(client, &resolved_entry_name, &target_entry_name);
+    Ok(())
+}
+
+fn write_upgrade_config(
+    client: &str,
+    config_path: &Path,
+    content: &str,
+    resolved_entry_name: &str,
+    target_entry_name: &str,
+    environment: &str,
+    repo_root: Option<&Path>,
+    config_dir: Option<&Path>,
+    mcp_timeout_ms: u64,
+) -> Result<()> {
     let backup_path = config_path.with_extension("safeselect.bak");
-    std::fs::copy(&config_path, &backup_path)?;
+    std::fs::copy(config_path, &backup_path)?;
 
-    let entry = serde_json::json!({
-        "command": "safeselect",
-        "args": ["serve", "--environment", environment],
-        "timeout": mcp_timeout_ms
-    });
-
-    let mut opencode_entry = serde_json::json!({
-        "type": "local",
-        "command": ["safeselect", "serve", "--environment", environment],
-        "timeout": mcp_timeout_ms,
-        "enabled": true
-    });
-
-    if let Some(root) = repo_root {
-        opencode_entry["cwd"] = serde_json::json!(root.to_string_lossy().to_string());
-    }
-
-    if let Some(dir) = config_dir {
-        opencode_entry["environment"] = serde_json::json!({
-            "SAFESELECT_CONFIG_DIR": dir.to_string_lossy().to_string()
-        });
-    }
-
-    let new_content = match client {
-        "opencode" => replace_opencode_json(
-            &content,
-            &opencode_entry,
-            &resolved_entry_name,
-            &target_entry_name,
-        )?,
-        "cursor" | "windsurf" | "codex" | "claude-code" => {
-            replace_mcp_json(&content, &entry, &resolved_entry_name, &target_entry_name)?
-        }
-        "copilot" | "gemini-cli" => replace_ini_entry(
-            &content,
-            &resolved_entry_name,
-            &target_entry_name,
-            &environment,
-        )?,
-        _ => return Err(SafeselectError::Other(format!("Unknown client: {client}"))),
-    };
+    let new_content = build_entry_content(
+        client,
+        content,
+        target_entry_name,
+        environment,
+        repo_root,
+        config_dir,
+        mcp_timeout_ms,
+        true,
+        Some(resolved_entry_name),
+    )?;
 
     println!(
         "--- Config diff for {client} ({}) ---",
         config_path.display()
     );
-    show_diff(&content, &new_content);
+    show_diff(content, &new_content);
     println!("\nBackup saved to: {}", backup_path.display());
 
-    std::fs::write(&config_path, &new_content)?;
+    write_config_and_verify(config_path, content, &new_content)?;
+    Ok(())
+}
 
-    let verify = std::fs::read_to_string(&config_path)?;
-    if verify != new_content {
-        std::fs::write(&config_path, &content)?;
-        return Err(SafeselectError::Other(
-            "Write verification failed, rolled back".into(),
-        ));
+fn resolve_upgrade_environment(
+    client: &str,
+    environment: Option<&str>,
+    content: &str,
+    entry_name: &str,
+) -> Result<String> {
+    match environment {
+        Some(value) => Ok(value.to_owned()),
+        None => detect_entry_environment(client, content, entry_name)?.ok_or_else(|| {
+            SafeselectError::Other(format!(
+                "Cannot detect environment for entry '{entry_name}'; use --environment"
+            ))
+        }),
     }
+}
 
+fn print_upgrade_result(client: &str, resolved_entry_name: &str, target_entry_name: &str) {
     if target_entry_name == resolved_entry_name {
         println!("Entry '{resolved_entry_name}' upgraded for {client}");
     } else {
@@ -258,7 +297,14 @@ pub fn upgrade_entry(
             "Entry '{resolved_entry_name}' upgraded and renamed to '{target_entry_name}' for {client}"
         );
     }
-    Ok(())
+}
+
+fn resolve_upgrade_entry_name(
+    repo_root: Option<&Path>,
+    environment: &str,
+    resolved_entry_name: &str,
+) -> String {
+    canonical_entry_name(repo_root, environment).unwrap_or_else(|| resolved_entry_name.to_string())
 }
 
 pub fn uninstall_entry(client: &str, entry_name: &str, repo_root: Option<&Path>) -> Result<()> {
@@ -569,48 +615,49 @@ fn verify_permissions(path: &Path) -> Result<()> {
 /// Strip JSONC comments (// and /* */) from a string, preserving string contents.
 fn strip_jsonc_comments(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
-    let bytes = input.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        // string literal — copy verbatim
-        if bytes[i] == b'"' {
-            out.push('"');
-            i += 1;
-            while i < bytes.len() {
-                let c = bytes[i] as char;
-                out.push(c);
-                if c == '\\' && i + 1 < bytes.len() {
-                    i += 1;
-                    out.push(bytes[i] as char);
-                } else if c == '"' {
-                    i += 1;
-                    break;
-                }
-                i += 1;
-            }
-            continue;
+    let mut chars = input.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match (ch, chars.peek().copied()) {
+            ('"', _) => copy_json_string(&mut chars, &mut out),
+            ('/', Some('/')) => skip_line_comment(&mut chars),
+            ('/', Some('*')) => skip_block_comment(&mut chars),
+            _ => out.push(ch),
         }
-        // single-line comment
-        if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
-            i += 2;
-            while i < bytes.len() && bytes[i] != b'\n' {
-                i += 1;
-            }
-            continue;
-        }
-        // block comment
-        if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
-            i += 2;
-            while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
-                i += 1;
-            }
-            i += 2; // skip */
-            continue;
-        }
-        out.push(bytes[i] as char);
-        i += 1;
     }
     out
+}
+
+fn copy_json_string(chars: &mut std::iter::Peekable<std::str::Chars<'_>>, out: &mut String) {
+    out.push('"');
+    while let Some(ch) = chars.next() {
+        out.push(ch);
+        if ch == '\\' {
+            if let Some(escaped) = chars.next() {
+                out.push(escaped);
+            }
+        } else if ch == '"' {
+            break;
+        }
+    }
+}
+
+fn skip_line_comment(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
+    for ch in chars.by_ref() {
+        if ch == '\n' {
+            break;
+        }
+    }
+}
+
+fn skip_block_comment(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
+    chars.next();
+    let mut previous = ' ';
+    for ch in chars.by_ref() {
+        if previous == '*' && ch == '/' {
+            break;
+        }
+        previous = ch;
+    }
 }
 
 /// Parse a JSON or JSONC string into a serde_json::Value.
@@ -1317,6 +1364,92 @@ value = true
             2
         );
         assert!(candidate_entry_names("unknown", json, "demo", None).is_err());
+    }
+
+    #[test]
+    fn resolves_local_agent_config_paths_and_upgrade_targets() {
+        let root =
+            std::env::temp_dir().join(format!("safeselect-agent-paths-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let opencode = get_local_client_config("opencode", Some(&root)).unwrap();
+        assert!(opencode.exists());
+        let cursor = get_local_client_config("cursor", Some(&root)).unwrap();
+        assert!(cursor.exists());
+        std::fs::write(
+            &opencode,
+            serde_json::json!({"mcp":{"safe":{"type":"local","command":["safeselect"]}}})
+                .to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            candidate_upgrade_config_paths("opencode", Some(&root), true).unwrap(),
+            vec![opencode.clone()]
+        );
+        assert_eq!(
+            resolve_upgrade_config_path_for_name("opencode", "safe", Some(&root), true).unwrap(),
+            opencode
+        );
+        assert!(
+            resolve_upgrade_config_path_for_name("opencode", "missing", Some(&root), true).is_err()
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn covers_entry_builder_clients_and_selection_fallbacks() {
+        let root =
+            std::env::temp_dir().join(format!("safeselect-agent-builder-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let content = r#"{"mcpServers":{}}"#;
+        for client in [
+            "opencode",
+            "cursor",
+            "windsurf",
+            "codex",
+            "claude-code",
+            "copilot",
+            "gemini-cli",
+            "unknown",
+        ] {
+            let _ = build_entry_content(
+                client,
+                content,
+                "entry",
+                "dev",
+                Some(&root),
+                None,
+                1000,
+                false,
+                None,
+            );
+            let _ = build_entry_content(
+                client,
+                content,
+                "entry-new",
+                "dev",
+                Some(&root),
+                None,
+                1000,
+                true,
+                Some("entry"),
+            );
+        }
+        let _ = select_install_config("cursor", None, false);
+        let _ = select_install_config("cursor", Some(&root), false);
+        let config = get_local_client_config("cursor", Some(&root)).unwrap();
+        std::fs::write(&config, r#"{"mcpServers":{}}"#).unwrap();
+        install_entry("cursor", "dev", "entry", Some(&root), None, 1000, true).unwrap();
+        upgrade_entry(
+            "cursor",
+            Some("entry"),
+            Some("dev"),
+            Some(&root),
+            None,
+            1000,
+            true,
+        )
+        .unwrap();
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
