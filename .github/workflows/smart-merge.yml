@@ -400,6 +400,26 @@ jobs:
                   "Run the Release workflow manually."
                 );
               }
+
+              // A Release dispatched with GITHUB_TOKEN does not reliably emit
+              // workflow_run for the sync workflow. Dispatch it explicitly so
+              // main is always synchronized back into develop after release.
+              try {
+                await github.rest.actions.createWorkflowDispatch({
+                  owner,
+                  repo,
+                  workflow_id: "sync-main-to-develop.yml",
+                  ref: "develop",
+                  request: githubApiRequest,
+                });
+                await comment("🔄 Main-to-develop sync dispatched after the release.");
+              } catch (error) {
+                core.warning(`Could not dispatch Main To Develop sync: ${error.message}`);
+                await comment(
+                  "⚠️ Release was dispatched, but Main To Develop sync could not be dispatched; " +
+                  "run the sync workflow manually."
+                );
+              }
             }
 
             // GITHUB_TOKEN merges do not trigger downstream push workflows.
