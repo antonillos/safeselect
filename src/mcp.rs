@@ -2822,25 +2822,23 @@ impl McpServer {
     }
 
     fn is_backend_ready_for_query(&self, ssh: &crate::config::SshConfig, url: &str) -> bool {
-        match self.backend.kind {
-            crate::backend::BackendKind::Jdbc => is_ssh_ready_for_query(ssh, url),
-            crate::backend::BackendKind::Document => {
-                let bastion_host = ssh.host.as_deref().unwrap_or("");
-                let bastion_port = ssh.port.unwrap_or(22);
-                if !crate::check_tcp_endpoint(
-                    bastion_host,
-                    bastion_port,
-                    std::time::Duration::from_secs(3),
-                ) {
-                    return false;
-                }
-                crate::extract_tcp_host_port(url)
-                    .map(|(host, port)| {
-                        crate::check_tcp_endpoint(&host, port, std::time::Duration::from_secs(3))
-                    })
-                    .unwrap_or(false)
-            }
+        if self.backend.kind == crate::backend::BackendKind::Jdbc {
+            is_ssh_ready_for_query(ssh, url)
+        } else {
+            Self::is_document_backend_ready(ssh, url)
         }
+    }
+
+    fn is_document_backend_ready(ssh: &crate::config::SshConfig, url: &str) -> bool {
+        let bastion_host = ssh.host.as_deref().unwrap_or("");
+        let bastion_port = ssh.port.unwrap_or(22);
+        crate::check_tcp_endpoint(
+            bastion_host,
+            bastion_port,
+            std::time::Duration::from_secs(3),
+        ) && crate::extract_tcp_host_port(url).is_some_and(|(host, port)| {
+            crate::check_tcp_endpoint(&host, port, std::time::Duration::from_secs(3))
+        })
     }
 
     fn restart_sidecar(&mut self) -> Result<()> {
@@ -5294,6 +5292,50 @@ mod tests {
         assert!(!is_recoverable_connection_error("syntax error"));
     }
 
+    #[test]
+    fn covers_connection_lifecycle_error_paths_without_backend() {
+        let repo_root = std::env::temp_dir().join(format!(
+            "safeselect-mcp-lifecycle-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&repo_root).unwrap();
+        let mut server = test_server(&repo_root);
+
+        server
+            .handle_disconnect(Some(serde_json::json!(1)))
+            .unwrap();
+        server.handle_connect(Some(serde_json::json!(2))).unwrap();
+        server.handle_reconnect(Some(serde_json::json!(3))).unwrap();
+        let _ = server.handle_list_databases(Some(serde_json::json!(4)));
+
+        std::fs::remove_dir_all(repo_root).unwrap();
+    }
+
+    #[test]
+    fn covers_catalog_and_configuration_rejection_paths() {
+        let repo_root = std::env::temp_dir().join(format!(
+            "safeselect-mcp-rejection-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&repo_root).unwrap();
+        let mut server = test_server(&repo_root);
+        let empty = serde_json::json!({});
+        let _ = server.handle_list_tables(Some(serde_json::json!(1)), &empty);
+        let _ = server.handle_describe_table(Some(serde_json::json!(2)), &empty);
+        let _ = server.handle_explain(Some(serde_json::json!(3)), &empty);
+        let _ = server.handle_config_rename_environment(Some(serde_json::json!(4)), &empty);
+        let _ = server.handle_uninstall(Some(serde_json::json!(5)), &empty);
+        std::fs::create_dir_all(repo_root.join(".safeselect/environments")).unwrap();
+        std::fs::write(
+            repo_root.join(".safeselect/environments/test.toml"),
+            "version = 1\n[database]\nkind = \"document\"\nurl = \"mongodb://127.0.0.1:1/app\"\n",
+        )
+        .unwrap();
+        server.backend.kind = crate::backend::BackendKind::Document;
+        let _ = server.handle_check(Some(serde_json::json!(6)));
+        std::fs::remove_dir_all(repo_root).unwrap();
+    }
+
     fn response_json(response: &JsonRpcResponse) -> serde_json::Value {
         serde_json::to_value(response).unwrap()
     }
@@ -5434,6 +5476,79 @@ mod tests {
             .unwrap();
         server
             .handle_get_collection_stats(id, &serde_json::json!({}))
+            .unwrap();
+        std::fs::remove_dir_all(repo_root).unwrap();
+    }
+
+    #[test]
+    fn covers_mcp_metadata_and_agent_status_paths() {
+        let repo_root =
+            std::env::temp_dir().join(format!("safeselect-mcp-meta-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&repo_root).unwrap();
+        let mut server = test_server(&repo_root);
+        server
+            .handle_database_info(Some(serde_json::json!(1)))
+            .unwrap();
+        server
+            .handle_audit_recent(Some(serde_json::json!(2)), &serde_json::json!({}))
+            .unwrap();
+        server
+            .handle_audit_recent(Some(serde_json::json!(3)), &serde_json::json!({"limit": 0}))
+            .unwrap();
+        server
+            .handle_audit_recent(Some(serde_json::json!(4)), &serde_json::json!({"limit": 2}))
+            .unwrap();
+        server
+            .handle_driver_list(Some(serde_json::json!(5)))
+            .unwrap();
+        server
+            .handle_agent_detect(Some(serde_json::json!(6)))
+            .unwrap();
+        server
+            .handle_agent_status(Some(serde_json::json!(7)))
+            .unwrap();
+        std::fs::remove_dir_all(repo_root).unwrap();
+    }
+
+    #[test]
+    fn covers_missing_argument_validation_for_mcp_tools() {
+        let repo_root =
+            std::env::temp_dir().join(format!("safeselect-mcp-missing-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&repo_root).unwrap();
+        let mut server = test_server(&repo_root);
+        let args = serde_json::json!({});
+        server
+            .handle_find_documents(Some(serde_json::json!(1)), &args)
+            .unwrap();
+        server
+            .handle_generate_document_fixture(Some(serde_json::json!(2)), &args)
+            .unwrap();
+        server
+            .handle_config_validate(Some(serde_json::json!(3)), &args)
+            .unwrap();
+        server
+            .handle_config_show(Some(serde_json::json!(4)), &args)
+            .unwrap();
+        server
+            .handle_config_delete_environment(Some(serde_json::json!(5)), &args)
+            .unwrap();
+        server
+            .handle_config_set_password(Some(serde_json::json!(6)), &args)
+            .unwrap();
+        server
+            .handle_config_reset(Some(serde_json::json!(7)), &args)
+            .unwrap();
+        server
+            .handle_driver_add(Some(serde_json::json!(8)), &args)
+            .unwrap();
+        server
+            .handle_driver_download(Some(serde_json::json!(9)), &args)
+            .unwrap();
+        server
+            .handle_agent_install(Some(serde_json::json!(10)), &args)
+            .unwrap();
+        server
+            .handle_agent_uninstall(Some(serde_json::json!(11)), &args)
             .unwrap();
         std::fs::remove_dir_all(repo_root).unwrap();
     }
