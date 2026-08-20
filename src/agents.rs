@@ -892,7 +892,14 @@ fn candidate_upgrade_config_paths(
             paths.push(local_path);
         }
     }
-    paths.push(get_client_config(client)?);
+    // A project-local config is a valid standalone target. Do not require the
+    // client to be installed globally when collecting upgrade candidates.
+    match get_client_config(client) {
+        Ok(global_path) => paths.push(global_path),
+        Err(SafeselectError::Other(message))
+            if message == format!("{client} not found on this system") => {}
+        Err(error) => return Err(error),
+    }
     paths.sort();
     paths.dedup();
     Ok(paths)
@@ -1385,6 +1392,8 @@ value = true
             candidate_upgrade_config_paths("opencode", Some(&root), true).unwrap(),
             vec![opencode.clone()]
         );
+        let candidates = candidate_upgrade_config_paths("opencode", Some(&root), false).unwrap();
+        assert!(candidates.contains(&opencode));
         assert_eq!(
             resolve_upgrade_config_path_for_name("opencode", "safe", Some(&root), true).unwrap(),
             opencode
