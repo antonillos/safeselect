@@ -5151,18 +5151,21 @@ fn document_backend_error_next_suggestion(message: &str) -> &'static str {
     let lower = message.to_ascii_lowercase();
     if lower.contains("timeout") || lower.contains("timed out") {
         "Call explain_documents with the same database, collection, and filter; then retry once with a narrower filter while preserving every existing restriction."
-    } else if (lower.contains("field") || lower.contains("path"))
-        && (lower.contains("unknown")
-            || lower.contains("not found")
-            || lower.contains("does not exist")
-            || lower.contains("unrecognized"))
-    {
+    } else if is_unknown_document_field_error(&lower) {
         "Call discover_document_schema for the same database and collection, then retry once using only observed fields and declarative MQL operators."
     } else if is_recoverable_connection_error(message) {
         "Call check now; call reconnect once only if check identifies a stale connection, otherwise report the connection failure."
     } else {
         "Stop and report this document database error to the user; no unchanged retry is safe."
     }
+}
+
+fn is_unknown_document_field_error(message: &str) -> bool {
+    (message.contains("field") || message.contains("path"))
+        && (message.contains("unknown")
+            || message.contains("not found")
+            || message.contains("does not exist")
+            || message.contains("unrecognized"))
 }
 
 fn build_explain_sql(sql: &str, args: &serde_json::Value) -> std::result::Result<String, String> {
@@ -5466,6 +5469,9 @@ mod tests {
         server.handle_get_table_stats(id.clone(), &invalid).unwrap();
         server.handle_list_triggers(id.clone(), &invalid).unwrap();
         server.handle_list_scheduled_jobs(id, &invalid).unwrap();
+        server
+            .handle_list_scheduled_jobs(Some(serde_json::json!(7)), &serde_json::json!({}))
+            .unwrap();
         let id = Some(serde_json::json!(2));
         server.handle_list_functions(id.clone(), &invalid).unwrap();
         server
@@ -6302,8 +6308,18 @@ services:
         assert!(
             document_backend_error_next_suggestion("query timed out").contains("explain_documents")
         );
+        assert!(document_backend_error_next_suggestion("request timed out")
+            .contains("explain_documents"));
         assert!(document_backend_error_next_suggestion("unknown field name")
             .contains("discover_document_schema"));
+        for message in [
+            "field not found",
+            "path does not exist",
+            "unrecognized field",
+        ] {
+            assert!(document_backend_error_next_suggestion(message)
+                .contains("discover_document_schema"));
+        }
         assert!(document_backend_error_next_suggestion("connection refused").contains("check"));
         assert!(document_backend_error_next_suggestion("invalid operator").contains("Stop"));
     }

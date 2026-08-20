@@ -268,23 +268,19 @@ impl SidecarProcess {
         let mut ack = String::new();
         self.reader.read_line(&mut ack)?;
         if ack.is_empty() {
-            let stderr = self.read_stderr();
-            let detail = if stderr.is_empty() {
-                String::new()
-            } else {
-                format!(": {stderr}")
-            };
-            return Err(SafeselectError::Sidecar(format!(
-                "sidecar process terminated during startup — {backend} backend connection failed{detail}"
-            )));
+            return Err(self.startup_connection_error(backend));
         }
-        let ack = ack.trim();
-        if ack != "ready" {
-            return Err(SafeselectError::Sidecar(format!(
-                "sidecar password rejected: {ack}"
-            )));
-        }
-        Ok(())
+        validate_sidecar_ack(ack.trim())
+    }
+
+    fn startup_connection_error(&mut self, backend: &str) -> SafeselectError {
+        let stderr = self.read_stderr();
+        let detail = (!stderr.is_empty())
+            .then(|| format!(": {stderr}"))
+            .unwrap_or_default();
+        SafeselectError::Sidecar(format!(
+            "sidecar process terminated during startup — {backend} backend connection failed{detail}"
+        ))
     }
 
     fn read_stderr(&mut self) -> String {
@@ -771,6 +767,16 @@ impl SidecarProcess {
         tracing::warn!("Force killing sidecar process (PID: {})", self.child.id());
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+fn validate_sidecar_ack(ack: &str) -> Result<()> {
+    if ack == "ready" {
+        Ok(())
+    } else {
+        Err(SafeselectError::Sidecar(format!(
+            "sidecar password rejected: {ack}"
+        )))
     }
 }
 

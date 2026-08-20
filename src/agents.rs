@@ -1385,6 +1385,8 @@ value = true
             candidate_upgrade_config_paths("opencode", Some(&root), true).unwrap(),
             vec![opencode.clone()]
         );
+        let candidates = candidate_upgrade_config_paths("opencode", Some(&root), false).unwrap();
+        assert!(candidates.contains(&opencode));
         assert_eq!(
             resolve_upgrade_config_path_for_name("opencode", "safe", Some(&root), true).unwrap(),
             opencode

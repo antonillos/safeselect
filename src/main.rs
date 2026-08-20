@@ -547,17 +547,7 @@ where
     F: FnOnce(&str, &str) -> Result<()>,
 {
     let dir = resolve_project_dir(loader, project)?;
-    let env_file = environment_config_file(&dir, &environment);
-    if !env_file.exists() {
-        return Err(SafeselectError::EnvironmentNotFound(
-            environment,
-            env_file.display().to_string(),
-        ));
-    }
-
-    let content = std::fs::read_to_string(&env_file)?;
-    let mut env_config: config::EnvironmentConfig = toml::from_str(&content)
-        .map_err(|e| SafeselectError::Config(format!("invalid {}: {e}", env_file.display())))?;
+    let (env_file, mut env_config) = load_ssh_environment_config(&dir, &environment)?;
     let ssh = env_config.ssh.as_mut().ok_or_else(|| {
         SafeselectError::Config(format!(
             "environment '{environment}' has no SSH configuration"
@@ -567,12 +557,7 @@ where
         .secret_account
         .clone()
         .unwrap_or_else(|| format!("{}/{environment}/ssh", project_display_name(&dir)));
-    let password = password.map(Ok).unwrap_or_else(|| {
-        inquire::Password::new(&format!("SSH password for '{account}'"))
-            .without_confirmation()
-            .prompt()
-            .map_err(|e| SafeselectError::Other(format!("Failed to read SSH password: {e}")))
-    })?;
+    let password = resolve_ssh_password(password, &account)?;
 
     store_password(&account, &password)?;
     ssh.secret_account = Some(account.clone());
@@ -585,6 +570,32 @@ where
     println!("  ✓ Updated {}", env_file.display());
     println!("\nDone. Run: safeselect check --environment {environment}");
     Ok(())
+}
+
+fn load_ssh_environment_config(
+    dir: &Path,
+    environment: &str,
+) -> Result<(PathBuf, config::EnvironmentConfig)> {
+    let env_file = environment_config_file(dir, environment);
+    if !env_file.exists() {
+        return Err(SafeselectError::EnvironmentNotFound(
+            environment.to_string(),
+            env_file.display().to_string(),
+        ));
+    }
+    let content = std::fs::read_to_string(&env_file)?;
+    let env_config = toml::from_str(&content)
+        .map_err(|e| SafeselectError::Config(format!("invalid {}: {e}", env_file.display())))?;
+    Ok((env_file, env_config))
+}
+
+fn resolve_ssh_password(password: Option<String>, account: &str) -> Result<String> {
+    password.map(Ok).unwrap_or_else(|| {
+        inquire::Password::new(&format!("SSH password for '{account}'"))
+            .without_confirmation()
+            .prompt()
+            .map_err(|e| SafeselectError::Other(format!("Failed to read SSH password: {e}")))
+    })
 }
 
 fn environment_config_file(project: &Path, environment: &str) -> PathBuf {
@@ -5106,6 +5117,29 @@ username = "usr_app"
         assert_eq!(
             build_ssh_command(&config, "postgresql://db").as_deref(),
             Some("ssh -L 127.0.0.1:15433:db.internal:5432 user@bastion")
+        );
+    }
+
+    #[test]
+    fn builds_ssh_command_without_optional_port_or_identity() {
+        let config = config::SshConfig {
+            enabled: true,
+            bastion: None,
+            host: Some("bastion".into()),
+            username: Some("user".into()),
+            port: None,
+            secret_account: None,
+            identity_file: None,
+            known_hosts: None,
+            forward_host: Some("db.internal".into()),
+            forward_port: Some(5432),
+            local_host: None,
+            local_port: None,
+            auth_type: None,
+        };
+        assert_eq!(
+            build_ssh_command(&config, "postgresql://db").as_deref(),
+            Some("ssh -L localhost:15432:db.internal:5432 user@bastion")
         );
     }
 

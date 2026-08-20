@@ -466,14 +466,18 @@ impl SecurityEngine {
             )));
         }
 
+        self.validate_system_policy(trimmed)
+    }
+
+    fn validate_system_policy(&self, sql: &str) -> Result<()> {
         if self.policy.require_single_statement {
-            self.check_single_statement(trimmed)?;
+            self.check_single_statement(sql)?;
         }
 
-        self.check_read_only(trimmed)?;
+        self.check_read_only(sql)?;
 
         if !self.policy.denied_relations.is_empty() {
-            self.check_denied_relations(trimmed)?;
+            self.check_denied_relations(sql)?;
         }
 
         Ok(())
@@ -1315,32 +1319,39 @@ fn extract_explain_target(sql: &str) -> Option<&str> {
 
     let after_explain = trimmed.get(7..)?.trim_start();
     if after_explain.starts_with('(') {
-        let mut depth = 0usize;
-        for (idx, ch) in after_explain.char_indices() {
-            match ch {
-                '(' => depth += 1,
-                ')' => {
-                    depth = depth.saturating_sub(1);
-                    if depth == 0 {
-                        return after_explain.get(idx + 1..).map(str::trim_start);
-                    }
-                }
-                _ => {}
-            }
-        }
-        return None;
+        return extract_parenthesized_explain_target(after_explain);
     }
 
-    let upper_after_explain = after_explain.to_uppercase();
+    Some(strip_explain_option_prefix(after_explain).unwrap_or(after_explain))
+}
+
+fn extract_parenthesized_explain_target(sql: &str) -> Option<&str> {
+    let mut depth = 0usize;
+    for (idx, ch) in sql.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return sql.get(idx + 1..).map(str::trim_start);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn strip_explain_option_prefix(sql: &str) -> Option<&str> {
+    let upper = sql.to_uppercase();
     for option in [
         "ANALYZE", "VERBOSE", "BUFFERS", "SETTINGS", "WAL", "TIMING", "SUMMARY",
     ] {
-        if upper_after_explain.starts_with(option) {
-            return after_explain.get(option.len()..).map(str::trim_start);
+        if upper.starts_with(option) {
+            return sql.get(option.len()..).map(str::trim_start);
         }
     }
-
-    Some(after_explain)
+    None
 }
 
 #[cfg(test)]
@@ -1970,9 +1981,24 @@ mod tests {
             Some("SELECT 1")
         );
         assert_eq!(
+            extract_explain_target("EXPLAIN () SELECT 1"),
+            Some("SELECT 1")
+        );
+        assert_eq!(
             extract_explain_target("EXPLAIN ANALYZE SELECT 1"),
             Some("SELECT 1")
         );
+        assert_eq!(
+            extract_explain_target("EXPLAIN SUMMARY SELECT 1"),
+            Some("SELECT 1")
+        );
+        for option in ["VERBOSE", "BUFFERS", "SETTINGS", "WAL", "TIMING"] {
+            assert_eq!(
+                extract_explain_target(&format!("EXPLAIN {option} SELECT 1")),
+                Some("SELECT 1")
+            );
+        }
+        assert_eq!(extract_explain_target("EXPLAIN select 1"), Some("select 1"));
         assert_eq!(extract_explain_target("SELECT 1"), None);
         assert_eq!(extract_explain_target("EXPLAIN (ANALYZE SELECT 1"), None);
     }
@@ -2076,7 +2102,27 @@ mod tests {
         assert!(engine
             .validate_system("SELECT * FROM information_schema.tables")
             .is_ok());
+        assert!(engine.validate_system("SELECT 1").is_ok());
         assert!(engine.validate_system("").is_err());
         assert!(engine.validate_system("DROP TABLE users").is_err());
+    }
+
+    #[test]
+    fn validates_system_single_statement_and_denied_relation_policies() {
+        let policy = SecurityPolicy {
+            require_single_statement: true,
+            denied_relations: vec!["public.secrets".into()],
+            ..SecurityPolicy::default()
+        };
+        let engine = SecurityEngine::new(policy, LimitsConfig::default());
+        assert!(engine
+            .validate_system("SELECT * FROM information_schema.tables")
+            .is_ok());
+        assert!(engine.validate_system("SELECT 1; SELECT 2").is_err());
+        assert!(engine
+            .validate_system("SELECT * FROM public.secrets")
+            .is_err());
+        let oversized = "x".repeat(MAX_SQL_BYTES + 1);
+        assert!(engine.validate_system(&oversized).is_err());
     }
 }
