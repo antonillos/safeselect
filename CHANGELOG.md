@@ -2,6 +2,40 @@
 
 All notable changes to this project are documented in this file.
 
+## [v0.7.2] - 2026-08-20
+
+### Fixed
+
+- fix(ci): dispatch releases after smart merge (#99)
+- fix: refresh CRAP badge after smart merge (#110)
+- fix: align CRAP coverage across platforms (#113)
+
+### Build And CI
+
+- ci: clean up integration test warnings (#101)
+- test(postgres): cover stacked query attacks (#102)
+- test(postgres): enforce least-privilege fixtures (#103)
+- test(mcp): add negative validation pack (#104)
+- ci: add report-only CRAP analysis (#105)
+- test: expand setup server coverage (#108)
+- test: cover MCP compose handler and publish CRAP badge (#109)
+- test: reduce near-threshold CRAP warnings (#111)
+- test: cover low-complexity CRAP findings (#114)
+- test: deepen CRAP coverage (#115)
+- test: expand second CRAP reduction batch (#117)
+- chore: remove obsolete asdf plugin scripts (#118)
+
+### Dependencies
+
+- chore(deps): bump uuid from 1.24.0 to 1.24.1 (#98)
+
+### Other
+
+- refactor: reduce CRAP technical debt (#106)
+- refactor: continue CRAP debt reduction (#107)
+- refactor: bring CRAP warnings below 200 (#112)
+- refactor: continue CRAP reduction (#116)
+
 ## [v0.7.1] - 2026-08-18
 
 ### Added
