@@ -800,7 +800,15 @@ fn java_major_version(version_output: &str) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{java_major_version, SidecarProcess};
+    use super::{format_elapsed, java_major_version, SidecarProcess};
+
+    #[test]
+    fn formats_elapsed_time_consistently() {
+        assert_eq!(format_elapsed(12), "12ms");
+        assert_eq!(format_elapsed(1_200), "1.2s");
+        assert_eq!(format_elapsed(60_000), "1m");
+        assert_eq!(format_elapsed(61_000), "1m 1s");
+    }
 
     #[test]
     fn parses_modern_java_versions() {
