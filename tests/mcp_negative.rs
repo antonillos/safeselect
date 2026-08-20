@@ -1,0 +1,254 @@
+use std::io::{BufRead, BufReader, Write};
+use std::path::PathBuf;
+use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
+use std::time::{Duration, Instant};
+
+struct McpHarness {
+    child: Child,
+    stdin: ChildStdin,
+    stdout: BufReader<ChildStdout>,
+    stderr: ChildStderr,
+}
+
+impl McpHarness {
+    fn start() -> (Self, PathBuf) {
+        let tmp =
+            std::env::temp_dir().join(format!("safeselect-mcp-negative-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let repo_root = tmp.join("repo");
+        let safeselect_dir = repo_root.join(".safeselect");
+        let environment_dir = safeselect_dir.join("environments");
+        let config_dir = tmp.join("config");
+        let driver_dir = config_dir.join("drivers");
+        let audit_dir = tmp.join("audit");
+        std::fs::create_dir_all(&environment_dir).unwrap();
+        std::fs::create_dir_all(&driver_dir).unwrap();
+
+        std::fs::write(
+            safeselect_dir.join("project.toml"),
+            format!(
+                r#"
+version = 1
+display_name = "MCP Negative Validation"
+
+[security]
+require_single_statement = true
+
+[audit]
+enabled = true
+directory = "{}"
+max_file_bytes = 1000000
+retain_files = 2
+"#,
+                audit_dir.display()
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            environment_dir.join("testing.toml"),
+            r#"
+version = 1
+
+[database]
+kind = "jdbc"
+vendor = "postgresql"
+driver = "postgresql"
+url = "jdbc:postgresql://127.0.0.1:1/unused"
+username = "unused"
+
+[database.secret]
+source = "env"
+variable = "SAFESELECT_MCP_NEGATIVE_TEST_PASSWORD"
+"#,
+        )
+        .unwrap();
+
+        let jar_path = tmp.join("unused.jar");
+        std::fs::write(&jar_path, []).unwrap();
+        std::fs::write(
+            driver_dir.join("postgresql.toml"),
+            format!(
+                r#"
+version = 1
+vendor = "postgresql"
+path = "{}"
+class = "org.postgresql.Driver"
+sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+"#,
+                jar_path.display()
+            ),
+        )
+        .unwrap();
+
+        let mut child = Command::new(safeselect_bin())
+            .args([
+                "serve",
+                "--project",
+                repo_root.to_str().unwrap(),
+                "--environment",
+                "testing",
+            ])
+            .env("SAFESELECT_CONFIG_DIR", &config_dir)
+            .env("SAFESELECT_MCP_NEGATIVE_TEST_PASSWORD", "unused")
+            .env("NO_COLOR", "1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to start MCP server");
+
+        (
+            Self {
+                stdin: child.stdin.take().unwrap(),
+                stdout: BufReader::new(child.stdout.take().unwrap()),
+                stderr: child.stderr.take().unwrap(),
+                child,
+            },
+            tmp,
+        )
+    }
+
+    fn send(&mut self, request: &serde_json::Value) -> serde_json::Value {
+        self.send_raw(&request.to_string())
+    }
+
+    fn send_raw(&mut self, request: &str) -> serde_json::Value {
+        writeln!(self.stdin, "{request}").unwrap();
+        self.stdin.flush().unwrap();
+        let mut line = String::new();
+        self.stdout.read_line(&mut line).unwrap();
+        if line.is_empty() {
+            let mut stderr = String::new();
+            std::io::Read::read_to_string(&mut self.stderr, &mut stderr).unwrap();
+            panic!("MCP server closed stdout before responding\nstderr:\n{stderr}");
+        }
+        serde_json::from_str(&line).expect("stdout must contain JSON-RPC only")
+    }
+
+    fn finish(mut self) -> String {
+        drop(self.stdin);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while self.child.try_wait().unwrap().is_none() {
+            assert!(
+                Instant::now() < deadline,
+                "MCP server did not exit after EOF"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let mut stderr = String::new();
+        std::io::Read::read_to_string(&mut self.stderr, &mut stderr).unwrap();
+        stderr
+    }
+}
+
+fn safeselect_bin() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_safeselect"))
+}
+
+fn assert_error(response: &serde_json::Value, id: serde_json::Value, code: i64) {
+    assert_eq!(
+        response["jsonrpc"], "2.0",
+        "invalid JSON-RPC response: {response}"
+    );
+    assert_eq!(response["id"], id, "response id mismatch: {response}");
+    assert_eq!(
+        response["error"]["code"], code,
+        "unexpected response: {response}"
+    );
+    assert!(
+        response["error"]["data"]["next_suggestion"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty()),
+        "error must contain safe next-step guidance: {response}"
+    );
+}
+
+#[test]
+fn mcp_negative_validation_preserves_jsonrpc_and_recovers_until_eof() {
+    let (mut mcp, tmp) = McpHarness::start();
+    let secret = "never-echo-this-secret";
+    let deep_argument = serde_json::json!({"nested": [vec!["x"; 256]]});
+    let large_payload = "x".repeat(256 * 1024);
+    let malformed = mcp.send_raw("{\"jsonrpc\":\"2.0\",\"id\":0");
+    assert_error(&malformed, serde_json::Value::Null, -32700);
+
+    let cases = [
+        (
+            serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": 42}),
+            serde_json::Value::Null,
+            -32700,
+        ),
+        (
+            serde_json::json!({"jsonrpc": "2.0", "id": 2}),
+            serde_json::json!(2),
+            -32600,
+        ),
+        (
+            serde_json::json!({"jsonrpc": "1.0", "id": 3, "method": "tools/list"}),
+            serde_json::json!(3),
+            -32600,
+        ),
+        (
+            serde_json::json!({"jsonrpc": "2.0", "id": 4, "method": "not/real", "extra": true}),
+            serde_json::json!(4),
+            -32601,
+        ),
+        (
+            serde_json::json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call"}),
+            serde_json::json!(5),
+            -32602,
+        ),
+        (
+            serde_json::json!({"jsonrpc": "2.0", "id": 6, "method": "tools/call", "params": {"name": "not_real", "arguments": null}}),
+            serde_json::json!(6),
+            -32602,
+        ),
+    ];
+
+    for (request, id, code) in cases {
+        let response = mcp.send(&request);
+        assert_error(&response, id, code);
+        assert!(
+            !response.to_string().contains(secret),
+            "error response leaked test secret: {response}"
+        );
+    }
+
+    let response = mcp.send(&serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "tools/list",
+        "params": deep_argument,
+        "extra": secret,
+    }));
+    assert_eq!(response["jsonrpc"], "2.0");
+    assert_eq!(response["id"], 7);
+    assert!(
+        response["result"]["tools"].is_array(),
+        "unexpected response: {response}"
+    );
+    assert!(
+        !response.to_string().contains(secret),
+        "successful response leaked unknown payload data: {response}"
+    );
+
+    let response = mcp.send(&serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 8,
+        "method": "tools/list",
+        "extra": large_payload,
+    }));
+    assert_eq!(response["jsonrpc"], "2.0");
+    assert_eq!(response["id"], 8);
+    assert!(
+        response["result"]["tools"].is_array(),
+        "large unknown frame did not recover safely: {response}"
+    );
+
+    let stderr = mcp.finish();
+    assert!(
+        !stderr.contains(secret),
+        "stderr leaked unknown request payload: {stderr}"
+    );
+    let _ = std::fs::remove_dir_all(tmp);
+}

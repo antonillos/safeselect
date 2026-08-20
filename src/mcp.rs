@@ -324,10 +324,11 @@ impl McpServer {
                 }
             };
 
-            let method = match msg.method.as_deref() {
-                Some(m) => m,
-                None => continue,
-            };
+            if msg.jsonrpc.as_deref() != Some("2.0") || msg.method.is_none() {
+                self.send_error(msg.id.clone(), -32600, "Invalid Request")?;
+                continue;
+            }
+            let method = msg.method.as_deref().expect("validated above");
 
             match method {
                 "initialize" => self.handle_initialize(&msg)?,
@@ -4324,7 +4325,15 @@ fn tool_error_response(
 
 pub fn run_setup_server(repo_root: &Path) -> Result<()> {
     let stdin = std::io::stdin();
-    let mut reader = BufReader::new(stdin.lock());
+    let stdout = std::io::stdout();
+    run_setup_server_with_io(repo_root, BufReader::new(stdin.lock()), stdout.lock())
+}
+
+fn run_setup_server_with_io<R: BufRead, W: Write>(
+    repo_root: &Path,
+    mut reader: R,
+    mut writer: W,
+) -> Result<()> {
     let mut line = String::new();
 
     loop {
@@ -4343,7 +4352,7 @@ pub fn run_setup_server(repo_root: &Path) -> Result<()> {
             Ok(m) => m,
             Err(_) => {
                 let resp = parse_error_response();
-                write_setup_response(&resp)?;
+                write_setup_response_to(&mut writer, &resp)?;
                 continue;
             }
         };
@@ -4379,7 +4388,7 @@ pub fn run_setup_server(repo_root: &Path) -> Result<()> {
                     })),
                     error: None,
                 };
-                write_setup_response(&resp)?;
+                write_setup_response_to(&mut writer, &resp)?;
             }
             "tools/list" => {
                 let tools = vec![
@@ -4438,7 +4447,7 @@ pub fn run_setup_server(repo_root: &Path) -> Result<()> {
                     result: Some(serde_json::json!({ "tools": tools })),
                     error: None,
                 };
-                write_setup_response(&resp)?;
+                write_setup_response_to(&mut writer, &resp)?;
             }
             "tools/call" => {
                 let params = match msg.params.as_ref() {
@@ -4456,7 +4465,7 @@ pub fn run_setup_server(repo_root: &Path) -> Result<()> {
                                 })),
                             }),
                         };
-                        write_setup_response(&resp)?;
+                        write_setup_response_to(&mut writer, &resp)?;
                         continue;
                     }
                 };
@@ -4476,7 +4485,7 @@ pub fn run_setup_server(repo_root: &Path) -> Result<()> {
                                 })),
                             }),
                         };
-                        write_setup_response(&resp)?;
+                        write_setup_response_to(&mut writer, &resp)?;
                         continue;
                     }
                 };
@@ -4506,7 +4515,7 @@ pub fn run_setup_server(repo_root: &Path) -> Result<()> {
                                         "No PostgreSQL services found in docker-compose files.".into(),
                                         "Stop and ask the user for the correct compose scan path; do not repeat the same scan unchanged.",
                                     );
-                                    write_setup_response(&resp)?;
+                                    write_setup_response_to(&mut writer, &resp)?;
                                 } else {
                                     let project_name = scan_path
                                         .file_name()
@@ -4525,7 +4534,7 @@ pub fn run_setup_server(repo_root: &Path) -> Result<()> {
                                                 text,
                                                 "Review the discovered settings, complete any indicated secret setup, then call config_validate.",
                                             );
-                                            write_setup_response(&resp)?;
+                                            write_setup_response_to(&mut writer, &resp)?;
                                         }
                                         Err(e) => {
                                             let resp = JsonRpcResponse {
@@ -4540,7 +4549,7 @@ pub fn run_setup_server(repo_root: &Path) -> Result<()> {
                                                     })),
                                                 }),
                                             };
-                                            write_setup_response(&resp)?;
+                                            write_setup_response_to(&mut writer, &resp)?;
                                         }
                                     }
                                 }
@@ -4558,7 +4567,7 @@ pub fn run_setup_server(repo_root: &Path) -> Result<()> {
                                         })),
                                     }),
                                 };
-                                write_setup_response(&resp)?;
+                                write_setup_response_to(&mut writer, &resp)?;
                             }
                         }
                     }
@@ -4583,7 +4592,7 @@ pub fn run_setup_server(repo_root: &Path) -> Result<()> {
                                         })),
                                     }),
                                 };
-                                write_setup_response(&resp)?;
+                                write_setup_response_to(&mut writer, &resp)?;
                                 continue;
                             }
                         };
@@ -4624,7 +4633,7 @@ pub fn run_setup_server(repo_root: &Path) -> Result<()> {
                             text,
                             "Call config_validate for a remaining environment, or stop if deletion completed the user’s request.",
                         );
-                        write_setup_response(&resp)?;
+                        write_setup_response_to(&mut writer, &resp)?;
                     }
                     "rename_environment" => {
                         let args = params
@@ -4647,7 +4656,7 @@ pub fn run_setup_server(repo_root: &Path) -> Result<()> {
                                         })),
                                     }),
                                 };
-                                write_setup_response(&resp)?;
+                                write_setup_response_to(&mut writer, &resp)?;
                                 continue;
                             }
                         };
@@ -4666,7 +4675,7 @@ pub fn run_setup_server(repo_root: &Path) -> Result<()> {
                                         })),
                                     }),
                                 };
-                                write_setup_response(&resp)?;
+                                write_setup_response_to(&mut writer, &resp)?;
                                 continue;
                             }
                         };
@@ -4745,7 +4754,7 @@ pub fn run_setup_server(repo_root: &Path) -> Result<()> {
                             text,
                             "Call config_validate for the renamed environment before using it.",
                         );
-                        write_setup_response(&resp)?;
+                        write_setup_response_to(&mut writer, &resp)?;
                     }
                     _ => {
                         let resp = JsonRpcResponse {
@@ -4760,7 +4769,7 @@ pub fn run_setup_server(repo_root: &Path) -> Result<()> {
                                 })),
                             }),
                         };
-                        write_setup_response(&resp)?;
+                        write_setup_response_to(&mut writer, &resp)?;
                     }
                 }
             }
@@ -4778,7 +4787,7 @@ pub fn run_setup_server(repo_root: &Path) -> Result<()> {
                         })),
                     }),
                 };
-                write_setup_response(&resp)?;
+                write_setup_response_to(&mut writer, &resp)?;
             }
         }
     }
@@ -4786,9 +4795,7 @@ pub fn run_setup_server(repo_root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn write_setup_response(resp: &JsonRpcResponse) -> Result<()> {
-    let stdout = std::io::stdout();
-    let mut writer = stdout.lock();
+fn write_setup_response_to<W: Write>(writer: &mut W, resp: &JsonRpcResponse) -> Result<()> {
     let line = serde_json::to_string(resp)?;
     writeln!(writer, "{line}")?;
     writer.flush()?;
@@ -4801,18 +4808,22 @@ fn is_sidecar_timeout(message: &str) -> bool {
 
 fn is_recoverable_connection_error(message: &str) -> bool {
     let msg = message.to_lowercase();
-    msg.contains("sqlstate 08")
-        || msg.contains("sql_state\":\"08")
-        || msg.contains("08006")
-        || msg.contains("08001")
-        || msg.contains("57p01")
-        || msg.contains("connection refused")
-        || msg.contains("connection is closed")
-        || msg.contains("broken pipe")
-        || msg.contains("eof")
-        || msg.contains("sidecar process terminated")
-        || msg.contains("not_connected")
-        || msg.contains("database not connected")
+    [
+        "sqlstate 08",
+        "sql_state\":\"08",
+        "08006",
+        "08001",
+        "57p01",
+        "connection refused",
+        "connection is closed",
+        "broken pipe",
+        "eof",
+        "sidecar process terminated",
+        "not_connected",
+        "database not connected",
+    ]
+    .iter()
+    .any(|needle| msg.contains(needle))
 }
 
 fn is_valid_identifier(s: &str) -> bool {
@@ -5196,10 +5207,184 @@ fn build_explain_sql(sql: &str, args: &serde_json::Value) -> std::result::Result
 
 #[cfg(test)]
 mod tests {
+    use std::io::Cursor;
+
+    #[test]
+    fn setup_server_handles_protocol_lifecycle_requests() {
+        let repo_root =
+            std::env::temp_dir().join(format!("safeselect-setup-test-{}", uuid::Uuid::new_v4()));
+        let environments = repo_root.join(".safeselect/environments");
+        std::fs::create_dir_all(&environments).unwrap();
+        std::fs::write(environments.join("delete-me.toml"), "not valid toml").unwrap();
+        std::fs::write(environments.join("old.toml"), "not valid toml").unwrap();
+        std::fs::write(environments.join("occupied.toml"), "not valid toml").unwrap();
+        let empty_scan_path = repo_root.join("empty");
+        std::fs::create_dir(&empty_scan_path).unwrap();
+        let bad_scan_path =
+            std::env::temp_dir().join(format!("safeselect-bad-compose-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&bad_scan_path).unwrap();
+        std::fs::write(bad_scan_path.join("docker-compose.yml"), "services: [").unwrap();
+        std::fs::write(
+            repo_root.join("docker-compose.yml"),
+            "services:\n  database:\n    image: postgres:17\n    environment:\n      POSTGRES_DB: app\n      POSTGRES_USER: agent\n      POSTGRES_PASSWORD: test-password\n    ports:\n      - '15432:5432'\n",
+        )
+        .unwrap();
+
+        let input = format!(
+            "{}{{\"jsonrpc\":\"2.0\",\"id\":14,\"method\":\"tools/call\",\"params\":{{\"name\":\"import_compose\",\"arguments\":{{\"scan_path\":\"{}\"}}}}}}\n{{\"jsonrpc\":\"2.0\",\"id\":15,\"method\":\"tools/call\",\"params\":{{\"name\":\"import_compose\",\"arguments\":{{}}}}}}\n{{\"jsonrpc\":\"2.0\",\"id\":16,\"method\":\"tools/call\",\"params\":{{\"name\":\"import_compose\",\"arguments\":{{\"scan_path\":\"{}\"}}}}}}\n{{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}}\n",
+            concat!(
+            "\n",
+            "not-json\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\"}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"unknown\"}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\"}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"unknown\"}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\",\"params\":{\"name\":\"delete_environment\",\"arguments\":{}}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"tools/call\",\"params\":{\"name\":\"rename_environment\",\"arguments\":{\"old_name\":\"old\"}}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"tools/call\",\"params\":{\"name\":\"delete_environment\",\"arguments\":{\"name\":\"delete-me\"}}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"tools/call\",\"params\":{\"name\":\"delete_environment\",\"arguments\":{\"name\":\"missing\"}}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"tools/call\",\"params\":{\"name\":\"rename_environment\",\"arguments\":{\"old_name\":\"old\",\"new_name\":\"new\"}}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":12,\"method\":\"tools/call\",\"params\":{\"name\":\"rename_environment\",\"arguments\":{\"old_name\":\"missing\",\"new_name\":\"other\"}}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":13,\"method\":\"tools/call\",\"params\":{\"name\":\"rename_environment\",\"arguments\":{\"old_name\":\"new\",\"new_name\":\"occupied\"}}}\n",
+            ),
+            empty_scan_path.display(),
+            bad_scan_path.display(),
+        );
+        let mut output = Vec::new();
+
+        run_setup_server_with_io(&repo_root, Cursor::new(input.as_bytes()), &mut output).unwrap();
+
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("Parse error"));
+        assert!(output.contains("safeselect-setup"));
+        assert!(output.contains("import_compose"));
+        assert!(output.contains("Method not found: unknown"));
+        assert!(output.contains("Missing params"));
+        assert!(output.contains("Missing tool name"));
+        assert!(output.contains("Unknown tool: unknown"));
+        assert!(output.contains("Missing 'name'"));
+        assert!(output.contains("Missing 'new_name'"));
+        assert!(output.contains("Deleted environment 'delete-me'"));
+        assert!(output.contains("Environment 'missing' not found"));
+        assert!(output.contains("Renamed 'old' → 'new'"));
+        assert!(output.contains("Environment 'occupied' already exists"));
+        assert!(output.contains("No PostgreSQL services found"));
+        assert!(
+            output.contains("Imported 1 connection(s): database"),
+            "{output}"
+        );
+        assert!(output.contains("Scan failed"));
+        assert!(!environments.join("delete-me.toml").exists());
+        assert!(environments.join("new.toml").exists());
+        std::fs::remove_dir_all(repo_root).unwrap();
+        std::fs::remove_dir_all(bad_scan_path).unwrap();
+    }
+
     use super::*;
+
+    #[test]
+    fn recognizes_recoverable_connection_errors() {
+        assert!(is_recoverable_connection_error("connection refused"));
+        assert!(is_recoverable_connection_error("SQLSTATE 08006"));
+        assert!(is_recoverable_connection_error(
+            "sidecar process terminated"
+        ));
+        assert!(!is_recoverable_connection_error("syntax error"));
+    }
 
     fn response_json(response: &JsonRpcResponse) -> serde_json::Value {
         serde_json::to_value(response).unwrap()
+    }
+
+    fn test_server(repo_root: &Path) -> McpServer {
+        let project = crate::config::ProjectConfig {
+            audit: crate::config::AuditConfig {
+                enabled: true,
+                directory: repo_root.join("audit").display().to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let environment = crate::config::EnvironmentConfig {
+            version: 1,
+            database: crate::config::DatabaseConfig {
+                kind: crate::backend::BackendKind::Jdbc,
+                vendor: Some("postgresql".into()),
+                driver: Some("postgresql".into()),
+                url: "jdbc:postgresql://127.0.0.1:5432/app".into(),
+                username: "agent".into(),
+                secret: None,
+            },
+            tls: None,
+            ssh: None,
+            limits: Default::default(),
+        };
+
+        McpServer::new(
+            project,
+            environment,
+            "test-project",
+            "test",
+            "driver.jar",
+            "org.postgresql.Driver",
+            "jdbc:postgresql://127.0.0.1:5432/app",
+            "agent",
+            "password",
+            repo_root,
+            &repo_root.join(".safeselect"),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn handle_import_compose_covers_empty_success_and_scan_error_paths() {
+        let repo_root = std::env::temp_dir().join(format!(
+            "safeselect-mcp-import-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let empty_path = repo_root.join("empty");
+        let bad_path = std::env::temp_dir().join(format!(
+            "safeselect-mcp-bad-compose-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&empty_path).unwrap();
+        std::fs::create_dir_all(&bad_path).unwrap();
+        std::fs::write(bad_path.join("docker-compose.yml"), "services: [").unwrap();
+
+        let mut server = test_server(&repo_root);
+        server
+            .handle_import_compose(
+                Some(serde_json::json!(1)),
+                &serde_json::json!({
+                    "scan_path": empty_path
+                }),
+            )
+            .unwrap();
+        server
+            .handle_import_compose(
+                Some(serde_json::json!(2)),
+                &serde_json::json!({
+                    "scan_path": bad_path
+                }),
+            )
+            .unwrap();
+
+        std::fs::write(
+            repo_root.join("docker-compose.yml"),
+            "services:\n  database:\n    image: postgres:17\n    environment:\n      POSTGRES_DB: app\n      POSTGRES_USER: agent\n      POSTGRES_PASSWORD: test-password\n    ports:\n      - '15432:5432'\n",
+        )
+        .unwrap();
+        server
+            .handle_import_compose(Some(serde_json::json!(3)), &serde_json::json!({}))
+            .unwrap();
+
+        assert!(repo_root
+            .join(".safeselect/environments/database.toml")
+            .exists());
+        std::fs::remove_dir_all(repo_root).unwrap();
+        std::fs::remove_dir_all(bad_path).unwrap();
     }
 
     #[test]
@@ -5964,5 +6149,90 @@ services:
         assert!(text.contains("safeselect agent install opencode --environment db"));
 
         let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn suggests_safe_recovery_for_document_backend_errors() {
+        assert!(
+            document_backend_error_next_suggestion("query timed out").contains("explain_documents")
+        );
+        assert!(document_backend_error_next_suggestion("unknown field name")
+            .contains("discover_document_schema"));
+        assert!(document_backend_error_next_suggestion("connection refused").contains("check"));
+        assert!(document_backend_error_next_suggestion("invalid operator").contains("Stop"));
+    }
+
+    #[test]
+    fn suggests_schema_for_document_operations_with_unknown_fields() {
+        let value = serde_json::json!({"documents": []});
+        assert!(document_operation_next_suggestion("find", &value).contains("schema"));
+        assert!(
+            document_operation_next_suggestion("discover_document_schema", &value)
+                .contains("retry")
+        );
+    }
+
+    #[test]
+    fn covers_document_operation_suggestions_for_each_supported_operation() {
+        let value = serde_json::json!({"documents": [{"id": 1}]});
+        for operation in [
+            "discover_document_schema",
+            "profile_document_field",
+            "explain_documents",
+            "generate_document_fixture",
+            "other",
+        ] {
+            assert!(!document_operation_next_suggestion(operation, &value).is_empty());
+        }
+    }
+
+    #[test]
+    fn covers_document_backend_operator_and_aggregate_guidance() {
+        for message in [
+            "operator does not exist for jsonb[]",
+            "operator does not exist for json",
+            "operator does not exist",
+            "aggregate functions are not allowed in group by",
+            "is an aggregate function",
+        ] {
+            assert!(!document_backend_error_next_suggestion(message).is_empty());
+        }
+    }
+
+    #[test]
+    fn validates_catalog_schema_arguments_and_allowlist() {
+        let root =
+            std::env::temp_dir().join(format!("safeselect-catalog-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut server = test_server(&root);
+        assert_eq!(
+            server.catalog_schema(None, &serde_json::json!({})).unwrap(),
+            None
+        );
+        assert_eq!(
+            server
+                .catalog_schema(
+                    Some(serde_json::json!(1)),
+                    &serde_json::json!({"schema":"public"})
+                )
+                .unwrap(),
+            Some("public".into())
+        );
+        assert!(server
+            .catalog_schema(
+                Some(serde_json::json!(1)),
+                &serde_json::json!({"schema":"bad-name"})
+            )
+            .is_err());
+        let mut policy = crate::config::SecurityPolicy::default();
+        policy.allowed_schemas = vec!["public".into()];
+        server.security = SecurityEngine::new(policy, crate::config::LimitsConfig::default());
+        assert!(server
+            .catalog_schema(
+                Some(serde_json::json!(1)),
+                &serde_json::json!({"schema":"private"})
+            )
+            .is_err());
+        let _ = std::fs::remove_dir_all(root);
     }
 }

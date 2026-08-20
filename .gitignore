@@ -15,3 +15,7 @@ Formula/
 *.ipr
 *.iws
 /.idea
+
+# Local-only planning documents
+/docs/*plan*.md
+/docs/*PLAN*.md

@@ -37,7 +37,7 @@ jobs:
           toolchain: stable
 
       - name: Install Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
@@ -115,6 +115,7 @@ jobs:
           path: |
             target/debug/deps/*.log
             ~/.local/state/safeselect/logs/
+          if-no-files-found: ignore
           retention-days: 7
 
       - name: Stop integration services

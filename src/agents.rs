@@ -265,7 +265,7 @@ pub fn uninstall_entry(client: &str, entry_name: &str, repo_root: Option<&Path>)
     let config_path = resolve_uninstall_target(client, entry_name, repo_root)?;
     let content = std::fs::read_to_string(&config_path)?;
 
-    if !content.contains(entry_name) && !content.contains("safeselect") {
+    if !contains_safeselect_entry(&content, entry_name) {
         return Err(SafeselectError::Other(format!(
             "No safeselect entry found in {client} config"
         )));
@@ -279,6 +279,10 @@ pub fn uninstall_entry(client: &str, entry_name: &str, repo_root: Option<&Path>)
 
     println!("Entry '{entry_name}' uninstalled from {client}");
     Ok(())
+}
+
+fn contains_safeselect_entry(content: &str, entry_name: &str) -> bool {
+    content.contains(entry_name) || content.contains("safeselect")
 }
 
 pub fn detect_uninstall_target(
@@ -1192,5 +1196,124 @@ value = true
             config_has_entry("opencode", content, "safeselect-demo-pre").unwrap();
 
         assert!(global_has_entry);
+    }
+
+    #[test]
+    fn strips_jsonc_comments_without_touching_strings() {
+        let input = r#"{
+  // single-line comment
+  "url": "https://example.test/*not a comment*/",
+  "escaped": "quote: \" and slash: \\", /* block comment */
+  "value": 1
+}"#;
+
+        let cleaned = strip_jsonc_comments(input);
+
+        assert!(!cleaned.contains("single-line comment"));
+        assert!(!cleaned.contains("block comment"));
+        assert!(cleaned.contains("https://example.test/*not a comment*/"));
+        assert!(cleaned.contains("quote:"));
+        assert!(cleaned.contains("slash:"));
+        assert!(cleaned.contains("\"value\": 1"));
+    }
+
+    #[test]
+    fn removes_matching_text_blocks() {
+        let content = "keep\nsafeselect-entry\nother-entry";
+
+        assert_eq!(
+            remove_text_block(content, "safeselect-entry"),
+            "keep\nother-entry"
+        );
+    }
+
+    #[test]
+    fn extracts_ini_entry_names() {
+        let content = "[mcpServers.alpha]\nkey = value\n[mcpServers.beta]\n";
+
+        assert_eq!(ini_entry_names(content), vec!["alpha", "beta"]);
+    }
+
+    #[test]
+    fn detects_unknown_uninstall_client() {
+        let result = detect_uninstall_target("unknown-client", None);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn checks_entries_for_json_and_ini_clients() {
+        let json = r#"{"mcp": {"alpha": {}}, "mcpServers": {"beta": {}}}"#;
+        let ini = "[mcpServers.gamma]\ncommand = safeselect\n";
+
+        assert!(config_has_entry("opencode", json, "alpha").unwrap());
+        assert!(config_has_entry("cursor", json, "beta").unwrap());
+        assert!(config_has_entry("copilot", ini, "gamma").unwrap());
+        assert!(config_has_entry("gemini-cli", ini, "gamma").unwrap());
+        assert!(config_has_entry("unknown-client", json, "alpha").is_err());
+    }
+
+    #[test]
+    fn creates_default_opencode_config() {
+        let path =
+            std::env::temp_dir().join(format!("safeselect-opencode-{}.json", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        create_opencode_config(&path).unwrap();
+        let value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(value, serde_json::json!({"mcp": {}}));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn replaces_existing_mcp_json_entry() {
+        let updated = replace_mcp_json(
+            r#"{"mcpServers":{"old":{"command":"old"}}}"#,
+            &serde_json::json!({"command": "new"}),
+            "old",
+            "new",
+        )
+        .unwrap();
+        assert!(updated.contains("\"new\""));
+        assert!(!updated.contains("\"old\""));
+    }
+
+    #[test]
+    fn selects_candidate_entries_for_supported_clients_and_environments() {
+        let json = r#"{"mcpServers":{"safeselect-demo-pre":{},"demo-dev":{},"other":{}}}"#;
+        assert_eq!(
+            candidate_entry_names("cursor", json, "demo", Some("pre")).unwrap(),
+            vec!["safeselect-demo-pre"]
+        );
+        assert_eq!(
+            candidate_entry_names("cursor", json, "demo", None)
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(candidate_entry_names("unknown", json, "demo", None).is_err());
+    }
+
+    #[test]
+    fn uninstalls_a_local_opencode_entry_and_creates_backup() {
+        let root = std::env::temp_dir().join(format!("safeselect-agent-{}", uuid::Uuid::new_v4()));
+        let dir = root.join(".opencode");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("opencode.json");
+        std::fs::write(
+            &path,
+            r#"{"mcp":{"safeselect-demo-pre":{"command":"safeselect"}}}"#,
+        )
+        .unwrap();
+        uninstall_entry("opencode", "safeselect-demo-pre", Some(&root)).unwrap();
+        assert!(!std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("safeselect-demo-pre"));
+        assert!(path.with_extension("safeselect.bak").exists());
+        std::fs::write(&path, "{}").unwrap();
+        assert!(uninstall_entry("opencode", "missing", Some(&root)).is_err());
+        std::fs::write(&path, r#"{"mcp":{"safeselect-demo-pre":{"command":}}}"#).unwrap();
+        assert!(uninstall_entry("opencode", "safeselect-demo-pre", Some(&root)).is_err());
+        let _ = std::fs::remove_dir_all(root);
     }
 }

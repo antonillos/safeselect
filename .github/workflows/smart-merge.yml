@@ -30,9 +30,12 @@ jobs:
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const pullNumber = context.issue.number;
-            const actor = context.actor;
+            const actor = context.actor.toLowerCase();
             const command = context.payload.comment.body.trim().split(/\s+/);
             const allowedOverrides = new Set(["merge", "squash", "rebase"]);
+            const githubApiRequest = {
+              headers: { "X-GitHub-Api-Version": "2026-03-10" },
+            };
             const requestedMethod = command[1] || "";
             const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -164,6 +167,7 @@ jobs:
                 repo,
                 workflow_id: "verify.yml",
                 ref: pull.head.ref,
+                request: githubApiRequest,
               });
 
               while (Date.now() < deadline && !verifyRun) {
@@ -311,18 +315,22 @@ jobs:
             }
 
             // A bot approval lets the authorized command satisfy repositories
-            // that require a review. GitHub may disable bot approvals; in that
-            // case the merge API will leave the PR untouched and explain why.
-            try {
-              await github.rest.pulls.createReview({
-                owner,
-                repo,
-                pull_number: pullNumber,
-                event: "APPROVE",
-                body: `Approved by the smart merge command requested by @${actor}.`,
-              });
-            } catch (error) {
-              core.warning(`Could not submit bot approval: ${error.message}`);
+            // that require a review. Never attempt to approve the actor's own
+            // pull request because GitHub rejects self-approvals.
+            if (actor !== author) {
+              try {
+                await github.rest.pulls.createReview({
+                  owner,
+                  repo,
+                  pull_number: pullNumber,
+                  event: "APPROVE",
+                  body: `Approved by the smart merge command requested by @${actor}.`,
+                });
+              } catch (error) {
+                core.warning(`Could not submit bot approval: ${error.message}`);
+              }
+            } else {
+              core.info(`Skipping bot approval because @${actor} authored the pull request.`);
             }
 
             // Refresh immediately before merging to avoid merging a stale head.
@@ -363,6 +371,56 @@ jobs:
               ref: mergeSha,
             });
             const verification = resultCommit.data.commit.verification;
+
+            // Pushes performed with GITHUB_TOKEN do not trigger downstream
+            // push workflows. Explicitly dispatch Release for release PRs so
+            // publishing does not depend on a manual workflow run.
+            const releaseMatch = head.match(/^release\/(v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?)$/i);
+            if (base === "main" && releaseMatch) {
+              const version = releaseMatch[1];
+              try {
+                await github.rest.actions.createWorkflowDispatch({
+                  owner,
+                  repo,
+                  workflow_id: "release.yml",
+                  ref: "main",
+                  inputs: {
+                    version,
+                    target_ref: "main",
+                    prerelease: version.includes("-") ? "true" : "false",
+                    draft: "false",
+                  },
+                });
+                await comment(`🚀 Release workflow dispatched for \`${version}\`.`);
+              } catch (error) {
+                core.warning(`Could not dispatch Release for ${version}: ${error.message}`);
+                await comment(
+                  `⚠️ Merge completed, but Release could not be dispatched for \`${version}\`. ` +
+                  "Run the Release workflow manually."
+                );
+              }
+            }
+
+            // GITHUB_TOKEN merges do not trigger downstream push workflows.
+            // Dispatch Verify explicitly so develop publishes the latest CRAP badge.
+            if (base === "develop") {
+              try {
+                await github.rest.actions.createWorkflowDispatch({
+                  owner,
+                  repo,
+                  workflow_id: "verify.yml",
+                  ref: "develop",
+                  request: githubApiRequest,
+                });
+                await comment("📊 Verify dispatched on `develop` to refresh the CRAP badge.");
+              } catch (error) {
+                core.warning(`Could not dispatch Verify on develop: ${error.message}`);
+                await comment(
+                  "⚠️ Merge completed, but Verify could not be dispatched on `develop`; " +
+                  "run the Verify workflow manually to refresh the CRAP badge."
+                );
+              }
+            }
 
             const disposable =
               pull.head.repo?.full_name === `${owner}/${repo}` &&

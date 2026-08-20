@@ -52,14 +52,8 @@ impl ConfigLoader {
             return Ok(drivers);
         }
         for entry in std::fs::read_dir(&self.drivers_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.extension().is_some_and(|e| e == "toml") {
-                let content = std::fs::read_to_string(&path)?;
-                let config: DriverConfig = toml::from_str(&content)?;
-                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                    drivers.push((stem.to_string(), config));
-                }
+            if let Some(driver) = load_driver_entry(&entry?.path())? {
+                drivers.push(driver);
             }
         }
         drivers.sort_by(|a, b| a.0.cmp(&b.0));
@@ -226,6 +220,18 @@ impl ConfigLoader {
     }
 }
 
+fn load_driver_entry(path: &Path) -> Result<Option<(String, DriverConfig)>> {
+    if path.extension().is_none_or(|extension| extension != "toml") {
+        return Ok(None);
+    }
+    let content = std::fs::read_to_string(path)?;
+    let config: DriverConfig = toml::from_str(&content)?;
+    Ok(path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(|stem| (stem.to_string(), config)))
+}
+
 pub fn merge_project_ssh(
     project: &ProjectConfig,
     environment: &mut EnvironmentConfig,
@@ -242,6 +248,11 @@ pub fn merge_project_ssh(
         )));
     };
 
+    merge_shared_ssh_fields(ssh, shared);
+    Ok(())
+}
+
+fn merge_shared_ssh_fields(ssh: &mut SshConfig, shared: &SharedSshConfig) {
     if ssh.host.is_none() {
         ssh.host = shared.host.clone();
     }
@@ -263,8 +274,6 @@ pub fn merge_project_ssh(
     if ssh.auth_type.is_none() {
         ssh.auth_type = shared.auth_type.clone();
     }
-
-    Ok(())
 }
 
 impl Default for ConfigLoader {
@@ -345,4 +354,119 @@ fn resolve_keychain(service: &str, account: &str) -> Result<String> {
         .map_err(|_| SafeselectError::Secret("invalid UTF-8 from keychain".into()))?
         .trim()
         .to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn merges_shared_ssh_settings_into_environment() {
+        let project: ProjectConfig = toml::from_str(
+            r#"
+version = 1
+[ssh_bastions.dev]
+host = "bastion.example"
+port = 2222
+username = "jump"
+secret_account = "jump-account"
+identity_file = "/tmp/jump.key"
+known_hosts = "/tmp/known_hosts"
+auth_type = "key"
+"#,
+        )
+        .unwrap();
+        let mut environment: EnvironmentConfig = toml::from_str(
+            r#"
+version = 1
+[database]
+url = "jdbc:postgresql://db/app"
+[ssh]
+enabled = true
+bastion = "dev"
+"#,
+        )
+        .unwrap();
+
+        merge_project_ssh(&project, &mut environment).unwrap();
+
+        let ssh = environment.ssh.unwrap();
+        assert_eq!(ssh.host.as_deref(), Some("bastion.example"));
+        assert_eq!(ssh.port, Some(2222));
+        assert_eq!(ssh.username.as_deref(), Some("jump"));
+        assert_eq!(ssh.secret_account.as_deref(), Some("jump-account"));
+        assert_eq!(ssh.identity_file.as_deref(), Some("/tmp/jump.key"));
+        assert_eq!(ssh.known_hosts.as_deref(), Some("/tmp/known_hosts"));
+        assert_eq!(ssh.auth_type.as_deref(), Some("key"));
+    }
+
+    #[test]
+    fn lists_only_toml_driver_files() {
+        let root = std::env::temp_dir().join(format!("safeselect-drivers-{}", std::process::id()));
+        let drivers = root.join("drivers");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&drivers).unwrap();
+        std::fs::write(
+            drivers.join("postgresql.toml"),
+            "version = 1\nvendor = \"postgresql\"\npath = \"/tmp/driver.jar\"\nclass = \"org.postgresql.Driver\"\nsha256 = \"abc\"\n",
+        )
+        .unwrap();
+        std::fs::write(drivers.join("ignored.txt"), "ignored").unwrap();
+
+        let loader = ConfigLoader {
+            drivers_dir: drivers,
+            config_dir: root.clone(),
+        };
+        let listed = loader.list_drivers().unwrap();
+
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].0, "postgresql");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn lists_no_drivers_when_directory_is_missing() {
+        let root =
+            std::env::temp_dir().join(format!("safeselect-empty-drivers-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let loader = ConfigLoader {
+            drivers_dir: root.join("missing"),
+            config_dir: root.clone(),
+        };
+
+        assert!(loader.list_drivers().unwrap().is_empty());
+    }
+
+    #[test]
+    fn leaves_environment_ssh_unchanged_when_no_bastion_is_configured() {
+        let project = ProjectConfig::default();
+        let mut environment: EnvironmentConfig = toml::from_str(
+            r#"
+version = 1
+[database]
+url = "jdbc:postgresql://db/app"
+"#,
+        )
+        .unwrap();
+        merge_project_ssh(&project, &mut environment).unwrap();
+        assert!(environment.ssh.is_none());
+
+        environment.ssh = Some(SshConfig {
+            enabled: true,
+            bastion: None,
+            host: None,
+            port: None,
+            username: None,
+            secret_account: None,
+            identity_file: None,
+            known_hosts: None,
+            local_host: None,
+            local_port: None,
+            forward_host: None,
+            forward_port: None,
+            auth_type: None,
+        });
+        merge_project_ssh(&project, &mut environment).unwrap();
+        assert!(environment.ssh.unwrap().host.is_none());
+    }
 }

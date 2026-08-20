@@ -33,6 +33,48 @@ pub fn run() {
         let baseline = database_state();
         log_step(&format!("captured baseline database state: {:?}", baseline));
 
+        for (name, sql) in [
+            (
+                "reader INSERT",
+                "INSERT INTO public.safe_table VALUES (4, 'delta', 'd')",
+            ),
+            (
+                "reader UPDATE",
+                "UPDATE public.safe_table SET name = 'changed' WHERE id = 1",
+            ),
+            (
+                "reader DELETE",
+                "DELETE FROM public.safe_table WHERE id = 1",
+            ),
+            (
+                "reader MERGE",
+                "MERGE INTO public.safe_table AS t USING (SELECT 1 AS id) AS s ON t.id = s.id WHEN MATCHED THEN UPDATE SET name = 'changed'",
+            ),
+            ("reader CREATE", "CREATE TABLE public.evil_copy (id int)"),
+            (
+                "reader ALTER",
+                "ALTER TABLE public.safe_table ADD COLUMN evil text",
+            ),
+            ("reader DROP", "DROP TABLE public.safe_table"),
+            ("reader function call", "SELECT public.writer_function()"),
+            ("reader procedure call", "CALL public.writer_procedure()"),
+            (
+                "reader secret table",
+                "SELECT * FROM public.secret_table",
+            ),
+            (
+                "reader table created after grants",
+                "SELECT * FROM public.after_grant_table",
+            ),
+        ] {
+            assert_database_role_rejected(name, sql, &baseline);
+        }
+        assert_database_role_noop(
+            "reader GRANT",
+            "GRANT SELECT ON public.safe_table TO PUBLIC",
+            &baseline,
+        );
+
         log_check("SELECT happy path");
         let (stdout, stderr, success) =
             postgres::run_safeselect(&repo_root, &config_dir, "SELECT 1 AS ok");
@@ -156,6 +198,30 @@ pub fn run() {
             ("transaction begin", "BEGIN"),
             ("transaction commit", "COMMIT"),
             ("transaction rollback", "ROLLBACK"),
+            (
+                "stacked commit drop",
+                "COMMIT; DROP TABLE public.safe_table",
+            ),
+            (
+                "stacked rollback create",
+                "ROLLBACK; CREATE TABLE public.evil_copy (id int)",
+            ),
+            (
+                "stacked select delete",
+                "SELECT 1; DELETE FROM public.safe_table WHERE id = 1",
+            ),
+            (
+                "stacked mixed case with comment",
+                "/* harmless prefix */\nCoMmIt ;\nDrOp TABLE public.safe_table",
+            ),
+            (
+                "stacked cte delete",
+                "WITH x AS (SELECT 1) SELECT * FROM x; DELETE FROM public.safe_table",
+            ),
+            (
+                "stacked do delete",
+                "DO $$ BEGIN PERFORM 1; END $$; DELETE FROM public.safe_table",
+            ),
             ("denied relation", "SELECT * FROM public.secret_table"),
             (
                 "session change",
@@ -223,10 +289,47 @@ fn assert_rejected(
     log_step(&format!("confirmed rejection without mutation: {name}"));
 }
 
+fn assert_database_role_rejected(name: &str, sql: &str, baseline: &DatabaseState) {
+    log_check(&format!("reader role rejects: {name}"));
+    let (stdout, stderr, success) = postgres::psql_as_test_user(&postgres::test_db(), sql);
+    assert!(
+        !success,
+        "reader role unexpectedly executed {name}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("permission denied") || stderr.contains("must be owner"),
+        "reader role failed for the wrong reason: {name}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert_eq!(
+        &database_state(),
+        baseline,
+        "reader role changed database state despite PostgreSQL rejecting {name}"
+    );
+}
+
+fn assert_database_role_noop(name: &str, sql: &str, baseline: &DatabaseState) {
+    log_check(&format!("reader role cannot grant privileges: {name}"));
+    let (stdout, stderr, success) = postgres::psql_as_test_user(&postgres::test_db(), sql);
+    assert!(
+        success,
+        "reader role unexpectedly failed {name}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("no privileges were granted"),
+        "reader role changed privileges or failed unexpectedly: {name}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert_eq!(
+        &database_state(),
+        baseline,
+        "reader role changed database state while attempting {name}"
+    );
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DatabaseState {
     safe_table_summary: String,
     safe_table_rows: String,
+    after_grant_table_rows: String,
     secret_table_rows: String,
     temp_evil_exists: String,
     evil_copy_exists: String,
@@ -241,6 +344,10 @@ fn database_state() -> DatabaseState {
         safe_table_rows: postgres::psql(
             &postgres::test_db(),
             "SELECT string_agg(id || ':' || octet_length(payload), ',' ORDER BY id) FROM public.safe_table;",
+        ),
+        after_grant_table_rows: postgres::psql(
+            &postgres::test_db(),
+            "SELECT count(*) || ':' || string_agg(value, ',' ORDER BY id) FROM public.after_grant_table;",
         ),
         secret_table_rows: postgres::psql(
             &postgres::test_db(),

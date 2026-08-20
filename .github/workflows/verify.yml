@@ -142,3 +142,83 @@ jobs:
         run: cargo audit
       - name: Run cargo deny
         run: cargo deny check
+
+  crap-report:
+    name: CRAP (report-only)
+    needs: unit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+      - name: Install Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Install coverage tools
+        uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Install cargo-binstall
+        run: curl -fsSL https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+      - name: Install cargo-crap
+        run: cargo binstall cargo-crap --locked -q
+      - name: Install makevn
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/antonillos/makevn/main/packaging/install/install-release.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Build sidecar for Rust embedding
+        run: |
+          makevn doctor
+          makevn init
+          makevn package
+          cp sidecar/target/safeselect-sidecar-*.jar sidecar/target/safeselect-sidecar.jar
+      - name: Download pinned crap4java release
+        run: |
+          curl -fsSL \
+            -o "${GITHUB_WORKSPACE}/../crap4java-0.1.0.jar" \
+            "https://github.com/antonillos/crap4java/releases/download/v0.1.0/crap4java-0.1.0.jar"
+          printf '%s  %s\n' \
+            "b996434078d560d52a058e3d9ffb0d07a9469ecdc57c8b4fa241fa70252bf68e" \
+            "${GITHUB_WORKSPACE}/../crap4java-0.1.0.jar" \
+            | sha256sum --check
+      - name: Run report-only CRAP analysis
+        run: ./tools/crap/run.sh --summary
+        env:
+          CRAP4JAVA_JAR: ${{ github.workspace }}/../crap4java-0.1.0.jar
+      - name: Upload CRAP artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: crap-report
+          path: target/crap/
+      - name: Prepare CRAP badge
+        if: >-
+          (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+          github.ref == 'refs/heads/develop'
+        run: |
+          mkdir -p target/crap-pages
+          cp target/crap/badge.json target/crap-pages/crap-badge.json
+      - name: Upload CRAP badge Pages artifact
+        if: >-
+          (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+          github.ref == 'refs/heads/develop'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: target/crap-pages/
+
+  deploy-crap-badge:
+    name: Publish CRAP badge
+    needs: crap-report
+    if: >-
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy CRAP badge
+        id: deployment
+        uses: actions/deploy-pages@v4

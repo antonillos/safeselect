@@ -110,32 +110,36 @@ fn parse_env_list(items: &[String]) -> HashMap<String, String> {
 fn parse_dotenv(content: &str) -> HashMap<String, String> {
     let mut vars = HashMap::new();
     for raw_line in content.lines() {
-        let line = raw_line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
+        if let Some((key, value)) = parse_dotenv_line(raw_line) {
+            vars.insert(key, value);
         }
-
-        let line = line.strip_prefix("export ").unwrap_or(line);
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-
-        let key = key.trim();
-        if key.is_empty() {
-            continue;
-        }
-
-        let mut value = value.trim().to_string();
-        if value.len() >= 2 {
-            let quoted = (value.starts_with('"') && value.ends_with('"'))
-                || (value.starts_with('\'') && value.ends_with('\''));
-            if quoted {
-                value = value[1..value.len() - 1].to_string();
-            }
-        }
-        vars.insert(key.to_string(), value);
     }
     vars
+}
+
+fn parse_dotenv_line(raw_line: &str) -> Option<(String, String)> {
+    let line = raw_line.trim();
+    if line.is_empty() || line.starts_with('#') {
+        return None;
+    }
+    let line = line.strip_prefix("export ").unwrap_or(line);
+    let (key, value) = line.split_once('=')?;
+    let key = key.trim();
+    if key.is_empty() {
+        return None;
+    }
+    Some((key.to_string(), unquote_dotenv_value(value.trim())))
+}
+
+fn unquote_dotenv_value(value: &str) -> String {
+    let quoted = value.len() >= 2
+        && ((value.starts_with('"') && value.ends_with('"'))
+            || (value.starts_with('\'') && value.ends_with('\'')));
+    if quoted {
+        value[1..value.len() - 1].to_string()
+    } else {
+        value.to_string()
+    }
 }
 
 fn load_dotenv(dir: &Path) -> HashMap<String, String> {
@@ -286,6 +290,11 @@ fn project_label(compose_path: &Path, scan_root: &Path) -> String {
 
 fn find_compose_files(dir: &Path) -> Vec<std::path::PathBuf> {
     let mut files = vec![];
+    collect_compose_files(dir, &mut files);
+    files
+}
+
+fn collect_compose_files(dir: &Path, files: &mut Vec<std::path::PathBuf>) {
     let candidates = [
         "docker-compose.yml",
         "docker-compose.yaml",
@@ -295,25 +304,31 @@ fn find_compose_files(dir: &Path) -> Vec<std::path::PathBuf> {
 
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                // skip hidden dirs, node_modules, target
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if !name.starts_with('.') && name != "node_modules" && name != "target" {
-                        files.extend(find_compose_files(&path));
-                    }
-                }
-            } else if path.is_file() {
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if candidates.contains(&name) {
-                        files.push(path);
-                    }
-                }
-            }
+            collect_compose_entry(entry.path(), &candidates, files);
         }
     }
+}
 
-    files
+fn collect_compose_entry(
+    path: std::path::PathBuf,
+    candidates: &[&str],
+    files: &mut Vec<std::path::PathBuf>,
+) {
+    if path.is_dir() {
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            return;
+        };
+        if !name.starts_with('.') && name != "node_modules" && name != "target" {
+            collect_compose_files(&path, files);
+        }
+    } else if path.is_file()
+        && path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| candidates.contains(&name))
+    {
+        files.push(path);
+    }
 }
 
 fn parse_compose_file(path: &Path, content: &str) -> Result<Vec<ComposeConnection>> {
@@ -505,6 +520,23 @@ pub fn build_guidance_from_parts(
     include_agent_step: bool,
 ) -> ImportGuidance {
     let mut parts = vec![];
+    append_import_summary(&mut parts, env_names);
+
+    parts.push(String::new());
+    parts.push("Next steps:".to_string());
+    parts.push("1. Ensure the PostgreSQL JDBC driver is available: safeselect driver download --vendor postgresql".to_string());
+
+    append_password_summary(&mut parts, project_name, no_password_envs);
+    append_connectivity_summary(&mut parts, env_names);
+    append_agent_summary(&mut parts, env_names, include_agent_step);
+
+    ImportGuidance {
+        text: parts.join("\n"),
+        imported_env_names: env_names.to_vec(),
+    }
+}
+
+fn append_import_summary(parts: &mut Vec<String>, env_names: &[String]) {
     if env_names.is_empty() {
         parts.push("All environments already exist. Nothing imported.".to_string());
     } else {
@@ -514,23 +546,23 @@ pub fn build_guidance_from_parts(
             env_names.join(", ")
         ));
     }
+}
 
-    parts.push(String::new());
-    parts.push("Next steps:".to_string());
-    parts.push("1. Ensure the PostgreSQL JDBC driver is available: safeselect driver download --vendor postgresql".to_string());
-
-    if no_password_envs.is_empty() {
+fn append_password_summary(parts: &mut Vec<String>, project_name: &str, env_names: &[String]) {
+    if env_names.is_empty() {
         parts.push("2. Passwords were imported or are already configured.".to_string());
     } else {
         parts.push("2. Configure missing passwords:".to_string());
-        for env_name in no_password_envs {
+        for env_name in env_names {
             parts.push(format!(
                 "   - {}",
                 secret_setup_hint(project_name, env_name)
             ));
         }
     }
+}
 
+fn append_connectivity_summary(parts: &mut Vec<String>, env_names: &[String]) {
     if env_names.is_empty() {
         parts.push("3. Run safeselect check --environment <env> after you add one.".to_string());
     } else {
@@ -539,23 +571,21 @@ pub fn build_guidance_from_parts(
             parts.push(format!("   - safeselect check --environment {env_name}"));
         }
     }
+}
 
-    if include_agent_step {
-        if env_names.is_empty() {
-            parts.push("4. Install the MCP entry after you have an environment: safeselect agent install opencode --environment <env>".to_string());
-        } else {
-            parts.push("4. Install SafeSelect in your AI agent:".to_string());
-            for env_name in env_names {
-                parts.push(format!(
-                    "   - safeselect agent install opencode --environment {env_name}"
-                ));
-            }
-        }
+fn append_agent_summary(parts: &mut Vec<String>, env_names: &[String], include: bool) {
+    if !include {
+        return;
     }
-
-    ImportGuidance {
-        text: parts.join("\n"),
-        imported_env_names: env_names.to_vec(),
+    if env_names.is_empty() {
+        parts.push("4. Install the MCP entry after you have an environment: safeselect agent install opencode --environment <env>".to_string());
+    } else {
+        parts.push("4. Install SafeSelect in your AI agent:".to_string());
+        for env_name in env_names {
+            parts.push(format!(
+                "   - safeselect agent install opencode --environment {env_name}"
+            ));
+        }
     }
 }
 
@@ -586,37 +616,34 @@ pub fn read_password_from_keychain(account: &str) -> Result<String> {
 }
 
 pub fn delete_password_from_keychain(account: &str) -> Result<()> {
-    let output = std::process::Command::new("security")
-        .args(["delete-generic-password", "-a", account, "-s", "safeselect"])
+    let output = delete_keychain_command(account)
         .output()
-        .map_err(|e| {
-            crate::error::SafeselectError::Secret(format!("security delete failed: {e}"))
-        })?;
+        .map_err(delete_keychain_command_error)?;
+    report_keychain_delete_result(&output);
+    Ok(())
+}
 
+fn report_keychain_delete_result(output: &std::process::Output) {
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         eprintln!("WARN: could not delete old Keychain entry: {stderr}");
     }
+}
 
-    Ok(())
+fn delete_keychain_command(account: &str) -> std::process::Command {
+    let mut command = std::process::Command::new("security");
+    command.args(["delete-generic-password", "-a", account, "-s", "safeselect"]);
+    command
+}
+
+fn delete_keychain_command_error(error: std::io::Error) -> crate::error::SafeselectError {
+    crate::error::SafeselectError::Secret(format!("security delete failed: {error}"))
 }
 
 pub fn store_password_in_keychain(account: &str, password: &str) -> Result<()> {
-    let output = std::process::Command::new("security")
-        .args([
-            "add-generic-password",
-            "-a",
-            account,
-            "-s",
-            "safeselect",
-            "-w",
-            password,
-            "-U",
-        ])
+    let output = keychain_command(account, password)
         .output()
-        .map_err(|e| {
-            crate::error::SafeselectError::Secret(format!("security command failed: {e}"))
-        })?;
+        .map_err(keychain_command_error)?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -626,9 +653,57 @@ pub fn store_password_in_keychain(account: &str, password: &str) -> Result<()> {
     Ok(())
 }
 
+fn keychain_command(account: &str, password: &str) -> std::process::Command {
+    let mut command = std::process::Command::new("security");
+    command.args([
+        "add-generic-password",
+        "-a",
+        account,
+        "-s",
+        "safeselect",
+        "-w",
+        password,
+        "-U",
+    ]);
+    command
+}
+
+fn keychain_command_error(error: std::io::Error) -> crate::error::SafeselectError {
+    crate::error::SafeselectError::Secret(format!("security command failed: {error}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn builds_secret_environment_variable_name() {
+        assert_eq!(secret_env_var("local-db"), "SAFESELECT_PASSWORD_LOCAL_DB");
+    }
+
+    #[test]
+    fn builds_keychain_command_with_account_and_password() {
+        let command = keychain_command("project/local", "secret");
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(command.get_program(), "security");
+        assert_eq!(
+            args,
+            [
+                "add-generic-password",
+                "-a",
+                "project/local",
+                "-s",
+                "safeselect",
+                "-w",
+                "secret",
+                "-U",
+            ]
+        );
+    }
 
     #[test]
     fn resolves_dotenv_defaults_in_environment() {
@@ -713,5 +788,106 @@ services:
         assert!(guidance
             .text
             .contains("safeselect agent install opencode --environment testing"));
+    }
+
+    #[test]
+    fn explains_empty_import_without_agent_step() {
+        let guidance = build_guidance_from_parts("project", &[], &[], false);
+
+        assert!(guidance
+            .text
+            .contains("All environments already exist. Nothing imported."));
+        assert!(!guidance.text.contains("agent install"));
+    }
+
+    #[test]
+    fn parses_dotenv_comments_exports_and_quotes() {
+        let values = parse_dotenv(
+            "\n# ignored\nexport USER=reader\nPASSWORD=\"secret\"\nEMPTY_KEY=\ninvalid\n=missing\n",
+        );
+
+        assert_eq!(values.get("USER").map(String::as_str), Some("reader"));
+        assert_eq!(values.get("PASSWORD").map(String::as_str), Some("secret"));
+        assert_eq!(values.get("EMPTY_KEY").map(String::as_str), Some(""));
+        assert!(!values.contains_key("invalid"));
+    }
+
+    #[test]
+    fn parses_environment_key_value_list() {
+        let values = parse_env_list(&[
+            "DB_HOST=localhost".into(),
+            " DB_PORT = 5432 ".into(),
+            "invalid".into(),
+        ]);
+        assert_eq!(values.get("DB_HOST").map(String::as_str), Some("localhost"));
+        assert_eq!(values.get("DB_PORT").map(String::as_str), Some("5432"));
+        assert_eq!(values.len(), 2);
+    }
+
+    #[test]
+    fn builds_keychain_delete_command() {
+        let command = delete_keychain_command("project/local");
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(command.get_program(), "security");
+        assert_eq!(
+            args,
+            [
+                "delete-generic-password",
+                "-a",
+                "project/local",
+                "-s",
+                "safeselect"
+            ]
+        );
+    }
+
+    #[test]
+    fn finds_compose_files_recursively_without_build_directories() {
+        let root =
+            std::env::temp_dir().join(format!("safeselect-compose-files-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("nested")).unwrap();
+        std::fs::create_dir_all(root.join("target")).unwrap();
+        std::fs::create_dir_all(root.join("node_modules")).unwrap();
+        std::fs::create_dir_all(root.join(".hidden")).unwrap();
+        std::fs::write(root.join("compose.yml"), "").unwrap();
+        std::fs::write(root.join("nested/docker-compose.yaml"), "").unwrap();
+        std::fs::write(root.join("target/compose.yml"), "").unwrap();
+        std::fs::write(root.join("node_modules/compose.yml"), "").unwrap();
+        std::fs::write(root.join(".hidden/compose.yml"), "").unwrap();
+
+        let files = find_compose_files(&root);
+
+        assert_eq!(files.len(), 2);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn recognizes_postgres_image_variants() {
+        assert!(is_postgres_image("postgres:17"));
+        assert!(is_postgres_image("postgis/postgis:latest"));
+        assert!(is_postgres_image("timescale/timescaledb:latest"));
+        assert!(!is_postgres_image("mysql:8"));
+    }
+
+    #[test]
+    fn parses_unquoted_dotenv_values() {
+        assert_eq!(
+            parse_dotenv_line("export PORT=5432"),
+            Some(("PORT".into(), "5432".into()))
+        );
+        assert_eq!(parse_dotenv_line("# comment"), None);
+    }
+
+    #[test]
+    fn preserves_empty_environment_values() {
+        assert_eq!(
+            parse_env_list(&["EMPTY=".into()]).get("EMPTY"),
+            Some(&String::new())
+        );
     }
 }

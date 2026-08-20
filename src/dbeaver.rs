@@ -276,3 +276,80 @@ fn parse_postgres_jdbc_url(url: &str) -> Option<ParsedJdbcUrl> {
         database,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalizes_postgres_driver_aliases() {
+        assert_eq!(normalize_driver("postgres"), "postgresql");
+        assert_eq!(normalize_driver("POSTGRES-JDBC"), "postgresql");
+        assert_eq!(normalize_driver("mysql"), "mysql");
+    }
+
+    #[test]
+    fn converts_connection_lists_and_maps_to_vectors() {
+        let list = ConnectionsField::List(vec![]).into_vec();
+        let map = ConnectionsField::Map(HashMap::new()).into_vec();
+        assert!(list.is_empty());
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn parses_postgres_jdbc_url_with_optional_port() {
+        let parsed = parse_postgres_jdbc_url("jdbc:postgresql://db.example:5433/app").unwrap();
+        assert_eq!(parsed.host, "db.example");
+        assert_eq!(parsed.port, 5433);
+        assert_eq!(parsed.database, "app");
+        assert!(parse_postgres_jdbc_url("jdbc:mysql://db/app").is_none());
+    }
+
+    #[test]
+    fn rejects_incomplete_postgres_jdbc_url() {
+        assert!(parse_postgres_jdbc_url("jdbc:postgresql://").is_none());
+        assert!(parse_postgres_jdbc_url("jdbc:postgresql://db").is_none());
+    }
+
+    #[test]
+    fn parses_dbeaver_sources_from_list_and_map_shapes() {
+        let content = r#"{
+          "connections": [{"name":"list","host":"db1","port":"5432","database":"app","driver":"postgres"}],
+          "data-sources": {"map": {"name":"map","url":"jdbc:postgresql://db2:5433/app"}}
+        }"#;
+        let connections = parse_data_sources(content).unwrap();
+        assert_eq!(connections.len(), 2);
+        assert_eq!(connections[0].driver, "postgresql");
+        assert_eq!(connections[1].host, "db2");
+        assert_eq!(connections[1].port, 5433);
+    }
+
+    #[test]
+    fn imports_data_sources_from_a_zip_archive() {
+        let path =
+            std::env::temp_dir().join(format!("safeselect-dbeaver-{}.zip", uuid::Uuid::new_v4()));
+        let file = std::fs::File::create(&path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        zip.start_file(
+            "workspace/readme.txt",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
+        std::io::Write::write_all(&mut zip, b"not a data source").unwrap();
+        zip.start_file(
+            "workspace/data-sources.json",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
+        std::io::Write::write_all(
+            &mut zip,
+            br#"{"connections":[{"name":"local","host":"localhost","database":"app"}]}"#,
+        )
+        .unwrap();
+        zip.finish().unwrap();
+
+        let connections = import_zip(&path).unwrap();
+        assert_eq!(connections[0].name, "local");
+        let _ = std::fs::remove_file(path);
+    }
+}

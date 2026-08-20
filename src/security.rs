@@ -111,11 +111,29 @@ impl SecurityEngine {
             collection: request.collection.clone(),
         })?;
 
-        if !request.filter.is_object() {
+        self.validate_document_find_filter(&request.filter)?;
+        self.validate_document_find_options(request)?;
+        self.validate_document_mql(&request.filter)?;
+        if let Some(projection) = &request.projection {
+            self.validate_document_mql(projection)?;
+        }
+        if let Some(sort) = &request.sort {
+            self.validate_document_mql(sort)?;
+        }
+
+        Ok(())
+    }
+
+    fn validate_document_find_filter(&self, filter: &serde_json::Value) -> Result<()> {
+        if !filter.is_object() {
             return Err(SafeselectError::QueryRejected(
                 "Document filter must be a JSON object".into(),
             ));
         }
+        Ok(())
+    }
+
+    fn validate_document_find_options(&self, request: &DocumentFindRequest) -> Result<()> {
         if request
             .projection
             .as_ref()
@@ -136,14 +154,6 @@ impl SecurityEngine {
                 self.limits.max_rows
             )));
         }
-        self.validate_document_mql(&request.filter)?;
-        if let Some(projection) = &request.projection {
-            self.validate_document_mql(projection)?;
-        }
-        if let Some(sort) = &request.sort {
-            self.validate_document_mql(sort)?;
-        }
-
         Ok(())
     }
 
@@ -197,26 +207,31 @@ impl SecurityEngine {
             )));
         }
         for stage in request.pipeline.as_array().into_iter().flatten() {
-            let Some(stage_object) = stage.as_object() else {
-                return Err(SafeselectError::QueryRejected(
-                    "Aggregation stages must be JSON objects. Correct the pipeline argument before retrying; do not repeat the same call. Example: [{\"$match\":{\"active\":true}}]".into(),
-                ));
-            };
-            if stage_object.len() != 1 {
-                return Err(SafeselectError::QueryRejected(
-                    "Aggregation stages must contain exactly one operator. Correct the pipeline argument before retrying; do not repeat the same call. Example: [{\"$match\":{\"active\":true}}]".into(),
-                ));
-            }
-            for name in stage_object.keys() {
-                if matches!(name.as_str(), "$out" | "$merge" | "$currentOp") {
-                    return Err(SafeselectError::QueryRejected(format!(
-                        "Aggregation stage '{name}' is not read-only"
-                    )));
-                }
-            }
-            self.validate_document_mql(stage)?;
+            self.validate_aggregate_stage(stage)?;
         }
         Ok(())
+    }
+
+    fn validate_aggregate_stage(&self, stage: &serde_json::Value) -> Result<()> {
+        let Some(stage_object) = stage.as_object() else {
+            return Err(SafeselectError::QueryRejected(
+                "Aggregation stages must be JSON objects. Correct the pipeline argument before retrying; do not repeat the same call. Example: [{\"$match\":{\"active\":true}}]".into(),
+            ));
+        };
+        if stage_object.len() != 1 {
+            return Err(SafeselectError::QueryRejected(
+                "Aggregation stages must contain exactly one operator. Correct the pipeline argument before retrying; do not repeat the same call. Example: [{\"$match\":{\"active\":true}}]".into(),
+            ));
+        }
+        if let Some(name) = stage_object
+            .keys()
+            .find(|name| matches!(name.as_str(), "$out" | "$merge" | "$currentOp"))
+        {
+            return Err(SafeselectError::QueryRejected(format!(
+                "Aggregation stage '{name}' is not read-only"
+            )));
+        }
+        self.validate_document_mql(stage)
     }
 
     pub fn validate_document_distinct(&self, request: &DocumentDistinctRequest) -> Result<()> {
@@ -411,20 +426,20 @@ impl SecurityEngine {
             )));
         }
 
+        self.validate_policy_constraints(trimmed)?;
+        self.check_read_only(trimmed)
+    }
+
+    fn validate_policy_constraints(&self, query: &str) -> Result<()> {
         if self.policy.require_single_statement {
-            self.check_single_statement(trimmed)?;
+            self.check_single_statement(query)?;
         }
-
-        self.check_read_only(trimmed)?;
-
         if !self.policy.allowed_schemas.is_empty() {
-            self.check_allowed_schemas(trimmed)?;
+            self.check_allowed_schemas(query)?;
         }
-
         if !self.policy.denied_relations.is_empty() {
-            self.check_denied_relations(trimmed)?;
+            self.check_denied_relations(query)?;
         }
-
         Ok(())
     }
 
@@ -686,15 +701,19 @@ impl SecurityEngine {
     }
 
     fn check_document_name(&self, kind: &str, name: &str) -> Result<()> {
-        if name.is_empty()
-            || name.len() > 255
-            || name.starts_with("system.")
-            || name.contains('\0')
-            || name.contains('$')
-            || name.contains('/')
-            || name.contains('\\')
-            || name.contains(' ')
-        {
+        let invalid = [
+            name.is_empty(),
+            name.len() > 255,
+            name.starts_with("system."),
+            name.contains('\0'),
+            name.contains('$'),
+            name.contains('/'),
+            name.contains('\\'),
+            name.contains(' '),
+        ]
+        .into_iter()
+        .any(std::convert::identity);
+        if invalid {
             return Err(SafeselectError::QueryRejected(format!(
                 "Invalid document {kind} name: {name}"
             )));
@@ -703,15 +722,19 @@ impl SecurityEngine {
     }
 
     fn check_document_field(&self, field: &str) -> Result<()> {
-        if field.is_empty()
-            || field.len() > 512
-            || field.contains('\0')
-            || field.contains('$')
-            || field.contains(' ')
-            || field.starts_with('.')
-            || field.ends_with('.')
-            || field.split('.').any(str::is_empty)
-        {
+        let invalid = [
+            field.is_empty(),
+            field.len() > 512,
+            field.contains('\0'),
+            field.contains('$'),
+            field.contains(' '),
+            field.starts_with('.'),
+            field.ends_with('.'),
+            field.split('.').any(str::is_empty),
+        ]
+        .into_iter()
+        .any(std::convert::identity);
+        if invalid {
             return Err(SafeselectError::QueryRejected(format!(
                 "Invalid document field path: {field}"
             )));
@@ -1315,6 +1338,28 @@ mod tests {
     }
 
     #[test]
+    fn test_stacked_query_variants_are_rejected_before_execution() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+
+        for sql in [
+            "COMMIT; DROP TABLE public.users",
+            "ROLLBACK; CREATE TABLE public.evil_copy (id int)",
+            "SELECT 1; DELETE FROM public.users",
+            "/* harmless prefix */\nCoMmIt ;\nDrOp TABLE public.users",
+            "WITH x AS (SELECT 1) SELECT * FROM x; DELETE FROM public.users",
+            "DO $$ BEGIN PERFORM 1; END $$; DELETE FROM public.users",
+        ] {
+            let error = engine
+                .validate(sql)
+                .expect_err("stacked query must be rejected before sidecar execution");
+            assert!(
+                error.to_string().contains("Single statement required"),
+                "unexpected rejection for {sql:?}: {error}"
+            );
+        }
+    }
+
+    #[test]
     fn test_semicolon_in_string() {
         assert_eq!(count_statements("SELECT 'hello;world'"), 1);
     }
@@ -1806,6 +1851,25 @@ mod tests {
     }
 
     #[test]
+    fn test_document_aggregate_rejects_write_stage_and_invalid_limit() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        let write_stage = DocumentAggregateRequest {
+            database: "app".into(),
+            collection: "users".into(),
+            pipeline: serde_json::json!([{"$out": "archive"}]),
+            limit: 10,
+        };
+        assert!(engine.validate_document_aggregate(&write_stage).is_err());
+
+        let invalid_limit = DocumentAggregateRequest {
+            pipeline: serde_json::json!([]),
+            limit: 0,
+            ..write_stage
+        };
+        assert!(engine.validate_document_aggregate(&invalid_limit).is_err());
+    }
+
+    #[test]
     fn test_document_distinct_rejects_invalid_field_path() {
         let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
         let request = DocumentDistinctRequest {
@@ -1819,6 +1883,40 @@ mod tests {
     }
 
     #[test]
+    fn test_document_distinct_accepts_valid_request() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        let request = DocumentDistinctRequest {
+            database: "app".into(),
+            collection: "users".into(),
+            field: "profile.name".into(),
+            filter: serde_json::json!({"active": true}),
+            limit: 10,
+        };
+
+        assert!(engine.validate_document_distinct(&request).is_ok());
+    }
+
+    #[test]
+    fn test_document_distinct_rejects_invalid_filter_and_limit() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        let invalid_filter = DocumentDistinctRequest {
+            database: "app".into(),
+            collection: "users".into(),
+            field: "name".into(),
+            filter: serde_json::json!("active"),
+            limit: 10,
+        };
+        assert!(engine.validate_document_distinct(&invalid_filter).is_err());
+
+        let invalid_limit = DocumentDistinctRequest {
+            filter: serde_json::json!({}),
+            limit: 0,
+            ..invalid_filter
+        };
+        assert!(engine.validate_document_distinct(&invalid_limit).is_err());
+    }
+
+    #[test]
     fn test_document_collection_filter_hides_denied_collection() {
         let policy = SecurityPolicy {
             denied_collections: vec!["app.secrets".into()],
@@ -1828,5 +1926,131 @@ mod tests {
         let collections =
             engine.filter_document_collections("app", vec!["users".into(), "secrets".into()]);
         assert_eq!(collections, vec!["users"]);
+    }
+
+    #[test]
+    fn test_result_size_accepts_limits_and_rejects_overages() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        assert!(engine.check_result_size(1, 1).is_ok());
+        assert!(engine.check_result_size(501, 1).is_err());
+        assert!(engine.check_result_size(1, 2_000_001).is_err());
+    }
+
+    #[test]
+    fn extracts_explain_targets_and_options() {
+        assert_eq!(extract_explain_target("EXPLAIN SELECT 1"), Some("SELECT 1"));
+        assert_eq!(
+            extract_explain_target("EXPLAIN (ANALYZE, BUFFERS) SELECT 1"),
+            Some("SELECT 1")
+        );
+        assert_eq!(
+            extract_explain_target("EXPLAIN ANALYZE SELECT 1"),
+            Some("SELECT 1")
+        );
+        assert_eq!(extract_explain_target("SELECT 1"), None);
+        assert_eq!(extract_explain_target("EXPLAIN (ANALYZE SELECT 1"), None);
+    }
+
+    #[test]
+    fn validates_document_find_projection_sort_and_limits() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        let valid = DocumentFindRequest {
+            database: "app".into(),
+            collection: "users".into(),
+            filter: serde_json::json!({"active": true}),
+            projection: Some(serde_json::json!({"name": 1})),
+            sort: Some(serde_json::json!({"name": 1})),
+            limit: 10,
+        };
+        assert!(engine.validate_document_find(&valid).is_ok());
+
+        for request in [
+            DocumentFindRequest {
+                projection: Some(serde_json::json!("name")),
+                ..valid.clone()
+            },
+            DocumentFindRequest {
+                sort: Some(serde_json::json!("name")),
+                ..valid.clone()
+            },
+            DocumentFindRequest {
+                limit: 0,
+                ..valid.clone()
+            },
+            DocumentFindRequest {
+                limit: 501,
+                ..valid
+            },
+        ] {
+            assert!(engine.validate_document_find(&request).is_err());
+        }
+    }
+
+    #[test]
+    fn strips_sql_comments_without_changing_literals() {
+        assert_eq!(
+            SecurityEngine::strip_sql_comments("SELECT 1 -- note\n"),
+            "SELECT 1 \n"
+        );
+        assert_eq!(
+            SecurityEngine::strip_sql_comments("SELECT 1 /* remove */"),
+            "SELECT 1 "
+        );
+    }
+
+    #[test]
+    fn counts_sql_statements_and_ignores_trailing_semicolons() {
+        assert_eq!(count_statements("SELECT 1"), 1);
+        assert_eq!(count_statements("SELECT 1; SELECT 2"), 2);
+        assert_eq!(strip_trailing_semicolons("SELECT 1;;;"), "SELECT 1");
+    }
+
+    #[test]
+    fn rejects_unbalanced_sql_parentheses() {
+        assert_eq!(count_statements("SELECT (1"), 1);
+    }
+
+    #[test]
+    fn detects_schema_references_and_allowed_patterns() {
+        assert!(!has_schema_reference("public.", &["public".into()]));
+        assert!(!has_schema_reference("private.x.y.", &[]));
+        assert!(!has_schema_reference("select a.b from users", &[]));
+    }
+
+    #[test]
+    fn sanitizes_keyword_scan_comments_and_literals() {
+        let sanitized =
+            sanitize_for_keyword_scan("SELECT 'FROM x' /* hidden */ FROM users -- end\n");
+        assert!(sanitized.contains("SELECT"));
+        assert!(sanitized.contains("FROM USERS"));
+        assert!(!sanitized.contains("hidden"));
+        assert!(!sanitized.contains("end"));
+    }
+
+    #[test]
+    fn finds_only_top_level_keywords() {
+        let sql = "SELECT (SELECT 1 AS nested) AS value FROM users";
+        assert_eq!(find_top_level_keyword(sql, 0, "AS"), Some(28));
+        assert_eq!(find_top_level_keyword(sql, 0, "FROM"), Some(37));
+        assert_eq!(find_top_level_keyword("SELECT 'FROM'", 0, "FROM"), None);
+    }
+
+    #[test]
+    fn scans_keywords_across_comments_quotes_and_nested_parentheses() {
+        let sql = "SELECT (1 /* FROM */), \"FROM\" -- FROM\nFROM users";
+        assert_eq!(find_top_level_keyword(sql, 0, "FROM"), sql.rfind("FROM"));
+        let sanitized = sanitize_for_keyword_scan("SELECT \"secret\" -- comment\nFROM users");
+        assert!(sanitized.contains("SELECT"));
+        assert!(sanitized.contains("FROM USERS"));
+    }
+
+    #[test]
+    fn validates_system_queries_without_schema_allowlist() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        assert!(engine
+            .validate_system("SELECT * FROM information_schema.tables")
+            .is_ok());
+        assert!(engine.validate_system("").is_err());
+        assert!(engine.validate_system("DROP TABLE users").is_err());
     }
 }

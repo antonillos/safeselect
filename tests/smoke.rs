@@ -1,5 +1,5 @@
 use sha2::{Digest, Sha256};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -135,7 +135,7 @@ fn test_serve_missing_project() {
 }
 
 #[test]
-fn test_mcp_security_rejection_is_audited_before_fail_closed_exit() {
+fn test_mcp_stacked_query_rejection_is_audited_before_fail_closed_exit() {
     let tmp = std::env::temp_dir().join(format!(
         "safeselect-fail-closed-audit-{}",
         std::process::id()
@@ -207,7 +207,7 @@ sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     )
     .unwrap();
 
-    let forbidden_sql = "INSERT INTO public.audit_probe(value) VALUES ('synthetic')";
+    let forbidden_sql = "/* harmless prefix */\nCoMmIt ;\nDrOp TABLE public.audit_probe";
     let mut child = Command::new(safeselect_bin())
         .args([
             "serve",
@@ -226,6 +226,7 @@ sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         .expect("failed to start MCP server");
 
     let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = child.stdout.take().unwrap();
     writeln!(
         stdin,
         "{}",
@@ -269,6 +270,32 @@ sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         std::thread::sleep(Duration::from_millis(20));
     };
     assert_eq!(status.code(), Some(1));
+
+    let mut stdout_text = String::new();
+    stdout
+        .read_to_string(&mut stdout_text)
+        .expect("failed to read MCP stdout");
+    let frames: Vec<serde_json::Value> = stdout_text
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("stdout must contain only JSON-RPC frames"))
+        .collect();
+    let rejection = frames
+        .iter()
+        .find(|frame| frame.get("id") == Some(&serde_json::json!(2)))
+        .expect("missing JSON-RPC rejection response");
+    assert_eq!(rejection["error"]["code"], -32000);
+    assert!(
+        rejection["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("Query rejected")),
+        "unexpected rejection response: {rejection}"
+    );
+    assert!(
+        rejection["error"]["data"]["next_suggestion"]
+            .as_str()
+            .is_some_and(|suggestion| !suggestion.is_empty()),
+        "rejection must retain trusted next-step guidance: {rejection}"
+    );
 
     let project_audit_dir = audit_dir.join("Fail Closed Audit Test").join("testing");
     let audit_files: Vec<_> = std::fs::read_dir(&project_audit_dir)
