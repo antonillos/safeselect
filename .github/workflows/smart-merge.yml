@@ -95,7 +95,8 @@ jobs:
               return;
             }
 
-            // SafeSelect uses this label to run the complete security validation.
+            // Mark the pull request as approved for the Smart Merge path. Validation is
+            // reused by immutable head SHA or dispatched once below.
             try {
               await github.rest.issues.addLabels({
                 owner,
