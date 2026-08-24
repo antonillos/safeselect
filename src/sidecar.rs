@@ -275,9 +275,11 @@ impl SidecarProcess {
 
     fn startup_connection_error(&mut self, backend: &str) -> SafeselectError {
         let stderr = self.read_stderr();
-        let detail = (!stderr.is_empty())
-            .then(|| format!(": {stderr}"))
-            .unwrap_or_default();
+        let detail = if stderr.is_empty() {
+            String::new()
+        } else {
+            format!(": {stderr}")
+        };
         SafeselectError::Sidecar(format!(
             "sidecar process terminated during startup — {backend} backend connection failed{detail}"
         ))
