@@ -1112,14 +1112,18 @@ impl McpServer {
                         },
                         "environment": {
                             "type": "string",
-                            "description": "Environment name to serve"
+                            "description": "Environment name to serve (optional when the project has exactly one)"
                         },
                         "name": {
                             "type": "string",
                             "description": "Entry name (optional, defaults to 'safeselect-<project-dir>-<environment>')"
+                        },
+                        "local": {
+                            "type": "boolean",
+                            "description": "Install in project scope instead of user scope (default: false)"
                         }
                     },
-                    "required": ["client", "environment"]
+                    "required": ["client"]
                 }),
             },
             ToolDefinition {
@@ -2955,7 +2959,7 @@ impl McpServer {
         args: &serde_json::Value,
     ) -> Result<()> {
         let environment = match args.get("environment").and_then(|v| v.as_str()) {
-            Some(e) => e,
+            Some(environment) => environment,
             None => return self.send_error(id, -32602, "Missing 'environment' argument"),
         };
 
@@ -3519,10 +3523,26 @@ impl McpServer {
             Some(c) => c,
             None => return self.send_error(id, -32602, "Missing 'client' argument"),
         };
+        let environments = project_environment_names(&self.repo_root)?;
         let environment = match args.get("environment").and_then(|v| v.as_str()) {
-            Some(e) => e,
-            None => return self.send_error(id, -32602, "Missing 'environment' argument"),
+            Some(environment) if environments.iter().any(|item| item == environment) => {
+                environment.to_string()
+            }
+            Some(environment) => {
+                return self.send_error(id, -32602, format!("Unknown environment '{environment}'. Next suggestion: Retry agent_install with one of: {}.", environments.join(", ")))
+            }
+            None if environments.len() == 1 => environments[0].clone(),
+            None if environments.is_empty() => {
+                return self.send_error(id, -32602, "No project environments exist. Next suggestion: Call import_compose or create one environment before retrying agent_install.")
+            }
+            None => {
+                return self.send_error(id, -32602, format!("Environment is ambiguous; valid choices: {}. Next suggestion: Retry agent_install once with one exact environment from this list.", environments.join(", ")))
+            }
         };
+        let local = args
+            .get("local")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
         let name = args
             .get("name")
             .and_then(|v| v.as_str())
@@ -3541,12 +3561,12 @@ impl McpServer {
 
         match agents::install_entry(
             client,
-            environment,
+            &environment,
             &entry_name,
             Some(&repo_root),
             Some(&config_dir),
             mcp_timeout_ms,
-            false,
+            local,
         ) {
             Ok(()) => {
                 let text = format!("Entry '{entry_name}' installed for {client}");
@@ -3592,23 +3612,13 @@ impl McpServer {
     }
 
     fn handle_agent_status(&mut self, id: Option<serde_json::Value>) -> Result<()> {
-        let clients = match agents::detect_clients() {
-            Ok(c) => c,
+        let status_lines = match agents::status_lines(Some(&self.repo_root)) {
+            Ok(lines) => lines,
             Err(e) => return self.send_error(id, -32000, format!("Detection failed: {e}")),
         };
 
         let mut lines = vec!["Agent integration status:".into()];
-        for client in &clients {
-            if client.detected {
-                let content = std::fs::read_to_string(&client.config_path).unwrap_or_default();
-                let has_entries = content.contains("safeselect");
-                let status = if has_entries { "✓" } else { " " };
-                let installed = if has_entries { " (installed)" } else { "" };
-                lines.push(format!("  {status} {}{}", client.name, installed));
-            } else {
-                lines.push(format!("  ✗ {}", client.name));
-            }
-        }
+        lines.extend(status_lines);
 
         let resp = trusted_tool_response(id, "ok", lines.join("\n"), "Report the integration status; call agent_install or agent_uninstall only if the user requested that change, otherwise stop.");
         self.write_response(&resp)
@@ -4289,6 +4299,27 @@ fn import_compose_guidance_text(
     update_generated_by(&scan_path.join(".safeselect"))?;
     let names: Vec<String> = all_connections.iter().map(|c| c.env_name.clone()).collect();
     Ok(compose::build_import_guidance(project_name, &import, &names, true).text)
+}
+
+fn project_environment_names(repo_root: &Path) -> Result<Vec<String>> {
+    let directory = repo_root.join(".safeselect").join("environments");
+    let mut names = Vec::new();
+    let entries = std::fs::read_dir(&directory).map_err(|error| {
+        SafeselectError::Config(format!(
+            "cannot read environments in {}: {error}",
+            directory.display()
+        ))
+    })?;
+    for entry in entries {
+        let path = entry?.path();
+        if path.extension().and_then(|extension| extension.to_str()) == Some("toml") {
+            if let Some(name) = path.file_stem().and_then(|name| name.to_str()) {
+                names.push(name.to_string());
+            }
+        }
+    }
+    names.sort();
+    Ok(names)
 }
 
 fn tool_error_response(
@@ -5560,6 +5591,26 @@ mod tests {
     }
 
     #[test]
+    fn lists_project_environments_for_agent_autodetection() {
+        let root = std::env::temp_dir().join(format!(
+            "safeselect-mcp-environments-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let environments = root.join(".safeselect/environments");
+        std::fs::create_dir_all(&environments).unwrap();
+        std::fs::write(environments.join("prod.toml"), "").unwrap();
+        std::fs::write(environments.join("dev.toml"), "").unwrap();
+        std::fs::write(environments.join("README.md"), "").unwrap();
+        assert_eq!(
+            project_environment_names(&root).unwrap(),
+            vec!["dev", "prod"]
+        );
+        std::fs::remove_dir_all(&environments).unwrap();
+        assert!(project_environment_names(&root).is_err());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn trusted_success_response_has_required_next_suggestion() {
         let value = response_json(&trusted_tool_response(
             Some(serde_json::json!(1)),
@@ -6386,8 +6437,10 @@ services:
                 &serde_json::json!({"schema":"bad-name"})
             )
             .is_err());
-        let mut policy = crate::config::SecurityPolicy::default();
-        policy.allowed_schemas = vec!["public".into()];
+        let policy = crate::config::SecurityPolicy {
+            allowed_schemas: vec!["public".into()],
+            ..Default::default()
+        };
         server.security = SecurityEngine::new(policy, crate::config::LimitsConfig::default());
         assert!(server
             .catalog_schema(

@@ -363,7 +363,7 @@ fn validate_explicit_project(
 }
 
 fn validate_current_project(loader: &ConfigLoader, cwd: &Path) -> Result<()> {
-    let Some(dir) = loader.find_local_project(&cwd) else {
+    let Some(dir) = loader.find_local_project(cwd) else {
         println!("No .safeselect/ directory found. Create one with:");
         println!("  safeselect import-dbeaver <export.zip>");
         println!("  mkdir -p .safeselect/environments && touch .safeselect/project.toml");
@@ -932,6 +932,9 @@ fn cmd_agent(action: AgentAction) -> Result<()> {
                     println!("    Config: {}", client.config_path.display());
                 }
             }
+            println!(
+                "Next: choose one detected client and run `safeselect agent install <client>`."
+            );
             Ok(())
         }
         AgentAction::Install {
@@ -1115,23 +1118,14 @@ fn cmd_agent(action: AgentAction) -> Result<()> {
             agents::uninstall_entry(&client, &entry_name, repo_root.as_deref())
         }
         AgentAction::Status => {
-            let clients = agents::detect_clients()?;
+            let loader = ConfigLoader::new();
+            let cwd = std::env::current_dir()?;
+            let repo_root = loader.find_local_project(&cwd);
             println!("Agent integration status:");
-
-            for client in &clients {
-                if client.detected {
-                    let content = std::fs::read_to_string(&client.config_path).unwrap_or_default();
-                    let has_entries = content.contains("safeselect");
-                    println!(
-                        "  {} {} {}",
-                        if has_entries { "✓" } else { " " },
-                        client.name,
-                        if has_entries { "(installed)" } else { "" }
-                    );
-                } else {
-                    println!("  ✗ {}", client.name);
-                }
+            for line in agents::status_lines(repo_root.as_deref())? {
+                println!("{line}");
             }
+            println!("Next: install or remove an entry only if the reported state differs from your intent.");
             Ok(())
         }
     }
