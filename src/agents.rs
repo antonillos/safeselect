@@ -273,7 +273,7 @@ fn install_file_entry(
 
     if new_content == content {
         println!("Entry '{entry_name}' is already up to date for {client}");
-        println!("Next: run `safeselect agent status` to verify it.");
+        println!("Next: {}", install_next_step(client, local));
         return Ok(());
     }
 
@@ -283,8 +283,20 @@ fn install_file_entry(
     write_config_and_verify(&config_path, &content, &new_content, config_existed)?;
 
     println!("Entry '{entry_name}' installed for {client}");
-    println!("Next: run `safeselect agent status` to verify it.");
+    println!("Next: {}", install_next_step(client, local));
     Ok(())
+}
+
+fn install_next_step(client: &str, local: bool) -> &'static str {
+    match (client, local) {
+        ("codex", true) => {
+            "open this project in Codex, trust it, and approve the MCP server when prompted."
+        }
+        ("claude-code", true) => {
+            "run `claude` from this project and approve the MCP server, then use `/mcp` to verify it."
+        }
+        _ => "run `safeselect agent status` to verify it.",
+    }
 }
 
 fn read_or_initialize_config(client: &str, path: &Path) -> Result<(bool, String)> {
@@ -748,7 +760,7 @@ fn install_claude_entry_with_program(
         )));
     }
     println!("Entry '{entry_name}' installed for claude-code ({scope} scope)");
-    println!("Next: run `safeselect agent status` to verify it.");
+    println!("Next: {}", install_next_step("claude-code", local));
     Ok(())
 }
 
@@ -1475,11 +1487,32 @@ fn detect_json_entry_environment(
     Ok(command.and_then(|args| extract_environment_from_args(args)))
 }
 
-fn canonical_entry_name(repo_root: Option<&Path>, environment: &str) -> Option<String> {
+pub fn canonical_entry_name(repo_root: Option<&Path>, environment: &str) -> Option<String> {
     let project_name = repo_root
         .and_then(|root| root.file_name())
         .and_then(|name| name.to_str())?;
-    Some(format!("safeselect-{project_name}-{environment}"))
+    Some(format!(
+        "safeselect-{}-{}",
+        slug_entry_name_part(project_name),
+        slug_entry_name_part(environment)
+    ))
+}
+
+fn slug_entry_name_part(value: &str) -> String {
+    let mut slug = String::with_capacity(value.len());
+    for character in value.chars() {
+        if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+            slug.push(character);
+        } else if !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    let slug = slug.trim_matches('-');
+    if slug.is_empty() {
+        "unknown".to_string()
+    } else {
+        slug.to_string()
+    }
 }
 
 fn extract_environment_from_args(args: &[serde_json::Value]) -> Option<String> {
@@ -1847,6 +1880,32 @@ mod tests {
         )
         .is_err());
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn builds_client_safe_canonical_entry_names() {
+        assert_eq!(
+            canonical_entry_name(Some(Path::new("/tmp/safeselect-e2e")), "testing"),
+            Some("safeselect-safeselect-e2e-testing".to_string())
+        );
+        assert_eq!(
+            canonical_entry_name(Some(Path::new("/tmp/Démo Project")), "QA / EU"),
+            Some("safeselect-D-mo-Project-QA-EU".to_string())
+        );
+        assert_eq!(
+            canonical_entry_name(Some(Path::new("/tmp/---")), " "),
+            Some("safeselect-unknown-unknown".to_string())
+        );
+    }
+
+    #[test]
+    fn suggests_native_project_approval_when_required() {
+        assert!(install_next_step("codex", true).contains("trust it"));
+        assert!(install_next_step("claude-code", true).contains("`/mcp`"));
+        assert_eq!(
+            install_next_step("codex", false),
+            "run `safeselect agent status` to verify it."
+        );
     }
 
     #[test]

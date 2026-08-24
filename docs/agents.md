@@ -88,6 +88,12 @@ Codex TOML edits preserve unrelated comments and settings. Claude Code changes
 go through its native `claude mcp` command. Repeating an installation with the
 same values is safe and does not duplicate the entry.
 
+Project-scoped Codex and Claude Code servers still pass through each client's
+native trust boundary. Open the repository in Codex and trust it before
+approving the MCP server. For Claude Code, run `claude` from the repository and
+approve the project MCP server when prompted; `/mcp` then shows its health.
+SafeSelect never bypasses either client's approval step.
+
 Use `safeselect agent upgrade` when you already have an installed SafeSelect MCP
 entry and want to refresh it after upgrading the SafeSelect binary. By default it
 migrates the entry to the canonical `safeselect-<project>-<environment>` name when
