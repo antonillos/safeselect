@@ -172,10 +172,6 @@ fn project_display_name(dir: &std::path::Path) -> String {
     config::project_account_prefix(dir)
 }
 
-fn default_agent_entry_name(project_name: &str, environment: &str) -> String {
-    format!("safeselect-{project_name}-{environment}")
-}
-
 fn list_environment_names(repo_root: &Path) -> Result<Vec<String>> {
     let env_dir = repo_root.join(".safeselect").join("environments");
     let mut env_names = Vec::new();
@@ -1028,7 +1024,14 @@ fn cmd_agent(action: AgentAction) -> Result<()> {
             for environment in environments {
                 let entry_name = match &name {
                     Some(name) => name.clone(),
-                    None => default_agent_entry_name(&project_display_name(&root), &environment),
+                    None => agents::canonical_entry_name(Some(&root), &environment).ok_or_else(
+                        || {
+                            SafeselectError::Other(
+                                "could not derive a safe MCP entry name from the project path"
+                                    .into(),
+                            )
+                        },
+                    )?,
                 };
 
                 agents::install_entry(
@@ -4181,14 +4184,6 @@ mod tests {
         let addr: std::net::SocketAddr = "127.0.0.1:1".parse().unwrap();
         assert!(!check_postgres(&addr));
         assert!(!kill_process_on_port(65534));
-    }
-
-    #[test]
-    fn builds_default_agent_entry_name() {
-        assert_eq!(
-            default_agent_entry_name("demo", "local"),
-            "safeselect-demo-local"
-        );
     }
 
     #[test]
