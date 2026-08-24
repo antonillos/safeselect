@@ -355,11 +355,11 @@ fn build_entry_content(
     old_entry_name: Option<&str>,
 ) -> Result<String> {
     let args = serve_args(environment, repo_root)?;
-    let entry = serde_json::json!({
+    let mut entry = serde_json::json!({
         "command": "safeselect",
         "args": args,
     });
-    let copilot_entry = serde_json::json!({
+    let mut copilot_entry = serde_json::json!({
         "type": "stdio",
         "command": "safeselect",
         "args": serve_args(environment, repo_root)?,
@@ -372,6 +372,13 @@ fn build_entry_content(
         "enabled": true
     });
     if let Some(dir) = config_dir {
+        let config_dir = dir.to_string_lossy().to_string();
+        entry["env"] = serde_json::json!({
+            "SAFESELECT_CONFIG_DIR": config_dir
+        });
+        copilot_entry["env"] = serde_json::json!({
+            "SAFESELECT_CONFIG_DIR": config_dir
+        });
         opencode_entry["environment"] = serde_json::json!({
             "SAFESELECT_CONFIG_DIR": dir.to_string_lossy().to_string()
         });
@@ -1761,7 +1768,7 @@ mod tests {
             "safe",
             "dev",
             Some(&root),
-            None,
+            Some(&root),
             90_000,
             false,
             None,
@@ -1770,6 +1777,10 @@ mod tests {
         let cursor: serde_json::Value = serde_json::from_str(&cursor).unwrap();
         assert_eq!(cursor["mcpServers"]["safe"]["command"], "safeselect");
         assert_eq!(cursor["mcpServers"]["safe"]["args"][1], "--project");
+        assert_eq!(
+            cursor["mcpServers"]["safe"]["env"]["SAFESELECT_CONFIG_DIR"],
+            root.to_string_lossy().as_ref()
+        );
 
         let copilot = build_entry_content(
             "copilot",
@@ -1777,7 +1788,7 @@ mod tests {
             "safe",
             "dev",
             Some(&root),
-            None,
+            Some(&root),
             90_000,
             false,
             None,
@@ -1786,6 +1797,10 @@ mod tests {
         let copilot: serde_json::Value = serde_json::from_str(&copilot).unwrap();
         assert_eq!(copilot["servers"]["safe"]["type"], "stdio");
         assert_eq!(copilot["servers"]["safe"]["command"], "safeselect");
+        assert_eq!(
+            copilot["servers"]["safe"]["env"]["SAFESELECT_CONFIG_DIR"],
+            root.to_string_lossy().as_ref()
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
