@@ -26,7 +26,7 @@ SQL proxy for AI agents. Fail-closed security model: any incident terminates the
 
 1. `cargo build` — builds the Rust binary with embedded sidecar
 2. `cargo test` — runs Rust unit tests
-3. `cd sidecar && mvn package` — rebuilds the Java sidecar
+3. `makevn doctor init test package` — run from the Git repository root to initialize, test, and rebuild the Java sidecar (do not call `mvn` directly)
 4. After rebuilding sidecar, copy JAR to expected name and rebuild Rust
 
 ## Commands
@@ -35,6 +35,7 @@ SQL proxy for AI agents. Fail-closed security model: any incident terminates the
 - `cargo clippy` — lint
 - `cargo fmt` — format
 - `cargo test` — run tests
+- `makevn doctor init test package` — run from the Git repository root to initialize, test, and build the Java sidecar
 
 ## Preferences
 

@@ -1,0 +1,45 @@
+{
+  "manifest_version": "0.3",
+  "name": "safeselect",
+  "display_name": "SafeSelect MCP",
+  "version": "__VERSION__",
+  "description": "Fail-closed, read-only PostgreSQL and MongoDB access for AI agents.",
+  "author": {
+    "name": "antonillos",
+    "url": "https://github.com/antonillos"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/antonillos/safeselect.git"
+  },
+  "homepage": "https://github.com/antonillos/safeselect",
+  "documentation": "https://github.com/antonillos/safeselect/blob/main/README.md",
+  "support": "https://github.com/antonillos/safeselect/issues",
+  "license": "MIT",
+  "compatibility": {
+    "platforms": ["__PLATFORM__"]
+  },
+  "user_config": {
+    "project": {
+      "type": "directory",
+      "title": "SafeSelect project",
+      "description": "Repository containing the SafeSelect project configuration.",
+      "required": true
+    },
+    "environment": {
+      "type": "string",
+      "title": "Environment",
+      "description": "SafeSelect environment to serve, for example testing or production.",
+      "required": true
+    }
+  },
+  "server": {
+    "type": "binary",
+    "entry_point": "server/safeselect",
+    "mcp_config": {
+      "command": "${__dirname}/server/safeselect",
+      "args": ["serve", "--project", "${user_config.project}", "--environment", "${user_config.environment}"],
+      "env": {}
+    }
+  }
+}
