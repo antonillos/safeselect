@@ -114,13 +114,19 @@ impl SecurityEngine {
         self.validate_document_find_filter(&request.filter)?;
         self.validate_document_find_options(request)?;
         self.validate_document_mql(&request.filter)?;
-        if let Some(projection) = &request.projection {
-            self.validate_document_mql(projection)?;
-        }
-        if let Some(sort) = &request.sort {
-            self.validate_document_mql(sort)?;
-        }
+        self.validate_optional_document_mql(request.projection.as_ref(), request.sort.as_ref())?;
 
+        Ok(())
+    }
+
+    fn validate_optional_document_mql(
+        &self,
+        projection: Option<&serde_json::Value>,
+        sort: Option<&serde_json::Value>,
+    ) -> Result<()> {
+        for value in [projection, sort].into_iter().flatten() {
+            self.validate_document_mql(value)?;
+        }
         Ok(())
     }
 
@@ -460,14 +466,18 @@ impl SecurityEngine {
             )));
         }
 
+        self.validate_system_policy(trimmed)
+    }
+
+    fn validate_system_policy(&self, sql: &str) -> Result<()> {
         if self.policy.require_single_statement {
-            self.check_single_statement(trimmed)?;
+            self.check_single_statement(sql)?;
         }
 
-        self.check_read_only(trimmed)?;
+        self.check_read_only(sql)?;
 
         if !self.policy.denied_relations.is_empty() {
-            self.check_denied_relations(trimmed)?;
+            self.check_denied_relations(sql)?;
         }
 
         Ok(())
@@ -488,29 +498,36 @@ impl SecurityEngine {
         let mut result = String::with_capacity(sql.len());
         let mut chars = sql.chars().peekable();
         while let Some(ch) = chars.next() {
-            if ch == '-' && chars.peek() == Some(&'-') {
-                // Line comment: skip until newline
-                for c in chars.by_ref() {
-                    if c == '\n' {
-                        result.push('\n');
-                        break;
-                    }
-                }
-            } else if ch == '/' && chars.peek() == Some(&'*') {
-                // Block comment: skip until */
-                chars.next(); // consume '*'
-                let mut prev = ' ';
-                for c in chars.by_ref() {
-                    if prev == '*' && c == '/' {
-                        break;
-                    }
-                    prev = c;
-                }
-            } else {
-                result.push(ch);
+            match (ch, chars.peek().copied()) {
+                ('-', Some('-')) => Self::skip_line_comment(&mut chars, &mut result),
+                ('/', Some('*')) => Self::skip_block_comment(&mut chars),
+                _ => result.push(ch),
             }
         }
         result
+    }
+
+    fn skip_line_comment(
+        chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
+        result: &mut String,
+    ) {
+        for ch in chars.by_ref() {
+            if ch == '\n' {
+                result.push('\n');
+                break;
+            }
+        }
+    }
+
+    fn skip_block_comment(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
+        chars.next();
+        let mut previous = ' ';
+        for ch in chars.by_ref() {
+            if previous == '*' && ch == '/' {
+                break;
+            }
+            previous = ch;
+        }
     }
 
     fn check_read_only(&self, sql: &str) -> Result<()> {
@@ -602,27 +619,39 @@ impl SecurityEngine {
 
     fn check_forbidden_tokens(&self, sql: &str, allow_with_keyword: bool) -> Result<()> {
         let compact = sanitize_for_keyword_scan(sql);
-        let forbidden = [
+        if let Some(keyword) = Self::first_forbidden_keyword(&compact, allow_with_keyword) {
+            return Err(SafeselectError::QueryRejected(format!(
+                "Read-only mode: {keyword} not allowed"
+            )));
+        }
+        if let Some(function) = Self::first_forbidden_function(&compact) {
+            return Err(SafeselectError::QueryRejected(format!(
+                "Read-only mode: function {function} not allowed"
+            )));
+        }
+        if contains_keyword(&compact, "SET") || compact.contains("SETROLE") {
+            return Err(SafeselectError::QueryRejected(
+                "Read-only mode: session changes are not allowed".into(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    fn first_forbidden_keyword(compact: &str, allow_with_keyword: bool) -> Option<&'static str> {
+        const FORBIDDEN: &[&str] = &[
             "INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER", "TRUNCATE", "COPY", "PREPARE",
             "EXECUTE", "CALL", "MERGE", "REPLACE", "GRANT", "REVOKE", "WITH", "DO", "DECLARE",
             "LOCK", "VACUUM", "REINDEX",
         ];
+        FORBIDDEN.iter().copied().find(|keyword| {
+            !(*keyword == "WITH" && (allow_with_keyword || contains_with_ordinality_only(compact)))
+                && contains_keyword(compact, keyword)
+        })
+    }
 
-        for keyword in forbidden {
-            if keyword == "WITH" && allow_with_keyword {
-                continue;
-            }
-            if keyword == "WITH" && contains_with_ordinality_only(&compact) {
-                continue;
-            }
-            if contains_keyword(&compact, keyword) {
-                return Err(SafeselectError::QueryRejected(format!(
-                    "Read-only mode: {keyword} not allowed"
-                )));
-            }
-        }
-
-        let forbidden_functions = [
+    fn first_forbidden_function(compact: &str) -> Option<&'static str> {
+        const FORBIDDEN: &[&str] = &[
             "SET_CONFIG",
             "PG_SLEEP",
             "PG_ADVISORY_LOCK",
@@ -641,22 +670,10 @@ impl SecurityEngine {
             "LO_UNLINK",
             "NEXTVAL",
         ];
-
-        for function in forbidden_functions {
-            if compact.contains(function) {
-                return Err(SafeselectError::QueryRejected(format!(
-                    "Read-only mode: function {function} not allowed"
-                )));
-            }
-        }
-
-        if contains_keyword(&compact, "SET") || compact.contains("SETROLE") {
-            return Err(SafeselectError::QueryRejected(
-                "Read-only mode: session changes are not allowed".into(),
-            ));
-        }
-
-        Ok(())
+        FORBIDDEN
+            .iter()
+            .copied()
+            .find(|function| compact.contains(function))
     }
 
     fn check_allowed_schemas(&self, sql: &str) -> Result<()> {
@@ -772,26 +789,39 @@ impl SecurityEngine {
 fn has_schema_reference(sql_lower: &str, allowed_patterns: &[String]) -> bool {
     let bytes = sql_lower.as_bytes();
     for i in 0..bytes.len().saturating_sub(2) {
-        if bytes[i + 1] == b'.' && bytes[i].is_ascii_alphabetic() {
-            let start = i;
-            let mut end = i + 2;
-            while end < bytes.len() && bytes[end].is_ascii_alphabetic() {
-                end += 1;
-            }
-            let schema = &sql_lower[start..end];
-            let schemaname = schema.trim_end_matches('.');
-            if !schemaname.is_empty()
-                && schemaname
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b == b'_')
-                && !is_sql_keyword(schemaname)
-                && !allowed_patterns.iter().any(|p| p.starts_with(schemaname))
-            {
+        if let Some(schema) = schema_at(sql_lower, i) {
+            if is_unknown_schema(schema, allowed_patterns) {
                 return true;
             }
         }
     }
     false
+}
+
+fn schema_at(sql_lower: &str, start: usize) -> Option<&str> {
+    let bytes = sql_lower.as_bytes();
+    if bytes.get(start).is_none_or(|b| !b.is_ascii_alphabetic())
+        || bytes.get(start + 1) != Some(&b'.')
+    {
+        return None;
+    }
+    let mut end = start + 2;
+    while end < bytes.len() && bytes[end].is_ascii_alphabetic() {
+        end += 1;
+    }
+    Some(&sql_lower[start..end])
+}
+
+fn is_unknown_schema(schema: &str, allowed_patterns: &[String]) -> bool {
+    let name = schema.trim_end_matches('.');
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        && !is_sql_keyword(name)
+        && !allowed_patterns
+            .iter()
+            .any(|pattern| pattern.starts_with(name))
 }
 
 fn is_sql_keyword(word: &str) -> bool {
@@ -1289,32 +1319,39 @@ fn extract_explain_target(sql: &str) -> Option<&str> {
 
     let after_explain = trimmed.get(7..)?.trim_start();
     if after_explain.starts_with('(') {
-        let mut depth = 0usize;
-        for (idx, ch) in after_explain.char_indices() {
-            match ch {
-                '(' => depth += 1,
-                ')' => {
-                    depth = depth.saturating_sub(1);
-                    if depth == 0 {
-                        return after_explain.get(idx + 1..).map(str::trim_start);
-                    }
-                }
-                _ => {}
-            }
-        }
-        return None;
+        return extract_parenthesized_explain_target(after_explain);
     }
 
-    let upper_after_explain = after_explain.to_uppercase();
+    Some(strip_explain_option_prefix(after_explain).unwrap_or(after_explain))
+}
+
+fn extract_parenthesized_explain_target(sql: &str) -> Option<&str> {
+    let mut depth = 0usize;
+    for (idx, ch) in sql.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return sql.get(idx + 1..).map(str::trim_start);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn strip_explain_option_prefix(sql: &str) -> Option<&str> {
+    let upper = sql.to_uppercase();
     for option in [
         "ANALYZE", "VERBOSE", "BUFFERS", "SETTINGS", "WAL", "TIMING", "SUMMARY",
     ] {
-        if upper_after_explain.starts_with(option) {
-            return after_explain.get(option.len()..).map(str::trim_start);
+        if upper.starts_with(option) {
+            return sql.get(option.len()..).map(str::trim_start);
         }
     }
-
-    Some(after_explain)
+    None
 }
 
 #[cfg(test)]
@@ -1944,9 +1981,24 @@ mod tests {
             Some("SELECT 1")
         );
         assert_eq!(
+            extract_explain_target("EXPLAIN () SELECT 1"),
+            Some("SELECT 1")
+        );
+        assert_eq!(
             extract_explain_target("EXPLAIN ANALYZE SELECT 1"),
             Some("SELECT 1")
         );
+        assert_eq!(
+            extract_explain_target("EXPLAIN SUMMARY SELECT 1"),
+            Some("SELECT 1")
+        );
+        for option in ["VERBOSE", "BUFFERS", "SETTINGS", "WAL", "TIMING"] {
+            assert_eq!(
+                extract_explain_target(&format!("EXPLAIN {option} SELECT 1")),
+                Some("SELECT 1")
+            );
+        }
+        assert_eq!(extract_explain_target("EXPLAIN select 1"), Some("select 1"));
         assert_eq!(extract_explain_target("SELECT 1"), None);
         assert_eq!(extract_explain_target("EXPLAIN (ANALYZE SELECT 1"), None);
     }
@@ -2050,7 +2102,27 @@ mod tests {
         assert!(engine
             .validate_system("SELECT * FROM information_schema.tables")
             .is_ok());
+        assert!(engine.validate_system("SELECT 1").is_ok());
         assert!(engine.validate_system("").is_err());
         assert!(engine.validate_system("DROP TABLE users").is_err());
+    }
+
+    #[test]
+    fn validates_system_single_statement_and_denied_relation_policies() {
+        let policy = SecurityPolicy {
+            require_single_statement: true,
+            denied_relations: vec!["public.secrets".into()],
+            ..SecurityPolicy::default()
+        };
+        let engine = SecurityEngine::new(policy, LimitsConfig::default());
+        assert!(engine
+            .validate_system("SELECT * FROM information_schema.tables")
+            .is_ok());
+        assert!(engine.validate_system("SELECT 1; SELECT 2").is_err());
+        assert!(engine
+            .validate_system("SELECT * FROM public.secrets")
+            .is_err());
+        let oversized = "x".repeat(MAX_SQL_BYTES + 1);
+        assert!(engine.validate_system(&oversized).is_err());
     }
 }

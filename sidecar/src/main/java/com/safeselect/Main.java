@@ -30,6 +30,20 @@ public class Main {
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final AtomicBoolean RUNNING = new AtomicBoolean(true);
     private static final long MAX_LOG_BYTES = 10L * 1024 * 1024;
+    private static final Set<BsonType> SCALAR_BSON_TYPES = Set.of(
+            BsonType.STRING, BsonType.BOOLEAN, BsonType.INT32, BsonType.INT64,
+            BsonType.DOUBLE, BsonType.DECIMAL128, BsonType.OBJECT_ID, BsonType.DATE_TIME,
+            BsonType.TIMESTAMP);
+    private static final Map<BsonType, java.util.function.Function<BsonValue, Object>> BSON_SCALAR_CONVERTERS = Map.ofEntries(
+            Map.entry(BsonType.STRING, value -> value.asString().getValue()),
+            Map.entry(BsonType.BOOLEAN, value -> value.asBoolean().getValue()),
+            Map.entry(BsonType.INT32, value -> value.asInt32().getValue()),
+            Map.entry(BsonType.INT64, value -> value.asInt64().getValue()),
+            Map.entry(BsonType.DOUBLE, value -> value.asDouble().getValue()),
+            Map.entry(BsonType.DECIMAL128, value -> value.asDecimal128().getValue().bigDecimalValue()),
+            Map.entry(BsonType.OBJECT_ID, value -> value.asObjectId().getValue().toHexString()),
+            Map.entry(BsonType.DATE_TIME, value -> value.asDateTime().getValue()),
+            Map.entry(BsonType.TIMESTAMP, value -> value.asTimestamp().getValue()));
     private static Connection connection;
     private static MongoClient mongoClient;
     private static String backend;
@@ -310,6 +324,10 @@ public class Main {
         if (val == null) {
             return null;
         }
+        return convertPgObjectNonNull(val);
+    }
+
+    private static Object convertPgObjectNonNull(Object val) throws Exception {
         
         // Handle Clob
         if (val instanceof java.sql.Clob) {
@@ -320,23 +338,7 @@ public class Main {
         
         // Handle PGobject (jsonb, hstore, etc.) via reflection
         if (className.startsWith("org.postgresql.util.PGobject")) {
-            try {
-                java.lang.reflect.Method getValue = val.getClass().getMethod("getValue");
-                String pgValue = (String) getValue.invoke(val);
-                
-                // Get type via reflection
-                java.lang.reflect.Method getType = val.getClass().getMethod("getType");
-                String pgType = (String) getType.invoke(val);
-                
-                // Parse JSON types
-                if ("jsonb".equals(pgType) || "json".equals(pgType)) {
-                    return MAPPER.readValue(pgValue, Object.class);
-                }
-                return pgValue;
-            } catch (Exception e) {
-                log("[CONVERT] Failed to convert PGobject: " + e.getMessage());
-                return val.toString();
-            }
+            return convertPgDriverObject(val);
         }
         
         // Handle PgArray
@@ -350,14 +352,28 @@ public class Main {
             return converted;
         }
         
-        // Handle other types with getValue method (legacy support)
+        return convertLegacyValue(val);
+    }
+
+    private static Object convertPgDriverObject(Object value) throws Exception {
         try {
-            java.lang.reflect.Method getValue = val.getClass().getMethod("getValue");
-            Object extracted = getValue.invoke(val);
-            return convertPgObject(extracted);
+            String pgValue = (String) value.getClass().getMethod("getValue").invoke(value);
+            String pgType = (String) value.getClass().getMethod("getType").invoke(value);
+            return Set.of("jsonb", "json").contains(pgType)
+                    ? MAPPER.readValue(pgValue, Object.class)
+                    : pgValue;
+        } catch (Exception e) {
+            log("[CONVERT] Failed to convert PGobject: " + e.getMessage());
+            return value.toString();
+        }
+    }
+
+    private static Object convertLegacyValue(Object value) throws Exception {
+        try {
+            java.lang.reflect.Method getValue = value.getClass().getMethod("getValue");
+            return convertPgObject(getValue.invoke(value));
         } catch (NoSuchMethodException | SecurityException e) {
-            // Not a PGobject or similar — keep original value
-            return val;
+            return value;
         }
     }
 
@@ -417,15 +433,23 @@ public class Main {
 
     private static void handleConnect(PrintWriter writer, Object id) throws Exception {
         if ("mongodb".equals(backend)) {
-            if (mongoClient != null) {
-                sendResponse(writer, id, Map.of("status", "already_connected"), null);
-                return;
-            }
-            String url = databaseUrl.replace("__SAFESELECT_PASSWORD__", URLEncoder.encode(password == null ? "" : password, java.nio.charset.StandardCharsets.UTF_8));
-            mongoClient = MongoClients.create(url);
-            sendResponse(writer, id, Map.of("status", "connected"), null);
+            handleMongoConnect(writer, id);
             return;
         }
+        handleJdbcConnect(writer, id);
+    }
+
+    private static void handleMongoConnect(PrintWriter writer, Object id) throws Exception {
+        if (mongoClient != null) {
+            sendResponse(writer, id, Map.of("status", "already_connected"), null);
+            return;
+        }
+        String url = databaseUrl.replace("__SAFESELECT_PASSWORD__", URLEncoder.encode(password == null ? "" : password, java.nio.charset.StandardCharsets.UTF_8));
+        mongoClient = MongoClients.create(url);
+        sendResponse(writer, id, Map.of("status", "connected"), null);
+    }
+
+    private static void handleJdbcConnect(PrintWriter writer, Object id) throws Exception {
         if (connection != null && !connection.isClosed()) {
             try {
                 if (connection.isValid(2)) {
@@ -524,6 +548,26 @@ public class Main {
         MongoCollection<Document> collection = mongoClient.getDatabase(databaseName).getCollection(collectionName);
 
         List<Object> classicIndexes = new ArrayList<>();
+        if (!appendClassicIndexes(writer, id, collection, classicIndexes)) return;
+
+        List<Object> searchIndexes = new ArrayList<>();
+        String searchStatus = appendSearchIndexes(writer, id, collection, searchIndexes);
+        if (searchStatus == null) return;
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("database", databaseName);
+        result.put("collection", collectionName);
+        result.put("classic_indexes", classicIndexes);
+        result.put("search_indexes", searchIndexes);
+        result.put("search_indexes_status", searchStatus);
+        sendBoundedResponse(writer, id, result);
+    }
+
+    private static boolean appendClassicIndexes(
+            PrintWriter writer,
+            Object id,
+            MongoCollection<Document> collection,
+            List<Object> indexes) throws Exception {
         try (MongoCursor<Document> cursor = collection.listIndexes().iterator()) {
             while (cursor.hasNext()) {
                 Document index = cursor.next();
@@ -534,15 +578,20 @@ public class Main {
                 safeIndex.put("unique", isClassicIndexUnique(indexName, index.getBoolean("unique", false)));
                 safeIndex.put("sparse", index.getBoolean("sparse", false));
                 safeIndex.put("partial_filter_expression", convertBsonValue(index.get("partialFilterExpression")));
-                if (!appendBounded(classicIndexes, safeIndex)) {
+                if (!appendBounded(indexes, safeIndex)) {
                     sendLimitExceeded(writer, id, "max_result_bytes", maxResultBytes);
-                    return;
+                    return false;
                 }
             }
         }
+        return true;
+    }
 
-        List<Object> searchIndexes = new ArrayList<>();
-        String searchStatus = "available";
+    private static String appendSearchIndexes(
+            PrintWriter writer,
+            Object id,
+            MongoCollection<Document> collection,
+            List<Object> indexes) throws Exception {
         try (MongoCursor<Document> cursor = collection.listSearchIndexes().iterator()) {
             while (cursor.hasNext()) {
                 Document index = cursor.next();
@@ -552,28 +601,17 @@ public class Main {
                 safeIndex.put("status", index.getString("status"));
                 safeIndex.put("queryable", index.getBoolean("queryable", false));
                 safeIndex.put("definition", convertBsonValue(index.get("latestDefinition")));
-                if (!appendBounded(searchIndexes, safeIndex)) {
+                if (!appendBounded(indexes, safeIndex)) {
                     sendLimitExceeded(writer, id, "max_result_bytes", maxResultBytes);
-                    return;
+                    return null;
                 }
             }
         } catch (MongoCommandException e) {
-            if (isSearchUnsupported(e)) {
-                searchStatus = "unsupported";
-            } else if (isSearchUnauthorized(e)) {
-                searchStatus = "unauthorized";
-            } else {
-                throw e;
-            }
+            if (isSearchUnsupported(e)) return "unsupported";
+            if (isSearchUnauthorized(e)) return "unauthorized";
+            throw e;
         }
-
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("database", databaseName);
-        result.put("collection", collectionName);
-        result.put("classic_indexes", classicIndexes);
-        result.put("search_indexes", searchIndexes);
-        result.put("search_indexes_status", searchStatus);
-        sendBoundedResponse(writer, id, result);
+        return "available";
     }
 
     @SuppressWarnings("unchecked")
@@ -707,47 +745,14 @@ public class Main {
         FindIterable<Document> find = collection.find(filter);
         applyMongoTimeout(find);
 
-        Object projection = params.get("projection");
-        if (projection != null) {
-            find.projection(toDocument(projection));
-        }
-        Object sort = params.get("sort");
-        if (sort != null) {
-            find.sort(toDocument(sort));
-        }
+        applyFindModifiers(find, params);
         long requestedLimit = ((Number) params.getOrDefault("limit", Math.min(maxRows, 100))).longValue();
         int effectiveLimit = (int) Math.min(requestedLimit, maxRows);
         find.limit(effectiveLimit);
 
         List<Object> documents = new ArrayList<>();
-        long byteCount = 0;
-        try (MongoCursor<Document> cursor = find.iterator()) {
-            while (cursor.hasNext()) {
-                Document document = cursor.next();
-                Object converted = MAPPER.readValue(document.toJson(), Object.class);
-                long documentBytes = MAPPER.writeValueAsBytes(converted).length;
-                if (documents.size() >= maxRows) {
-                    sendResponse(writer, id, null, Map.of(
-                            "code", "RESULT_LIMIT_EXCEEDED",
-                            "message", "Document limit exceeded: " + maxRows,
-                            "limit_type", "max_rows",
-                            "limit_value", maxRows
-                    ));
-                    return;
-                }
-                if (byteCount + documentBytes > maxResultBytes) {
-                    sendResponse(writer, id, null, Map.of(
-                            "code", "RESULT_LIMIT_EXCEEDED",
-                            "message", "Result size limit exceeded: " + maxResultBytes + " bytes",
-                            "limit_type", "max_result_bytes",
-                            "limit_value", maxResultBytes
-                    ));
-                    return;
-                }
-                byteCount += documentBytes;
-                documents.add(converted);
-            }
-        }
+        long byteCount = collectFindDocuments(writer, id, find, documents);
+        if (byteCount < 0) return;
 
         long elapsedMs = System.currentTimeMillis() - startTime;
         Map<String, Object> result = new LinkedHashMap<>();
@@ -757,6 +762,44 @@ public class Main {
         result.put("elapsed_ms", elapsedMs);
         result.put("elapsed", formatElapsed(elapsedMs));
         sendResponse(writer, id, result, null);
+    }
+
+    private static void applyFindModifiers(FindIterable<Document> find, Map<String, Object> params) throws Exception {
+        if (params.get("projection") != null) find.projection(toDocument(params.get("projection")));
+        if (params.get("sort") != null) find.sort(toDocument(params.get("sort")));
+    }
+
+    private static long collectFindDocuments(
+            PrintWriter writer,
+            Object id,
+            FindIterable<Document> find,
+            List<Object> documents) throws Exception {
+        long byteCount = 0;
+        try (MongoCursor<Document> cursor = find.iterator()) {
+            while (cursor.hasNext()) {
+                Object converted = MAPPER.readValue(cursor.next().toJson(), Object.class);
+                long documentBytes = MAPPER.writeValueAsBytes(converted).length;
+                if (documents.size() >= maxRows) {
+                    sendResponse(writer, id, null, Map.of(
+                            "code", "RESULT_LIMIT_EXCEEDED",
+                            "message", "Document limit exceeded: " + maxRows,
+                            "limit_type", "max_rows",
+                            "limit_value", maxRows));
+                    return -1;
+                }
+                if (byteCount + documentBytes > maxResultBytes) {
+                    sendResponse(writer, id, null, Map.of(
+                            "code", "RESULT_LIMIT_EXCEEDED",
+                            "message", "Result size limit exceeded: " + maxResultBytes + " bytes",
+                            "limit_type", "max_result_bytes",
+                            "limit_value", maxResultBytes));
+                    return -1;
+                }
+                byteCount += documentBytes;
+                documents.add(converted);
+            }
+        }
+        return byteCount;
     }
 
     @SuppressWarnings("unchecked")
@@ -776,25 +819,37 @@ public class Main {
         }
         if (rejectMongoJavaScript(writer, id, rawPipeline)) return;
 
-        List<Document> pipeline = new ArrayList<>();
-        for (Object stage : rawPipeline) {
-            Document document = toDocument(stage);
-            for (String key : document.keySet()) {
-                if ("$out".equals(key) || "$merge".equals(key) || "$currentOp".equals(key)) {
-                    sendResponse(writer, id, null, Map.of("code", "NOT_READ_ONLY", "message", "Aggregation stage is not read-only: " + key));
-                    return;
-                }
-            }
-            pipeline.add(document);
-        }
         long requestedLimit = numberParam(params, "limit", Math.min(maxRows, 100));
         int effectiveLimit = (int) Math.min(requestedLimit, maxRows);
-        pipeline.add(new Document("$limit", effectiveLimit));
+        List<Document> pipeline = buildReadOnlyPipeline(writer, id, rawPipeline, effectiveLimit);
+        if (pipeline == null) return;
 
         MongoCollection<Document> collection = mongoClient.getDatabase(databaseName).getCollection(collectionName);
         AggregateIterable<Document> aggregate = collection.aggregate(pipeline).allowDiskUse(false);
         applyMongoTimeout(aggregate);
         sendDocumentIterable(writer, id, aggregate.iterator(), startTime, "documents", "document_count");
+    }
+
+    private static List<Document> buildReadOnlyPipeline(
+            PrintWriter writer,
+            Object id,
+            List<?> rawPipeline,
+            int effectiveLimit) throws Exception {
+        List<Document> pipeline = new ArrayList<>();
+        for (Object stage : rawPipeline) {
+            Document document = toDocument(stage);
+            for (String key : document.keySet()) {
+                if ("$out".equals(key) || "$merge".equals(key) || "$currentOp".equals(key)) {
+                    sendResponse(writer, id, null, Map.of(
+                            "code", "NOT_READ_ONLY",
+                            "message", "Aggregation stage is not read-only: " + key));
+                    return null;
+                }
+            }
+            pipeline.add(document);
+        }
+        pipeline.add(new Document("$limit", effectiveLimit));
+        return pipeline;
     }
 
     @SuppressWarnings("unchecked")
@@ -818,21 +873,10 @@ public class Main {
         long limit = numberParam(params, "limit", Math.min(maxRows, 100));
         MongoCollection<Document> collection = mongoClient.getDatabase(databaseName).getCollection(collectionName);
         List<Object> values = new ArrayList<>();
-        long byteCount = 0;
         var distinct = collection.distinct(field, filter, BsonValue.class);
         applyMongoTimeout(distinct);
-        try (MongoCursor<BsonValue> cursor = distinct.iterator()) {
-            while (cursor.hasNext() && values.size() < limit && values.size() < maxRows) {
-                Object value = convertBsonValue(cursor.next());
-                long valueBytes = MAPPER.writeValueAsBytes(value).length;
-                if (byteCount + valueBytes > maxResultBytes) {
-                    sendLimitExceeded(writer, id, "max_result_bytes", maxResultBytes);
-                    return;
-                }
-                byteCount += valueBytes;
-                values.add(value);
-            }
-        }
+        long byteCount = collectDistinctValues(writer, id, distinct, limit, values);
+        if (byteCount < 0) return;
         long elapsedMs = System.currentTimeMillis() - startTime;
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("values", values);
@@ -841,6 +885,28 @@ public class Main {
         result.put("elapsed_ms", elapsedMs);
         result.put("elapsed", formatElapsed(elapsedMs));
         sendResponse(writer, id, result, null);
+    }
+
+    private static long collectDistinctValues(
+            PrintWriter writer,
+            Object id,
+            com.mongodb.client.DistinctIterable<BsonValue> distinct,
+            long limit,
+            List<Object> values) throws Exception {
+        long byteCount = 0;
+        try (MongoCursor<BsonValue> cursor = distinct.iterator()) {
+            while (cursor.hasNext() && values.size() < limit && values.size() < maxRows) {
+                Object value = convertBsonValue(cursor.next());
+                long valueBytes = MAPPER.writeValueAsBytes(value).length;
+                if (byteCount + valueBytes > maxResultBytes) {
+                    sendLimitExceeded(writer, id, "max_result_bytes", maxResultBytes);
+                    return -1;
+                }
+                byteCount += valueBytes;
+                values.add(value);
+            }
+        }
+        return byteCount;
     }
 
     @SuppressWarnings("unchecked")
@@ -883,21 +949,7 @@ public class Main {
             return;
         }
         if (rejectMongoJavaScript(writer, id, params.get("filter"), params.get("projection"), params.get("sort"))) return;
-        Document find = new Document("find", collectionName).append("filter", toDocument(params.getOrDefault("filter", Map.of())));
-        if (params.get("projection") != null) {
-            find.append("projection", toDocument(params.get("projection")));
-        }
-        if (params.get("sort") != null) {
-            find.append("sort", toDocument(params.get("sort")));
-        }
-        if (params.get("limit") != null) {
-            find.append("limit", numberParam(params, "limit", Math.min(maxRows, 100)));
-        }
-        applyMongoTimeout(find);
-        Document explain = new Document("explain", find);
-        if (statementTimeoutMs > 0) {
-            explain.append("maxTimeMS", statementTimeoutMs);
-        }
+        Document explain = buildExplainCommand(collectionName, params);
         Document result = mongoClient.getDatabase(databaseName).runCommand(explain, ReadPreference.secondaryPreferred());
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("explain", convertBsonValue(result));
@@ -905,6 +957,20 @@ public class Main {
         response.put("elapsed_ms", elapsedMs);
         response.put("elapsed", formatElapsed(elapsedMs));
         sendResponse(writer, id, response, null);
+    }
+
+    private static Document buildExplainCommand(String collectionName, Map<String, Object> params) throws Exception {
+        Document find = new Document("find", collectionName)
+                .append("filter", toDocument(params.getOrDefault("filter", Map.of())));
+        if (params.get("projection") != null) find.append("projection", toDocument(params.get("projection")));
+        if (params.get("sort") != null) find.append("sort", toDocument(params.get("sort")));
+        if (params.get("limit") != null) {
+            find.append("limit", numberParam(params, "limit", Math.min(maxRows, 100)));
+        }
+        applyMongoTimeout(find);
+        Document explain = new Document("explain", find);
+        if (statementTimeoutMs > 0) explain.append("maxTimeMS", statementTimeoutMs);
+        return explain;
     }
 
     @SuppressWarnings("unchecked")
@@ -1017,29 +1083,10 @@ public class Main {
         if (params.get("projection") != null) {
             find.projection(toDocument(params.get("projection")));
         }
-        List<String> redactFields = new ArrayList<>();
-        if (params.get("redact_fields") instanceof List<?> fields) {
-            for (Object field : fields) {
-                if (field instanceof String value) {
-                    redactFields.add(value);
-                }
-            }
-        }
+        List<String> redactFields = fixtureRedactFields(params);
         List<Object> documents = new ArrayList<>();
-        long byteCount = 0;
-        try (MongoCursor<Document> cursor = find.iterator()) {
-            while (cursor.hasNext()) {
-                Object converted = convertBsonValue(cursor.next());
-                redactValue(converted, "", redactFields);
-                long documentBytes = MAPPER.writeValueAsBytes(converted).length;
-                if (byteCount + documentBytes > maxResultBytes) {
-                    sendLimitExceeded(writer, id, "max_result_bytes", maxResultBytes);
-                    return;
-                }
-                byteCount += documentBytes;
-                documents.add(converted);
-            }
-        }
+        long byteCount = collectFixtureDocuments(writer, id, find, redactFields, documents);
+        if (byteCount < 0) return;
         long elapsedMs = System.currentTimeMillis() - startTime;
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("documents", documents);
@@ -1049,6 +1096,37 @@ public class Main {
         result.put("elapsed_ms", elapsedMs);
         result.put("elapsed", formatElapsed(elapsedMs));
         sendResponse(writer, id, result, null);
+    }
+
+    private static List<String> fixtureRedactFields(Map<String, Object> params) {
+        if (!(params.get("redact_fields") instanceof List<?> fields)) return new ArrayList<>();
+        return fields.stream()
+                .filter(String.class::isInstance)
+                .map(String.class::cast)
+                .toList();
+    }
+
+    private static long collectFixtureDocuments(
+            PrintWriter writer,
+            Object id,
+            FindIterable<Document> find,
+            List<String> redactFields,
+            List<Object> documents) throws Exception {
+        long byteCount = 0;
+        try (MongoCursor<Document> cursor = find.iterator()) {
+            while (cursor.hasNext()) {
+                Object converted = convertBsonValue(cursor.next());
+                redactValue(converted, "", redactFields);
+                long documentBytes = MAPPER.writeValueAsBytes(converted).length;
+                if (byteCount + documentBytes > maxResultBytes) {
+                    sendLimitExceeded(writer, id, "max_result_bytes", maxResultBytes);
+                    return -1;
+                }
+                byteCount += documentBytes;
+                documents.add(converted);
+            }
+        }
+        return byteCount;
     }
 
     private static Document toDocument(Object value) throws Exception {
@@ -1063,19 +1141,30 @@ public class Main {
 
     static String forbiddenMongoJavaScriptOperator(Object value) {
         if (value instanceof Map<?, ?> values) {
-            for (Map.Entry<?, ?> entry : values.entrySet()) {
-                String key = String.valueOf(entry.getKey());
-                if ("$where".equals(key) || "$function".equals(key) || "$accumulator".equals(key)) {
-                    return key;
-                }
-                String nested = forbiddenMongoJavaScriptOperator(entry.getValue());
-                if (nested != null) return nested;
+            return forbiddenMongoJavaScriptMap(values);
+        }
+        if (value instanceof Iterable<?> values) {
+            return forbiddenMongoJavaScriptIterable(values);
+        }
+        return null;
+    }
+
+    private static String forbiddenMongoJavaScriptMap(Map<?, ?> values) {
+        for (Map.Entry<?, ?> entry : values.entrySet()) {
+            String key = String.valueOf(entry.getKey());
+            if ("$where".equals(key) || "$function".equals(key) || "$accumulator".equals(key)) {
+                return key;
             }
-        } else if (value instanceof Iterable<?> values) {
-            for (Object entry : values) {
-                String nested = forbiddenMongoJavaScriptOperator(entry);
-                if (nested != null) return nested;
-            }
+            String nested = forbiddenMongoJavaScriptOperator(entry.getValue());
+            if (nested != null) return nested;
+        }
+        return null;
+    }
+
+    private static String forbiddenMongoJavaScriptIterable(Iterable<?> values) {
+        for (Object entry : values) {
+            String nested = forbiddenMongoJavaScriptOperator(entry);
+            if (nested != null) return nested;
         }
         return null;
     }
@@ -1156,33 +1245,17 @@ public class Main {
         if (value.getBsonType() == BsonType.UNDEFINED) {
             return null;
         }
-        if (value.isString()) {
-            return value.asString().getValue();
+        if (SCALAR_BSON_TYPES.contains(value.getBsonType())) {
+            return convertBsonScalar(value);
         }
-        if (value.isBoolean()) {
-            return value.asBoolean().getValue();
-        }
-        if (value.isInt32()) {
-            return value.asInt32().getValue();
-        }
-        if (value.isInt64()) {
-            return value.asInt64().getValue();
-        }
-        if (value.isDouble()) {
-            return value.asDouble().getValue();
-        }
-        if (value.isDecimal128()) {
-            return value.asDecimal128().getValue().bigDecimalValue();
-        }
-        if (value.isObjectId()) {
-            return value.asObjectId().getValue().toHexString();
-        }
-        if (value.isDateTime()) {
-            return value.asDateTime().getValue();
-        }
-        if (value.isTimestamp()) {
-            return value.asTimestamp().getValue();
-        }
+        return convertBsonComposite(value);
+    }
+
+    private static Object convertBsonScalar(BsonValue value) {
+        return BSON_SCALAR_CONVERTERS.get(value.getBsonType()).apply(value);
+    }
+
+    private static Object convertBsonComposite(BsonValue value) {
         if (value.isRegularExpression()) {
             Map<String, Object> regex = new LinkedHashMap<>();
             regex.put("_bson_type", "regular_expression");
@@ -1271,32 +1344,48 @@ public class Main {
         if (index >= parts.length) {
             return value;
         }
-        if (value instanceof Map<?, ?> map) {
-            if (!map.containsKey(parts[index])) {
-                return MissingValue.INSTANCE;
-            }
-            return resolvePath(map.get(parts[index]), parts, index + 1);
-        }
-        if (value instanceof Document document) {
-            if (!document.containsKey(parts[index])) {
-                return MissingValue.INSTANCE;
-            }
-            return resolvePath(document.get(parts[index]), parts, index + 1);
+        return resolvePathContainer(value, parts, index);
+    }
+
+    private static Object resolvePathContainer(Object value, String[] parts, int index) {
+        if (isMapLike(value)) {
+            return resolveMapLikePath(value, parts, index);
         }
         if (value instanceof List<?> list) {
-            List<Object> values = new ArrayList<>();
-            for (Object item : list) {
-                Object nested = resolvePath(item, parts, index);
-                if (nested != MissingValue.INSTANCE) {
-                    values.add(nested);
-                }
-            }
-            if (values.isEmpty()) {
-                return MissingValue.INSTANCE;
-            }
-            return values;
+            return resolveListPath(list, parts, index);
         }
         return MissingValue.INSTANCE;
+    }
+
+    private static boolean isMapLike(Object value) {
+        return value instanceof Map<?, ?> || value instanceof Document;
+    }
+
+    private static Object resolveMapLikePath(Object value, String[] parts, int index) {
+        if (value instanceof Document document) {
+            return resolveDocumentPath(document, parts, index);
+        }
+        return resolveMapPath((Map<?, ?>) value, parts, index);
+    }
+
+    private static Object resolveMapPath(Map<?, ?> map, String[] parts, int index) {
+        return map.containsKey(parts[index])
+                ? resolvePath(map.get(parts[index]), parts, index + 1)
+                : MissingValue.INSTANCE;
+    }
+
+    private static Object resolveDocumentPath(Document document, String[] parts, int index) {
+        return document.containsKey(parts[index])
+                ? resolvePath(document.get(parts[index]), parts, index + 1)
+                : MissingValue.INSTANCE;
+    }
+
+    private static Object resolveListPath(List<?> list, String[] parts, int index) {
+        List<Object> values = list.stream()
+                .map(item -> resolvePath(item, parts, index))
+                .filter(nested -> nested != MissingValue.INSTANCE)
+                .toList();
+        return values.isEmpty() ? MissingValue.INSTANCE : values;
     }
 
     @SuppressWarnings("unchecked")

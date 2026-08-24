@@ -197,8 +197,13 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
-      - name: Build sidecar
-        run: mvn -f sidecar/pom.xml package -DskipTests
+      - name: Install makevn
+        shell: bash
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/antonillos/makevn/main/packaging/install/install-release.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Initialize, test, and package sidecar
+        run: makevn doctor init test package
       - name: Copy sidecar JAR
         run: |
           jar="$(ls sidecar/target/safeselect-sidecar-*.jar 2>/dev/null | sort -V | tail -1)"
@@ -219,6 +224,15 @@ jobs:
           cd target/${{ matrix.target }}/release
           tar czf safeselect-${{ needs.validate-version.outputs.version }}-${{ matrix.target }}.tar.gz safeselect
           sha256sum safeselect-${{ needs.validate-version.outputs.version }}-${{ matrix.target }}.tar.gz > safeselect-${{ needs.validate-version.outputs.version }}-${{ matrix.target }}.tar.gz.sha256
+      - name: Package MCP Bundle
+        run: |
+          asset="safeselect-${{ needs.validate-version.outputs.version }}-${{ matrix.target }}.mcpb"
+          scripts/package-mcpb.sh \
+            --binary "target/${{ matrix.target }}/release/safeselect" \
+            --target "${{ matrix.target }}" \
+            --version "${{ needs.validate-version.outputs.semver }}" \
+            --output "target/${{ matrix.target }}/release/${asset}"
+          sha256sum "target/${{ matrix.target }}/release/${asset}" > "target/${{ matrix.target }}/release/${asset}.sha256"
       - name: Upload release assets
         env:
           GH_TOKEN: ${{ github.token }}
@@ -227,7 +241,99 @@ jobs:
           gh release upload "${{ needs.validate-version.outputs.version }}" \
             target/${{ matrix.target }}/release/safeselect-${{ needs.validate-version.outputs.version }}-${{ matrix.target }}.tar.gz \
             target/${{ matrix.target }}/release/safeselect-${{ needs.validate-version.outputs.version }}-${{ matrix.target }}.tar.gz.sha256 \
+            target/${{ matrix.target }}/release/safeselect-${{ needs.validate-version.outputs.version }}-${{ matrix.target }}.mcpb \
+            target/${{ matrix.target }}/release/safeselect-${{ needs.validate-version.outputs.version }}-${{ matrix.target }}.mcpb.sha256 \
             --clobber
+
+  publish-mcp-registry:
+    if: needs.validate-version.outputs.exists != 'true' && needs.validate-version.outputs.prerelease != 'true' && needs.validate-version.outputs.draft != 'true' && needs.integration-tests.result == 'success'
+    runs-on: ubuntu-latest
+    needs: [validate-version, build, integration-tests]
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.validate-version.outputs.target-ref }}
+      - name: Download MCPB checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.validate-version.outputs.version }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/checksums
+          for target in \
+            aarch64-apple-darwin \
+            x86_64-apple-darwin \
+            aarch64-unknown-linux-gnu \
+            x86_64-unknown-linux-gnu; do
+            gh release download "${VERSION}" --repo "${REPOSITORY}" \
+              --pattern "safeselect-${VERSION}-${target}.mcpb.sha256" \
+              --dir dist/checksums
+          done
+      - name: Generate server.json
+        env:
+          VERSION: ${{ needs.validate-version.outputs.version }}
+          SEMVER: ${{ needs.validate-version.outputs.semver }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_args=()
+          for target in \
+            aarch64-apple-darwin \
+            x86_64-apple-darwin \
+            aarch64-unknown-linux-gnu \
+            x86_64-unknown-linux-gnu; do
+            asset="safeselect-${VERSION}-${target}.mcpb"
+            checksum_file="dist/checksums/${asset}.sha256"
+            checksum="$(awk '{print $1}' "${checksum_file}")"
+            package_args+=("${asset}=${checksum}")
+          done
+          scripts/generate-registry-server-json.sh \
+            --version "${SEMVER}" \
+            --release-url "https://github.com/${REPOSITORY}/releases/download/${VERSION}" \
+            --output dist/server.json \
+            "${package_args[@]}"
+      - name: Install MCP Registry publisher
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" \
+            | tar xz mcp-publisher
+      - name: Validate MCP Registry metadata
+        run: ./mcp-publisher validate dist/server.json
+      - name: Publish MCP Registry metadata
+        run: |
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish dist/server.json
+      - name: Verify registry publication and attach metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.validate-version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error \
+            "https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.antonillos/safeselect" \
+            -o dist/registry-search.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path("dist/registry-search.json").read_text())
+          servers = payload.get("servers", [])
+          if not any(
+              server.get("name") == "io.github.antonillos/safeselect"
+              and server.get("version") == "${{ needs.validate-version.outputs.semver }}"
+              for server in servers
+          ):
+              raise SystemExit("SafeSelect version did not appear in the MCP Registry search response")
+          PY
+          gh release upload "${VERSION}" dist/server.json --clobber
 
   publish-package-managers:
     if: needs.validate-version.outputs.exists != 'true' && needs.validate-version.outputs.prerelease != 'true' && needs.validate-version.outputs.draft != 'true' && needs.integration-tests.result == 'success'

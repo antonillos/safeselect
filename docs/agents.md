@@ -37,13 +37,19 @@ Agents should treat SafeSelect as their database boundary:
 
 ## Supported Agents
 
-- **OpenCode** — fully supported with `safeselect agent install`
-- **Cursor** — config-based MCP integration
-- **Windsurf** — config-based MCP integration
-- **Claude Code** — config-based MCP integration
-- **OpenAI Codex** — config-based MCP integration
-- **GitHub Copilot** — VS Code MCP support
-- **Gemini CLI** — MCP support
+| Client | User scope | Project scope | Native contract |
+|---|---:|---:|---|
+| OpenCode | Yes | Yes | `mcp` in JSON/JSONC |
+| OpenAI Codex | Yes | Yes | `mcp_servers` in TOML |
+| Claude Code | Yes | Yes | `claude mcp` with `user`/`project` scope |
+| Cursor | Yes | Yes | `mcpServers` in `mcp.json` |
+| Windsurf | Yes | No | `mcpServers` in its global MCP config |
+| GitHub Copilot | Yes | Yes | `servers` in `mcp.json` |
+| Gemini CLI | Yes | Yes | `mcpServers` in `settings.json` |
+
+SafeSelect rejects `--local` for Windsurf rather than silently changing a global
+file. User scope is the default for every other client; pass `--local` when the
+integration should travel with the repository.
 
 ## Installing in an Agent
 
@@ -51,8 +57,11 @@ Agents should treat SafeSelect as their database boundary:
 # Detect available clients
 safeselect agent detect
 
-# Install in OpenCode
-safeselect agent install opencode --project myapp --environment testing --name safeselect-myapp-testing
+# Install in user scope. The only environment is inferred when unambiguous.
+safeselect agent install opencode --project /absolute/path/to/myapp
+
+# Or install in the repository's official project-scoped client config.
+safeselect agent install codex --project /absolute/path/to/myapp --local
 
 # Upgrade from the current project; name auto-detected when unambiguous
 safeselect agent upgrade opencode --environment testing
@@ -66,14 +75,24 @@ safeselect agent status
 
 The installation command:
 
-1. Detects the agent's config file.
-2. For an interactive OpenCode install, offers the existing project-local config,
-   a new `.opencode/opencode.jsonc` when `.opencode/opencode.json` already exists,
-   or the global config.
-3. Validates the selected config format and permissions.
-4. Creates a backup.
-5. Shows a diff of the change.
-6. Writes the new config atomically and verifies it.
+1. Uses the client's official path, format, and requested scope.
+2. Resolves the repository to an absolute path and pins it in the MCP command.
+3. Infers the environment only when exactly one exists; otherwise it asks for an
+   explicit choice instead of guessing.
+4. Rejects symlinks and group/world-writable config files or directories.
+5. Creates a backup and shows a diff.
+6. Writes atomically, verifies the result, and rolls back on failure.
+7. Prints one safe next step, normally `safeselect agent status`.
+
+Codex TOML edits preserve unrelated comments and settings. Claude Code changes
+go through its native `claude mcp` command. Repeating an installation with the
+same values is safe and does not duplicate the entry.
+
+Project-scoped Codex and Claude Code servers still pass through each client's
+native trust boundary. Open the repository in Codex and trust it before
+approving the MCP server. For Claude Code, run `claude` from the repository and
+approve the project MCP server when prompted; `/mcp` then shows its health.
+SafeSelect never bypasses either client's approval step.
 
 Use `safeselect agent upgrade` when you already have an installed SafeSelect MCP
 entry and want to refresh it after upgrading the SafeSelect binary. By default it
@@ -91,7 +110,7 @@ The installed entry looks like this in your agent's config:
   "mcpServers": {
     "safeselect-myapp-testing": {
       "command": "safeselect",
-      "args": ["serve", "--project", "myapp", "--environment", "testing"]
+      "args": ["serve", "--project", "/absolute/path/to/myapp", "--environment", "testing"]
     }
   }
 }

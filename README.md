@@ -1,6 +1,8 @@
-# SafeSelect
+# SafeSelect MCP
 
-**Fail-closed, read-only SQL and NoSQL database access for AI agents over MCP.**
+## Agents can look. They cannot mutate.
+
+**Fail-closed, read-only PostgreSQL and MongoDB access for AI coding agents over MCP.**
 
 [![CI](https://github.com/antonillos/safeselect/actions/workflows/verify.yml/badge.svg)](https://github.com/antonillos/safeselect/actions/workflows/verify.yml)
 [![CRAP](https://img.shields.io/endpoint?url=https%3A%2F%2Fantonillos.github.io%2Fsafeselect%2Fcrap-badge.json)](https://github.com/antonillos/safeselect/actions/workflows/verify.yml)
@@ -12,7 +14,10 @@
 [![asdf](https://img.shields.io/badge/asdf-plugin-8A2BE2)](https://github.com/antonillos/asdf-safeselect)
 [![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
 
-SafeSelect gives coding agents a constrained database tool for SQL and NoSQL systems: discover structure, inspect data, run read-only operations, diagnose connectivity, and recover stale connections without ever getting write access.
+SafeSelect gives coding agents a constrained database tool: discover structure,
+inspect production-shaped data, explain queries, diagnose connectivity, and
+recover stale connections without ever receiving write-capable tools or direct
+access to database credentials.
 
 Most database MCP servers make it easy to connect an agent to a database. SafeSelect is built for the harder problem: letting an agent inspect production-shaped data without turning the database into an unrestricted tool surface.
 
@@ -20,6 +25,14 @@ Most database MCP servers make it easy to connect an agent to a database. SafeSe
 > SafeSelect is a safety boundary for agent access, not a replacement for database permissions. Use least-privilege database users when you can; SafeSelect still constrains overpowered credentials when agents connect through it.
 
 Current backend support: PostgreSQL and MongoDB.
+
+## Where It Helps
+
+- Debug an application against realistic data without exposing mutation tools.
+- Let an agent inspect schemas, indexes, query plans, and bounded rows during development.
+- Explore MongoDB collections through bounded reads and sampled schema inference.
+- Reuse existing DBeaver, Docker Compose, or MongoDB Compass connections.
+- Give coding agents database context while keeping policy, limits, secrets, and audit under your control.
 
 ## Why SafeSelect?
 
@@ -81,8 +94,11 @@ safeselect import-dbeaver ~/Downloads/dbeaver-export.zip
 # Verify the environment
 safeselect check --environment testing
 
-# Install the MCP entry for your agent
-safeselect agent install opencode --environment testing
+# Install the MCP entry. If this is the only environment, its name is inferred.
+safeselect agent install opencode
+
+# Verify exactly what was installed and where.
+safeselect agent status
 ```
 
 SafeSelect uses any available Java 17+ runtime instead of requiring Homebrew's
@@ -104,7 +120,11 @@ The generated MCP entry is a stdio server scoped to one project and environment:
 }
 ```
 
-See [AI agent integration](docs/agents.md) for client-specific setup and manual configuration.
+SafeSelect uses each client's official MCP configuration contract, pins the
+absolute repository path, and defaults to user scope. Add `--local` for a
+project-scoped entry where the client supports it. See
+[AI agent integration](docs/agents.md) for exact paths, scopes, and manual
+configuration.
 
 ## Agent Workflow
 
@@ -150,6 +170,14 @@ summary without exposing database-derived detail.
 - **Driver verification**: JDBC drivers are checked by SHA-256 before use.
 - **Audit trail**: query text is hashed before being recorded; the current session exposes bounded audit metadata through `audit_status` and `audit_recent`.
 
+### Deliberate Limits
+
+- SafeSelect does not expose database writes, migrations, administration, or arbitrary command execution.
+- PostgreSQL and MongoDB are the supported backends today; broad connector count is not the goal.
+- MCP transport is local stdio. SafeSelect is not a remote database gateway.
+- MongoDB schema discovery is sampled and bounded, not an exhaustive schema guarantee.
+- SafeSelect complements database-native least privilege; it does not replace it.
+
 ## MCP Tools
 
 | Area | Tools |
@@ -185,8 +213,6 @@ When no `.safeselect/` directory exists, `safeselect serve --environment <env>` 
 
 Use `safeselect --help` or a command-specific `--help` for the full CLI.
 
-Interactive OpenCode installation lets you choose the project-local JSON config,
-create a separate `.opencode/opencode.jsonc` when appropriate, or use the global config.
 Uninstall checks both release-installer and Cargo binary locations.
 MongoDB Compass imports support SSH-tunneled `mongodb+srv://` connections by resolving
 the SRV target and rewriting the local endpoint with the required TLS and direct-connection
@@ -208,8 +234,19 @@ SafeSelect walks upward from the current directory to find `.safeselect/`. Use `
 
 ## Supported Agents
 
-- OpenCode: install supported
-- GitHub Copilot, Cursor, Windsurf, Claude Code, Codex, Gemini CLI: detection supported
+| Client | User scope | Project scope | Integration |
+|---|---:|---:|---|
+| OpenCode | Yes | Yes | JSON/JSONC `mcp` |
+| OpenAI Codex | Yes | Yes | lossless TOML `mcp_servers` |
+| Claude Code | Yes | Yes | native `claude mcp` scopes |
+| Cursor | Yes | Yes | `.cursor/mcp.json` |
+| Windsurf | Yes | No | global Windsurf MCP config |
+| GitHub Copilot | Yes | Yes | `servers` in MCP JSON |
+| Gemini CLI | Yes | Yes | `.gemini/settings.json` |
+
+SafeSelect never silently falls back to a broader scope. In particular,
+`--local` for Windsurf fails with a clear correction because Windsurf does not
+document a project-scoped MCP configuration.
 
 ## Build From Source
 

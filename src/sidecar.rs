@@ -268,23 +268,21 @@ impl SidecarProcess {
         let mut ack = String::new();
         self.reader.read_line(&mut ack)?;
         if ack.is_empty() {
-            let stderr = self.read_stderr();
-            let detail = if stderr.is_empty() {
-                String::new()
-            } else {
-                format!(": {stderr}")
-            };
-            return Err(SafeselectError::Sidecar(format!(
-                "sidecar process terminated during startup — {backend} backend connection failed{detail}"
-            )));
+            return Err(self.startup_connection_error(backend));
         }
-        let ack = ack.trim();
-        if ack != "ready" {
-            return Err(SafeselectError::Sidecar(format!(
-                "sidecar password rejected: {ack}"
-            )));
-        }
-        Ok(())
+        validate_sidecar_ack(ack.trim())
+    }
+
+    fn startup_connection_error(&mut self, backend: &str) -> SafeselectError {
+        let stderr = self.read_stderr();
+        let detail = if stderr.is_empty() {
+            String::new()
+        } else {
+            format!(": {stderr}")
+        };
+        SafeselectError::Sidecar(format!(
+            "sidecar process terminated during startup — {backend} backend connection failed{detail}"
+        ))
     }
 
     fn read_stderr(&mut self) -> String {
@@ -382,80 +380,93 @@ impl SidecarProcess {
     }
 
     pub fn ping(&mut self) -> Result<()> {
-        let resp = self.send_request("ping", None)?;
-        match resp.ok {
-            Some(val) if val == "pong" => Ok(()),
-            _ => Err(SafeselectError::Sidecar("ping failed".into())),
-        }
+        self.send_request("ping", None).and_then(|resp| {
+            if resp.ok.as_ref().and_then(serde_json::Value::as_str) == Some("pong") {
+                Ok(())
+            } else {
+                Err(SafeselectError::Sidecar("ping failed".into()))
+            }
+        })
     }
 
     pub fn execute(&mut self, sql: &str) -> Result<QueryResult> {
         let start = std::time::Instant::now();
         tracing::debug!("Sidecar execute started");
 
-        let params = serde_json::json!({"sql": sql});
-        let resp = self.send_request("execute", Some(params))?;
-
+        let result = self.execute_request(sql)?;
         tracing::debug!(
             "Sidecar execute send_request completed ({:?})",
             start.elapsed()
         );
+        tracing::debug!("Sidecar execute completed ({:?})", start.elapsed());
+        Ok(result)
+    }
 
-        if let Some(err) = resp.error {
-            if err.code == "SQL_ERROR" {
-                return Err(SafeselectError::SqlError(format!(
-                    "SQL execution failed [{}]: {}",
-                    err.code, err.message
-                )));
-            }
-            return Err(SafeselectError::Sidecar(format!(
+    fn execute_request(&mut self, sql: &str) -> Result<QueryResult> {
+        let params = serde_json::json!({"sql": sql});
+        self.send_request("execute", Some(params)).and_then(|resp| {
+            Self::map_execute_error(resp.error)
+                .and_then(|_| Self::parse_response(resp.ok, "empty response from sidecar"))
+        })
+    }
+
+    fn map_execute_error(error: Option<ResponseError>) -> Result<()> {
+        let Some(error) = error else {
+            return Ok(());
+        };
+        if error.code == "SQL_ERROR" {
+            return Err(SafeselectError::SqlError(format!(
                 "SQL execution failed [{}]: {}",
-                err.code, err.message
+                error.code, error.message
             )));
         }
+        Err(SafeselectError::Sidecar(format!(
+            "SQL execution failed [{}]: {}",
+            error.code, error.message
+        )))
+    }
 
-        match resp.ok {
-            Some(val) => {
-                let result: QueryResult = serde_json::from_value(val)?;
-                tracing::debug!("Sidecar execute completed ({:?})", start.elapsed());
-                Ok(result)
-            }
-            None => Err(SafeselectError::Sidecar(
-                "empty response from sidecar".into(),
-            )),
-        }
+    fn parse_response<T: serde::de::DeserializeOwned>(
+        value: Option<serde_json::Value>,
+        empty_message: &str,
+    ) -> Result<T> {
+        value
+            .ok_or_else(|| SafeselectError::Sidecar(empty_message.into()))
+            .and_then(|value| serde_json::from_value(value).map_err(Into::into))
+    }
+
+    fn check_response_error(error: Option<ResponseError>, operation: &str) -> Result<()> {
+        error.map_or(Ok(()), |error| {
+            Err(SafeselectError::Sidecar(format!(
+                "{operation} failed [{}]: {}",
+                error.code, error.message
+            )))
+        })
+    }
+
+    fn request_value<T: serde::de::DeserializeOwned>(
+        &mut self,
+        method: &str,
+        params: Option<serde_json::Value>,
+        operation: &str,
+    ) -> Result<T> {
+        self.send_request(method, params).and_then(|resp| {
+            Self::check_response_error(resp.error, operation)
+                .and_then(|_| Self::parse_response(resp.ok, "empty response from sidecar"))
+        })
     }
 
     pub fn list_databases(&mut self) -> Result<Vec<String>> {
-        let resp = self.send_request("list_databases", None)?;
-        if let Some(err) = resp.error {
-            return Err(SafeselectError::Sidecar(format!(
-                "list_databases failed [{}]: {}",
-                err.code, err.message
-            )));
-        }
-        match resp.ok {
-            Some(val) => Ok(serde_json::from_value(val)?),
-            None => Err(SafeselectError::Sidecar(
-                "empty response from sidecar".into(),
-            )),
-        }
+        self.request_value("list_databases", None, "list_databases")
     }
 
     pub fn verify_document_connection(&mut self) -> Result<()> {
-        let resp = self.send_request("verify_document_connection", None)?;
-        if let Some(err) = resp.error {
-            return Err(SafeselectError::Sidecar(format!(
-                "verify_document_connection failed [{}]: {}",
-                err.code, err.message
-            )));
-        }
-        match resp.ok {
-            Some(_) => Ok(()),
-            None => Err(SafeselectError::Sidecar(
-                "empty response from sidecar".into(),
-            )),
-        }
+        self.request_value::<serde_json::Value>(
+            "verify_document_connection",
+            None,
+            "verify_document_connection",
+        )
+        .map(|_| ())
     }
 
     pub fn list_collections(&mut self, database: &str) -> Result<Vec<String>> {
@@ -476,18 +487,11 @@ impl SidecarProcess {
 
     pub fn get_database_stats(&mut self, database: &str) -> Result<serde_json::Value> {
         self.ensure_document_database_exists(database)?;
-        let resp = self.send_request(
+        self.request_value(
             "get_database_stats",
             Some(serde_json::json!({ "database": database })),
-        )?;
-        if let Some(err) = resp.error {
-            return Err(SafeselectError::Sidecar(format!(
-                "get_database_stats failed [{}]: {}",
-                err.code, err.message
-            )));
-        }
-        resp.ok
-            .ok_or_else(|| SafeselectError::Sidecar("empty response from sidecar".into()))
+            "get_database_stats",
+        )
     }
 
     pub fn get_collection_stats(
@@ -502,39 +506,22 @@ impl SidecarProcess {
     }
 
     fn list_collections_unchecked(&mut self, database: &str) -> Result<Vec<String>> {
-        let resp = self.send_request(
+        self.request_value(
             "list_collections",
             Some(serde_json::json!({ "database": database })),
-        )?;
-        if let Some(err) = resp.error {
-            return Err(SafeselectError::Sidecar(format!(
-                "list_collections failed [{}]: {}",
-                err.code, err.message
-            )));
-        }
-        match resp.ok {
-            Some(val) => Ok(serde_json::from_value(val)?),
-            None => Err(SafeselectError::Sidecar(
-                "empty response from sidecar".into(),
-            )),
-        }
+            "list_collections",
+        )
     }
 
     pub fn find_documents(&mut self, request: &DocumentFindRequest) -> Result<DocumentResult> {
-        self.ensure_document_namespace_exists(&request.database, &request.collection)?;
-        let resp = self.send_request("find_documents", Some(serde_json::to_value(request)?))?;
-        if let Some(err) = resp.error {
-            return Err(SafeselectError::Sidecar(format!(
-                "find_documents failed [{}]: {}",
-                err.code, err.message
-            )));
-        }
-        match resp.ok {
-            Some(val) => Ok(serde_json::from_value(val)?),
-            None => Err(SafeselectError::Sidecar(
-                "empty response from sidecar".into(),
-            )),
-        }
+        serde_json::to_value(request)
+            .map_err(SafeselectError::from)
+            .and_then(|params| {
+                self.ensure_document_namespace_exists(&request.database, &request.collection)
+                    .and_then(|_| {
+                        self.request_value("find_documents", Some(params), "find_documents")
+                    })
+            })
     }
 
     pub fn aggregate_documents(
@@ -588,53 +575,57 @@ impl SidecarProcess {
         method: &str,
         params: serde_json::Value,
     ) -> Result<serde_json::Value> {
-        let database = params
+        Self::document_namespace(&params).and_then(|(database, collection)| {
+            self.ensure_document_namespace_exists(&database, &collection)
+                .and_then(|_| self.request_value(method, Some(params), method))
+        })
+    }
+
+    fn document_namespace(params: &serde_json::Value) -> Result<(String, String)> {
+        params
             .get("database")
             .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| SafeselectError::Sidecar("missing document database".into()))?
-            .to_string();
-        let collection = params
-            .get("collection")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| SafeselectError::Sidecar("missing document collection".into()))?
-            .to_string();
-        self.ensure_document_namespace_exists(&database, &collection)?;
-        let resp = self.send_request(method, Some(params))?;
-        if let Some(err) = resp.error {
-            return Err(SafeselectError::Sidecar(format!(
-                "{method} failed [{}]: {}",
-                err.code, err.message
-            )));
-        }
-        resp.ok
-            .ok_or_else(|| SafeselectError::Sidecar("empty response from sidecar".into()))
+            .map(str::to_owned)
+            .ok_or_else(|| SafeselectError::Sidecar("missing document database".into()))
+            .and_then(|database| {
+                params
+                    .get("collection")
+                    .and_then(serde_json::Value::as_str)
+                    .map(|collection| (database, collection.to_owned()))
+                    .ok_or_else(|| SafeselectError::Sidecar("missing document collection".into()))
+            })
     }
 
     fn ensure_document_database_exists(&mut self, database: &str) -> Result<()> {
-        if self
-            .list_databases()?
-            .iter()
-            .any(|candidate| candidate == database)
-        {
-            return Ok(());
-        }
-        Err(SafeselectError::Sidecar(format!(
-            "document database '{database}' does not exist"
-        )))
+        self.list_databases().and_then(|databases| {
+            databases
+                .iter()
+                .any(|candidate| candidate == database)
+                .then_some(())
+                .ok_or_else(|| {
+                    SafeselectError::Sidecar(format!(
+                        "document database '{database}' does not exist"
+                    ))
+                })
+        })
     }
 
     fn ensure_document_namespace_exists(&mut self, database: &str, collection: &str) -> Result<()> {
-        self.ensure_document_database_exists(database)?;
-        if self
-            .list_collections_unchecked(database)?
-            .iter()
-            .any(|candidate| candidate == collection)
-        {
-            return Ok(());
-        }
-        Err(SafeselectError::Sidecar(format!(
-            "document collection '{database}.{collection}' does not exist"
-        )))
+        self.ensure_document_database_exists(database)
+            .and_then(|_| {
+                self.list_collections_unchecked(database)
+                    .and_then(|collections| {
+                        collections
+                            .iter()
+                            .any(|candidate| candidate == collection)
+                            .then_some(())
+                            .ok_or_else(|| {
+                                SafeselectError::Sidecar(format!(
+                                    "document collection '{database}.{collection}' does not exist"
+                                ))
+                            })
+                    })
+            })
     }
 
     fn send_request(
@@ -781,6 +772,16 @@ impl SidecarProcess {
     }
 }
 
+fn validate_sidecar_ack(ack: &str) -> Result<()> {
+    if ack == "ready" {
+        Ok(())
+    } else {
+        Err(SafeselectError::Sidecar(format!(
+            "sidecar password rejected: {ack}"
+        )))
+    }
+}
+
 impl Drop for SidecarProcess {
     fn drop(&mut self) {
         let _ = self.child.kill();
@@ -800,7 +801,15 @@ fn java_major_version(version_output: &str) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{java_major_version, SidecarProcess};
+    use super::{format_elapsed, java_major_version, SidecarProcess};
+
+    #[test]
+    fn formats_elapsed_time_consistently() {
+        assert_eq!(format_elapsed(12), "12ms");
+        assert_eq!(format_elapsed(1_200), "1.2s");
+        assert_eq!(format_elapsed(60_000), "1m");
+        assert_eq!(format_elapsed(61_000), "1m 1s");
+    }
 
     #[test]
     fn parses_modern_java_versions() {

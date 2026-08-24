@@ -172,10 +172,6 @@ fn project_display_name(dir: &std::path::Path) -> String {
     config::project_account_prefix(dir)
 }
 
-fn default_agent_entry_name(project_name: &str, environment: &str) -> String {
-    format!("safeselect-{project_name}-{environment}")
-}
-
 fn list_environment_names(repo_root: &Path) -> Result<Vec<String>> {
     let env_dir = repo_root.join(".safeselect").join("environments");
     let mut env_names = Vec::new();
@@ -363,7 +359,7 @@ fn validate_explicit_project(
 }
 
 fn validate_current_project(loader: &ConfigLoader, cwd: &Path) -> Result<()> {
-    let Some(dir) = loader.find_local_project(&cwd) else {
+    let Some(dir) = loader.find_local_project(cwd) else {
         println!("No .safeselect/ directory found. Create one with:");
         println!("  safeselect import-dbeaver <export.zip>");
         println!("  mkdir -p .safeselect/environments && touch .safeselect/project.toml");
@@ -547,17 +543,7 @@ where
     F: FnOnce(&str, &str) -> Result<()>,
 {
     let dir = resolve_project_dir(loader, project)?;
-    let env_file = environment_config_file(&dir, &environment);
-    if !env_file.exists() {
-        return Err(SafeselectError::EnvironmentNotFound(
-            environment,
-            env_file.display().to_string(),
-        ));
-    }
-
-    let content = std::fs::read_to_string(&env_file)?;
-    let mut env_config: config::EnvironmentConfig = toml::from_str(&content)
-        .map_err(|e| SafeselectError::Config(format!("invalid {}: {e}", env_file.display())))?;
+    let (env_file, mut env_config) = load_ssh_environment_config(&dir, &environment)?;
     let ssh = env_config.ssh.as_mut().ok_or_else(|| {
         SafeselectError::Config(format!(
             "environment '{environment}' has no SSH configuration"
@@ -567,12 +553,7 @@ where
         .secret_account
         .clone()
         .unwrap_or_else(|| format!("{}/{environment}/ssh", project_display_name(&dir)));
-    let password = password.map(Ok).unwrap_or_else(|| {
-        inquire::Password::new(&format!("SSH password for '{account}'"))
-            .without_confirmation()
-            .prompt()
-            .map_err(|e| SafeselectError::Other(format!("Failed to read SSH password: {e}")))
-    })?;
+    let password = resolve_ssh_password(password, &account)?;
 
     store_password(&account, &password)?;
     ssh.secret_account = Some(account.clone());
@@ -585,6 +566,32 @@ where
     println!("  ✓ Updated {}", env_file.display());
     println!("\nDone. Run: safeselect check --environment {environment}");
     Ok(())
+}
+
+fn load_ssh_environment_config(
+    dir: &Path,
+    environment: &str,
+) -> Result<(PathBuf, config::EnvironmentConfig)> {
+    let env_file = environment_config_file(dir, environment);
+    if !env_file.exists() {
+        return Err(SafeselectError::EnvironmentNotFound(
+            environment.to_string(),
+            env_file.display().to_string(),
+        ));
+    }
+    let content = std::fs::read_to_string(&env_file)?;
+    let env_config = toml::from_str(&content)
+        .map_err(|e| SafeselectError::Config(format!("invalid {}: {e}", env_file.display())))?;
+    Ok((env_file, env_config))
+}
+
+fn resolve_ssh_password(password: Option<String>, account: &str) -> Result<String> {
+    password.map(Ok).unwrap_or_else(|| {
+        inquire::Password::new(&format!("SSH password for '{account}'"))
+            .without_confirmation()
+            .prompt()
+            .map_err(|e| SafeselectError::Other(format!("Failed to read SSH password: {e}")))
+    })
 }
 
 fn environment_config_file(project: &Path, environment: &str) -> PathBuf {
@@ -921,6 +928,9 @@ fn cmd_agent(action: AgentAction) -> Result<()> {
                     println!("    Config: {}", client.config_path.display());
                 }
             }
+            println!(
+                "Next: choose one detected client and run `safeselect agent install <client>`."
+            );
             Ok(())
         }
         AgentAction::Install {
@@ -1014,7 +1024,14 @@ fn cmd_agent(action: AgentAction) -> Result<()> {
             for environment in environments {
                 let entry_name = match &name {
                     Some(name) => name.clone(),
-                    None => default_agent_entry_name(&project_display_name(&root), &environment),
+                    None => agents::canonical_entry_name(Some(&root), &environment).ok_or_else(
+                        || {
+                            SafeselectError::Other(
+                                "could not derive a safe MCP entry name from the project path"
+                                    .into(),
+                            )
+                        },
+                    )?,
                 };
 
                 agents::install_entry(
@@ -1104,23 +1121,14 @@ fn cmd_agent(action: AgentAction) -> Result<()> {
             agents::uninstall_entry(&client, &entry_name, repo_root.as_deref())
         }
         AgentAction::Status => {
-            let clients = agents::detect_clients()?;
+            let loader = ConfigLoader::new();
+            let cwd = std::env::current_dir()?;
+            let repo_root = loader.find_local_project(&cwd);
             println!("Agent integration status:");
-
-            for client in &clients {
-                if client.detected {
-                    let content = std::fs::read_to_string(&client.config_path).unwrap_or_default();
-                    let has_entries = content.contains("safeselect");
-                    println!(
-                        "  {} {} {}",
-                        if has_entries { "✓" } else { " " },
-                        client.name,
-                        if has_entries { "(installed)" } else { "" }
-                    );
-                } else {
-                    println!("  ✗ {}", client.name);
-                }
+            for line in agents::status_lines(repo_root.as_deref())? {
+                println!("{line}");
             }
+            println!("Next: install or remove an entry only if the reported state differs from your intent.");
             Ok(())
         }
     }
@@ -3235,16 +3243,17 @@ fn run_reconnects(
     repo_root: &std::path::Path,
     env_names: &[String],
 ) -> Result<()> {
-    let mut failures = Vec::new();
-    for env_name in env_names {
-        match cmd_reconnect(loader, repo_root, env_name) {
-            Ok(()) => {}
-            Err(e) => {
-                println!("Reconnect failed for {env_name}: {e}");
-                failures.push(format!("{env_name}: {e}"));
-            }
-        }
-    }
+    let failures: Vec<String> = env_names
+        .iter()
+        .filter_map(|env_name| {
+            cmd_reconnect(loader, repo_root, env_name)
+                .err()
+                .map(|error| {
+                    println!("Reconnect failed for {env_name}: {error}");
+                    format!("{env_name}: {error}")
+                })
+        })
+        .collect();
     if failures.is_empty() {
         Ok(())
     } else {
@@ -4148,11 +4157,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn builds_default_agent_entry_name() {
-        assert_eq!(
-            default_agent_entry_name("demo", "local"),
-            "safeselect-demo-local"
-        );
+    fn covers_small_configuration_helpers() {
+        let root = std::env::temp_dir().join(format!("safeselect-config-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(".safeselect/environments")).unwrap();
+        std::fs::write(
+            root.join(".safeselect/environments/dev.toml"),
+            "version = 1\n[database]\nurl = \"jdbc:postgresql://localhost/db\"\n",
+        )
+        .unwrap();
+        assert!(environment_config_file(&root, "dev").exists());
+        assert!(load_environment_config(&root, "dev").is_ok());
+        assert!(check_version_and_maybe_reset(&root).is_ok());
+        let mut removed = String::new();
+        append_deleted_secret_message(
+            &mut removed,
+            Some(("env".into(), Some("SAFESELECT_PASSWORD".into()), None)),
+        )
+        .unwrap();
+        assert!(removed.contains("not removed"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn covers_local_connectivity_failure_helpers() {
+        let addr: std::net::SocketAddr = "127.0.0.1:1".parse().unwrap();
+        assert!(!check_postgres(&addr));
+        assert!(!kill_process_on_port(65534));
     }
 
     #[test]
@@ -5075,6 +5106,29 @@ username = "usr_app"
         assert_eq!(
             build_ssh_command(&config, "postgresql://db").as_deref(),
             Some("ssh -L 127.0.0.1:15433:db.internal:5432 user@bastion")
+        );
+    }
+
+    #[test]
+    fn builds_ssh_command_without_optional_port_or_identity() {
+        let config = config::SshConfig {
+            enabled: true,
+            bastion: None,
+            host: Some("bastion".into()),
+            username: Some("user".into()),
+            port: None,
+            secret_account: None,
+            identity_file: None,
+            known_hosts: None,
+            forward_host: Some("db.internal".into()),
+            forward_port: Some(5432),
+            local_host: None,
+            local_port: None,
+            auth_type: None,
+        };
+        assert_eq!(
+            build_ssh_command(&config, "postgresql://db").as_deref(),
+            Some("ssh -L localhost:15432:db.internal:5432 user@bastion")
         );
     }
 

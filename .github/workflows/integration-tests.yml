@@ -42,6 +42,11 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
+      - name: Install makevn
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/antonillos/makevn/main/packaging/install/install-release.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
       - name: Start integration services
         run: docker compose -f docker-compose.integration.yml up -d --wait
 
@@ -56,11 +61,10 @@ jobs:
             target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Build sidecar
+      - name: Initialize, test, and package sidecar
         run: |
-          cd sidecar
-          mvn clean package -DskipTests
-          cp target/safeselect-sidecar-*.jar target/safeselect-sidecar.jar
+          makevn doctor init test package
+          cp sidecar/target/safeselect-sidecar-*.jar sidecar/target/safeselect-sidecar.jar
 
       - name: Build SafeSelect
         run: cargo build --release

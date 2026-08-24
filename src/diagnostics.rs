@@ -88,3 +88,31 @@ pub fn line(status: DiagnosticStatus, code: DiagnosticCode, message: impl AsRef<
 pub fn print(status: DiagnosticStatus, code: DiagnosticCode, message: impl AsRef<str>) {
     println!("{}", line(status, code, message));
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{line, DiagnosticCode, DiagnosticStatus};
+
+    #[test]
+    fn renders_all_diagnostic_status_markers() {
+        assert!(line(DiagnosticStatus::Ok, DiagnosticCode::ConfigResolved, "ok").contains("✓"));
+        assert!(line(
+            DiagnosticStatus::Warn,
+            DiagnosticCode::ConfigResolved,
+            "warn"
+        )
+        .contains("⚠"));
+        assert!(line(
+            DiagnosticStatus::Fail,
+            DiagnosticCode::ConfigResolved,
+            "fail"
+        )
+        .contains("✗"));
+        assert!(line(
+            DiagnosticStatus::Info,
+            DiagnosticCode::ConfigResolved,
+            "info"
+        )
+        .contains("◇"));
+    }
+}

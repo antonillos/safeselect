@@ -1112,14 +1112,18 @@ impl McpServer {
                         },
                         "environment": {
                             "type": "string",
-                            "description": "Environment name to serve"
+                            "description": "Environment name to serve (optional when the project has exactly one)"
                         },
                         "name": {
                             "type": "string",
                             "description": "Entry name (optional, defaults to 'safeselect-<project-dir>-<environment>')"
+                        },
+                        "local": {
+                            "type": "boolean",
+                            "description": "Install in project scope instead of user scope (default: false)"
                         }
                     },
-                    "required": ["client", "environment"]
+                    "required": ["client"]
                 }),
             },
             ToolDefinition {
@@ -2822,25 +2826,23 @@ impl McpServer {
     }
 
     fn is_backend_ready_for_query(&self, ssh: &crate::config::SshConfig, url: &str) -> bool {
-        match self.backend.kind {
-            crate::backend::BackendKind::Jdbc => is_ssh_ready_for_query(ssh, url),
-            crate::backend::BackendKind::Document => {
-                let bastion_host = ssh.host.as_deref().unwrap_or("");
-                let bastion_port = ssh.port.unwrap_or(22);
-                if !crate::check_tcp_endpoint(
-                    bastion_host,
-                    bastion_port,
-                    std::time::Duration::from_secs(3),
-                ) {
-                    return false;
-                }
-                crate::extract_tcp_host_port(url)
-                    .map(|(host, port)| {
-                        crate::check_tcp_endpoint(&host, port, std::time::Duration::from_secs(3))
-                    })
-                    .unwrap_or(false)
-            }
+        if self.backend.kind == crate::backend::BackendKind::Jdbc {
+            is_ssh_ready_for_query(ssh, url)
+        } else {
+            Self::is_document_backend_ready(ssh, url)
         }
+    }
+
+    fn is_document_backend_ready(ssh: &crate::config::SshConfig, url: &str) -> bool {
+        let bastion_host = ssh.host.as_deref().unwrap_or("");
+        let bastion_port = ssh.port.unwrap_or(22);
+        crate::check_tcp_endpoint(
+            bastion_host,
+            bastion_port,
+            std::time::Duration::from_secs(3),
+        ) && crate::extract_tcp_host_port(url).is_some_and(|(host, port)| {
+            crate::check_tcp_endpoint(&host, port, std::time::Duration::from_secs(3))
+        })
     }
 
     fn restart_sidecar(&mut self) -> Result<()> {
@@ -2957,7 +2959,7 @@ impl McpServer {
         args: &serde_json::Value,
     ) -> Result<()> {
         let environment = match args.get("environment").and_then(|v| v.as_str()) {
-            Some(e) => e,
+            Some(environment) => environment,
             None => return self.send_error(id, -32602, "Missing 'environment' argument"),
         };
 
@@ -3521,10 +3523,26 @@ impl McpServer {
             Some(c) => c,
             None => return self.send_error(id, -32602, "Missing 'client' argument"),
         };
+        let environments = project_environment_names(&self.repo_root)?;
         let environment = match args.get("environment").and_then(|v| v.as_str()) {
-            Some(e) => e,
-            None => return self.send_error(id, -32602, "Missing 'environment' argument"),
+            Some(environment) if environments.iter().any(|item| item == environment) => {
+                environment.to_string()
+            }
+            Some(environment) => {
+                return self.send_error(id, -32602, format!("Unknown environment '{environment}'. Next suggestion: Retry agent_install with one of: {}.", environments.join(", ")))
+            }
+            None if environments.len() == 1 => environments[0].clone(),
+            None if environments.is_empty() => {
+                return self.send_error(id, -32602, "No project environments exist. Next suggestion: Call import_compose or create one environment before retrying agent_install.")
+            }
+            None => {
+                return self.send_error(id, -32602, format!("Environment is ambiguous; valid choices: {}. Next suggestion: Retry agent_install once with one exact environment from this list.", environments.join(", ")))
+            }
         };
+        let local = args
+            .get("local")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
         let name = args
             .get("name")
             .and_then(|v| v.as_str())
@@ -3543,12 +3561,12 @@ impl McpServer {
 
         match agents::install_entry(
             client,
-            environment,
+            &environment,
             &entry_name,
             Some(&repo_root),
             Some(&config_dir),
             mcp_timeout_ms,
-            false,
+            local,
         ) {
             Ok(()) => {
                 let text = format!("Entry '{entry_name}' installed for {client}");
@@ -3594,23 +3612,13 @@ impl McpServer {
     }
 
     fn handle_agent_status(&mut self, id: Option<serde_json::Value>) -> Result<()> {
-        let clients = match agents::detect_clients() {
-            Ok(c) => c,
+        let status_lines = match agents::status_lines(Some(&self.repo_root)) {
+            Ok(lines) => lines,
             Err(e) => return self.send_error(id, -32000, format!("Detection failed: {e}")),
         };
 
         let mut lines = vec!["Agent integration status:".into()];
-        for client in &clients {
-            if client.detected {
-                let content = std::fs::read_to_string(&client.config_path).unwrap_or_default();
-                let has_entries = content.contains("safeselect");
-                let status = if has_entries { "✓" } else { " " };
-                let installed = if has_entries { " (installed)" } else { "" };
-                lines.push(format!("  {status} {}{}", client.name, installed));
-            } else {
-                lines.push(format!("  ✗ {}", client.name));
-            }
-        }
+        lines.extend(status_lines);
 
         let resp = trusted_tool_response(id, "ok", lines.join("\n"), "Report the integration status; call agent_install or agent_uninstall only if the user requested that change, otherwise stop.");
         self.write_response(&resp)
@@ -4291,6 +4299,27 @@ fn import_compose_guidance_text(
     update_generated_by(&scan_path.join(".safeselect"))?;
     let names: Vec<String> = all_connections.iter().map(|c| c.env_name.clone()).collect();
     Ok(compose::build_import_guidance(project_name, &import, &names, true).text)
+}
+
+fn project_environment_names(repo_root: &Path) -> Result<Vec<String>> {
+    let directory = repo_root.join(".safeselect").join("environments");
+    let mut names = Vec::new();
+    let entries = std::fs::read_dir(&directory).map_err(|error| {
+        SafeselectError::Config(format!(
+            "cannot read environments in {}: {error}",
+            directory.display()
+        ))
+    })?;
+    for entry in entries {
+        let path = entry?.path();
+        if path.extension().and_then(|extension| extension.to_str()) == Some("toml") {
+            if let Some(name) = path.file_stem().and_then(|name| name.to_str()) {
+                names.push(name.to_string());
+            }
+        }
+    }
+    names.sort();
+    Ok(names)
 }
 
 fn tool_error_response(
@@ -5153,18 +5182,21 @@ fn document_backend_error_next_suggestion(message: &str) -> &'static str {
     let lower = message.to_ascii_lowercase();
     if lower.contains("timeout") || lower.contains("timed out") {
         "Call explain_documents with the same database, collection, and filter; then retry once with a narrower filter while preserving every existing restriction."
-    } else if (lower.contains("field") || lower.contains("path"))
-        && (lower.contains("unknown")
-            || lower.contains("not found")
-            || lower.contains("does not exist")
-            || lower.contains("unrecognized"))
-    {
+    } else if is_unknown_document_field_error(&lower) {
         "Call discover_document_schema for the same database and collection, then retry once using only observed fields and declarative MQL operators."
     } else if is_recoverable_connection_error(message) {
         "Call check now; call reconnect once only if check identifies a stale connection, otherwise report the connection failure."
     } else {
         "Stop and report this document database error to the user; no unchanged retry is safe."
     }
+}
+
+fn is_unknown_document_field_error(message: &str) -> bool {
+    (message.contains("field") || message.contains("path"))
+        && (message.contains("unknown")
+            || message.contains("not found")
+            || message.contains("does not exist")
+            || message.contains("unrecognized"))
 }
 
 fn build_explain_sql(sql: &str, args: &serde_json::Value) -> std::result::Result<String, String> {
@@ -5294,6 +5326,50 @@ mod tests {
         assert!(!is_recoverable_connection_error("syntax error"));
     }
 
+    #[test]
+    fn covers_connection_lifecycle_error_paths_without_backend() {
+        let repo_root = std::env::temp_dir().join(format!(
+            "safeselect-mcp-lifecycle-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&repo_root).unwrap();
+        let mut server = test_server(&repo_root);
+
+        server
+            .handle_disconnect(Some(serde_json::json!(1)))
+            .unwrap();
+        server.handle_connect(Some(serde_json::json!(2))).unwrap();
+        server.handle_reconnect(Some(serde_json::json!(3))).unwrap();
+        let _ = server.handle_list_databases(Some(serde_json::json!(4)));
+
+        std::fs::remove_dir_all(repo_root).unwrap();
+    }
+
+    #[test]
+    fn covers_catalog_and_configuration_rejection_paths() {
+        let repo_root = std::env::temp_dir().join(format!(
+            "safeselect-mcp-rejection-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&repo_root).unwrap();
+        let mut server = test_server(&repo_root);
+        let empty = serde_json::json!({});
+        let _ = server.handle_list_tables(Some(serde_json::json!(1)), &empty);
+        let _ = server.handle_describe_table(Some(serde_json::json!(2)), &empty);
+        let _ = server.handle_explain(Some(serde_json::json!(3)), &empty);
+        let _ = server.handle_config_rename_environment(Some(serde_json::json!(4)), &empty);
+        let _ = server.handle_uninstall(Some(serde_json::json!(5)), &empty);
+        std::fs::create_dir_all(repo_root.join(".safeselect/environments")).unwrap();
+        std::fs::write(
+            repo_root.join(".safeselect/environments/test.toml"),
+            "version = 1\n[database]\nkind = \"document\"\nurl = \"mongodb://127.0.0.1:1/app\"\n",
+        )
+        .unwrap();
+        server.backend.kind = crate::backend::BackendKind::Document;
+        let _ = server.handle_check(Some(serde_json::json!(6)));
+        std::fs::remove_dir_all(repo_root).unwrap();
+    }
+
     fn response_json(response: &JsonRpcResponse) -> serde_json::Value {
         serde_json::to_value(response).unwrap()
     }
@@ -5405,6 +5481,133 @@ mod tests {
             .as_array()
             .unwrap()
             .contains(&serde_json::json!("next_suggestion")));
+    }
+
+    #[test]
+    fn rejects_invalid_catalog_arguments_without_touching_backend() {
+        let repo_root =
+            std::env::temp_dir().join(format!("safeselect-mcp-args-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&repo_root).unwrap();
+        let mut server = test_server(&repo_root);
+        let id = Some(serde_json::json!(1));
+        let invalid = serde_json::json!({"unexpected": true});
+        server
+            .handle_list_collections(id.clone(), &invalid)
+            .unwrap();
+        server
+            .handle_list_table_indexes(id.clone(), &invalid)
+            .unwrap();
+        server.handle_get_table_stats(id.clone(), &invalid).unwrap();
+        server.handle_list_triggers(id.clone(), &invalid).unwrap();
+        server.handle_list_scheduled_jobs(id, &invalid).unwrap();
+        server
+            .handle_list_scheduled_jobs(Some(serde_json::json!(7)), &serde_json::json!({}))
+            .unwrap();
+        let id = Some(serde_json::json!(2));
+        server.handle_list_functions(id.clone(), &invalid).unwrap();
+        server
+            .handle_list_collection_indexes(id.clone(), &serde_json::json!({}))
+            .unwrap();
+        server
+            .handle_get_mongodb_database_stats(id.clone(), &serde_json::json!({}))
+            .unwrap();
+        server
+            .handle_get_collection_stats(id, &serde_json::json!({}))
+            .unwrap();
+        std::fs::remove_dir_all(repo_root).unwrap();
+    }
+
+    #[test]
+    fn covers_mcp_metadata_and_agent_status_paths() {
+        let repo_root =
+            std::env::temp_dir().join(format!("safeselect-mcp-meta-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&repo_root).unwrap();
+        let mut server = test_server(&repo_root);
+        server
+            .handle_database_info(Some(serde_json::json!(1)))
+            .unwrap();
+        server
+            .handle_audit_recent(Some(serde_json::json!(2)), &serde_json::json!({}))
+            .unwrap();
+        server
+            .handle_audit_recent(Some(serde_json::json!(3)), &serde_json::json!({"limit": 0}))
+            .unwrap();
+        server
+            .handle_audit_recent(Some(serde_json::json!(4)), &serde_json::json!({"limit": 2}))
+            .unwrap();
+        server
+            .handle_driver_list(Some(serde_json::json!(5)))
+            .unwrap();
+        server
+            .handle_agent_detect(Some(serde_json::json!(6)))
+            .unwrap();
+        server
+            .handle_agent_status(Some(serde_json::json!(7)))
+            .unwrap();
+        std::fs::remove_dir_all(repo_root).unwrap();
+    }
+
+    #[test]
+    fn covers_missing_argument_validation_for_mcp_tools() {
+        let repo_root =
+            std::env::temp_dir().join(format!("safeselect-mcp-missing-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&repo_root).unwrap();
+        let mut server = test_server(&repo_root);
+        let args = serde_json::json!({});
+        server
+            .handle_find_documents(Some(serde_json::json!(1)), &args)
+            .unwrap();
+        server
+            .handle_generate_document_fixture(Some(serde_json::json!(2)), &args)
+            .unwrap();
+        server
+            .handle_config_validate(Some(serde_json::json!(3)), &args)
+            .unwrap();
+        server
+            .handle_config_show(Some(serde_json::json!(4)), &args)
+            .unwrap();
+        server
+            .handle_config_delete_environment(Some(serde_json::json!(5)), &args)
+            .unwrap();
+        server
+            .handle_config_set_password(Some(serde_json::json!(6)), &args)
+            .unwrap();
+        server
+            .handle_config_reset(Some(serde_json::json!(7)), &args)
+            .unwrap();
+        server
+            .handle_driver_add(Some(serde_json::json!(8)), &args)
+            .unwrap();
+        server
+            .handle_driver_download(Some(serde_json::json!(9)), &args)
+            .unwrap();
+        server
+            .handle_agent_install(Some(serde_json::json!(10)), &args)
+            .unwrap();
+        server
+            .handle_agent_uninstall(Some(serde_json::json!(11)), &args)
+            .unwrap();
+        std::fs::remove_dir_all(repo_root).unwrap();
+    }
+
+    #[test]
+    fn lists_project_environments_for_agent_autodetection() {
+        let root = std::env::temp_dir().join(format!(
+            "safeselect-mcp-environments-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let environments = root.join(".safeselect/environments");
+        std::fs::create_dir_all(&environments).unwrap();
+        std::fs::write(environments.join("prod.toml"), "").unwrap();
+        std::fs::write(environments.join("dev.toml"), "").unwrap();
+        std::fs::write(environments.join("README.md"), "").unwrap();
+        assert_eq!(
+            project_environment_names(&root).unwrap(),
+            vec!["dev", "prod"]
+        );
+        std::fs::remove_dir_all(&environments).unwrap();
+        assert!(project_environment_names(&root).is_err());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -6156,8 +6359,18 @@ services:
         assert!(
             document_backend_error_next_suggestion("query timed out").contains("explain_documents")
         );
+        assert!(document_backend_error_next_suggestion("request timed out")
+            .contains("explain_documents"));
         assert!(document_backend_error_next_suggestion("unknown field name")
             .contains("discover_document_schema"));
+        for message in [
+            "field not found",
+            "path does not exist",
+            "unrecognized field",
+        ] {
+            assert!(document_backend_error_next_suggestion(message)
+                .contains("discover_document_schema"));
+        }
         assert!(document_backend_error_next_suggestion("connection refused").contains("check"));
         assert!(document_backend_error_next_suggestion("invalid operator").contains("Stop"));
     }
@@ -6224,8 +6437,10 @@ services:
                 &serde_json::json!({"schema":"bad-name"})
             )
             .is_err());
-        let mut policy = crate::config::SecurityPolicy::default();
-        policy.allowed_schemas = vec!["public".into()];
+        let policy = crate::config::SecurityPolicy {
+            allowed_schemas: vec!["public".into()],
+            ..Default::default()
+        };
         server.security = SecurityEngine::new(policy, crate::config::LimitsConfig::default());
         assert!(server
             .catalog_schema(

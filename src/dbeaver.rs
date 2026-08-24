@@ -325,6 +325,35 @@ mod tests {
     }
 
     #[test]
+    fn applies_nested_configuration_fallbacks_and_skips_sources_without_hosts() {
+        let content = r###"{
+          "connections": [
+            {"name":"nested","configuration":{"host":"db","port":"bad","database":"app","driver":"postgres","userName":"agent","handlers":{"ssh_tunnel":{"enabled":true,"properties":{"#host":"jumpbox","#port":2222,"#user":"tunnel-user","#localHost":"127.0.0.1","#localPort":15432,"#keyFile":"/tmp/id_ed25519","#authType":"KEY"}}}}},
+            {"name":"missing-host","database":"ignored"}
+          ],
+          "data-sources": []
+        }"###;
+        let connections = parse_data_sources(content).unwrap();
+        assert_eq!(connections.len(), 1);
+        assert_eq!(connections[0].name, "nested");
+        assert_eq!(connections[0].host, "db");
+        assert_eq!(connections[0].port, 5432);
+        assert_eq!(connections[0].database, "app");
+        assert_eq!(connections[0].username, "agent");
+        assert_eq!(connections[0].driver, "");
+        assert_eq!(connections[0].ssh_host.as_deref(), Some("jumpbox"));
+        assert_eq!(connections[0].ssh_port, Some(2222));
+        assert_eq!(connections[0].ssh_user.as_deref(), Some("tunnel-user"));
+        assert_eq!(connections[0].ssh_local_host.as_deref(), Some("127.0.0.1"));
+        assert_eq!(connections[0].ssh_local_port, Some(15432));
+        assert_eq!(
+            connections[0].ssh_key_file.as_deref(),
+            Some("/tmp/id_ed25519")
+        );
+        assert_eq!(connections[0].ssh_auth_type.as_deref(), Some("KEY"));
+    }
+
+    #[test]
     fn imports_data_sources_from_a_zip_archive() {
         let path =
             std::env::temp_dir().join(format!("safeselect-dbeaver-{}.zip", uuid::Uuid::new_v4()));

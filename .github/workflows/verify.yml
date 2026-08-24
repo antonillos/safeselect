@@ -5,7 +5,7 @@ on:
     branches:
       - develop
       - main
-    types: [opened, synchronize, reopened, labeled]
+    types: [opened, synchronize, reopened]
   push:
     branches:
       - develop
@@ -34,9 +34,13 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
-      - name: Build sidecar
+      - name: Install makevn
         run: |
-          mvn -f sidecar/pom.xml package -DskipTests
+          curl -fsSL https://raw.githubusercontent.com/antonillos/makevn/main/packaging/install/install-release.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Initialize, test, and package sidecar
+        run: |
+          makevn doctor init test package
           cp sidecar/target/safeselect-sidecar-*.jar sidecar/target/safeselect-sidecar.jar
       - name: Check compilation
         run: cargo check
@@ -44,6 +48,27 @@ jobs:
         run: cargo test
         env:
           CARGO_TERM_COLOR: always
+      - name: Validate MCPB packaging helpers
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build
+          version="$(sed -nE 's/^version = "([^"]+)"/\1/p' Cargo.toml | sed -n '1p')"
+          asset="safeselect-v${version}-x86_64-unknown-linux-gnu.mcpb"
+          scripts/package-mcpb.sh \
+            --binary target/debug/safeselect \
+            --target x86_64-unknown-linux-gnu \
+            --version "${version}" \
+            --output "${RUNNER_TEMP}/${asset}"
+          unzip -t "${RUNNER_TEMP}/${asset}"
+          unzip -p "${RUNNER_TEMP}/${asset}" manifest.json | python3 -m json.tool >/dev/null
+          checksum="$(sha256sum "${RUNNER_TEMP}/${asset}" | awk '{print $1}')"
+          scripts/generate-registry-server-json.sh \
+            --version "${version}" \
+            --release-url "https://github.com/antonillos/safeselect/releases/download/v${version}" \
+            --output "${RUNNER_TEMP}/server.json" \
+            "${asset}=${checksum}"
+          python3 -m json.tool "${RUNNER_TEMP}/server.json" >/dev/null
 
   integration:
     name: Integration (PostgreSQL)
@@ -71,9 +96,13 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
-      - name: Build sidecar
+      - name: Install makevn
         run: |
-          mvn -f sidecar/pom.xml package -DskipTests
+          curl -fsSL https://raw.githubusercontent.com/antonillos/makevn/main/packaging/install/install-release.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Initialize, test, and package sidecar
+        run: |
+          makevn doctor init test package
           cp sidecar/target/safeselect-sidecar-*.jar sidecar/target/safeselect-sidecar.jar
       - name: Download PostgreSQL driver
         run: cargo run -- driver download --vendor postgresql
@@ -110,9 +139,13 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
-      - name: Build sidecar
+      - name: Install makevn
         run: |
-          mvn -f sidecar/pom.xml package -DskipTests
+          curl -fsSL https://raw.githubusercontent.com/antonillos/makevn/main/packaging/install/install-release.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Initialize, test, and package sidecar
+        run: |
+          makevn doctor init test package
           cp sidecar/target/safeselect-sidecar-*.jar sidecar/target/safeselect-sidecar.jar
       - name: Run real MongoDB security tests
         run: cargo test --test security real_mongodb_security_rejections_and_limits -- --nocapture
@@ -168,9 +201,7 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Build sidecar for Rust embedding
         run: |
-          makevn doctor
-          makevn init
-          makevn package
+          makevn doctor init test package
           cp sidecar/target/safeselect-sidecar-*.jar sidecar/target/safeselect-sidecar.jar
       - name: Download pinned crap4java release
         run: |

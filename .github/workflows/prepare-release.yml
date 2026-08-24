@@ -51,6 +51,11 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
+      - name: Install makevn
+        shell: bash
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/antonillos/makevn/main/packaging/install/install-release.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Resolve next version
         id: version
         shell: bash
@@ -187,8 +192,8 @@ jobs:
           } > "${tmp_changelog}"
 
           mv "${tmp_changelog}" CHANGELOG.md
-      - name: Build sidecar
-        run: mvn -f sidecar/pom.xml package -DskipTests
+      - name: Initialize, test, and package sidecar
+        run: makevn doctor init test package
       - name: Copy sidecar JAR
         run: cp sidecar/target/safeselect-sidecar-*.jar sidecar/target/safeselect-sidecar.jar
       - name: Build Rust binary

@@ -47,10 +47,8 @@ git clone https://github.com/antonillos/safeselect.git
 cd safeselect
 
 # Build the Java sidecar
-cd sidecar
-mvn package -DskipTests
-cp target/safeselect-sidecar-*.jar target/safeselect-sidecar.jar
-cd ..
+makevn doctor init test package
+cp sidecar/target/safeselect-sidecar-*.jar sidecar/target/safeselect-sidecar.jar
 
 # Build the Rust binary
 cargo build --release
