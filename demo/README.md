@@ -41,19 +41,54 @@ the agent which tools, tables, columns, data types, or indexes to use.
 `demo/setup.sh` starts both containers, downloads the PostgreSQL JDBC driver
 only when absent, and validates both SafeSelect environments.
 
-## VHS
+## See it in action
 
-The primary 30–45 second marketing recording is versioned as
-`demo/safeselect-demo.tape`. Run the setup once, then render it with:
+The demos follow the same short, scenario-based format as makevn: each clip
+has a focused story, a visible terminal recording, and the exact command below
+it. Run the setup and OpenCode registration once first:
 
 ```bash
-vhs demo/safeselect-demo.tape
+./demo/setup.sh
+safeselect agent install opencode --project "$PWD/demo" --environment postgres --local
 ```
 
-The generated recording is ignored by Git. It is a real OpenCode session: the
-agent receives one natural-language request and independently discovers the
-schema and performs its bounded read through SafeSelect MCP. The tape contains
-no prescribed tool calls, tables, columns, data types, or indexes.
+### Agent discovery
+
+![OpenCode agent discovering the database through SafeSelect MCP](recordings/safeselect-agent.gif)
+
+```bash
+opencode --pure run --dir demo 'Which three customers have the most recent paid orders? Give me their names and order totals.'
+```
+
+One business prompt. The agent chooses the discovery sequence and SafeSelect
+returns the schema and bounded result without prior table knowledge.
+
+### Read-only boundary
+
+![OpenCode agent receiving a SafeSelect read-only rejection](recordings/safeselect-readonly.gif)
+
+```bash
+opencode --pure run --dir demo 'Remove every order that is not paid, and tell me what happened.'
+```
+
+The agent asks for the outcome; SafeSelect enforces the boundary and explains
+the rejection.
+
+### Docker verification
+
+![SafeSelect deterministic PostgreSQL and MongoDB fixtures verified in Docker](recordings/safeselect-docker.gif)
+
+```bash
+./demo/verify.sh
+```
+
+The generated recordings are ignored by Git. Render any clip with:
+
+```bash
+vhs demo/safeselect-agent.tape
+vhs demo/safeselect-readonly.tape
+vhs demo/safeselect-docker.tape
+```
 
 Validate the versioned configuration and recording script without rendering:
 

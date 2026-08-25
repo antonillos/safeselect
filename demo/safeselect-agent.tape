@@ -1,7 +1,5 @@
-# Preflight once before recording:
-# ./demo/setup.sh
-# safeselect agent install opencode --project "$PWD/demo" --environment postgres --local
-Output demo/recordings/safeselect-demo.gif
+# Preflight: ./demo/setup.sh and SafeSelect OpenCode registration.
+Output demo/recordings/safeselect-agent.gif
 
 Require safeselect
 Require opencode

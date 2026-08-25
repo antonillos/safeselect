@@ -5,7 +5,9 @@ ROOT_DIR="$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(CDPATH= cd -- "${ROOT_DIR}/.." && pwd)"
 
 bash -n "${ROOT_DIR}"/*.sh
-vhs validate "${ROOT_DIR}/safeselect-demo.tape"
+for tape in "${ROOT_DIR}"/safeselect-*.tape; do
+  vhs validate "${tape}"
+done
 
 # shellcheck source=env.sh
 source "${ROOT_DIR}/env.sh"
