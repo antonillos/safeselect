@@ -944,12 +944,17 @@ fn resolve_uninstall_target(
 fn resolve_global_uninstall_target(client: &str, entry_name: &str) -> Result<PathBuf> {
     let config_path = get_client_config(client)?;
     let content = std::fs::read_to_string(&config_path)?;
-    match config_has_entry(client, &content, entry_name)? {
-        true => Ok(config_path),
-        false => Err(SafeselectError::Other(format!(
-            "No SafeSelect entry named '{entry_name}' found in {client} config"
-        ))),
+    ensure_config_entry(client, &content, entry_name)?;
+    Ok(config_path)
+}
+
+fn ensure_config_entry(client: &str, content: &str, entry_name: &str) -> Result<()> {
+    if config_has_entry(client, content, entry_name)? {
+        return Ok(());
     }
+    Err(SafeselectError::Other(format!(
+        "No SafeSelect entry named '{entry_name}' found in {client} config"
+    )))
 }
 
 fn find_local_uninstall_target(
@@ -1989,6 +1994,13 @@ mod tests {
         assert!(config_has_entry("copilot", copilot, "gamma").unwrap());
         assert!(config_has_entry("gemini-cli", json, "beta").unwrap());
         assert!(config_has_entry("unknown-client", json, "alpha").is_err());
+    }
+
+    #[test]
+    fn validates_global_uninstall_entry_before_removing_it() {
+        let content = r#"{"mcp":{"safeselect":{"command":["safeselect"]}}}"#;
+        assert!(ensure_config_entry("opencode", content, "safeselect").is_ok());
+        assert!(ensure_config_entry("opencode", content, "missing").is_err());
     }
 
     #[test]
