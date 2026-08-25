@@ -44,8 +44,12 @@ download_and_install() {
 
     echo "Installing to ${PREFIX}/bin..."
     mkdir -p "${PREFIX}/bin"
-    cp safeselect "${PREFIX}/bin/safeselect"
-    chmod +x "${PREFIX}/bin/safeselect"
+    installed_binary="${PREFIX}/bin/.safeselect.tmp.$$"
+    trap 'rm -f "${installed_binary}"' EXIT HUP INT TERM
+    cp safeselect "${installed_binary}"
+    chmod +x "${installed_binary}"
+    mv -f "${installed_binary}" "${PREFIX}/bin/safeselect"
+    trap - EXIT HUP INT TERM
 
     rm -rf "${TMPDIR}"
 

@@ -49,8 +49,12 @@ SAFESELECT_BUILD_VERSION="${build_version}" RUSTFLAGS="-A warnings" cargo build 
 TARGET_DIR="${SCRIPT_DIR}/target/${MODE}"
 printf 'Installing to %s...\n' "${BIN_DIR}"
 mkdir -p "${BIN_DIR}"
-cp "${TARGET_DIR}/safeselect" "${BIN_DIR}/safeselect"
-chmod +x "${BIN_DIR}/safeselect"
+installed_binary="${BIN_DIR}/.safeselect.tmp.$$"
+trap 'rm -f "${installed_binary}"' EXIT
+cp "${TARGET_DIR}/safeselect" "${installed_binary}"
+chmod +x "${installed_binary}"
+mv -f "${installed_binary}" "${BIN_DIR}/safeselect"
+trap - EXIT
 
 printf '\n✓ safeselect installed at %s/safeselect (%s)\n' "${BIN_DIR}" "${MODE}"
 printf '  Make sure %s is in your PATH\n' "${BIN_DIR}"
