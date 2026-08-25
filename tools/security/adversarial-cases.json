@@ -380,11 +380,11 @@
       "id": "mongodb.unbounded-max-time",
       "backend": "mongodb",
       "operation": "find_documents",
-      "payload": { "maxTimeMS": 0 },
+      "payload": { "filter": {}, "limit": 1, "maxTimeMS": 0 },
       "expected_decision": "reject",
       "expected_state_unchanged": true,
       "controls": ["timeout_policy"],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "id": "mongodb.allow-disk-use",
@@ -394,17 +394,17 @@
       "expected_decision": "reject",
       "expected_state_unchanged": true,
       "controls": ["resource_option_policy"],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "id": "mongodb.excessive-batch-size",
       "backend": "mongodb",
       "operation": "find_documents",
-      "payload": { "batchSize": 1000000 },
+      "payload": { "batchSize": 1000000, "filter": {}, "limit": 1 },
       "expected_decision": "reject",
       "expected_state_unchanged": true,
       "controls": ["resource_option_policy"],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "id": "mcp.duplicate-id",
