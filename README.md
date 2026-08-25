@@ -80,6 +80,31 @@ The product promise is simple: **agents can look, but they cannot mutate**. Even
 
 The agent talks to SafeSelect through MCP stdio. SafeSelect enforces policy in Rust, stores secrets outside project files, and reaches databases through an embedded Java sidecar: JDBC for SQL backends and the MongoDB driver for MongoDB. The Rust to Java channel is JSON-lines over stdin/stdout: no sockets, no open ports.
 
+## See it in action
+
+One business prompt is enough: the agent discovers the database structure and
+uses SafeSelect's bounded, read-only MCP tools without being told tables,
+columns, or query syntax. The [complete demo gallery](demo/README.md) also
+covers setup and the read-only rejection path.
+
+### OpenCode discovers PostgreSQL
+
+<p align="center">
+  <img src="docs/recordings/safeselect-opencode.gif" alt="OpenCode discovers PostgreSQL through SafeSelect MCP" width="900">
+</p>
+
+### Codex discovers PostgreSQL
+
+<p align="center">
+  <img src="docs/recordings/safeselect-codex.gif" alt="Codex discovers PostgreSQL through SafeSelect MCP" width="900">
+</p>
+
+### MongoDB, with the same safety boundary
+
+<p align="center">
+  <img src="docs/recordings/safeselect-mongodb.gif" alt="OpenCode discovers MongoDB through SafeSelect MCP" width="900">
+</p>
+
 ## Quick Start
 
 ```bash
