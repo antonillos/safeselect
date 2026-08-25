@@ -33,8 +33,8 @@ environments. Source the demo environment before using it:
 
 ```bash
 source demo/env.sh
-safeselect query --project demo --environment postgres --sql 'SELECT * FROM demo_products LIMIT 3'
-python3 demo/mcp_call.py mongodb find_documents '{"database":"safeselect_demo","collection":"products","filter":{"available":true},"limit":3}'
+./demo/show-postgres.sh
+./demo/show-mongodb.sh
 ```
 
 `demo/setup.sh` starts both containers, downloads the PostgreSQL JDBC driver
@@ -49,8 +49,11 @@ The primary 30–45 second marketing recording is versioned as
 vhs demo/safeselect-demo.tape
 ```
 
-The generated recording is ignored by Git. It shows one bounded PostgreSQL
-read, one bounded MongoDB MCP read, and a rejected write attempt.
+The generated recording is ignored by Git. Its visible actor is an AI agent:
+it receives natural-language requests, discovers and reads through SafeSelect
+MCP tools, then sends a mutation request that SafeSelect rejects fail-closed.
+The scripts are deterministic MCP-client harnesses for recording; they do not
+pretend that a live model produced the transcript.
 
 Validate the versioned configuration and recording script without rendering:
 

@@ -17,22 +17,22 @@ Type "cd /Users/antonillos/Projects/antonillos/safeselect"
 Enter
 Type "source demo/env.sh"
 Enter
-Type "echo 'SafeSelect MCP — agents can look, they cannot mutate.'"
+Type "echo 'An AI agent asks. SafeSelect is its database boundary.'"
 Enter
 Sleep 2s
 
 Type "./demo/show-postgres.sh"
 Enter
-Sleep 3s
+Sleep 6s
 
 Type "./demo/show-mongodb.sh"
 Enter
-Sleep 3s
+Sleep 6s
 
 Type "./demo/show-rejection.sh"
 Enter
-Sleep 3s
+Sleep 6s
 
-Type "echo 'SafeSelect MCP: local, read-only, fail-closed.'"
+Type "echo 'Agent workflow: discover, read, then fail closed on mutation.'"
 Enter
 Sleep 2s
