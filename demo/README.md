@@ -117,7 +117,7 @@ installing the SafeSelect MCP.
 
 ```bash
 source /private/tmp/safeselect-codex-agent/codex.env
-codex exec --ephemeral --cd /private/tmp/safeselect-codex-agent --approve-for-me --skip-git-repo-check 'Which three customers have the most recent paid orders? Give me their names and order totals.'
+codex exec --ephemeral --enable fast_mode --cd /private/tmp/safeselect-codex-agent --approve-for-me --skip-git-repo-check 'Which three customers have the most recent paid orders? Give me their names and order totals.' 2>/dev/null
 ```
 
 Codex receives the same single business prompt as OpenCode and independently

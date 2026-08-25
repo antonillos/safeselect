@@ -17,6 +17,6 @@ Type "cd /private/tmp/safeselect-codex-agent"
 Enter
 Type "source codex.env"
 Enter
-Type "codex exec --ephemeral --cd /private/tmp/safeselect-codex-agent --approve-for-me --skip-git-repo-check 'Which three customers have the most recent paid orders? Give me their names and order totals.'"
+Type "codex exec --ephemeral --enable fast_mode --cd /private/tmp/safeselect-codex-agent --approve-for-me --skip-git-repo-check 'Which three customers have the most recent paid orders? Give me their names and order totals.' 2>/dev/null"
 Enter
-Sleep 60s
+Sleep 75s
