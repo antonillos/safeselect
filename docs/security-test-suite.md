@@ -52,10 +52,10 @@ The initial case corpus is stored in
 It is backend-neutral: adapters map each case to their fixture and preserve the
 expected decision and state-invariance contract.
 
-The corpus currently contains 45 cases: 40 implemented against the existing
-regression adapters and 5 planned cases covering MCP framing. Planned cases
-remain visible in the manifest but must not be reported as executed evidence
-until an adapter consumes them.
+The corpus currently contains 45 implemented cases against the existing
+database and MCP regression adapters. The MCP adapter covers duplicate request
+IDs, notifications, CRLF framing, truncated sidecar responses, and driver
+error redaction.
 
 Validate it with the standard-library reporter:
 

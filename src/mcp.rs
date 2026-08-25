@@ -302,6 +302,7 @@ impl McpServer {
         let stdin = std::io::stdin();
         let mut reader = BufReader::new(stdin.lock());
         let mut line = String::new();
+        let mut seen_requests = Vec::new();
 
         loop {
             line.clear();
@@ -326,6 +327,22 @@ impl McpServer {
 
             if msg.jsonrpc.as_deref() != Some("2.0") || msg.method.is_none() {
                 self.send_error(msg.id.clone(), -32600, "Invalid Request")?;
+                continue;
+            }
+
+            if let Some(id) = msg.id.as_ref() {
+                let fingerprint = serde_json::json!({
+                    "id": id,
+                    "method": msg.method,
+                    "params": msg.params
+                });
+                if seen_requests.iter().any(|seen| seen == &fingerprint) {
+                    self.send_error(Some(id.clone()), -32600, "Duplicate request id")?;
+                    continue;
+                }
+                seen_requests.push(fingerprint);
+            } else {
+                // JSON-RPC notifications are valid input but never receive a response.
                 continue;
             }
             let method = msg.method.as_deref().expect("validated above");
@@ -4155,7 +4172,10 @@ impl McpServer {
         next_suggestion: &str,
     ) -> Result<()> {
         let boundary = format!("safeselect-untrusted-data-{}", uuid::Uuid::new_v4());
-        let framed_detail = format!("<{boundary}>\n{detail}\n</{boundary}>");
+        let framed_detail = format!(
+            "<{boundary}>\n{}\n</{boundary}>",
+            redact_error_detail(detail)
+        );
         let message = trusted_backend_error_message(trusted_message, next_suggestion);
         let resp = JsonRpcResponse {
             jsonrpc: "2.0",
@@ -4185,6 +4205,20 @@ impl McpServer {
 
 fn trusted_backend_error_message(trusted_message: &str, next_suggestion: &str) -> String {
     format!("{trusted_message} Next suggestion: {next_suggestion}")
+}
+
+fn redact_error_detail(detail: &str) -> String {
+    detail
+        .split_whitespace()
+        .map(|token| {
+            if let Some((prefix, _)) = token.split_once("password=") {
+                format!("{prefix}password=[redacted]")
+            } else {
+                token.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn error_next_suggestion(message: &str) -> &'static str {
@@ -5395,6 +5429,16 @@ mod tests {
 
     fn response_json(response: &JsonRpcResponse) -> serde_json::Value {
         serde_json::to_value(response).unwrap()
+    }
+
+    #[test]
+    fn redacts_driver_passwords_from_backend_error_details() {
+        let detail = redact_error_detail(
+            "jdbc:postgresql://db:5432/app password=super-secret SQLSTATE=08001",
+        );
+        assert!(!detail.contains("super-secret"));
+        assert!(detail.contains("password=[redacted]"));
+        assert!(detail.contains("SQLSTATE=08001"));
     }
 
     fn test_server(repo_root: &Path) -> McpServer {
