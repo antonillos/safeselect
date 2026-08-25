@@ -19,7 +19,7 @@ rejected operation did not mutate the fixture.
 | Adapter | Entry point | Coverage |
 |---|---|---|
 | PostgreSQL | [`real_postgres.rs`](../tests/security_suite/real_postgres.rs) | Read-only SQL, stacked statements, CTE DML, transaction control, side-effecting functions, schema policy, result limits, and timeouts |
-| MongoDB | [`real_mongodb.rs`](../tests/security_suite/real_mongodb.rs) | Database/collection policy, `$out`/`$merge`, server-side JavaScript, result limits, timeouts, and retry guidance |
+| MongoDB | [`real_mongodb.rs`](../tests/security_suite/real_mongodb.rs) | Database/collection policy, nested namespace policy, recursive pipeline stages, `$out`/`$merge`, metadata stages, server-side JavaScript, result limits, timeouts, and retry guidance |
 | MCP protocol | [`mcp_negative.rs`](../tests/mcp_negative.rs) | Malformed JSON-RPC, oversized payloads, and fail-closed process behaviour |
 
 ## Running locally
@@ -52,11 +52,11 @@ The initial case corpus is stored in
 It is backend-neutral: adapters map each case to their fixture and preserve the
 expected decision and state-invariance contract.
 
-The corpus currently contains 45 cases: 12 implemented against the existing
-regression adapters and 33 planned cases covering database side effects,
-nested namespaces, metadata disclosure, resource options, parser edge cases,
-and MCP framing. Planned cases remain visible in the manifest but must not be
-reported as executed evidence until an adapter consumes them.
+The corpus currently contains 45 cases: 21 implemented against the existing
+regression adapters and 24 planned cases covering database side effects,
+resource options, parser edge cases, and MCP framing. Planned cases remain
+visible in the manifest but must not be reported as executed evidence until an
+adapter consumes them.
 
 Validate it with the standard-library reporter:
 
@@ -76,9 +76,9 @@ tools/security/validate_manifest.py --json
    [`security-proof.md`](security-proof.md).
 7. Keep the case deterministic and safe to rerun.
 
-The next extraction step is to make the backend adapters consume this corpus,
-so other MCP implementations can reuse the same attack corpus without
-importing SafeSelect's backend harness.
+The next extraction step is to execute the remaining PostgreSQL side-effect
+cases and MongoDB resource-option cases, so other MCP implementations can reuse
+the same attack corpus without importing SafeSelect's backend harness.
 
 ## Security references
 

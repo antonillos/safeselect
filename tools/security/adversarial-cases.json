@@ -294,7 +294,7 @@
       "expected_decision": "reject",
       "expected_state_unchanged": true,
       "controls": ["nested_namespace_policy"],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "id": "mongodb.union-with-denied-collection",
@@ -304,7 +304,7 @@
       "expected_decision": "reject",
       "expected_state_unchanged": true,
       "controls": ["nested_namespace_policy"],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "id": "mongodb.graph-lookup-denied-collection",
@@ -314,7 +314,7 @@
       "expected_decision": "reject",
       "expected_state_unchanged": true,
       "controls": ["nested_namespace_policy"],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "id": "mongodb.facet-nested-merge",
@@ -324,7 +324,7 @@
       "expected_decision": "reject",
       "expected_state_unchanged": true,
       "controls": ["recursive_stage_policy"],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "id": "mongodb.out-alternate-database",
@@ -334,7 +334,7 @@
       "expected_decision": "reject",
       "expected_state_unchanged": true,
       "controls": ["aggregation_write_stage_rejection", "nested_namespace_policy"],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "id": "mongodb.current-op-metadata",
@@ -344,7 +344,7 @@
       "expected_decision": "reject",
       "expected_state_unchanged": true,
       "controls": ["metadata_stage_policy"],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "id": "mongodb.list-sessions-metadata",
@@ -354,7 +354,7 @@
       "expected_decision": "reject",
       "expected_state_unchanged": true,
       "controls": ["metadata_stage_policy"],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "id": "mongodb.collstats-metadata",
@@ -364,7 +364,7 @@
       "expected_decision": "reject",
       "expected_state_unchanged": true,
       "controls": ["metadata_stage_policy"],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "id": "mongodb.plan-cache-stats-metadata",
@@ -374,7 +374,7 @@
       "expected_decision": "reject",
       "expected_state_unchanged": true,
       "controls": ["metadata_stage_policy"],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "id": "mongodb.unbounded-max-time",
