@@ -16,9 +16,9 @@ Set WindowBar "Colorful"
 
 Type "cd /private/tmp/safeselect-codex-agent"
 Enter
-Type "CODEX_SETUP_RESET=1 ./setup.sh"
+Type "CODEX_SETUP_RESET=1 bash -x ./setup.sh 2>&1"
 Enter
-Sleep 12s
+Sleep 20s
 Type "source codex.env"
 Enter
 Type "codex mcp list"

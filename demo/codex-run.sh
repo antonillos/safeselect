@@ -11,13 +11,10 @@ codex exec --ephemeral --enable fast_mode \
   --approve-for-me \
   --skip-git-repo-check \
   'Which three customers have the most recent paid orders? Give me their names and order totals.' \
-  >"${LOG_FILE}" 2>&1
-CODEX_STATUS=$?
+  2>&1 | tee "${LOG_FILE}" | sed -E '/ WARN |guardian trunk rollout snapshot|Session persistence is disabled|guardian review fork/d'
+PIPE_STATUS=("${PIPESTATUS[@]}")
+CODEX_STATUS="${PIPE_STATUS[0]}"
 set -e
-
-# Keep the useful agent/MCP exchange, but remove Codex's internal Guardian
-# diagnostics from the marketing recording.
-sed -E '/ WARN |guardian trunk rollout snapshot|Session persistence is disabled|guardian review fork/d' "${LOG_FILE}"
 
 printf '\n--- SafeSelect MCP calls ---\n'
 grep '^mcp: safeselect' "${LOG_FILE}" || true
