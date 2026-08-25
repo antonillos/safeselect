@@ -1,5 +1,5 @@
-# Preflight: ./demo/setup.sh and SafeSelect OpenCode registration.
-Output demo/recordings/safeselect-agent.gif
+# Preflight: ./demo/setup.sh and SafeSelect OpenCode registration for MongoDB.
+Output demo/recordings/safeselect-mongodb.gif
 
 Require safeselect
 Require opencode
@@ -17,6 +17,6 @@ Type "cd /Users/antonillos/Projects/antonillos/safeselect"
 Enter
 Type "source demo/env.sh"
 Enter
-Type "opencode --pure run --dir demo 'Which three customers have the most recent paid orders? Give me their names and order totals.'"
+Type "opencode --pure run --dir demo 'Which security products are currently available? Give me their names, SKUs, and prices.'"
 Enter
 Sleep 60s

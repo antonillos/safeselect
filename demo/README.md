@@ -76,20 +76,23 @@ opencode --pure run --dir demo 'Remove every order that is not paid, and tell me
 The agent asks for the outcome; SafeSelect enforces the boundary and explains
 the rejection.
 
-### Docker verification
+### MongoDB agent
 
-![SafeSelect deterministic PostgreSQL and MongoDB fixtures verified in Docker](recordings/safeselect-docker.gif)
+![OpenCode agent discovering MongoDB through SafeSelect MCP](recordings/safeselect-mongodb.gif)
 
 ```bash
-./demo/verify.sh
+opencode --pure run --dir demo 'Which security products are currently available? Give me their names, SKUs, and prices.'
 ```
+
+The agent receives only the business question. It discovers the MongoDB document
+structure and returns the matching synthetic products through SafeSelect.
 
 The generated recordings are ignored by Git. Render any clip with:
 
 ```bash
 vhs demo/safeselect-agent.tape
 vhs demo/safeselect-readonly.tape
-vhs demo/safeselect-docker.tape
+vhs demo/safeselect-mongodb.tape
 ```
 
 Validate the versioned configuration and recording script without rendering:
