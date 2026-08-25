@@ -56,8 +56,45 @@ public class Main {
     private static long maxRows = Long.MAX_VALUE;
     private static long maxResultBytes = Long.MAX_VALUE;
     private static boolean verboseMode = false;
+    private static boolean passwordStdin = false;
     private static final AtomicLong lastActivityMs = new AtomicLong(System.currentTimeMillis());
     private static PrintWriter logWriter;
+
+    @FunctionalInterface
+    private interface ArgumentSetter { void set(String value); }
+
+    @FunctionalInterface
+    private interface RequestHandler { void handle(PrintWriter writer, Object id, Map<String, Object> request) throws Exception; }
+
+    private static final Map<String, ArgumentSetter> ARGUMENTS = Map.ofEntries(
+            Map.entry("--backend", value -> backend = value),
+            Map.entry("--driver", value -> driverClass = value),
+            Map.entry("--url", value -> databaseUrl = value),
+            Map.entry("--user", value -> user = value),
+            Map.entry("--idle-timeout-seconds", value -> idleTimeoutMs = Long.parseLong(value) * 1000),
+            Map.entry("--statement-timeout-ms", value -> statementTimeoutMs = Long.parseLong(value)),
+            Map.entry("--max-rows", value -> maxRows = Long.parseLong(value)),
+            Map.entry("--max-result-bytes", value -> maxResultBytes = Long.parseLong(value)));
+
+    private static final Map<String, RequestHandler> REQUEST_HANDLERS = Map.ofEntries(
+            Map.entry("ping", (w, id, r) -> sendResponse(w, id, "pong", null)),
+            Map.entry("execute", Main::handleExecute),
+            Map.entry("list_databases", (w, id, r) -> handleListDatabases(w, id)),
+            Map.entry("verify_document_connection", (w, id, r) -> handleVerifyDocumentConnection(w, id)),
+            Map.entry("list_collections", Main::handleListCollections),
+            Map.entry("list_collection_indexes", Main::handleListCollectionIndexes),
+            Map.entry("get_database_stats", Main::handleGetDatabaseStats),
+            Map.entry("get_collection_stats", Main::handleGetCollectionStats),
+            Map.entry("find_documents", Main::handleFindDocuments),
+            Map.entry("aggregate_documents", Main::handleAggregateDocuments),
+            Map.entry("distinct_documents", Main::handleDistinctDocuments),
+            Map.entry("count_documents", Main::handleCountDocuments),
+            Map.entry("explain_documents", Main::handleExplainDocuments),
+            Map.entry("profile_document_field", Main::handleProfileDocumentField),
+            Map.entry("discover_document_schema", Main::handleDiscoverDocumentSchema),
+            Map.entry("generate_document_fixture", Main::handleGenerateDocumentFixture),
+            Map.entry("disconnect", (w, id, r) -> handleDisconnect(w, id)),
+            Map.entry("connect", (w, id, r) -> handleConnect(w, id)));
 
     private static void initializeLogWriter() throws IOException {
         String logDir = System.getProperty("user.home") + "/.local/state/safeselect/logs";
@@ -117,173 +154,155 @@ public class Main {
     }
 
     public static void main(String[] args) throws Exception {
-        backend = "jdbc";
-        driverClass = null;
-        databaseUrl = null;
-        user = null;
-        boolean passwordStdin = false;
+        configureArguments(args);
+        validateArguments();
+        runSidecar();
+    }
 
-        for (int i = 0; i < args.length; i++) {
-            switch (args[i]) {
-                case "--backend" -> backend = args[++i];
-                case "--driver" -> driverClass = args[++i];
-                case "--url" -> databaseUrl = args[++i];
-                case "--user" -> user = args[++i];
-                case "--password-stdin" -> passwordStdin = true;
-                case "--idle-timeout-seconds" -> idleTimeoutMs = Long.parseLong(args[++i]) * 1000;
-                case "--statement-timeout-ms" -> statementTimeoutMs = Long.parseLong(args[++i]);
-                case "--max-rows" -> maxRows = Long.parseLong(args[++i]);
-                case "--max-result-bytes" -> maxResultBytes = Long.parseLong(args[++i]);
-                case "--verbose" -> verboseMode = true;
-            }
-        }
-
-        if (verboseMode) {
-            initializeLogWriter();
-            log("Starting sidecar");
-        }
-
-        if (databaseUrl == null || user == null || !passwordStdin || ("jdbc".equals(backend) && driverClass == null)) {
+    private static void validateArguments() { if (databaseUrl == null || user == null || !passwordStdin || ("jdbc".equals(backend) && driverClass == null)) {
             error("Usage: --backend <jdbc|mongodb> [--driver <class>] --url <url> --user <name> --password-stdin [--idle-timeout-seconds <sec>] [--statement-timeout-ms <ms>] [--max-rows <n>] [--max-result-bytes <n>]");
             System.exit(1);
         }
+    }
 
+    private static void runSidecar() throws Exception {
+        configureLogging();
         BufferedReader reader = new BufferedReader(new InputStreamReader(System.in));
         PrintWriter writer = new PrintWriter(new OutputStreamWriter(System.out));
-
         password = reader.readLine();
-        if ("jdbc".equals(backend) && (password == null || password.isBlank())) {
-            error("Password required on stdin");
-            System.exit(1);
-        }
-
-        if (idleTimeoutMs > 0) {
-            startIdleTimer(writer);
-        }
-
+        validatePassword();
+        configureIdleTimer(writer);
         try {
             connectBackend();
-
             writer.println("ready");
             writer.flush();
-
-            while (RUNNING.get()) {
-                String line = reader.readLine();
-                if (line == null) break;
-
-                try {
-                    @SuppressWarnings("unchecked")
-                    Map<String, Object> request = MAPPER.readValue(line, Map.class);
-                    Object id = request.get("id");
-                    String method = (String) request.get("method");
-
-                    switch (method) {
-                        case "ping" -> {
-                            touchActivity();
-                            sendResponse(writer, id, "pong", null);
-                        }
-                        case "execute" -> {
-                            touchActivity();
-                            handleExecute(writer, id, request);
-                        }
-                        case "list_databases" -> {
-                            touchActivity();
-                            handleListDatabases(writer, id);
-                        }
-                        case "verify_document_connection" -> {
-                            touchActivity();
-                            handleVerifyDocumentConnection(writer, id);
-                        }
-                        case "list_collections" -> {
-                            touchActivity();
-                            handleListCollections(writer, id, request);
-                        }
-                        case "list_collection_indexes" -> {
-                            touchActivity();
-                            handleListCollectionIndexes(writer, id, request);
-                        }
-                        case "get_database_stats" -> {
-                            touchActivity();
-                            handleGetDatabaseStats(writer, id, request);
-                        }
-                        case "get_collection_stats" -> {
-                            touchActivity();
-                            handleGetCollectionStats(writer, id, request);
-                        }
-                        case "find_documents" -> {
-                            touchActivity();
-                            handleFindDocuments(writer, id, request);
-                        }
-                        case "aggregate_documents" -> {
-                            touchActivity();
-                            handleAggregateDocuments(writer, id, request);
-                        }
-                        case "distinct_documents" -> {
-                            touchActivity();
-                            handleDistinctDocuments(writer, id, request);
-                        }
-                        case "count_documents" -> {
-                            touchActivity();
-                            handleCountDocuments(writer, id, request);
-                        }
-                        case "explain_documents" -> {
-                            touchActivity();
-                            handleExplainDocuments(writer, id, request);
-                        }
-                        case "profile_document_field" -> {
-                            touchActivity();
-                            handleProfileDocumentField(writer, id, request);
-                        }
-                        case "discover_document_schema" -> {
-                            touchActivity();
-                            handleDiscoverDocumentSchema(writer, id, request);
-                        }
-                        case "generate_document_fixture" -> {
-                            touchActivity();
-                            handleGenerateDocumentFixture(writer, id, request);
-                        }
-                        case "disconnect" -> {
-                            touchActivity();
-                            handleDisconnect(writer, id);
-                        }
-                        case "connect" -> {
-                            touchActivity();
-                            handleConnect(writer, id);
-                        }
-                        case "shutdown" -> {
-                            sendResponse(writer, id, "bye", null);
-                            RUNNING.set(false);
-                        }
-                        default -> sendResponse(writer, id, null,
-                                Map.of("code", "UNKNOWN_METHOD", "message", "Unknown method: " + method));
-                    }
-                } catch (Exception e) {
-                    error("Error processing request: " + summarizeException(e));
-                    try {
-                        @SuppressWarnings("unchecked")
-                        final var failedRequest = (Map<String, Object>) MAPPER.readValue(line, Map.class);
-                        final var id = failedRequest.get("id");
-                        final var method = String.valueOf(failedRequest.get("method"));
-                        sendResponse(writer, id, null, Map.of(
-                                "code", "REQUEST_FAILED",
-                                "message", method + " failed: " + summarizeException(e)
-                        ));
-                    } catch (Exception responseError) {
-                        error("Failed to send error response: " + summarizeException(responseError));
-                    }
-                }
-            }
-
-            if (connection != null && !connection.isClosed()) {
-                connection.close();
-            }
-            if (mongoClient != null) {
-                mongoClient.close();
-            }
+            processRequests(reader, writer);
+            closeBackends();
         } catch (Exception e) {
             error("Fatal error: " + summarizeException(e));
             System.exit(1);
         }
+    }
+
+    private static void configureLogging() throws IOException {
+        if (verboseMode) {
+            initializeLogWriter();
+            log("Starting sidecar");
+        }
+    }
+
+    private static void configureIdleTimer(PrintWriter writer) {
+        if (idleTimeoutMs > 0) {
+            startIdleTimer(writer);
+        }
+    }
+
+    private static void validatePassword() {
+        if (isJdbcPasswordMissing()) {
+            error("Password required on stdin");
+            System.exit(1);
+        }
+    }
+
+    private static boolean isJdbcPasswordMissing() {
+        if (!"jdbc".equals(backend)) {
+            return false;
+        }
+        return password == null || password.isBlank();
+    }
+
+    private static void processRequests(BufferedReader reader, PrintWriter writer) throws Exception {
+        while (RUNNING.get()) {
+            String line = readRequestLine(reader);
+            if (line == null) {
+                break;
+            }
+            processRequestLine(line, writer);
+        }
+    }
+
+    private static String readRequestLine(BufferedReader reader) throws IOException {
+        return reader.readLine();
+    }
+
+    private static void processRequestLine(String line, PrintWriter writer) {
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> request = MAPPER.readValue(line, Map.class);
+            Object id = request.get("id");
+            String method = (String) request.get("method");
+            dispatchRequest(writer, request, id, method);
+        } catch (Exception e) {
+            error("Error processing request: " + summarizeException(e));
+            sendRequestError(line, writer, e);
+        }
+    }
+
+    private static void sendRequestError(String line, PrintWriter writer, Exception cause) {
+        try {
+            @SuppressWarnings("unchecked")
+            final var failedRequest = (Map<String, Object>) MAPPER.readValue(line, Map.class);
+            final var id = failedRequest.get("id");
+            final var method = String.valueOf(failedRequest.get("method"));
+            sendResponse(writer, id, null, Map.of(
+                    "code", "REQUEST_FAILED",
+                    "message", method + " failed: " + summarizeException(cause)));
+        } catch (Exception responseError) {
+            error("Failed to send error response: " + summarizeException(responseError));
+        }
+    }
+
+    private static void closeBackends() throws SQLException {
+        closeJdbcBackend();
+        closeMongoBackend();
+    }
+
+    private static void closeJdbcBackend() throws SQLException {
+        if (connection != null && !connection.isClosed()) {
+            connection.close();
+        }
+    }
+
+    private static void closeMongoBackend() {
+        if (mongoClient != null) {
+            mongoClient.close();
+        }
+    }
+
+    private static void configureArguments(String[] args) {
+        backend = "jdbc";
+        driverClass = null;
+        databaseUrl = null;
+        user = null;
+        passwordStdin = false;
+        verboseMode = false;
+        for (int i = 0; i < args.length; i++) {
+            String argument = args[i];
+            if ("--password-stdin".equals(argument)) {
+                passwordStdin = true;
+            } else if ("--verbose".equals(argument)) {
+                verboseMode = true;
+            } else if (ARGUMENTS.containsKey(argument) && i + 1 < args.length) {
+                ARGUMENTS.get(argument).set(args[++i]);
+            }
+        }
+    }
+
+    private static void dispatchRequest(PrintWriter writer, Map<String, Object> request,
+                                        Object id, String method) throws Exception {
+        if ("shutdown".equals(method)) {
+            sendResponse(writer, id, "bye", null);
+            RUNNING.set(false);
+            return;
+        }
+        RequestHandler handler = REQUEST_HANDLERS.get(method);
+        if (handler == null) {
+            sendResponse(writer, id, null,
+                    Map.of("code", "UNKNOWN_METHOD", "message", "Unknown method: " + method));
+            return;
+        }
+        touchActivity();
+        handler.handle(writer, id, request);
     }
 
     private static void connectBackend() throws Exception {
@@ -1510,115 +1529,74 @@ public class Main {
         }
     }
 
-    @SuppressWarnings("unchecked")
-    private static void handleExecute(PrintWriter writer, Object id, Map<String, Object> request) throws Exception {
-        long startTime = System.currentTimeMillis();
+    private static void handleExecute(PrintWriter writer, Object id, Map<String, Object> request) throws Exception { long startTime = System.currentTimeMillis();
         log("[EXECUTE] Starting query execution, id=" + id);
         
-        if (connection == null || connection.isClosed()) {
-            error("Not connected, returning error");
-            sendResponse(writer, id, null,
-                    Map.of("code", "NOT_CONNECTED", "message", "Database not connected. Use 'connect' first."));
+        if (!ensureConnected(writer, id)) {
             return;
         }
 
-        Map<String, Object> params = (Map<String, Object>) request.get("params");
-        if (params == null) {
-            error("Missing params");
-            sendResponse(writer, id, null, Map.of("code", "MISSING_PARAMS", "message", "No params"));
-            return;
-        }
-
-        String sql = (String) params.get("sql");
-        if (sql == null || sql.isBlank()) {
-            error("Missing SQL");
-            sendResponse(writer, id, null, Map.of("code", "MISSING_SQL", "message", "No SQL provided"));
+        String sql = validatedSql(writer, id, request);
+        if (sql == null) {
             return;
         }
 
         log("[EXECUTE] SQL: " + sql.substring(0, Math.min(100, sql.length())) + "...");
 
         try (Statement stmt = connection.createStatement()) {
-            if (statementTimeoutMs > 0) {
-                int timeoutSeconds = (int) Math.ceil(statementTimeoutMs / 1000.0);
-                stmt.setQueryTimeout(timeoutSeconds);
-            }
+            configureStatementTimeout(stmt);
             log("[EXECUTE] Executing statement...");
             boolean isResultSet = stmt.execute(sql);
             log("[EXECUTE] Statement executed in " + (System.currentTimeMillis() - startTime) + "ms, isResultSet=" + isResultSet);
 
             if (isResultSet) {
                 try (ResultSet rs = stmt.getResultSet()) {
-                    ResultSetMetaData meta = rs.getMetaData();
-                    int columnCount = meta.getColumnCount();
-
-                    List<String> columns = new ArrayList<>();
-                    for (int i = 1; i <= columnCount; i++) {
-                        columns.add(meta.getColumnName(i));
-                    }
-
-                    List<List<Object>> rows = new ArrayList<>();
-                    long rowCount = 0;
-                    long byteCount = 0;
-
-                    log("[EXECUTE] Reading result set...");
-                    while (rs.next()) {
-                        if (rowCount >= maxRows) {
-                            sendResponse(writer, id, null, Map.of(
-                                    "code", "RESULT_LIMIT_EXCEEDED",
-                                    "message", "Row limit exceeded: " + maxRows,
-                                    "limit_type", "max_rows",
-                                    "limit_value", maxRows
-                            ));
-                            return;
-                        }
-                        List<Object> row = new ArrayList<>();
-                        long rowBytes = 0;
-                        for (int i = 1; i <= columnCount; i++) {
-                            Object val = rs.getObject(i);
-                            val = convertPgObject(val);
-                            row.add(val);
-                            if (val != null) {
-                                rowBytes += val.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
-                            }
-                        }
-                        if (byteCount + rowBytes > maxResultBytes) {
-                            sendResponse(writer, id, null, Map.of(
-                                    "code", "RESULT_LIMIT_EXCEEDED",
-                                    "message", "Result size limit exceeded: " + maxResultBytes + " bytes",
-                                    "limit_type", "max_result_bytes",
-                                    "limit_value", maxResultBytes
-                            ));
-                            return;
-                        }
-                        byteCount += rowBytes;
-                        rows.add(row);
-                        rowCount++;
-                    }
-                    long elapsedMs = System.currentTimeMillis() - startTime;
-                    log("[EXECUTE] Read " + rowCount + " rows, " + byteCount + " bytes in " + elapsedMs + "ms");
-
-                    Map<String, Object> result = new LinkedHashMap<>();
-                    result.put("columns", columns);
-                    result.put("rows", rows);
-                    result.put("row_count", rowCount);
-                    result.put("byte_count", byteCount);
-                    result.put("elapsed_ms", elapsedMs);
-                    result.put("elapsed", formatElapsed(elapsedMs));
-
-                    log("[EXECUTE] Sending response...");
-                    sendResponse(writer, id, result, null);
-                    log("[EXECUTE] Completed in " + elapsedMs + "ms");
+                    writeResultSetResponse(writer, id, rs, startTime);
                 }
             } else {
-                long elapsedMs = System.currentTimeMillis() - startTime;
-                Map<String, Object> result = new LinkedHashMap<>();
-                result.put("elapsed_ms", elapsedMs);
-                result.put("elapsed", formatElapsed(elapsedMs));
-                log("[EXECUTE] Non-result statement completed in " + elapsedMs + "ms");
-                sendResponse(writer, id, result, null);
+                writeStatementResponse(writer, id, startTime);
             }
         } catch (SQLException e) {
+            sendSqlError(writer, id, e);
+        }
+    }
+
+    private static boolean ensureConnected(PrintWriter writer, Object id) throws Exception {
+        if (connection == null || connection.isClosed()) {
+            error("Not connected, returning error");
+            sendResponse(writer, id, null,
+                    Map.of("code", "NOT_CONNECTED", "message", "Database not connected. Use 'connect' first."));
+            return false;
+        }
+        return true;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static String validatedSql(PrintWriter writer, Object id, Map<String, Object> request) throws Exception {
+        Map<String, Object> params = (Map<String, Object>) request.get("params");
+        if (params == null) {
+            error("Missing params");
+            sendResponse(writer, id, null, Map.of("code", "MISSING_PARAMS", "message", "No params"));
+            return null;
+        }
+
+        String sql = (String) params.get("sql");
+        if (sql == null || sql.isBlank()) {
+            error("Missing SQL");
+            sendResponse(writer, id, null, Map.of("code", "MISSING_SQL", "message", "No SQL provided"));
+            return null;
+        }
+        return sql;
+    }
+
+    private static void configureStatementTimeout(Statement stmt) throws SQLException {
+        if (statementTimeoutMs > 0) {
+            int timeoutSeconds = (int) Math.ceil(statementTimeoutMs / 1000.0);
+            stmt.setQueryTimeout(timeoutSeconds);
+        }
+    }
+
+    private static void sendSqlError(PrintWriter writer, Object id, SQLException e) throws Exception {
             error("SQL error: " + e.getMessage() + " (state=" + e.getSQLState() + ")");
             Map<String, Object> error = new LinkedHashMap<>();
             error.put("code", "SQL_ERROR");
@@ -1632,7 +1610,71 @@ public class Main {
                 error.put("message", e.getMessage());
             }
             sendResponse(writer, id, null, error);
+    }
+
+    private static void writeResultSetResponse(PrintWriter writer, Object id, ResultSet rs, long startTime) throws Exception { ResultSetMetaData meta = rs.getMetaData();
+        int columnCount = meta.getColumnCount();
+        List<String> columns = new ArrayList<>();
+        for (int i = 1; i <= columnCount; i++) {
+            columns.add(meta.getColumnName(i));
         }
+
+        List<List<Object>> rows = new ArrayList<>();
+        long rowCount = 0;
+        long byteCount = 0;
+        log("[EXECUTE] Reading result set...");
+        while (rs.next()) {
+            if (rowCount >= maxRows) {
+                sendResponse(writer, id, null, Map.of("code", "RESULT_LIMIT_EXCEEDED",
+                        "message", "Row limit exceeded: " + maxRows,
+                        "limit_type", "max_rows", "limit_value", maxRows));
+                return;
+            }
+            ResultRow resultRow = readResultRow(rs, columnCount);
+            if (byteCount + resultRow.bytes() > maxResultBytes) {
+                sendResponse(writer, id, null, Map.of("code", "RESULT_LIMIT_EXCEEDED",
+                        "message", "Result size limit exceeded: " + maxResultBytes + " bytes",
+                        "limit_type", "max_result_bytes", "limit_value", maxResultBytes));
+                return;
+            }
+            byteCount += resultRow.bytes();
+            rows.add(resultRow.values());
+            rowCount++;
+        }
+        long elapsedMs = System.currentTimeMillis() - startTime;
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("columns", columns);
+        result.put("rows", rows);
+        result.put("row_count", rowCount);
+        result.put("byte_count", byteCount);
+        result.put("elapsed_ms", elapsedMs);
+        result.put("elapsed", formatElapsed(elapsedMs));
+        sendResponse(writer, id, result, null);
+        log("[EXECUTE] Completed in " + elapsedMs + "ms");
+    }
+
+    private record ResultRow(List<Object> values, long bytes) { }
+
+    private static ResultRow readResultRow(ResultSet rs, int columnCount) throws Exception { List<Object> values = new ArrayList<>();
+        long bytes = 0;
+        for (int i = 1; i <= columnCount; i++) {
+            Object value = convertPgObject(rs.getObject(i));
+            values.add(value);
+            if (value != null) {
+                bytes += value.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+            }
+        }
+        return new ResultRow(values, bytes);
+    }
+
+    private static void writeStatementResponse(PrintWriter writer, Object id, long startTime)
+            throws Exception {
+        long elapsedMs = System.currentTimeMillis() - startTime;
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("elapsed_ms", elapsedMs);
+        result.put("elapsed", formatElapsed(elapsedMs));
+        log("[EXECUTE] Non-result statement completed in " + elapsedMs + "ms");
+        sendResponse(writer, id, result, null);
     }
 
     private static void sendResponse(PrintWriter writer, Object id, Object ok, Object error) throws Exception {
