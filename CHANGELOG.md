@@ -2,6 +2,34 @@
 
 All notable changes to this project are documented in this file.
 
+## [v0.7.3] - 2026-08-24
+
+### Added
+
+- feat: add secure multi-agent MCP setup (#127)
+- feat(release): publish checksummed MCP bundles (#133)
+
+### Fixed
+
+- fix(ci): support stacked pull request merges (#130)
+- fix(agent): sanitize canonical MCP entry names (#131)
+- fix(agent): propagate custom config directories (#132)
+
+### Documentation
+
+- docs: position README as SafeSelect MCP home (#128)
+
+### Build And CI
+
+- ci: avoid duplicate verify runs on labels (#121)
+- test: reduce CRAP warnings to 140 (#124)
+- ci: dispatch main-to-develop sync after release (#123)
+- test: reduce CRAP warnings to 90 (#126)
+
+### Other
+
+- refactor: reduce CRAP warnings to 99 (#125)
+
 ## [v0.7.2] - 2026-08-20
 
 ### Fixed
