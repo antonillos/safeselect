@@ -36,16 +36,18 @@ pub fn run() {
         log_step(&format!("captured baseline database state: {:?}", baseline));
 
         for case in manifest::implemented_for("postgresql") {
-            assert_eq!(
-                case.expected_decision, "reject",
-                "manifest case {}",
-                case.id
-            );
             let sql = case
                 .payload
                 .as_str()
                 .unwrap_or_else(|| panic!("manifest case {} must contain SQL text", case.id));
-            assert_rejected(&repo_root, &config_dir, &case.id, sql, &baseline);
+            match case.expected_decision.as_str() {
+                "allow" => assert_allowed(&repo_root, &config_dir, &case.id, sql, &baseline),
+                "reject" => assert_rejected(&repo_root, &config_dir, &case.id, sql, &baseline),
+                decision => panic!(
+                    "unsupported decision {decision} for manifest case {}",
+                    case.id
+                ),
+            }
         }
 
         for (name, sql) in [
@@ -303,6 +305,22 @@ fn assert_rejected(
         "{name} changed database state despite rejection"
     );
     log_step(&format!("confirmed rejection without mutation: {name}"));
+}
+
+fn assert_allowed(root: &Path, config_dir: &Path, name: &str, sql: &str, baseline: &DatabaseState) {
+    log_check(&format!("expect allow: {name}"));
+    log_step(&format!("sql={sql}"));
+    let (stdout, stderr, success) = postgres::run_safeselect(root, config_dir, sql);
+    assert!(
+        success,
+        "{name} unexpectedly failed\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert_eq!(
+        &database_state(),
+        baseline,
+        "{name} changed database state despite being read-only"
+    );
+    log_step(&format!("confirmed allow without mutation: {name}"));
 }
 
 fn assert_database_role_rejected(name: &str, sql: &str, baseline: &DatabaseState) {

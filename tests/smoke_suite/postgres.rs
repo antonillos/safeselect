@@ -154,7 +154,7 @@ pub fn setup_database() {
     psql(
         &test_db,
         &format!(
-            "CREATE TABLE public.safe_table (id int primary key, name text, payload text); \
+            "CREATE TABLE public.safe_table (id int primary key, name text, payload text, \"select\" text); \
              CREATE VIEW public.safe_view AS SELECT id, name FROM public.safe_table; \
              CREATE TABLE public.large_payload (id int primary key, payload text); \
              CREATE TABLE public.secret_table (id int primary key, secret text); \

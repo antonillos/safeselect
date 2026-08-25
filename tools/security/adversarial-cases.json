@@ -254,17 +254,17 @@
       "expected_decision": "allow",
       "expected_state_unchanged": true,
       "controls": ["statement_boundary_parser"],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "id": "postgresql.quoted-identifier",
       "backend": "postgresql",
       "operation": "select",
-      "payload": "SELECT \"select\" FROM public.safe_table",
+      "payload": "SELECT \"select\" FROM public.safe_table LIMIT 1",
       "expected_decision": "allow",
       "expected_state_unchanged": true,
       "controls": ["identifier_parser_safety"],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "id": "postgresql.unicode-confusable-keyword",
@@ -274,7 +274,7 @@
       "expected_decision": "reject",
       "expected_state_unchanged": true,
       "controls": ["keyword_normalization"],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "id": "postgresql.dynamic-sql-procedure",
