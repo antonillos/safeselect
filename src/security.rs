@@ -30,6 +30,16 @@ fn forbidden_mql_javascript_operator(value: &serde_json::Value) -> Option<&'stat
     }
 }
 
+fn contains_nested_sql_block_comment(sql: &str) -> bool {
+    let Some((_, after_open)) = sql.split_once("/*") else {
+        return false;
+    };
+    let Some((comment_body, _)) = after_open.split_once("*/") else {
+        return false;
+    };
+    comment_body.contains("/*")
+}
+
 impl SecurityEngine {
     pub fn new(policy: SecurityPolicy, limits: LimitsConfig) -> Self {
         Self { policy, limits }
@@ -585,6 +595,12 @@ impl SecurityEngine {
             )));
         }
 
+        if contains_nested_sql_block_comment(trimmed) {
+            return Err(SafeselectError::QueryRejected(
+                "Nested SQL block comments are not supported".into(),
+            ));
+        }
+
         self.validate_policy_constraints(trimmed)?;
         self.check_read_only(trimmed)
     }
@@ -807,6 +823,7 @@ impl SecurityEngine {
         const FORBIDDEN: &[&str] = &[
             "SET_CONFIG",
             "PG_SLEEP",
+            "SETVAL",
             "PG_ADVISORY_LOCK",
             "PG_ADVISORY_XACT_LOCK",
             "PG_CREATE_PHYSICAL_REPLICATION_SLOT",
@@ -1663,6 +1680,17 @@ mod tests {
     fn test_read_only_rejects_sleep_function() {
         let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
         assert!(engine.check_read_only("SELECT pg_sleep(5)").is_err());
+    }
+
+    #[test]
+    fn test_read_only_rejects_sequence_mutation_and_nested_comments() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        assert!(engine
+            .check_read_only("SELECT setval('public.safe_sequence', 99, true)")
+            .is_err());
+        assert!(engine
+            .validate("SELECT /* outer /* nested */ 1 */ 1")
+            .is_err());
     }
 
     #[test]

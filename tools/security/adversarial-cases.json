@@ -134,7 +134,7 @@
       "expected_decision": "reject",
       "expected_state_unchanged": true,
       "controls": ["sequence_state_change"],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "id": "postgresql.sequence-setval",
@@ -144,7 +144,7 @@
       "expected_decision": "reject",
       "expected_state_unchanged": true,
       "controls": ["sequence_state_change"],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "id": "postgresql.copy-from",
@@ -154,7 +154,7 @@
       "expected_decision": "reject",
       "expected_state_unchanged": true,
       "controls": ["copy_write_rejection"],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "id": "postgresql.copy-to-program",
@@ -164,7 +164,7 @@
       "expected_decision": "reject",
       "expected_state_unchanged": true,
       "controls": ["copy_program_rejection"],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "id": "postgresql.set-transaction-read-write",
@@ -174,7 +174,7 @@
       "expected_decision": "reject",
       "expected_state_unchanged": true,
       "controls": ["transaction_mode_rejection"],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "id": "postgresql.set-role",
@@ -184,7 +184,7 @@
       "expected_decision": "reject",
       "expected_state_unchanged": true,
       "controls": ["role_switch_rejection"],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "id": "postgresql.reset-role",
@@ -194,7 +194,7 @@
       "expected_decision": "reject",
       "expected_state_unchanged": true,
       "controls": ["role_switch_rejection"],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "id": "postgresql.advisory-lock",
@@ -204,7 +204,7 @@
       "expected_decision": "reject",
       "expected_state_unchanged": true,
       "controls": ["resource_lock_rejection"],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "id": "postgresql.listen",
@@ -214,7 +214,7 @@
       "expected_decision": "reject",
       "expected_state_unchanged": true,
       "controls": ["session_side_effect_rejection"],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "id": "postgresql.notify",
@@ -224,7 +224,7 @@
       "expected_decision": "reject",
       "expected_state_unchanged": true,
       "controls": ["session_side_effect_rejection"],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "id": "postgresql.security-definer-search-path",
@@ -244,7 +244,7 @@
       "expected_decision": "reject",
       "expected_state_unchanged": true,
       "controls": ["comment_parser_safety"],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "id": "postgresql.literal-semicolon",
@@ -254,17 +254,17 @@
       "expected_decision": "allow",
       "expected_state_unchanged": true,
       "controls": ["statement_boundary_parser"],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "id": "postgresql.quoted-identifier",
       "backend": "postgresql",
       "operation": "select",
-      "payload": "SELECT \"select\" FROM public.safe_table",
+      "payload": "SELECT \"select\" FROM public.safe_table LIMIT 1",
       "expected_decision": "allow",
       "expected_state_unchanged": true,
       "controls": ["identifier_parser_safety"],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "id": "postgresql.unicode-confusable-keyword",
@@ -274,7 +274,7 @@
       "expected_decision": "reject",
       "expected_state_unchanged": true,
       "controls": ["keyword_normalization"],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "id": "postgresql.dynamic-sql-procedure",
