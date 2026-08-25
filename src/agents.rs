@@ -731,6 +731,21 @@ fn uninstall_claude_entry(entry_name: &str, repo_root: Option<&Path>) -> Result<
     let local = repo_root
         .map(|root| root.join(".mcp.json").exists())
         .unwrap_or(false);
+    uninstall_claude_entry_with_availability(entry_name, repo_root, local, command_exists("claude"))
+}
+
+fn uninstall_claude_entry_with_availability(
+    entry_name: &str,
+    repo_root: Option<&Path>,
+    local: bool,
+    claude_available: bool,
+) -> Result<()> {
+    if local && !claude_available {
+        // Project-local Claude configuration is a SafeSelect-owned JSON file.
+        // Keep uninstall usable when only the config remains and the Claude
+        // CLI is not installed in the current PATH.
+        return uninstall_file_entry("claude-code", entry_name, repo_root);
+    }
     run_claude_remove(entry_name, repo_root, local)
 }
 
@@ -2162,6 +2177,27 @@ mod tests {
         .to_string()
         .contains("rejected"));
         assert!(run_claude_remove_with_program(&program, "safe", Some(&root), false).is_err());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn uninstalls_local_claude_entry_without_cli() {
+        let root =
+            std::env::temp_dir().join(format!("safeselect-claude-local-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join(".mcp.json"),
+            r#"{"mcpServers":{"safe":{"command":"safeselect","args":["serve","--environment","dev"]}}}"#,
+        )
+        .unwrap();
+
+        uninstall_claude_entry_with_availability("safe", Some(&root), true, false).unwrap();
+        let content = std::fs::read_to_string(root.join(".mcp.json")).unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&content).unwrap(),
+            serde_json::json!({"mcpServers": {}})
+        );
+        assert!(root.join(".mcp.safeselect.bak").exists());
         let _ = std::fs::remove_dir_all(root);
     }
 
