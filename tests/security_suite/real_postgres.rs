@@ -3,6 +3,8 @@
 use crate::postgres;
 use std::path::Path;
 
+use super::manifest;
+
 pub fn run() {
     if std::env::var("SAFESELECT_SECURITY_TEST").is_err() {
         eprintln!("Skipping: set SAFESELECT_SECURITY_TEST=1 to run real PostgreSQL security tests");
@@ -32,6 +34,19 @@ pub fn run() {
     let result = std::panic::catch_unwind(|| {
         let baseline = database_state();
         log_step(&format!("captured baseline database state: {:?}", baseline));
+
+        for case in manifest::implemented_for("postgresql") {
+            assert_eq!(
+                case.expected_decision, "reject",
+                "manifest case {}",
+                case.id
+            );
+            let sql = case
+                .payload
+                .as_str()
+                .unwrap_or_else(|| panic!("manifest case {} must contain SQL text", case.id));
+            assert_rejected(&repo_root, &config_dir, &case.id, sql, &baseline);
+        }
 
         for (name, sql) in [
             (
@@ -278,7 +293,8 @@ fn assert_rejected(
         stderr.contains("Query rejected")
             || stderr.contains("Read-only mode")
             || stderr.contains("RESULT_LIMIT_EXCEEDED")
-            || stderr.contains("Limit exceeded"),
+            || stderr.contains("Limit exceeded")
+            || stderr.contains("permission denied"),
         "{name} failed for the wrong reason\nstdout:\n{stdout}\nstderr:\n{stderr}"
     );
     assert_eq!(
