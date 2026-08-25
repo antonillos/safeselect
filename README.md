@@ -2,7 +2,7 @@
 
 ## Agents can look. They cannot mutate.
 
-**Fail-closed, read-only PostgreSQL and MongoDB access for AI coding agents over MCP.**
+**Secure, fail-closed, read-only database access for AI agents over MCP.**
 
 [![CI](https://github.com/antonillos/safeselect/actions/workflows/verify.yml/badge.svg)](https://github.com/antonillos/safeselect/actions/workflows/verify.yml)
 [![CRAP](https://img.shields.io/endpoint?url=https%3A%2F%2Fantonillos.github.io%2Fsafeselect%2Fcrap-badge.json)](https://github.com/antonillos/safeselect/actions/workflows/verify.yml)
