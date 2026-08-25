@@ -45,7 +45,9 @@ only when absent, and validates both SafeSelect environments.
 
 The demos follow the same short, scenario-based format as makevn: each clip
 has a focused story, a visible terminal recording, and the exact command below
-it. Run the setup and OpenCode registration once first:
+it. Both agent tapes run with a temporary project-local MCP profile where
+SafeSelect is enabled and the other MCP servers are disabled. Global agent
+configuration is not modified.
 
 ```bash
 ./demo/setup.sh

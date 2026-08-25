@@ -19,4 +19,4 @@ Type "source demo/env.sh"
 Enter
 Type "opencode --pure run --dir demo 'Which three customers have the most recent paid orders? Give me their names and order totals.'"
 Enter
-Sleep 30s
+Sleep 45s

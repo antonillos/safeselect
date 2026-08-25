@@ -19,4 +19,4 @@ Type "source demo/env.sh"
 Enter
 Type "opencode --pure run --dir demo 'Remove every order that is not paid, and tell me what happened.'"
 Enter
-Sleep 30s
+Sleep 45s
