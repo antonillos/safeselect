@@ -87,6 +87,22 @@ opencode --pure run --dir demo 'Which security products are currently available?
 The agent receives only the business question. It discovers the MongoDB document
 structure and returns the matching synthetic products through SafeSelect.
 
+### Codex integration setup
+
+The fixtures remain in this repository, while the driver/runtime and Codex MCP
+configuration belong to the separate integration project. Link the versioned
+setup script into that project and run it there:
+
+```bash
+ln -sfn "$PWD/demo/codex-setup.sh" /private/tmp/safeselect-codex-agent/setup.sh
+/private/tmp/safeselect-codex-agent/setup.sh
+source /private/tmp/safeselect-codex-agent/codex.env
+```
+
+The setup validates both databases, registers the PostgreSQL driver, and passes
+both SafeSelect runtime variables to Codex. It does not modify global Codex MCP
+configuration.
+
 The generated recordings are ignored by Git. Render any clip with:
 
 ```bash
