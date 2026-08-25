@@ -2907,6 +2907,52 @@ fn setup_passwords_for_missing(repo_root: &std::path::Path, env_names: &[String]
     Ok(())
 }
 
+fn ssh_uses_password(ssh: &config::SshConfig) -> bool {
+    ssh.auth_type.as_deref() == Some("PASSWORD")
+}
+
+fn missing_ssh_fields(ssh: &config::SshConfig) -> Vec<&'static str> {
+    [
+        (ssh.host.as_deref().unwrap_or("").is_empty(), "host"),
+        (ssh.username.as_deref().unwrap_or("").is_empty(), "username"),
+        (
+            ssh.forward_host.as_deref().unwrap_or("").is_empty(),
+            "forward_host",
+        ),
+        (ssh.forward_port.unwrap_or(0) == 0, "forward_port"),
+    ]
+    .into_iter()
+    .filter_map(|(missing, field)| missing.then_some(field))
+    .collect()
+}
+
+fn build_tunnel_ssh_args(ssh: &config::SshConfig) -> Vec<String> {
+    let local_host = ssh.local_host.as_deref().unwrap_or("localhost");
+    let local_port = ssh.local_port.unwrap_or(15432);
+    let forward_host = ssh.forward_host.as_deref().unwrap_or("");
+    let forward_port = ssh.forward_port.unwrap_or(0);
+    let user = ssh.username.as_deref().unwrap_or("");
+    let bastion = ssh.host.as_deref().unwrap_or("");
+    let mut args = vec![
+        "-o".into(),
+        "ConnectTimeout=15".into(),
+        "-o".into(),
+        "ExitOnForwardFailure=yes".into(),
+        "-o".into(),
+        "ServerAliveInterval=15".into(),
+        "-o".into(),
+        "ServerAliveCountMax=3".into(),
+        "-N".into(),
+        "-L".into(),
+        format!("{local_host}:{local_port}:{forward_host}:{forward_port}"),
+        format!("{user}@{bastion}"),
+    ];
+    if let Some(port) = ssh.port.filter(|port| *port != 22) {
+        args.extend(["-p".into(), port.to_string()]);
+    }
+    args
+}
+
 /// Try to establish SSH tunnels for environments that need one.
 /// Returns PIDs of tunnels started by this call.
 pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Result<()> {
@@ -2964,7 +3010,7 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
             std::io::stdout().flush()?;
         }
 
-        let use_password = matches!(&ssh.auth_type, Some(at) if at == "PASSWORD");
+        let use_password = ssh_uses_password(ssh);
 
         // Check if we CAN establish our own tunnel (sshpass or key available)
         let can_establish = if use_password {
@@ -2996,25 +3042,8 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
         }
 
         // Try to establish it
-        let bastion = ssh.host.as_deref().unwrap_or("");
-        let user = ssh.username.as_deref().unwrap_or("");
-        let fwd_host = ssh.forward_host.as_deref().unwrap_or("");
-        let fwd_port = ssh.forward_port.unwrap_or(0);
-
-        if bastion.is_empty() || user.is_empty() || fwd_host.is_empty() || fwd_port == 0 {
-            let mut missing = vec![];
-            if bastion.is_empty() {
-                missing.push("host");
-            }
-            if user.is_empty() {
-                missing.push("username");
-            }
-            if fwd_host.is_empty() {
-                missing.push("forward_host");
-            }
-            if fwd_port == 0 {
-                missing.push("forward_port");
-            }
+        let missing = missing_ssh_fields(ssh);
+        if !missing.is_empty() {
             println!(
                 "  ⚠  Incomplete SSH config for '{env_name}': missing {}",
                 missing.join(", ")
@@ -3035,30 +3064,11 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
         let tunnel_local_host = ssh.local_host.as_deref().unwrap_or("localhost");
         let tunnel_local_port = ssh.local_port.unwrap_or(15432);
 
-        let use_password = matches!(&ssh.auth_type, Some(at) if at == "PASSWORD");
+        let use_password = ssh_uses_password(ssh);
 
         // Use a different local port (15432) for forwarding, not the SSH server port
         // Build SSH args
-        let mut ssh_args: Vec<String> = vec![
-            "-o".into(),
-            "ConnectTimeout=15".into(),
-            "-o".into(),
-            "ExitOnForwardFailure=yes".into(),
-            "-o".into(),
-            "ServerAliveInterval=15".into(),
-            "-o".into(),
-            "ServerAliveCountMax=3".into(),
-            "-N".into(),
-            "-L".into(),
-            format!("{tunnel_local_host}:{tunnel_local_port}:{fwd_host}:{fwd_port}"),
-            format!("{user}@{bastion}"),
-        ];
-        if let Some(p) = ssh.port {
-            if p != 22 {
-                ssh_args.push("-p".into());
-                ssh_args.push(p.to_string());
-            }
-        }
+        let ssh_args = build_tunnel_ssh_args(ssh);
 
         // Pass the password through the environment so it is not exposed in process arguments.
         let spawn_sshpass = |password: &str| -> std::io::Result<std::process::Child> {
@@ -3187,7 +3197,9 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
                 tunnel_wait.as_secs()
             );
             println!("  Possible causes:");
-            println!("    - Database host:port is wrong: {fwd_host}:{fwd_port}");
+            let forward_host = ssh.forward_host.as_deref().unwrap_or("");
+            let forward_port = ssh.forward_port.unwrap_or(0);
+            println!("    - Database host:port is wrong: {forward_host}:{forward_port}");
             println!("    - Database is not running or not accepting connections");
             println!("    - SSH tunnel failed to forward (check bastion logs)");
             let cmd = build_ssh_command(ssh, &cfg.database.url)
@@ -4184,6 +4196,38 @@ mod tests {
         let addr: std::net::SocketAddr = "127.0.0.1:1".parse().unwrap();
         assert!(!check_postgres(&addr));
         assert!(!kill_process_on_port(65534));
+    }
+
+    #[test]
+    fn builds_ssh_tunnel_arguments_and_reports_missing_fields() {
+        let mut ssh = config::SshConfig {
+            enabled: true,
+            bastion: None,
+            host: Some("jump.example.com".into()),
+            port: Some(2222),
+            username: Some("tunnel".into()),
+            secret_account: None,
+            identity_file: None,
+            known_hosts: None,
+            local_host: Some("127.0.0.1".into()),
+            local_port: Some(15432),
+            forward_host: Some("db.internal".into()),
+            forward_port: Some(5432),
+            auth_type: Some("PASSWORD".into()),
+        };
+
+        assert!(missing_ssh_fields(&ssh).is_empty());
+        assert!(ssh_uses_password(&ssh));
+        let args = build_tunnel_ssh_args(&ssh);
+        assert!(args.windows(2).any(|pair| pair == ["-p", "2222"]));
+        assert!(args
+            .iter()
+            .any(|arg| arg == "127.0.0.1:15432:db.internal:5432"));
+        assert!(args.iter().any(|arg| arg == "tunnel@jump.example.com"));
+
+        ssh.forward_host = None;
+        ssh.forward_port = None;
+        assert_eq!(missing_ssh_fields(&ssh), ["forward_host", "forward_port"]);
     }
 
     #[test]

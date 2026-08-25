@@ -24,6 +24,7 @@ env:
 jobs:
   unit:
     name: Unit & Smoke
+    needs: crap-report
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -177,8 +178,7 @@ jobs:
         run: cargo deny check
 
   crap-report:
-    name: CRAP (report-only)
-    needs: unit
+    name: CRAP (ratchet <=80)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -212,11 +212,12 @@ jobs:
             "b996434078d560d52a058e3d9ffb0d07a9469ecdc57c8b4fa241fa70252bf68e" \
             "${GITHUB_WORKSPACE}/../crap4java-0.1.0.jar" \
             | sha256sum --check
-      - name: Run report-only CRAP analysis
-        run: ./tools/crap/run.sh --summary
+      - name: Run CRAP analysis and ratchet
+        run: ./tools/crap/run.sh --summary --ratchet 80
         env:
           CRAP4JAVA_JAR: ${{ github.workspace }}/../crap4java-0.1.0.jar
       - name: Upload CRAP artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: crap-report
