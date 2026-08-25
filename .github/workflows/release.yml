@@ -327,9 +327,9 @@ jobs:
           payload = json.loads(Path("dist/registry-search.json").read_text())
           servers = payload.get("servers", [])
           if not any(
-              server.get("name") == "io.github.antonillos/safeselect"
-              and server.get("version") == "${{ needs.validate-version.outputs.semver }}"
-              for server in servers
+              item.get("server", item).get("name") == "io.github.antonillos/safeselect"
+              and item.get("server", item).get("version") == "${{ needs.validate-version.outputs.semver }}"
+              for item in servers
           ):
               raise SystemExit("SafeSelect version did not appear in the MCP Registry search response")
           PY
