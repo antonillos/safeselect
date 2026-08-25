@@ -56,7 +56,7 @@ safeselect agent install opencode --project "$PWD/demo" --environment postgres -
 
 ### Agent discovery
 
-![OpenCode agent discovering the database through SafeSelect MCP](recordings/safeselect-agent.gif)
+![OpenCode agent discovering the database through SafeSelect MCP](recordings/safeselect-opencode.gif)
 
 ```bash
 opencode --pure run --dir demo 'Which three customers have the most recent paid orders? Give me their names and order totals.'
@@ -87,12 +87,50 @@ opencode --pure run --dir demo 'Which security products are currently available?
 The agent receives only the business question. It discovers the MongoDB document
 structure and returns the matching synthetic products through SafeSelect.
 
+### Codex integration setup
+
+The fixtures remain in this repository, while the driver/runtime and Codex MCP
+configuration belong to the separate integration project. Link the versioned
+setup script into that project and run it there:
+
+```bash
+ln -sfn "$PWD/demo/codex-setup.sh" /private/tmp/safeselect-codex-agent/setup.sh
+/private/tmp/safeselect-codex-agent/setup.sh
+source /private/tmp/safeselect-codex-agent/codex.env
+```
+
+The setup validates both databases, registers the PostgreSQL driver, and passes
+both SafeSelect runtime variables to Codex. It does not modify global Codex MCP
+configuration.
+
+![Installing the isolated Codex SafeSelect integration](recordings/safeselect-codex-install.gif)
+
+```bash
+CODEX_SETUP_RESET=1 /private/tmp/safeselect-codex-agent/setup.sh
+```
+
+This resets only the temporary integration runtime and Codex profile before
+starting the deterministic fixtures, registering the PostgreSQL driver, and
+installing the SafeSelect MCP.
+
+![Codex agent discovering the database through SafeSelect MCP](recordings/safeselect-codex.gif)
+
+```bash
+source /private/tmp/safeselect-codex-agent/codex.env
+/private/tmp/safeselect-codex-agent/run-codex.sh
+```
+
+Codex receives the same single business prompt as OpenCode and independently
+discovers the PostgreSQL schema through SafeSelect.
+
 The generated recordings are ignored by Git. Render any clip with:
 
 ```bash
-vhs demo/safeselect-agent.tape
+vhs demo/safeselect-opencode.tape
 vhs demo/safeselect-readonly.tape
 vhs demo/safeselect-mongodb.tape
+vhs demo/safeselect-codex.tape
+vhs demo/safeselect-codex-install.tape
 ```
 
 Validate the versioned configuration and recording script without rendering:
