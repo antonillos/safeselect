@@ -1,5 +1,5 @@
 # Preflight: ./demo/setup.sh and SafeSelect OpenCode registration.
-Output demo/recordings/safeselect-agent.gif
+Output demo/recordings/safeselect-opencode.gif
 
 Require safeselect
 Require opencode

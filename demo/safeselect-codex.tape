@@ -5,18 +5,18 @@ Require safeselect
 Require codex
 
 Set Shell "bash"
-Set FontSize 22
+Set FontSize 20
 Set Width 1280
-Set Height 720
+Set Height 900
 Set Padding 24
 Set Theme "Catppuccin Frappe"
 Set TypingSpeed 20ms
 Set WindowBar "Colorful"
 
-Type "cd /private/tmp/safeselect-codex-agent"
+Type "cd /private/tmp/safeselect-codex-agent/workspace"
 Enter
-Type "source codex.env"
+Type "source ../codex.env"
 Enter
-Type "codex exec --ephemeral --enable fast_mode --cd /private/tmp/safeselect-codex-agent --approve-for-me --skip-git-repo-check 'Which three customers have the most recent paid orders? Give me their names and order totals.' 2>/dev/null"
+Type "../run-codex.sh"
 Enter
 Sleep 75s

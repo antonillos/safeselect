@@ -56,7 +56,7 @@ safeselect agent install opencode --project "$PWD/demo" --environment postgres -
 
 ### Agent discovery
 
-![OpenCode agent discovering the database through SafeSelect MCP](recordings/safeselect-agent.gif)
+![OpenCode agent discovering the database through SafeSelect MCP](recordings/safeselect-opencode.gif)
 
 ```bash
 opencode --pure run --dir demo 'Which three customers have the most recent paid orders? Give me their names and order totals.'
@@ -117,7 +117,7 @@ installing the SafeSelect MCP.
 
 ```bash
 source /private/tmp/safeselect-codex-agent/codex.env
-codex exec --ephemeral --enable fast_mode --cd /private/tmp/safeselect-codex-agent --approve-for-me --skip-git-repo-check 'Which three customers have the most recent paid orders? Give me their names and order totals.' 2>/dev/null
+/private/tmp/safeselect-codex-agent/run-codex.sh
 ```
 
 Codex receives the same single business prompt as OpenCode and independently
@@ -126,7 +126,7 @@ discovers the PostgreSQL schema through SafeSelect.
 The generated recordings are ignored by Git. Render any clip with:
 
 ```bash
-vhs demo/safeselect-agent.tape
+vhs demo/safeselect-opencode.tape
 vhs demo/safeselect-readonly.tape
 vhs demo/safeselect-mongodb.tape
 vhs demo/safeselect-codex.tape

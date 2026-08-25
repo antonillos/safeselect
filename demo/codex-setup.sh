@@ -13,6 +13,7 @@ SAFESELECT_ROOT="${SAFESELECT_ROOT:-$(CDPATH= cd -- "$(dirname "${SCRIPT_PATH}")
 DEMO_ROOT="${SAFESELECT_ROOT}/demo"
 RUNTIME_ROOT="${DEMO_ROOT}/.runtime"
 CODEX_HOME_ROOT="${INTEGRATION_ROOT}/.codex"
+AGENT_WORKSPACE="${INTEGRATION_ROOT}/workspace"
 
 if [ "${CODEX_SETUP_RESET:-0}" = "1" ]; then
   rm -rf "${CODEX_HOME_ROOT}" "${RUNTIME_ROOT}"
@@ -31,6 +32,8 @@ safeselect check --project "${DEMO_ROOT}" --environment postgres
 safeselect check --project "${DEMO_ROOT}" --environment mongodb
 
 mkdir -p "${CODEX_HOME_ROOT}"
+mkdir -p "${AGENT_WORKSPACE}"
+ln -sfn "${SAFESELECT_ROOT}/demo/codex-run.sh" "${INTEGRATION_ROOT}/run-codex.sh"
 if [ -f "${HOME}/.codex/auth.json" ]; then
   ln -sfn "${HOME}/.codex/auth.json" "${CODEX_HOME_ROOT}/auth.json"
 fi
