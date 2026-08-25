@@ -1,0 +1,40 @@
+name: safeselect-demo
+
+services:
+  postgres:
+    image: postgres:17@sha256:2203e6282d9e7de7c24d7da234e2a744fb325df366a3fd8ed940e8abbee39527
+    environment:
+      POSTGRES_DB: safeselect_demo
+      POSTGRES_USER: demo
+      POSTGRES_PASSWORD: demo-password
+    ports:
+      - "55432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./fixtures/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U demo -d safeselect_demo"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  mongodb:
+    image: mongo:8@sha256:49f1d7b87c2ddf918372be5defe7edff8c46703d0b2a56023a3f825e32e1250c
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: demo
+      MONGO_INITDB_ROOT_PASSWORD: demo-password
+      MONGO_INITDB_DATABASE: safeselect_demo
+    ports:
+      - "57017:27017"
+    volumes:
+      - mongo-data:/data/db
+      - ./fixtures/mongodb/init.js:/docker-entrypoint-initdb.d/01-init.js:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet mongodb://demo:demo-password@localhost:27017/admin --eval 'db.runCommand({ ping: 1 }).ok' | grep 1"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  postgres-data:
+  mongo-data:
