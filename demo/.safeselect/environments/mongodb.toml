@@ -1,0 +1,11 @@
+version = 1
+
+[database]
+kind = "document"
+vendor = "mongodb"
+url = "mongodb://demo:__SAFESELECT_PASSWORD__@127.0.0.1:57017/safeselect_demo?authSource=admin"
+username = "demo"
+
+[database.secret]
+source = "env"
+variable = "SAFESELECT_DEMO_PASSWORD"
