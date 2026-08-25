@@ -93,7 +93,8 @@ in depth also depends on those permissions and the host.
 
 Automated evidence lives in [`verify.yml`](../.github/workflows/verify.yml) and
 the suites under `tests/`. Update this page's version and links when controls
-or cases change; a green badge is not a universal security proof.
+or cases change; see the [security test suite](security-test-suite.md) for the
+execution contract. A green badge is not a universal security proof.
 
 ```bash
 cargo test --test security -- --nocapture
