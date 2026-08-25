@@ -45,16 +45,31 @@ canonical MongoDB invocation and
 [`integration-tests.yml`](../.github/workflows/integration-tests.yml) for the
 full fixture workflow.
 
+## Versioned case corpus
+
+The initial case corpus is stored in
+[`tools/security/adversarial-cases.json`](../tools/security/adversarial-cases.json).
+It is backend-neutral: adapters map each case to their fixture and preserve the
+expected decision and state-invariance contract.
+
+Validate it with the standard-library reporter:
+
+```bash
+tools/security/validate_manifest.py
+tools/security/validate_manifest.py --json
+```
+
 ## Adding a case
 
-1. Add a named payload to the relevant backend adapter.
-2. Capture the fixture baseline before the case group.
-3. Assert the expected rejection category, not only a generic process error.
-4. Assert that the final state equals the baseline.
-5. Add the case to the attack → control → test table in
+1. Add a stable case to the versioned JSON corpus.
+2. Add the payload to the relevant backend adapter.
+3. Capture the fixture baseline before the case group.
+4. Assert the expected rejection category, not only a generic process error.
+5. Assert that the final state equals the baseline.
+6. Add the case to the attack → control → test table in
    [`security-proof.md`](security-proof.md).
-6. Keep the case deterministic and safe to rerun.
+7. Keep the case deterministic and safe to rerun.
 
-The next extraction step is a versioned case manifest with human-readable and
-JSON output, so other MCP implementations can reuse the same attack corpus
-without importing SafeSelect's backend harness.
+The next extraction step is to make the backend adapters consume this corpus,
+so other MCP implementations can reuse the same attack corpus without
+importing SafeSelect's backend harness.

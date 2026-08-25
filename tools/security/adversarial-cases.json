@@ -1,0 +1,130 @@
+{
+  "schema_version": 1,
+  "description": "Initial read-only adversarial corpus for database MCP servers.",
+  "cases": [
+    {
+      "id": "postgresql.stacked-select-delete",
+      "backend": "postgresql",
+      "operation": "select",
+      "payload": "SELECT 1; DELETE FROM public.safe_table WHERE id = 1",
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["single_statement", "read_only"]
+    },
+    {
+      "id": "postgresql.cte-delete",
+      "backend": "postgresql",
+      "operation": "select",
+      "payload": "WITH deleted AS (DELETE FROM public.safe_table RETURNING *) SELECT * FROM deleted",
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["read_only", "cte_dml_rejection"]
+    },
+    {
+      "id": "postgresql.side-effecting-function",
+      "backend": "postgresql",
+      "operation": "select",
+      "payload": "SELECT public.writer_function()",
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["read_only", "side_effecting_function_rejection"]
+    },
+    {
+      "id": "postgresql.transaction-control",
+      "backend": "postgresql",
+      "operation": "select",
+      "payload": "BEGIN",
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["transaction_control_rejection"]
+    },
+    {
+      "id": "postgresql.unvalidated-explain-analyze",
+      "backend": "postgresql",
+      "operation": "select",
+      "payload": "EXPLAIN ANALYZE DELETE FROM public.safe_table WHERE id = 1",
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["read_only", "explain_validation"]
+    },
+    {
+      "id": "postgresql.denied-relation",
+      "backend": "postgresql",
+      "operation": "select",
+      "payload": "SELECT * FROM public.secret_table",
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["relation_policy"]
+    },
+    {
+      "id": "mongodb.aggregate-out",
+      "backend": "mongodb",
+      "operation": "aggregate_documents",
+      "payload": {
+        "pipeline": [
+          { "$match": { "active": true } },
+          { "$out": "evil_copy" }
+        ]
+      },
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["aggregation_write_stage_rejection"]
+    },
+    {
+      "id": "mongodb.aggregate-merge",
+      "backend": "mongodb",
+      "operation": "aggregate_documents",
+      "payload": {
+        "pipeline": [
+          { "$match": { "active": true } },
+          { "$merge": "evil_copy" }
+        ]
+      },
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["aggregation_write_stage_rejection"]
+    },
+    {
+      "id": "mongodb.server-side-javascript",
+      "backend": "mongodb",
+      "operation": "find_documents",
+      "payload": {
+        "filter": { "$where": "this.active == true" }
+      },
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["server_side_javascript_rejection"]
+    },
+    {
+      "id": "mongodb.denied-collection",
+      "backend": "mongodb",
+      "operation": "find_documents",
+      "payload": {
+        "collection": "secret_docs",
+        "filter": {},
+        "limit": 1
+      },
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["collection_policy"]
+    },
+    {
+      "id": "limits.result-bytes",
+      "backend": "both",
+      "operation": "read",
+      "payload": { "fixture": "large_payload" },
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["result_byte_limit"]
+    },
+    {
+      "id": "protocol.malformed-json-rpc",
+      "backend": "mcp",
+      "operation": "json_rpc",
+      "payload": "{\"jsonrpc\":\"2.0\",\"id\":0",
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["json_rpc_framing"]
+    }
+  ]
+}
