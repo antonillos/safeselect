@@ -119,6 +119,49 @@ impl SecurityEngine {
         Ok(())
     }
 
+    pub fn validate_document_find_arguments(&self, args: &serde_json::Value) -> Result<()> {
+        self.validate_document_max_time(args.get("maxTimeMS"))?;
+        if let Some(batch_size) = args.get("batchSize") {
+            let batch_size = batch_size.as_u64().ok_or_else(|| {
+                SafeselectError::QueryRejected("Document batchSize must be an integer".into())
+            })?;
+            if batch_size == 0 || batch_size > self.limits.max_rows {
+                return Err(SafeselectError::QueryRejected(format!(
+                    "Document batchSize must be between 1 and {}",
+                    self.limits.max_rows
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn validate_document_aggregate_arguments(&self, args: &serde_json::Value) -> Result<()> {
+        if args
+            .get("allowDiskUse")
+            .is_some_and(|allow| allow.as_bool() != Some(false))
+        {
+            return Err(SafeselectError::QueryRejected(
+                "MongoDB allowDiskUse must be false for read-only aggregation".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_document_max_time(&self, max_time: Option<&serde_json::Value>) -> Result<()> {
+        let Some(max_time) = max_time else {
+            return Ok(());
+        };
+        let max_time = max_time.as_u64().ok_or_else(|| {
+            SafeselectError::QueryRejected("Document maxTimeMS must be an integer".into())
+        })?;
+        if max_time == 0 {
+            return Err(SafeselectError::QueryRejected(
+                "Document maxTimeMS must be greater than zero".into(),
+            ));
+        }
+        Ok(())
+    }
+
     fn validate_optional_document_mql(
         &self,
         projection: Option<&serde_json::Value>,
@@ -1862,6 +1905,20 @@ mod tests {
             limit: 10,
         };
         assert!(engine.validate_document_aggregate(&request).is_err());
+    }
+
+    #[test]
+    fn test_document_options_reject_unbounded_resource_requests() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        assert!(engine
+            .validate_document_find_arguments(&serde_json::json!({"maxTimeMS": 0}))
+            .is_err());
+        assert!(engine
+            .validate_document_find_arguments(&serde_json::json!({"batchSize": 100_000}))
+            .is_err());
+        assert!(engine
+            .validate_document_aggregate_arguments(&serde_json::json!({"allowDiskUse": true}))
+            .is_err());
     }
 
     #[test]

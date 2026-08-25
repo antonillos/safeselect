@@ -1533,6 +1533,16 @@ impl McpServer {
             limit,
         };
 
+        if let Err(e) = self.security.validate_document_find_arguments(args) {
+            self.audit.record_tool(
+                "REJECT",
+                "reject",
+                "find_documents",
+                started.elapsed().as_millis() as u64,
+            )?;
+            return self.send_error(id, -32000, format!("Request rejected: {e}"));
+        }
+
         if let Err(e) = self.security.validate_document_find(&request) {
             self.audit.record_tool(
                 "REJECT",
@@ -1729,7 +1739,11 @@ impl McpServer {
         self.handle_document_value(
             id,
             "aggregate_documents",
-            |security| security.validate_document_aggregate(&request),
+            |security| {
+                security
+                    .validate_document_aggregate_arguments(args)
+                    .and_then(|()| security.validate_document_aggregate(&request))
+            },
             |sidecar| sidecar.aggregate_documents(&request),
         )
     }
