@@ -9,8 +9,12 @@ binary="${download_path}/safeselect"
 [[ -f "${binary}" ]] || { printf 'safeselect binary not found in %s\n' "${download_path}" >&2; exit 1; }
 
 mkdir -p "${install_path}/bin"
-cp -f "${binary}" "${install_path}/bin/safeselect"
-chmod +x "${install_path}/bin/safeselect"
+installed_binary="${install_path}/bin/.safeselect.tmp.$$"
+trap 'rm -f "${installed_binary}"' EXIT HUP INT TERM
+cp -f "${binary}" "${installed_binary}"
+chmod +x "${installed_binary}"
+mv -f "${installed_binary}" "${install_path}/bin/safeselect"
+trap - EXIT HUP INT TERM
 
 "${install_path}/bin/safeselect" --version >/dev/null
 
