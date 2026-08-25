@@ -14,6 +14,10 @@ DEMO_ROOT="${SAFESELECT_ROOT}/demo"
 RUNTIME_ROOT="${DEMO_ROOT}/.runtime"
 CODEX_HOME_ROOT="${INTEGRATION_ROOT}/.codex"
 
+if [ "${CODEX_SETUP_RESET:-0}" = "1" ]; then
+  rm -rf "${CODEX_HOME_ROOT}" "${RUNTIME_ROOT}"
+fi
+
 export SAFESELECT_CONFIG_DIR="${RUNTIME_ROOT}"
 export SAFESELECT_DEMO_PASSWORD="demo-password"
 

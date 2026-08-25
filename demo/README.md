@@ -103,12 +103,34 @@ The setup validates both databases, registers the PostgreSQL driver, and passes
 both SafeSelect runtime variables to Codex. It does not modify global Codex MCP
 configuration.
 
+![Installing the isolated Codex SafeSelect integration](recordings/safeselect-codex-install.gif)
+
+```bash
+CODEX_SETUP_RESET=1 /private/tmp/safeselect-codex-agent/setup.sh
+```
+
+This resets only the temporary integration runtime and Codex profile before
+starting the deterministic fixtures, registering the PostgreSQL driver, and
+installing the SafeSelect MCP.
+
+![Codex agent discovering the database through SafeSelect MCP](recordings/safeselect-codex.gif)
+
+```bash
+source /private/tmp/safeselect-codex-agent/codex.env
+codex exec --ephemeral --cd /private/tmp/safeselect-codex-agent --approve-for-me --skip-git-repo-check 'Which three customers have the most recent paid orders? Give me their names and order totals.'
+```
+
+Codex receives the same single business prompt as OpenCode and independently
+discovers the PostgreSQL schema through SafeSelect.
+
 The generated recordings are ignored by Git. Render any clip with:
 
 ```bash
 vhs demo/safeselect-agent.tape
 vhs demo/safeselect-readonly.tape
 vhs demo/safeselect-mongodb.tape
+vhs demo/safeselect-codex.tape
+vhs demo/safeselect-codex-install.tape
 ```
 
 Validate the versioned configuration and recording script without rendering:
