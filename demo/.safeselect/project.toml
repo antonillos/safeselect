@@ -1,0 +1,27 @@
+version = 1
+display_name = "SafeSelect synthetic database demo"
+
+[security]
+allowed_schemas = ["public"]
+allowed_databases = ["safeselect_demo"]
+allowed_collections = [
+  "safeselect_demo.customers",
+  "safeselect_demo.products",
+  "safeselect_demo.orders",
+  "safeselect_demo.events",
+]
+require_single_statement = true
+allow_volatile_functions = false
+allow_set_role = false
+
+[limits]
+statement_timeout_ms = 5000
+connection_timeout_ms = 5000
+max_rows = 20
+max_result_bytes = 100000
+
+[audit]
+enabled = true
+directory = "demo/.demo-audit"
+max_file_bytes = 1000000
+retain_files = 5
