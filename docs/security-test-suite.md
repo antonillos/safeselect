@@ -52,6 +52,12 @@ The initial case corpus is stored in
 It is backend-neutral: adapters map each case to their fixture and preserve the
 expected decision and state-invariance contract.
 
+The corpus currently contains 45 cases: 12 implemented against the existing
+regression adapters and 33 planned cases covering database side effects,
+nested namespaces, metadata disclosure, resource options, parser edge cases,
+and MCP framing. Planned cases remain visible in the manifest but must not be
+reported as executed evidence until an adapter consumes them.
+
 Validate it with the standard-library reporter:
 
 ```bash
@@ -73,3 +79,12 @@ tools/security/validate_manifest.py --json
 The next extraction step is to make the backend adapters consume this corpus,
 so other MCP implementations can reuse the same attack corpus without
 importing SafeSelect's backend harness.
+
+## Security references
+
+- [PostgreSQL read-only transaction restrictions](https://www.postgresql.org/docs/current/sql-set-transaction.html)
+- [PostgreSQL sequence state changes](https://www.postgresql.org/docs/17/functions-sequence.html)
+- [PostgreSQL function security](https://www.postgresql.org/docs/17/perm-functions.html)
+- [MongoDB aggregation stages](https://www.mongodb.com/docs/current/reference/operator/aggregation-pipeline/)
+- [MongoDB aggregation resource limits](https://www.mongodb.com/docs/manual/reference/command/aggregate/)
+- [OWASP SQL Injection Prevention Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html)

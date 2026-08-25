@@ -18,6 +18,7 @@ REQUIRED_CASE_FIELDS = {
 }
 ALLOWED_BACKENDS = {"postgresql", "mongodb", "both", "mcp"}
 ALLOWED_DECISIONS = {"reject", "allow"}
+ALLOWED_STATUSES = {"implemented", "planned"}
 
 
 def load_manifest(path: Path) -> tuple[dict, list[str]]:
@@ -35,6 +36,7 @@ def load_manifest(path: Path) -> tuple[dict, list[str]]:
         return document, errors
 
     seen_ids: set[str] = set()
+    status_counts: dict[str, int] = {}
     for index, case in enumerate(cases):
         prefix = f"cases[{index}]"
         if not isinstance(case, dict):
@@ -57,6 +59,11 @@ def load_manifest(path: Path) -> tuple[dict, list[str]]:
             errors.append(f"{prefix}.expected_state_unchanged must be true")
         if not isinstance(case.get("controls"), list) or not case["controls"]:
             errors.append(f"{prefix}.controls must be a non-empty array")
+        status = case.get("status", "implemented")
+        if status not in ALLOWED_STATUSES:
+            errors.append(f"{prefix}.status is unsupported")
+        status_counts[status] = status_counts.get(status, 0) + 1
+    document["_status_counts"] = status_counts
     return document, errors
 
 
@@ -78,6 +85,7 @@ def main() -> int:
         "manifest": str(args.manifest),
         "schema_version": document.get("schema_version"),
         "case_count": len(cases) if isinstance(cases, list) else 0,
+        "status_counts": document.get("_status_counts", {}),
         "valid": not errors,
         "errors": errors,
     }
