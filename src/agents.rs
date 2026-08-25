@@ -257,6 +257,7 @@ fn install_file_entry(
     local: bool,
 ) -> Result<()> {
     let config_path = select_install_config(client, repo_root, local)?;
+    warn_scope_collision(client, &config_path, entry_name, repo_root, local)?;
     let (config_existed, content) = read_or_initialize_config(client, &config_path)?;
 
     let new_content = build_entry_content(
@@ -285,6 +286,57 @@ fn install_file_entry(
     println!("Entry '{entry_name}' installed for {client}");
     println!("Next: {}", install_next_step(client, local));
     Ok(())
+}
+
+fn warn_scope_collision(
+    client: &str,
+    target_config: &Path,
+    entry_name: &str,
+    repo_root: Option<&Path>,
+    local: bool,
+) -> Result<()> {
+    let opposite_config = if local {
+        get_client_config(client).ok()
+    } else {
+        repo_root.and_then(|root| detect_local_client_config(client, root))
+    };
+    let Some(opposite_config) = opposite_config else {
+        return Ok(());
+    };
+    if !scope_collision(client, target_config, &opposite_config, entry_name)? {
+        return Ok(());
+    }
+
+    let target_scope = if local { "project" } else { "user" };
+    let opposite_scope = if local { "user" } else { "project" };
+    eprintln!(
+        "⚠ Entry '{entry_name}' already exists in {opposite_scope} scope for {client}: {}",
+        opposite_config.display()
+    );
+    eprintln!(
+        "  Installing it in {target_scope} scope will create two entries with the same name."
+    );
+    eprintln!(
+        "  Use --local/without --local intentionally, or remove the existing entry explicitly."
+    );
+    Ok(())
+}
+
+fn scope_has_entry(client: &str, config_path: &Path, entry_name: &str) -> Result<bool> {
+    let content = std::fs::read_to_string(config_path)?;
+    config_has_entry(client, &content, entry_name)
+}
+
+fn scope_collision(
+    client: &str,
+    target_config: &Path,
+    opposite_config: &Path,
+    entry_name: &str,
+) -> Result<bool> {
+    if opposite_config == target_config || !opposite_config.exists() {
+        return Ok(false);
+    }
+    scope_has_entry(client, opposite_config, entry_name)
 }
 
 fn install_next_step(client: &str, local: bool) -> &'static str {
@@ -1257,7 +1309,9 @@ fn resolve_upgrade_target(
     let mut matches = Vec::new();
     for config_path in configs {
         let content = std::fs::read_to_string(&config_path)?;
-        for candidate in candidate_entry_names(client, &content, project_name, environment)? {
+        for candidate in
+            candidate_entry_names(client, &content, project_name, environment, repo_root)?
+        {
             matches.push((config_path.clone(), candidate));
         }
     }
@@ -1364,6 +1418,7 @@ fn candidate_entry_names(
     content: &str,
     project_name: &str,
     environment: Option<&str>,
+    repo_root: Option<&Path>,
 ) -> Result<Vec<String>> {
     let canonical_prefix = format!("safeselect-{project_name}-");
     let legacy_prefix = format!("{project_name}-");
@@ -1372,15 +1427,50 @@ fn candidate_entry_names(
     Ok(all_names
         .into_iter()
         .filter(|name| {
-            candidate_name_matches(
+            let name_matches = candidate_name_matches(
                 name,
                 project_name,
                 environment,
                 &canonical_prefix,
                 &legacy_prefix,
-            )
+            );
+            let cwd_matches = client == "opencode"
+                && repo_root.is_some_and(|root| {
+                    opencode_entry_matches_project(content, name, root)
+                        && environment.map_or(true, |expected| {
+                            detect_entry_environment(client, content, name)
+                                .ok()
+                                .flatten()
+                                .as_deref()
+                                == Some(expected)
+                        })
+                });
+            name_matches || cwd_matches
         })
+        .filter(|name| entry_uses_safeselect(client, content, name).unwrap_or(false))
         .collect())
+}
+
+fn opencode_entry_matches_project(content: &str, name: &str, repo_root: &Path) -> bool {
+    let Ok(config) = parse_json_or_jsonc(content) else {
+        return false;
+    };
+    let Some(args) = config
+        .get("mcp")
+        .and_then(|value| value.get(name))
+        .and_then(|value| value.get("command"))
+        .and_then(serde_json::Value::as_array)
+    else {
+        return false;
+    };
+    let Some(project) = args.windows(2).find_map(|window| {
+        (window[0].as_str() == Some("--project"))
+            .then(|| window[1].as_str())
+            .flatten()
+    }) else {
+        return false;
+    };
+    Path::new(project).canonicalize().ok() == repo_root.canonicalize().ok()
 }
 
 fn all_entry_names(client: &str, content: &str) -> Result<Vec<String>> {
@@ -1605,6 +1695,66 @@ mod tests {
             .expect("should parse");
 
         assert_eq!(environment.as_deref(), Some("pre"));
+    }
+
+    #[test]
+    fn matches_legacy_opencode_entry_by_project_cwd() {
+        let root =
+            std::env::temp_dir().join(format!("safeselect-opencode-cwd-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let content = format!(
+            r#"{{
+  "mcp": {{
+    "safeselect": {{
+      "type": "local",
+      "command": ["safeselect", "serve", "--project", "{}", "--environment", "testing"]
+    }}
+  }}
+}}"#,
+            root.display()
+        );
+
+        let names = candidate_entry_names(
+            "opencode",
+            &content,
+            "unrelated-project-name",
+            None,
+            Some(&root),
+        )
+        .unwrap();
+
+        assert_eq!(names, vec!["safeselect"]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn detects_same_entry_name_in_opposite_scope() {
+        let path = std::env::temp_dir().join(format!(
+            "safeselect-agent-collision-{}.json",
+            std::process::id()
+        ));
+        std::fs::write(
+            &path,
+            r#"{"mcp":{"safeselect-demo-testing":{"command":["safeselect","serve"]}}}"#,
+        )
+        .unwrap();
+
+        assert!(scope_collision(
+            "opencode",
+            Path::new("/tmp/project/opencode.jsonc"),
+            &path,
+            "safeselect-demo-testing"
+        )
+        .unwrap());
+        assert!(!scope_collision(
+            "opencode",
+            Path::new("/tmp/project/opencode.jsonc"),
+            &path,
+            "other-entry"
+        )
+        .unwrap());
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
@@ -2053,18 +2203,18 @@ mod tests {
 
     #[test]
     fn selects_candidate_entries_for_supported_clients_and_environments() {
-        let json = r#"{"mcpServers":{"safeselect-demo-pre":{},"demo-dev":{},"other":{}}}"#;
+        let json = r#"{"mcpServers":{"safeselect-demo-pre":{"command":"safeselect"},"demo-dev":{"command":"safeselect"},"other":{}}}"#;
         assert_eq!(
-            candidate_entry_names("cursor", json, "demo", Some("pre")).unwrap(),
+            candidate_entry_names("cursor", json, "demo", Some("pre"), None).unwrap(),
             vec!["safeselect-demo-pre"]
         );
         assert_eq!(
-            candidate_entry_names("cursor", json, "demo", None)
+            candidate_entry_names("cursor", json, "demo", None, None)
                 .unwrap()
                 .len(),
             2
         );
-        assert!(candidate_entry_names("unknown", json, "demo", None).is_err());
+        assert!(candidate_entry_names("unknown", json, "demo", None, None).is_err());
     }
 
     #[test]
