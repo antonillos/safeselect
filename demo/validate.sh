@@ -5,7 +5,6 @@ ROOT_DIR="$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(CDPATH= cd -- "${ROOT_DIR}/.." && pwd)"
 
 bash -n "${ROOT_DIR}"/*.sh
-python3 -m py_compile "${ROOT_DIR}/mcp_call.py"
 vhs validate "${ROOT_DIR}/safeselect-demo.tape"
 
 # shellcheck source=env.sh

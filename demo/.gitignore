@@ -1,5 +1,7 @@
 .runtime/
 .demo-audit/
+.codex/
+.opencode/
 recordings/*.gif
 recordings/*.mp4
 recordings/*.webm

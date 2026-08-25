@@ -26,17 +26,18 @@ does not take over the default development ports.
 `reset` removes the named Docker volumes before recreating the fixture. Use
 `stop` when you want to preserve the data between runs.
 
-## SafeSelect environments
+## Agent demo
 
 The checked-in `.safeselect/` project has `postgres` and `mongodb`
-environments. Source the demo environment before using it:
+environments. To prepare the real OpenCode agent demo, run:
 
 ```bash
-source demo/env.sh
-./demo/show-postgres.sh
-./demo/show-mongodb.sh
+./demo/setup.sh
+safeselect agent install opencode --project "$PWD/demo" --environment postgres --local
 ```
 
+This only registers SafeSelect as the project's MCP server; it does not tell
+the agent which tools, tables, columns, data types, or indexes to use.
 `demo/setup.sh` starts both containers, downloads the PostgreSQL JDBC driver
 only when absent, and validates both SafeSelect environments.
 
@@ -49,11 +50,10 @@ The primary 30–45 second marketing recording is versioned as
 vhs demo/safeselect-demo.tape
 ```
 
-The generated recording is ignored by Git. Its visible actor is an AI agent:
-it receives natural-language requests, discovers and reads through SafeSelect
-MCP tools, then sends a mutation request that SafeSelect rejects fail-closed.
-The scripts are deterministic MCP-client harnesses for recording; they do not
-pretend that a live model produced the transcript.
+The generated recording is ignored by Git. It is a real OpenCode session: the
+agent receives one natural-language request and independently discovers the
+schema and performs its bounded read through SafeSelect MCP. The tape contains
+no prescribed tool calls, tables, columns, data types, or indexes.
 
 Validate the versioned configuration and recording script without rendering:
 
