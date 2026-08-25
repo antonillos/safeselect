@@ -16,7 +16,7 @@ Set WindowBar "Colorful"
 
 Type "cd /private/tmp/safeselect-codex-agent"
 Enter
-Type "CODEX_SETUP_RESET=1 bash -x ./setup.sh 2>&1"
+Type "CODEX_SETUP_RESET=1 bash -x ./setup.sh 2>&1 | grep -Ei '^\\+ (safeselect|codex mcp)|checking configuration|config valid|driver|backend verification|all checks passed|added global mcp|no drivers registered'"
 Enter
 Sleep 20s
 Type "source codex.env"
