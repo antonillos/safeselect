@@ -218,7 +218,7 @@ jobs:
           CRAP4JAVA_JAR: ${{ github.workspace }}/../crap4java-0.1.0.jar
       - name: Upload CRAP artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: crap-report
           path: target/crap/
@@ -253,4 +253,4 @@ jobs:
     steps:
       - name: Deploy CRAP badge
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
