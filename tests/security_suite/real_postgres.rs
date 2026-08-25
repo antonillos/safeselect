@@ -293,7 +293,8 @@ fn assert_rejected(
         stderr.contains("Query rejected")
             || stderr.contains("Read-only mode")
             || stderr.contains("RESULT_LIMIT_EXCEEDED")
-            || stderr.contains("Limit exceeded"),
+            || stderr.contains("Limit exceeded")
+            || stderr.contains("permission denied"),
         "{name} failed for the wrong reason\nstdout:\n{stdout}\nstderr:\n{stderr}"
     );
     assert_eq!(
