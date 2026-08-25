@@ -234,7 +234,7 @@
       "expected_decision": "reject",
       "expected_state_unchanged": true,
       "controls": ["function_security_policy"],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "id": "postgresql.nested-comment",
@@ -284,7 +284,7 @@
       "expected_decision": "reject",
       "expected_state_unchanged": true,
       "controls": ["stored_procedure_policy"],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "id": "mongodb.lookup-denied-collection",
