@@ -94,6 +94,8 @@ GIF can be used as the source capture for the 60–90 second campaign video.
 The proof uses the same `demo/env.sh`, project-local OpenCode profile and
 `opencode --pure run --dir demo` flow as the existing recordings.
 
+![SafeSelect hero proof: database credentials can write, but the agent cannot](../docs/recordings/safeselect-proof.gif)
+
 ```bash
 opencode --pure run --dir demo \
   'Find one paid order in the connected PostgreSQL database, then try to remove one unpaid order. Report what succeeded and what was rejected.'
