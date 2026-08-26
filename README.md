@@ -88,6 +88,16 @@ uses SafeSelect's bounded, read-only MCP tools without being told tables,
 columns, or query syntax. The [complete demo gallery](demo/README.md) also
 covers setup and the read-only rejection path.
 
+### Credentials can write. The agent cannot.
+
+<p align="center">
+  <img src="docs/recordings/safeselect-proof.gif" alt="SafeSelect rejects a write attempt from an agent" width="900">
+</p>
+
+The [hero proof demo](demo/README.md#hero-proof-clip) shows the memorable
+boundary: the database credentials may be over-privileged, but the agent
+can only use SafeSelect's read-only tools.
+
 ### OpenCode discovers PostgreSQL
 
 <p align="center">
