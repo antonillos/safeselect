@@ -1,0 +1,460 @@
+{
+  "schema_version": 1,
+  "description": "Initial read-only adversarial corpus for database MCP servers.",
+  "cases": [
+    {
+      "id": "postgresql.stacked-select-delete",
+      "backend": "postgresql",
+      "operation": "select",
+      "payload": "SELECT 1; DELETE FROM public.safe_table WHERE id = 1",
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["single_statement", "read_only"]
+    },
+    {
+      "id": "postgresql.cte-delete",
+      "backend": "postgresql",
+      "operation": "select",
+      "payload": "WITH deleted AS (DELETE FROM public.safe_table RETURNING *) SELECT * FROM deleted",
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["read_only", "cte_dml_rejection"]
+    },
+    {
+      "id": "postgresql.side-effecting-function",
+      "backend": "postgresql",
+      "operation": "select",
+      "payload": "SELECT public.writer_function()",
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["read_only", "side_effecting_function_rejection"]
+    },
+    {
+      "id": "postgresql.transaction-control",
+      "backend": "postgresql",
+      "operation": "select",
+      "payload": "BEGIN",
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["transaction_control_rejection"]
+    },
+    {
+      "id": "postgresql.unvalidated-explain-analyze",
+      "backend": "postgresql",
+      "operation": "select",
+      "payload": "EXPLAIN ANALYZE DELETE FROM public.safe_table WHERE id = 1",
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["read_only", "explain_validation"]
+    },
+    {
+      "id": "postgresql.denied-relation",
+      "backend": "postgresql",
+      "operation": "select",
+      "payload": "SELECT * FROM public.secret_table",
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["relation_policy"]
+    },
+    {
+      "id": "mongodb.aggregate-out",
+      "backend": "mongodb",
+      "operation": "aggregate_documents",
+      "payload": {
+        "pipeline": [
+          { "$match": { "active": true } },
+          { "$out": "evil_copy" }
+        ]
+      },
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["aggregation_write_stage_rejection"]
+    },
+    {
+      "id": "mongodb.aggregate-merge",
+      "backend": "mongodb",
+      "operation": "aggregate_documents",
+      "payload": {
+        "pipeline": [
+          { "$match": { "active": true } },
+          { "$merge": "evil_copy" }
+        ]
+      },
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["aggregation_write_stage_rejection"]
+    },
+    {
+      "id": "mongodb.server-side-javascript",
+      "backend": "mongodb",
+      "operation": "find_documents",
+      "payload": {
+        "filter": { "$where": "this.active == true" }
+      },
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["server_side_javascript_rejection"]
+    },
+    {
+      "id": "mongodb.denied-collection",
+      "backend": "mongodb",
+      "operation": "find_documents",
+      "payload": {
+        "collection": "secret_docs",
+        "filter": {},
+        "limit": 1
+      },
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["collection_policy"]
+    },
+    {
+      "id": "limits.result-bytes",
+      "backend": "both",
+      "operation": "read",
+      "payload": { "fixture": "large_payload" },
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["result_byte_limit"]
+    },
+    {
+      "id": "protocol.malformed-json-rpc",
+      "backend": "mcp",
+      "operation": "json_rpc",
+      "payload": "{\"jsonrpc\":\"2.0\",\"id\":0",
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["json_rpc_framing"]
+    },
+    {
+      "id": "postgresql.sequence-nextval",
+      "backend": "postgresql",
+      "operation": "select",
+      "payload": "SELECT nextval('public.safe_sequence')",
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["sequence_state_change"],
+      "status": "implemented"
+    },
+    {
+      "id": "postgresql.sequence-setval",
+      "backend": "postgresql",
+      "operation": "select",
+      "payload": "SELECT setval('public.safe_sequence', 99, true)",
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["sequence_state_change"],
+      "status": "implemented"
+    },
+    {
+      "id": "postgresql.copy-from",
+      "backend": "postgresql",
+      "operation": "select",
+      "payload": "COPY public.safe_table FROM STDIN",
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["copy_write_rejection"],
+      "status": "implemented"
+    },
+    {
+      "id": "postgresql.copy-to-program",
+      "backend": "postgresql",
+      "operation": "select",
+      "payload": "COPY (SELECT name FROM public.safe_table) TO PROGRAM 'cat'",
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["copy_program_rejection"],
+      "status": "implemented"
+    },
+    {
+      "id": "postgresql.set-transaction-read-write",
+      "backend": "postgresql",
+      "operation": "select",
+      "payload": "SET TRANSACTION READ WRITE",
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["transaction_mode_rejection"],
+      "status": "implemented"
+    },
+    {
+      "id": "postgresql.set-role",
+      "backend": "postgresql",
+      "operation": "select",
+      "payload": "SET ROLE postgres",
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["role_switch_rejection"],
+      "status": "implemented"
+    },
+    {
+      "id": "postgresql.reset-role",
+      "backend": "postgresql",
+      "operation": "select",
+      "payload": "RESET ROLE",
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["role_switch_rejection"],
+      "status": "implemented"
+    },
+    {
+      "id": "postgresql.advisory-lock",
+      "backend": "postgresql",
+      "operation": "select",
+      "payload": "SELECT pg_advisory_lock(424242)",
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["resource_lock_rejection"],
+      "status": "implemented"
+    },
+    {
+      "id": "postgresql.listen",
+      "backend": "postgresql",
+      "operation": "select",
+      "payload": "LISTEN safeselect_probe",
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["session_side_effect_rejection"],
+      "status": "implemented"
+    },
+    {
+      "id": "postgresql.notify",
+      "backend": "postgresql",
+      "operation": "select",
+      "payload": "NOTIFY safeselect_probe, 'probe'",
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["session_side_effect_rejection"],
+      "status": "implemented"
+    },
+    {
+      "id": "postgresql.security-definer-search-path",
+      "backend": "postgresql",
+      "operation": "select",
+      "payload": "SELECT public.security_definer_probe()",
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["function_security_policy"],
+      "status": "implemented"
+    },
+    {
+      "id": "postgresql.nested-comment",
+      "backend": "postgresql",
+      "operation": "select",
+      "payload": "SELECT /* outer /* nested */ 1 */ 1",
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["comment_parser_safety"],
+      "status": "implemented"
+    },
+    {
+      "id": "postgresql.literal-semicolon",
+      "backend": "postgresql",
+      "operation": "select",
+      "payload": "SELECT 'value;still-literal' AS value",
+      "expected_decision": "allow",
+      "expected_state_unchanged": true,
+      "controls": ["statement_boundary_parser"],
+      "status": "implemented"
+    },
+    {
+      "id": "postgresql.quoted-identifier",
+      "backend": "postgresql",
+      "operation": "select",
+      "payload": "SELECT \"select\" FROM public.safe_table LIMIT 1",
+      "expected_decision": "allow",
+      "expected_state_unchanged": true,
+      "controls": ["identifier_parser_safety"],
+      "status": "implemented"
+    },
+    {
+      "id": "postgresql.unicode-confusable-keyword",
+      "backend": "postgresql",
+      "operation": "select",
+      "payload": "ＳＥＬＥＣＴ 1",
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["keyword_normalization"],
+      "status": "implemented"
+    },
+    {
+      "id": "postgresql.dynamic-sql-procedure",
+      "backend": "postgresql",
+      "operation": "select",
+      "payload": "SELECT public.dynamic_sql_probe('DELETE FROM public.safe_table')",
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["stored_procedure_policy"],
+      "status": "implemented"
+    },
+    {
+      "id": "mongodb.lookup-denied-collection",
+      "backend": "mongodb",
+      "operation": "aggregate_documents",
+      "payload": { "pipeline": [{ "$lookup": { "from": "secret_docs", "as": "leak", "pipeline": [] } }] },
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["nested_namespace_policy"],
+      "status": "implemented"
+    },
+    {
+      "id": "mongodb.union-with-denied-collection",
+      "backend": "mongodb",
+      "operation": "aggregate_documents",
+      "payload": { "pipeline": [{ "$unionWith": { "coll": "secret_docs", "pipeline": [] } }] },
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["nested_namespace_policy"],
+      "status": "implemented"
+    },
+    {
+      "id": "mongodb.graph-lookup-denied-collection",
+      "backend": "mongodb",
+      "operation": "aggregate_documents",
+      "payload": { "pipeline": [{ "$graphLookup": { "from": "secret_docs", "startWith": "$id", "connectFromField": "id", "connectToField": "id", "as": "leak" } }] },
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["nested_namespace_policy"],
+      "status": "implemented"
+    },
+    {
+      "id": "mongodb.facet-nested-merge",
+      "backend": "mongodb",
+      "operation": "aggregate_documents",
+      "payload": { "pipeline": [{ "$facet": { "writes": [{ "$merge": "evil_copy" }] } }] },
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["recursive_stage_policy"],
+      "status": "implemented"
+    },
+    {
+      "id": "mongodb.out-alternate-database",
+      "backend": "mongodb",
+      "operation": "aggregate_documents",
+      "payload": { "pipeline": [{ "$out": { "db": "admin", "coll": "evil_copy" } }] },
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["aggregation_write_stage_rejection", "nested_namespace_policy"],
+      "status": "implemented"
+    },
+    {
+      "id": "mongodb.current-op-metadata",
+      "backend": "mongodb",
+      "operation": "aggregate_documents",
+      "payload": { "pipeline": [{ "$currentOp": {} }] },
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["metadata_stage_policy"],
+      "status": "implemented"
+    },
+    {
+      "id": "mongodb.list-sessions-metadata",
+      "backend": "mongodb",
+      "operation": "aggregate_documents",
+      "payload": { "pipeline": [{ "$listSessions": {} }] },
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["metadata_stage_policy"],
+      "status": "implemented"
+    },
+    {
+      "id": "mongodb.collstats-metadata",
+      "backend": "mongodb",
+      "operation": "aggregate_documents",
+      "payload": { "pipeline": [{ "$collStats": { "latencyStats": {} } }] },
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["metadata_stage_policy"],
+      "status": "implemented"
+    },
+    {
+      "id": "mongodb.plan-cache-stats-metadata",
+      "backend": "mongodb",
+      "operation": "aggregate_documents",
+      "payload": { "pipeline": [{ "$planCacheStats": {} }] },
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["metadata_stage_policy"],
+      "status": "implemented"
+    },
+    {
+      "id": "mongodb.unbounded-max-time",
+      "backend": "mongodb",
+      "operation": "find_documents",
+      "payload": { "filter": {}, "limit": 1, "maxTimeMS": 0 },
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["timeout_policy"],
+      "status": "implemented"
+    },
+    {
+      "id": "mongodb.allow-disk-use",
+      "backend": "mongodb",
+      "operation": "aggregate_documents",
+      "payload": { "allowDiskUse": true, "pipeline": [{ "$group": { "_id": "$active" } }] },
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["resource_option_policy"],
+      "status": "implemented"
+    },
+    {
+      "id": "mongodb.excessive-batch-size",
+      "backend": "mongodb",
+      "operation": "find_documents",
+      "payload": { "batchSize": 1000000, "filter": {}, "limit": 1 },
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["resource_option_policy"],
+      "status": "implemented"
+    },
+    {
+      "id": "mcp.duplicate-id",
+      "backend": "mcp",
+      "operation": "json_rpc",
+      "payload": { "requests": [{ "jsonrpc": "2.0", "id": 1, "method": "ping" }, { "jsonrpc": "2.0", "id": 1, "method": "ping" }] },
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["json_rpc_id_policy"],
+      "status": "implemented"
+    },
+    {
+      "id": "mcp.notification-without-id",
+      "backend": "mcp",
+      "operation": "json_rpc",
+      "payload": { "jsonrpc": "2.0", "method": "tools/list" },
+      "expected_decision": "allow",
+      "expected_state_unchanged": true,
+      "controls": ["json_rpc_notification_policy"],
+      "status": "implemented"
+    },
+    {
+      "id": "mcp.crlf-framing",
+      "backend": "mcp",
+      "operation": "json_rpc",
+      "payload": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\r\n",
+      "expected_decision": "allow",
+      "expected_state_unchanged": true,
+      "controls": ["json_rpc_framing"],
+      "status": "implemented"
+    },
+    {
+      "id": "mcp.truncated-sidecar-response",
+      "backend": "mcp",
+      "operation": "sidecar_response",
+      "payload": "{\"jsonrpc\":\"2.0\",\"result\":",
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["sidecar_fail_closed"],
+      "status": "implemented"
+    },
+    {
+      "id": "mcp.driver-error-secret-redaction",
+      "backend": "mcp",
+      "operation": "error_response",
+      "payload": { "message": "jdbc:postgresql://db:5432/app password=super-secret" },
+      "expected_decision": "reject",
+      "expected_state_unchanged": true,
+      "controls": ["error_redaction"],
+      "status": "implemented"
+    }
+  ]
+}

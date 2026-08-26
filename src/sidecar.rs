@@ -719,7 +719,7 @@ impl SidecarProcess {
                 ));
             }
 
-            let resp: Response = serde_json::from_str(&response_line)?;
+            let resp = parse_response_line(&response_line)?;
             // Skip async notifications (idle_disconnect, etc.) that have no id
             if resp.r#type.is_some() && resp.id.is_none() {
                 continue;
@@ -772,6 +772,11 @@ impl SidecarProcess {
     }
 }
 
+fn parse_response_line(line: &str) -> Result<Response> {
+    serde_json::from_str(line)
+        .map_err(|_| SafeselectError::Sidecar("sidecar returned invalid JSON response".into()))
+}
+
 fn validate_sidecar_ack(ack: &str) -> Result<()> {
     if ack == "ready" {
         Ok(())
@@ -801,7 +806,7 @@ fn java_major_version(version_output: &str) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_elapsed, java_major_version, SidecarProcess};
+    use super::{format_elapsed, java_major_version, parse_response_line, SidecarProcess};
 
     #[test]
     fn formats_elapsed_time_consistently() {
@@ -832,5 +837,17 @@ mod tests {
     fn locates_a_usable_java_executable() {
         let java = SidecarProcess::java_executable().unwrap();
         assert!(java.ends_with("java") || java.ends_with("java.exe"));
+    }
+
+    #[test]
+    fn rejects_truncated_sidecar_response_without_echoing_payload() {
+        let error = match parse_response_line(r#"{"jsonrpc":"2.0","result":"#) {
+            Ok(_) => panic!("truncated response must be rejected"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error.to_string(),
+            "Sidecar error: sidecar returned invalid JSON response"
+        );
     }
 }

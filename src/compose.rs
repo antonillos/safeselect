@@ -647,13 +647,15 @@ pub fn store_password_in_keychain(account: &str, password: &str) -> Result<()> {
     let output = keychain_command(account, password)
         .output()
         .map_err(keychain_command_error)?;
+    report_keychain_store_result(&output);
+    Ok(())
+}
 
+fn report_keychain_store_result(output: &std::process::Output) {
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         eprintln!("WARN: could not store password in Keychain: {stderr}");
     }
-
-    Ok(())
 }
 
 fn keychain_command(account: &str, password: &str) -> std::process::Command {
@@ -706,6 +708,12 @@ mod tests {
                 "-U",
             ]
         );
+    }
+
+    #[test]
+    fn reports_keychain_store_status_without_panicking() {
+        report_keychain_store_result(&std::process::Command::new("true").output().unwrap());
+        report_keychain_store_result(&std::process::Command::new("false").output().unwrap());
     }
 
     #[test]

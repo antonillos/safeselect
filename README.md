@@ -2,7 +2,7 @@
 
 ## Agents can look. They cannot mutate.
 
-**Fail-closed, read-only PostgreSQL and MongoDB access for AI coding agents over MCP.**
+**Secure, fail-closed, read-only database access for AI agents over MCP.**
 
 [![CI](https://github.com/antonillos/safeselect/actions/workflows/verify.yml/badge.svg)](https://github.com/antonillos/safeselect/actions/workflows/verify.yml)
 [![CRAP](https://img.shields.io/endpoint?url=https%3A%2F%2Fantonillos.github.io%2Fsafeselect%2Fcrap-badge.json)](https://github.com/antonillos/safeselect/actions/workflows/verify.yml)
@@ -10,6 +10,7 @@
 [![Rust](https://img.shields.io/badge/Rust-1.81%2B-dea584?logo=rust&logoColor=white)]()
 [![Java](https://img.shields.io/badge/Java-17%2B-5382a1?logo=openjdk&logoColor=white)]()
 [![MCP](https://img.shields.io/badge/MCP-stdio%20tools-7b68ee)]()
+[![Listed on mcpservers.org](https://mcpservers.org/badge.svg)](https://mcpservers.org/servers/antonillos/safeselect)
 [![Homebrew](https://img.shields.io/badge/Homebrew-tap-FBB040?logo=homebrew&logoColor=white)](https://github.com/antonillos/homebrew-tap)
 [![asdf](https://img.shields.io/badge/asdf-plugin-8A2BE2)](https://github.com/antonillos/asdf-safeselect)
 [![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
@@ -79,6 +80,31 @@ The product promise is simple: **agents can look, but they cannot mutate**. Even
 </p>
 
 The agent talks to SafeSelect through MCP stdio. SafeSelect enforces policy in Rust, stores secrets outside project files, and reaches databases through an embedded Java sidecar: JDBC for SQL backends and the MongoDB driver for MongoDB. The Rust to Java channel is JSON-lines over stdin/stdout: no sockets, no open ports.
+
+## See it in action
+
+One business prompt is enough: the agent discovers the database structure and
+uses SafeSelect's bounded, read-only MCP tools without being told tables,
+columns, or query syntax. The [complete demo gallery](demo/README.md) also
+covers setup and the read-only rejection path.
+
+### OpenCode discovers PostgreSQL
+
+<p align="center">
+  <img src="docs/recordings/safeselect-opencode.gif" alt="OpenCode discovers PostgreSQL through SafeSelect MCP" width="900">
+</p>
+
+### Codex discovers PostgreSQL
+
+<p align="center">
+  <img src="docs/recordings/safeselect-codex.gif" alt="Codex discovers PostgreSQL through SafeSelect MCP" width="900">
+</p>
+
+### MongoDB, with the same safety boundary
+
+<p align="center">
+  <img src="docs/recordings/safeselect-mongodb.gif" alt="OpenCode discovers MongoDB through SafeSelect MCP" width="900">
+</p>
 
 ## Quick Start
 
@@ -262,6 +288,8 @@ Requirements: Rust 1.81+, Java 17+, Maven 3.8+. `sshpass` is optional for passwo
 - [Installation guide](docs/install.md)
 - [AI agent integration](docs/agents.md)
 - [Security model](docs/security.md)
+- [Security Proof](docs/security-proof.md)
+- [Security test suite](docs/security-test-suite.md)
 - [Security policy](SECURITY.md)
 - [Distribution](docs/distribution.md)
 - [Changelog](CHANGELOG.md)

@@ -1,0 +1,12 @@
+version = 1
+
+[database]
+kind = "jdbc"
+vendor = "postgresql"
+driver = "postgresql"
+url = "jdbc:postgresql://127.0.0.1:55432/safeselect_demo"
+username = "demo"
+
+[database.secret]
+source = "env"
+variable = "SAFESELECT_DEMO_PASSWORD"

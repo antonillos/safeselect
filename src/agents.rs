@@ -256,19 +256,14 @@ fn install_file_entry(
     mcp_timeout_ms: u64,
     local: bool,
 ) -> Result<()> {
-    let config_path = select_install_config(client, repo_root, local)?;
-    let (config_existed, content) = read_or_initialize_config(client, &config_path)?;
-
-    let new_content = build_entry_content(
+    let (config_path, config_existed, content, new_content) = prepare_file_install(
         client,
-        &content,
         entry_name,
         environment,
         repo_root,
         config_dir,
         mcp_timeout_ms,
-        false,
-        None,
+        local,
     )?;
 
     if new_content == content {
@@ -285,6 +280,86 @@ fn install_file_entry(
     println!("Entry '{entry_name}' installed for {client}");
     println!("Next: {}", install_next_step(client, local));
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_file_install(
+    client: &str,
+    entry_name: &str,
+    environment: &str,
+    repo_root: Option<&Path>,
+    config_dir: Option<&Path>,
+    mcp_timeout_ms: u64,
+    local: bool,
+) -> Result<(PathBuf, bool, String, String)> {
+    let config_path = select_install_config(client, repo_root, local)?;
+    warn_scope_collision(client, &config_path, entry_name, repo_root, local)?;
+    let (config_existed, content) = read_or_initialize_config(client, &config_path)?;
+    let new_content = build_entry_content(
+        client,
+        &content,
+        entry_name,
+        environment,
+        repo_root,
+        config_dir,
+        mcp_timeout_ms,
+        false,
+        None,
+    )?;
+    Ok((config_path, config_existed, content, new_content))
+}
+
+fn warn_scope_collision(
+    client: &str,
+    target_config: &Path,
+    entry_name: &str,
+    repo_root: Option<&Path>,
+    local: bool,
+) -> Result<()> {
+    let opposite_config = opposite_scope_config(client, repo_root, local);
+    let Some(opposite_config) = opposite_config else {
+        return Ok(());
+    };
+    if !scope_collision(client, target_config, &opposite_config, entry_name)? {
+        return Ok(());
+    }
+
+    let target_scope = if local { "project" } else { "user" };
+    let opposite_scope = if local { "user" } else { "project" };
+    eprintln!(
+        "⚠ Entry '{entry_name}' already exists in {opposite_scope} scope for {client}: {}",
+        opposite_config.display()
+    );
+    eprintln!(
+        "  Installing it in {target_scope} scope will create two entries with the same name."
+    );
+    eprintln!(
+        "  Use --local/without --local intentionally, or remove the existing entry explicitly."
+    );
+    Ok(())
+}
+
+fn opposite_scope_config(client: &str, repo_root: Option<&Path>, local: bool) -> Option<PathBuf> {
+    local
+        .then(|| get_client_config(client).ok())
+        .unwrap_or_else(|| repo_root.and_then(|root| detect_local_client_config(client, root)))
+}
+
+fn scope_has_entry(client: &str, config_path: &Path, entry_name: &str) -> Result<bool> {
+    let content = std::fs::read_to_string(config_path)?;
+    config_has_entry(client, &content, entry_name)
+}
+
+fn scope_collision(
+    client: &str,
+    target_config: &Path,
+    opposite_config: &Path,
+    entry_name: &str,
+) -> Result<bool> {
+    if opposite_config == target_config || !opposite_config.exists() {
+        return Ok(false);
+    }
+    scope_has_entry(client, opposite_config, entry_name)
 }
 
 fn install_next_step(client: &str, local: bool) -> &'static str {
@@ -354,35 +429,8 @@ fn build_entry_content(
     upgrade: bool,
     old_entry_name: Option<&str>,
 ) -> Result<String> {
-    let args = serve_args(environment, repo_root)?;
-    let mut entry = serde_json::json!({
-        "command": "safeselect",
-        "args": args,
-    });
-    let mut copilot_entry = serde_json::json!({
-        "type": "stdio",
-        "command": "safeselect",
-        "args": serve_args(environment, repo_root)?,
-    });
-    let mut opencode_entry = serde_json::json!({
-        "type": "local",
-        "command": std::iter::once("safeselect".to_string())
-            .chain(serve_args(environment, repo_root)?).collect::<Vec<_>>(),
-        "timeout": mcp_timeout_ms,
-        "enabled": true
-    });
-    if let Some(dir) = config_dir {
-        let config_dir = dir.to_string_lossy().to_string();
-        entry["env"] = serde_json::json!({
-            "SAFESELECT_CONFIG_DIR": config_dir
-        });
-        copilot_entry["env"] = serde_json::json!({
-            "SAFESELECT_CONFIG_DIR": config_dir
-        });
-        opencode_entry["environment"] = serde_json::json!({
-            "SAFESELECT_CONFIG_DIR": dir.to_string_lossy().to_string()
-        });
-    }
+    let (entry, copilot_entry, opencode_entry) =
+        build_client_entries(environment, repo_root, config_dir, mcp_timeout_ms)?;
 
     let format = client_format(client)?;
     if format == ConfigFormat::Codex {
@@ -401,31 +449,80 @@ fn build_entry_content(
         ));
     }
 
-    if upgrade {
-        let old_entry_name = old_entry_name.expect("upgrade requires the previous entry name");
-        match client {
-            "opencode" => {
-                replace_opencode_json(content, &opencode_entry, old_entry_name, entry_name)
-            }
-            "cursor" | "windsurf" | "gemini-cli" => {
-                replace_mcp_json(content, &entry, old_entry_name, entry_name)
-            }
-            "copilot" => replace_json_entry(
-                content,
-                "servers",
-                &copilot_entry,
-                old_entry_name,
-                entry_name,
-            ),
-            _ => Err(SafeselectError::Other(format!("Unknown client: {client}"))),
+    update_client_entry(
+        client,
+        content,
+        entry_name,
+        old_entry_name,
+        upgrade,
+        &entry,
+        &copilot_entry,
+        &opencode_entry,
+    )
+}
+
+fn build_client_entries(
+    environment: &str,
+    repo_root: Option<&Path>,
+    config_dir: Option<&Path>,
+    mcp_timeout_ms: u64,
+) -> Result<(serde_json::Value, serde_json::Value, serde_json::Value)> {
+    let args = serve_args(environment, repo_root)?;
+    let mut entry = serde_json::json!({"command": "safeselect", "args": args});
+    let mut copilot_entry = serde_json::json!({
+        "type": "stdio", "command": "safeselect",
+        "args": serve_args(environment, repo_root)?,
+    });
+    let mut opencode_entry = serde_json::json!({
+        "type": "local", "command": std::iter::once("safeselect".to_string())
+            .chain(serve_args(environment, repo_root)?).collect::<Vec<_>>(),
+        "timeout": mcp_timeout_ms, "enabled": true
+    });
+    if let Some(dir) = config_dir {
+        let value = dir.to_string_lossy().to_string();
+        entry["env"] = serde_json::json!({"SAFESELECT_CONFIG_DIR": value});
+        copilot_entry["env"] = serde_json::json!({"SAFESELECT_CONFIG_DIR": value});
+        opencode_entry["environment"] = serde_json::json!({"SAFESELECT_CONFIG_DIR": value});
+    }
+    Ok((entry, copilot_entry, opencode_entry))
+}
+
+fn update_client_entry(
+    client: &str,
+    content: &str,
+    entry_name: &str,
+    old_entry_name: Option<&str>,
+    upgrade: bool,
+    entry: &serde_json::Value,
+    copilot_entry: &serde_json::Value,
+    opencode_entry: &serde_json::Value,
+) -> Result<String> {
+    match (upgrade, client) {
+        (true, "opencode") => replace_opencode_json(
+            content,
+            opencode_entry,
+            old_entry_name.expect("upgrade requires the previous entry name"),
+            entry_name,
+        ),
+        (true, "cursor" | "windsurf" | "gemini-cli") => replace_mcp_json(
+            content,
+            entry,
+            old_entry_name.expect("upgrade requires the previous entry name"),
+            entry_name,
+        ),
+        (true, "copilot") => replace_json_entry(
+            content,
+            "servers",
+            copilot_entry,
+            old_entry_name.expect("upgrade requires the previous entry name"),
+            entry_name,
+        ),
+        (false, "opencode") => append_opencode_json(content, opencode_entry, entry_name),
+        (false, "cursor" | "windsurf" | "gemini-cli") => {
+            append_mcp_json(content, entry, entry_name)
         }
-    } else {
-        match client {
-            "opencode" => append_opencode_json(content, &opencode_entry, entry_name),
-            "cursor" | "windsurf" | "gemini-cli" => append_mcp_json(content, &entry, entry_name),
-            "copilot" => append_json_entry(content, "servers", &copilot_entry, entry_name),
-            _ => Err(SafeselectError::Other(format!("Unknown client: {client}"))),
-        }
+        (false, "copilot") => append_json_entry(content, "servers", copilot_entry, entry_name),
+        _ => Err(SafeselectError::Other(format!("Unknown client: {client}"))),
     }
 }
 
@@ -441,17 +538,26 @@ fn write_config_and_verify(
     let temp = parent.join(format!(".safeselect-{}.tmp", uuid::Uuid::new_v4()));
     write_private_file(&temp, updated)?;
     std::fs::rename(&temp, path)?;
-    if std::fs::read_to_string(path)? != updated {
-        if original_existed {
-            write_private_file(path, original)?;
-        } else {
-            let _ = std::fs::remove_file(path);
-        }
+    if !verify_config_contents(path, updated)? {
+        rollback_config(path, original, original_existed)?;
         return Err(SafeselectError::Other(
             "Write verification failed, rolled back".into(),
         ));
     }
     Ok(())
+}
+
+fn verify_config_contents(path: &Path, expected: &str) -> Result<bool> {
+    Ok(std::fs::read_to_string(path)? == expected)
+}
+
+fn rollback_config(path: &Path, original: &str, original_existed: bool) -> Result<()> {
+    if original_existed {
+        write_private_file(path, original)
+    } else {
+        let _ = std::fs::remove_file(path);
+        Ok(())
+    }
 }
 
 fn write_private_file(path: &Path, content: &str) -> Result<()> {
@@ -679,6 +785,21 @@ fn uninstall_claude_entry(entry_name: &str, repo_root: Option<&Path>) -> Result<
     let local = repo_root
         .map(|root| root.join(".mcp.json").exists())
         .unwrap_or(false);
+    uninstall_claude_entry_with_availability(entry_name, repo_root, local, command_exists("claude"))
+}
+
+fn uninstall_claude_entry_with_availability(
+    entry_name: &str,
+    repo_root: Option<&Path>,
+    local: bool,
+    claude_available: bool,
+) -> Result<()> {
+    if local && !claude_available {
+        // Project-local Claude configuration is a SafeSelect-owned JSON file.
+        // Keep uninstall usable when only the config remains and the Claude
+        // CLI is not installed in the current PATH.
+        return uninstall_file_entry("claude-code", entry_name, repo_root);
+    }
     run_claude_remove(entry_name, repo_root, local)
 }
 
@@ -814,28 +935,47 @@ fn resolve_uninstall_target(
     entry_name: &str,
     repo_root: Option<&Path>,
 ) -> Result<PathBuf> {
-    if let Some(root) = repo_root {
-        let mut current = Some(root);
-        while let Some(dir) = current {
-            if let Some(local_path) = detect_local_client_config(client, dir) {
-                let content = std::fs::read_to_string(&local_path)?;
-                if config_has_entry(client, &content, entry_name)? {
-                    return Ok(local_path);
-                }
-            }
-            current = dir.parent();
-        }
+    if let Some(path) = find_local_uninstall_target(client, entry_name, repo_root)? {
+        return Ok(path);
     }
+    resolve_global_uninstall_target(client, entry_name)
+}
 
+fn resolve_global_uninstall_target(client: &str, entry_name: &str) -> Result<PathBuf> {
     let config_path = get_client_config(client)?;
     let content = std::fs::read_to_string(&config_path)?;
-    if config_has_entry(client, &content, entry_name)? {
-        Ok(config_path)
-    } else {
-        Err(SafeselectError::Other(format!(
-            "No SafeSelect entry named '{entry_name}' found in {client} config"
-        )))
+    ensure_config_entry(client, &content, entry_name)?;
+    Ok(config_path)
+}
+
+fn ensure_config_entry(client: &str, content: &str, entry_name: &str) -> Result<()> {
+    if config_has_entry(client, content, entry_name)? {
+        return Ok(());
     }
+    Err(SafeselectError::Other(format!(
+        "No SafeSelect entry named '{entry_name}' found in {client} config"
+    )))
+}
+
+fn find_local_uninstall_target(
+    client: &str,
+    entry_name: &str,
+    repo_root: Option<&Path>,
+) -> Result<Option<PathBuf>> {
+    let Some(root) = repo_root else {
+        return Ok(None);
+    };
+    let mut current = Some(root);
+    while let Some(dir) = current {
+        if let Some(local_path) = detect_local_client_config(client, dir) {
+            let content = std::fs::read_to_string(&local_path)?;
+            if config_has_entry(client, &content, entry_name)? {
+                return Ok(Some(local_path));
+            }
+        }
+        current = dir.parent();
+    }
+    Ok(None)
 }
 
 fn get_client_config(client: &str) -> Result<PathBuf> {
@@ -863,61 +1003,47 @@ fn canonical_global_config(client: &str) -> Option<PathBuf> {
 }
 
 fn canonical_home_config(client: &str, home: &Path) -> Option<PathBuf> {
-    match client {
-        "opencode" => Some(dirs::config_dir()?.join("opencode").join("opencode.jsonc")),
-        "cursor" => Some(home.join(".cursor").join("mcp.json")),
-        "windsurf" => Some(
+    if client == "opencode" {
+        return Some(dirs::config_dir()?.join("opencode").join("opencode.jsonc"));
+    }
+    [
+        ("cursor", home.join(".cursor").join("mcp.json")),
+        (
+            "windsurf",
             home.join(".codeium")
                 .join("windsurf")
                 .join("mcp_config.json"),
         ),
-        "claude-code" => Some(home.join(".claude.json")),
-        "copilot" => Some(home.join(".copilot").join("mcp-config.json")),
-        "gemini-cli" => Some(home.join(".gemini").join("settings.json")),
-        _ => None,
-    }
+        ("claude-code", home.join(".claude.json")),
+        ("copilot", home.join(".copilot").join("mcp-config.json")),
+        ("gemini-cli", home.join(".gemini").join("settings.json")),
+    ]
+    .into_iter()
+    .find_map(|(name, path)| (client == name).then_some(path))
 }
 
 fn detect_local_client_config(client: &str, repo_root: &Path) -> Option<PathBuf> {
     match client {
-        "opencode" => {
-            let opencode_dir = repo_root.join(".opencode");
-            let candidates = [
-                opencode_dir.join("opencode.jsonc"),
-                opencode_dir.join("opencode.json"),
-                opencode_dir.join("config.jsonc"),
-                opencode_dir.join("config.json"),
-            ];
-            candidates.into_iter().find(|p| p.exists())
-        }
-        "cursor" => {
-            let config = repo_root.join(".cursor").join("mcp.json");
-            if config.exists() {
-                Some(config)
-            } else {
-                None
-            }
-        }
-        "claude-code" => {
-            let config = repo_root.join(".mcp.json");
-            if config.exists() {
-                Some(config)
-            } else {
-                None
-            }
-        }
-        "codex" => {
-            let config = repo_root.join(".codex").join("config.toml");
-            if config.exists() {
-                Some(config)
-            } else {
-                None
-            }
-        }
+        "opencode" => opencode_candidates(repo_root)
+            .into_iter()
+            .find(|p| p.exists()),
+        "cursor" => existing(repo_root.join(".cursor").join("mcp.json")),
+        "claude-code" => existing(repo_root.join(".mcp.json")),
+        "codex" => existing(repo_root.join(".codex").join("config.toml")),
         "copilot" => existing(repo_root.join(".vscode").join("mcp.json")),
         "gemini-cli" => existing(repo_root.join(".gemini").join("settings.json")),
         _ => None,
     }
+}
+
+fn opencode_candidates(repo_root: &Path) -> [PathBuf; 4] {
+    let opencode_dir = repo_root.join(".opencode");
+    [
+        opencode_dir.join("opencode.jsonc"),
+        opencode_dir.join("opencode.json"),
+        opencode_dir.join("config.jsonc"),
+        opencode_dir.join("config.json"),
+    ]
 }
 
 fn existing(path: PathBuf) -> Option<PathBuf> {
@@ -931,34 +1057,29 @@ fn get_local_client_config(client: &str, repo_root: Option<&Path>) -> Result<Pat
         )
     })?;
 
-    let local_path = match client {
-        "opencode" => {
-            let opencode_dir = root.join(".opencode");
-            let candidates = [
-                opencode_dir.join("opencode.jsonc"),
-                opencode_dir.join("opencode.json"),
-                opencode_dir.join("config.jsonc"),
-                opencode_dir.join("config.json"),
-            ];
-            if let Some(existing) = candidates.iter().find(|p| p.exists()) {
-                existing.clone()
-            } else {
-                opencode_dir.join("opencode.jsonc")
-            }
-        }
-        "cursor" => root.join(".cursor").join("mcp.json"),
-        "claude-code" => root.join(".mcp.json"),
-        "codex" => root.join(".codex").join("config.toml"),
-        "copilot" => root.join(".vscode").join("mcp.json"),
-        "gemini-cli" => root.join(".gemini").join("settings.json"),
-        c => {
-            return Err(SafeselectError::Other(format!(
-                "Local config not supported for {c}; use global install (without --local)"
-            )))
-        }
+    let local_path = if client == "opencode" {
+        opencode_candidates(root)
+            .into_iter()
+            .find(|p| p.exists())
+            .unwrap_or_else(|| root.join(".opencode").join("opencode.jsonc"))
+    } else {
+        local_config_path(client, root)?
     };
 
     Ok(local_path)
+}
+
+fn local_config_path(client: &str, root: &Path) -> Result<PathBuf> {
+    match client {
+        "cursor" => Ok(root.join(".cursor").join("mcp.json")),
+        "claude-code" => Ok(root.join(".mcp.json")),
+        "codex" => Ok(root.join(".codex").join("config.toml")),
+        "copilot" => Ok(root.join(".vscode").join("mcp.json")),
+        "gemini-cli" => Ok(root.join(".gemini").join("settings.json")),
+        c => Err(SafeselectError::Other(format!(
+            "Local config not supported for {c}; use global install (without --local)"
+        ))),
+    }
 }
 
 fn detect_opencode_config() -> Option<PathBuf> {
@@ -1257,7 +1378,9 @@ fn resolve_upgrade_target(
     let mut matches = Vec::new();
     for config_path in configs {
         let content = std::fs::read_to_string(&config_path)?;
-        for candidate in candidate_entry_names(client, &content, project_name, environment)? {
+        for candidate in
+            candidate_entry_names(client, &content, project_name, environment, repo_root)?
+        {
             matches.push((config_path.clone(), candidate));
         }
     }
@@ -1364,6 +1487,7 @@ fn candidate_entry_names(
     content: &str,
     project_name: &str,
     environment: Option<&str>,
+    repo_root: Option<&Path>,
 ) -> Result<Vec<String>> {
     let canonical_prefix = format!("safeselect-{project_name}-");
     let legacy_prefix = format!("{project_name}-");
@@ -1372,25 +1496,67 @@ fn candidate_entry_names(
     Ok(all_names
         .into_iter()
         .filter(|name| {
-            candidate_name_matches(
+            let name_matches = candidate_name_matches(
                 name,
                 project_name,
                 environment,
                 &canonical_prefix,
                 &legacy_prefix,
-            )
+            );
+            let cwd_matches = client == "opencode"
+                && repo_root.is_some_and(|root| {
+                    opencode_entry_matches_project(content, name, root)
+                        && environment.map_or(true, |expected| {
+                            detect_entry_environment(client, content, name)
+                                .ok()
+                                .flatten()
+                                .as_deref()
+                                == Some(expected)
+                        })
+                });
+            name_matches || cwd_matches
         })
+        .filter(|name| entry_uses_safeselect(client, content, name).unwrap_or(false))
         .collect())
 }
 
-fn all_entry_names(client: &str, content: &str) -> Result<Vec<String>> {
-    let names = match client_format(client)? {
-        ConfigFormat::OpenCode => json_entry_names(content, "mcp")?,
-        ConfigFormat::McpServers | ConfigFormat::Claude => json_entry_names(content, "mcpServers")?,
-        ConfigFormat::Copilot => json_entry_names(content, "servers")?,
-        ConfigFormat::Codex => toml_entry_names(content)?,
+fn opencode_entry_matches_project(content: &str, name: &str, repo_root: &Path) -> bool {
+    let Ok(config) = parse_json_or_jsonc(content) else {
+        return false;
     };
-    Ok(names)
+    let Some(args) = config
+        .get("mcp")
+        .and_then(|value| value.get(name))
+        .and_then(|value| value.get("command"))
+        .and_then(serde_json::Value::as_array)
+    else {
+        return false;
+    };
+    let Some(project) = args.windows(2).find_map(|window| {
+        (window[0].as_str() == Some("--project"))
+            .then(|| window[1].as_str())
+            .flatten()
+    }) else {
+        return false;
+    };
+    Path::new(project).canonicalize().ok() == repo_root.canonicalize().ok()
+}
+
+fn all_entry_names(client: &str, content: &str) -> Result<Vec<String>> {
+    let format = client_format(client)?;
+    if let Some(key) = json_entry_key(format) {
+        return json_entry_names(content, key);
+    }
+    toml_entry_names(content)
+}
+
+fn json_entry_key(format: ConfigFormat) -> Option<&'static str> {
+    match format {
+        ConfigFormat::OpenCode => Some("mcp"),
+        ConfigFormat::McpServers | ConfigFormat::Claude => Some("mcpServers"),
+        ConfigFormat::Copilot => Some("servers"),
+        ConfigFormat::Codex => None,
+    }
 }
 
 fn candidate_name_matches(
@@ -1608,6 +1774,66 @@ mod tests {
     }
 
     #[test]
+    fn matches_legacy_opencode_entry_by_project_cwd() {
+        let root =
+            std::env::temp_dir().join(format!("safeselect-opencode-cwd-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let content = format!(
+            r#"{{
+  "mcp": {{
+    "safeselect": {{
+      "type": "local",
+      "command": ["safeselect", "serve", "--project", "{}", "--environment", "testing"]
+    }}
+  }}
+}}"#,
+            root.display()
+        );
+
+        let names = candidate_entry_names(
+            "opencode",
+            &content,
+            "unrelated-project-name",
+            None,
+            Some(&root),
+        )
+        .unwrap();
+
+        assert_eq!(names, vec!["safeselect"]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn detects_same_entry_name_in_opposite_scope() {
+        let path = std::env::temp_dir().join(format!(
+            "safeselect-agent-collision-{}.json",
+            std::process::id()
+        ));
+        std::fs::write(
+            &path,
+            r#"{"mcp":{"safeselect-demo-testing":{"command":["safeselect","serve"]}}}"#,
+        )
+        .unwrap();
+
+        assert!(scope_collision(
+            "opencode",
+            Path::new("/tmp/project/opencode.jsonc"),
+            &path,
+            "safeselect-demo-testing"
+        )
+        .unwrap());
+        assert!(!scope_collision(
+            "opencode",
+            Path::new("/tmp/project/opencode.jsonc"),
+            &path,
+            "other-entry"
+        )
+        .unwrap());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn detects_environment_from_copilot_entry() {
         let content = r#"{"servers":{"safeselect-demo-pre":{"type":"stdio","command":"safeselect","args":["serve","--project","/tmp/demo","--environment","pre"]}}}"#;
 
@@ -1734,6 +1960,31 @@ mod tests {
     }
 
     #[test]
+    fn covers_unknown_agent_update_and_existing_install_paths() {
+        let entry = serde_json::json!({"command": "safeselect"});
+        assert!(update_client_entry(
+            "unknown-client",
+            "{}",
+            "safe",
+            None,
+            false,
+            &entry,
+            &entry,
+            &entry,
+        )
+        .is_err());
+
+        let root = std::env::temp_dir().join(format!(
+            "safeselect-install-repeat-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(root.join(".opencode")).unwrap();
+        install_entry("opencode", "dev", "safe", Some(&root), None, 90_000, true).unwrap();
+        install_entry("opencode", "dev", "safe", Some(&root), None, 90_000, true).unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn checks_entries_for_json_and_ini_clients() {
         let json = r#"{"mcp": {"alpha": {}}, "mcpServers": {"beta": {}}}"#;
         let copilot = r#"{"servers":{"gamma":{"command":"safeselect"}}}"#;
@@ -1743,6 +1994,13 @@ mod tests {
         assert!(config_has_entry("copilot", copilot, "gamma").unwrap());
         assert!(config_has_entry("gemini-cli", json, "beta").unwrap());
         assert!(config_has_entry("unknown-client", json, "alpha").is_err());
+    }
+
+    #[test]
+    fn validates_global_uninstall_entry_before_removing_it() {
+        let content = r#"{"mcp":{"safeselect":{"command":["safeselect"]}}}"#;
+        assert!(ensure_config_entry("opencode", content, "safeselect").is_ok());
+        assert!(ensure_config_entry("opencode", content, "missing").is_err());
     }
 
     #[test]
@@ -2016,6 +2274,27 @@ mod tests {
     }
 
     #[test]
+    fn uninstalls_local_claude_entry_without_cli() {
+        let root =
+            std::env::temp_dir().join(format!("safeselect-claude-local-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join(".mcp.json"),
+            r#"{"mcpServers":{"safe":{"command":"safeselect","args":["serve","--environment","dev"]}}}"#,
+        )
+        .unwrap();
+
+        uninstall_claude_entry_with_availability("safe", Some(&root), true, false).unwrap();
+        let content = std::fs::read_to_string(root.join(".mcp.json")).unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&content).unwrap(),
+            serde_json::json!({"mcpServers": {}})
+        );
+        assert!(root.join(".mcp.safeselect.bak").exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn replaces_existing_mcp_json_entry() {
         let updated = replace_mcp_json(
             r#"{"mcpServers":{"old":{"command":"old"}}}"#,
@@ -2053,18 +2332,18 @@ mod tests {
 
     #[test]
     fn selects_candidate_entries_for_supported_clients_and_environments() {
-        let json = r#"{"mcpServers":{"safeselect-demo-pre":{},"demo-dev":{},"other":{}}}"#;
+        let json = r#"{"mcpServers":{"safeselect-demo-pre":{"command":"safeselect"},"demo-dev":{"command":"safeselect"},"other":{}}}"#;
         assert_eq!(
-            candidate_entry_names("cursor", json, "demo", Some("pre")).unwrap(),
+            candidate_entry_names("cursor", json, "demo", Some("pre"), None).unwrap(),
             vec!["safeselect-demo-pre"]
         );
         assert_eq!(
-            candidate_entry_names("cursor", json, "demo", None)
+            candidate_entry_names("cursor", json, "demo", None, None)
                 .unwrap()
                 .len(),
             2
         );
-        assert!(candidate_entry_names("unknown", json, "demo", None).is_err());
+        assert!(candidate_entry_names("unknown", json, "demo", None, None).is_err());
     }
 
     #[test]

@@ -110,6 +110,91 @@ class MainTest {
     }
 
     @Test
+    void coversExtractedExecuteValidationAndResponseHelpers() throws Exception {
+        var writer = new PrintWriter(new StringWriter());
+        setStatic("connection", null);
+        invoke("handleExecute", new Class<?>[]{PrintWriter.class, Object.class, Map.class}, writer, "id", Map.of());
+        assertFalse((Boolean) invoke("ensureConnected", new Class<?>[]{PrintWriter.class, Object.class}, writer, "id"));
+
+        var connection = Proxy.newProxyInstance(MainTest.class.getClassLoader(),
+                new Class<?>[]{java.sql.Connection.class}, (proxy, method, args) ->
+                        method.getName().equals("isClosed") ? false : null);
+        setStatic("connection", connection);
+        assertTrue((Boolean) invoke("ensureConnected", new Class<?>[]{PrintWriter.class, Object.class}, writer, "id"));
+        assertNull(invoke("validatedSql", new Class<?>[]{PrintWriter.class, Object.class, Map.class},
+                writer, "id", Map.of()));
+        assertEquals("select 1", invoke("validatedSql", new Class<?>[]{PrintWriter.class, Object.class, Map.class},
+                writer, "id", Map.of("params", Map.of("sql", "select 1"))));
+
+        var statementForExecute = Proxy.newProxyInstance(MainTest.class.getClassLoader(),
+                new Class<?>[]{java.sql.Statement.class}, (proxy, method, args) ->
+                        method.getName().equals("execute") ? false : null);
+        connection = Proxy.newProxyInstance(MainTest.class.getClassLoader(),
+                new Class<?>[]{java.sql.Connection.class}, (proxy, method, args) -> switch (method.getName()) {
+                    case "isClosed" -> false;
+                    case "createStatement" -> statementForExecute;
+                    default -> null;
+                });
+        setStatic("connection", connection);
+        invoke("handleExecute", new Class<?>[]{PrintWriter.class, Object.class, Map.class}, writer, "id",
+                Map.of("params", Map.of("sql", "select 1")));
+
+        var statement = Proxy.newProxyInstance(MainTest.class.getClassLoader(),
+                new Class<?>[]{java.sql.Statement.class}, (proxy, method, args) -> null);
+        setStatic("statementTimeoutMs", 1000L);
+        invoke("configureStatementTimeout", new Class<?>[]{java.sql.Statement.class}, statement);
+        setStatic("statementTimeoutMs", 0L);
+        invoke("sendSqlError", new Class<?>[]{PrintWriter.class, Object.class, java.sql.SQLException.class},
+                writer, "id", new java.sql.SQLException("failed", "57014"));
+        invoke("sendSqlError", new Class<?>[]{PrintWriter.class, Object.class, java.sql.SQLException.class},
+                writer, "id", new java.sql.SQLException("failed", "42000"));
+        invoke("writeStatementResponse", new Class<?>[]{PrintWriter.class, Object.class, long.class}, writer, "id", 0L);
+
+        var metadata = Proxy.newProxyInstance(MainTest.class.getClassLoader(),
+                new Class<?>[]{java.sql.ResultSetMetaData.class}, (proxy, method, args) ->
+                        method.getName().equals("getColumnCount") ? 0 : null);
+        var resultSet = Proxy.newProxyInstance(MainTest.class.getClassLoader(),
+                new Class<?>[]{java.sql.ResultSet.class}, (proxy, method, args) -> switch (method.getName()) {
+                    case "getMetaData" -> metadata;
+                    case "next" -> false;
+                    default -> null;
+                });
+        invoke("writeResultSetResponse", new Class<?>[]{PrintWriter.class, Object.class, java.sql.ResultSet.class, long.class},
+                writer, "id", resultSet, 0L);
+        invoke("readResultRow", new Class<?>[]{java.sql.ResultSet.class, int.class}, resultSet, 0);
+        setStatic("connection", null);
+    }
+
+    @Test
+    void coversArgumentAndRequestDispatchers() throws Exception {
+        invoke("configureArguments", new Class<?>[]{String[].class}, (Object) new String[]{
+                "--backend", "mongodb", "--url", "mongodb://localhost", "--user", "safe",
+                "--password-stdin", "--idle-timeout-seconds", "2", "--statement-timeout-ms", "20",
+                "--max-rows", "3", "--max-result-bytes", "40", "--verbose"});
+        invoke("validateArguments", new Class<?>[]{});
+        assertFalse((Boolean) invoke("isJdbcPasswordMissing", new Class<?>[]{}));
+        setStatic("backend", "jdbc");
+        setStatic("password", "safe");
+        assertFalse((Boolean) invoke("isJdbcPasswordMissing", new Class<?>[]{}));
+        var writer = new PrintWriter(new StringWriter());
+        var running = Main.class.getDeclaredField("RUNNING");
+        running.setAccessible(true);
+        ((java.util.concurrent.atomic.AtomicBoolean) running.get(null)).set(true);
+        invoke("processRequests", new Class<?>[]{java.io.BufferedReader.class, PrintWriter.class},
+                new java.io.BufferedReader(new java.io.StringReader("")), writer);
+        setStatic("connection", null);
+        invoke("closeJdbcBackend", new Class<?>[]{});
+        invoke("dispatchRequest", new Class<?>[]{PrintWriter.class, Map.class, Object.class, String.class},
+                writer, Map.of(), "id", "ping");
+        invoke("dispatchRequest", new Class<?>[]{PrintWriter.class, Map.class, Object.class, String.class},
+                writer, Map.of(), "id", "unknown");
+        ((java.util.concurrent.atomic.AtomicBoolean) running.get(null)).set(true);
+        invoke("dispatchRequest", new Class<?>[]{PrintWriter.class, Map.class, Object.class, String.class},
+                writer, Map.of(), "id", "shutdown");
+        ((java.util.concurrent.atomic.AtomicBoolean) running.get(null)).set(true);
+    }
+
+    @Test
     void coversDisconnectedMongoOperationGuards() throws Exception {
         setStatic("backend", "mongodb");
         setStatic("mongoClient", null);

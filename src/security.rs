@@ -30,6 +30,16 @@ fn forbidden_mql_javascript_operator(value: &serde_json::Value) -> Option<&'stat
     }
 }
 
+fn contains_nested_sql_block_comment(sql: &str) -> bool {
+    let Some((_, after_open)) = sql.split_once("/*") else {
+        return false;
+    };
+    let Some((comment_body, _)) = after_open.split_once("*/") else {
+        return false;
+    };
+    comment_body.contains("/*")
+}
+
 impl SecurityEngine {
     pub fn new(policy: SecurityPolicy, limits: LimitsConfig) -> Self {
         Self { policy, limits }
@@ -116,6 +126,49 @@ impl SecurityEngine {
         self.validate_document_mql(&request.filter)?;
         self.validate_optional_document_mql(request.projection.as_ref(), request.sort.as_ref())?;
 
+        Ok(())
+    }
+
+    pub fn validate_document_find_arguments(&self, args: &serde_json::Value) -> Result<()> {
+        self.validate_document_max_time(args.get("maxTimeMS"))?;
+        if let Some(batch_size) = args.get("batchSize") {
+            let batch_size = batch_size.as_u64().ok_or_else(|| {
+                SafeselectError::QueryRejected("Document batchSize must be an integer".into())
+            })?;
+            if batch_size == 0 || batch_size > self.limits.max_rows {
+                return Err(SafeselectError::QueryRejected(format!(
+                    "Document batchSize must be between 1 and {}",
+                    self.limits.max_rows
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn validate_document_aggregate_arguments(&self, args: &serde_json::Value) -> Result<()> {
+        if args
+            .get("allowDiskUse")
+            .is_some_and(|allow| allow.as_bool() != Some(false))
+        {
+            return Err(SafeselectError::QueryRejected(
+                "MongoDB allowDiskUse must be false for read-only aggregation".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_document_max_time(&self, max_time: Option<&serde_json::Value>) -> Result<()> {
+        let Some(max_time) = max_time else {
+            return Ok(());
+        };
+        let max_time = max_time.as_u64().ok_or_else(|| {
+            SafeselectError::QueryRejected("Document maxTimeMS must be an integer".into())
+        })?;
+        if max_time == 0 {
+            return Err(SafeselectError::QueryRejected(
+                "Document maxTimeMS must be greater than zero".into(),
+            ));
+        }
         Ok(())
     }
 
@@ -212,13 +265,22 @@ impl SecurityEngine {
                 self.limits.max_rows
             )));
         }
-        for stage in request.pipeline.as_array().into_iter().flatten() {
-            self.validate_aggregate_stage(stage)?;
+        self.validate_aggregate_pipeline(&request.database, request.pipeline.as_array().unwrap())?;
+        Ok(())
+    }
+
+    fn validate_aggregate_pipeline(
+        &self,
+        database: &str,
+        stages: &[serde_json::Value],
+    ) -> Result<()> {
+        for stage in stages {
+            self.validate_aggregate_stage(database, stage)?;
         }
         Ok(())
     }
 
-    fn validate_aggregate_stage(&self, stage: &serde_json::Value) -> Result<()> {
+    fn validate_aggregate_stage(&self, database: &str, stage: &serde_json::Value) -> Result<()> {
         let Some(stage_object) = stage.as_object() else {
             return Err(SafeselectError::QueryRejected(
                 "Aggregation stages must be JSON objects. Correct the pipeline argument before retrying; do not repeat the same call. Example: [{\"$match\":{\"active\":true}}]".into(),
@@ -229,15 +291,116 @@ impl SecurityEngine {
                 "Aggregation stages must contain exactly one operator. Correct the pipeline argument before retrying; do not repeat the same call. Example: [{\"$match\":{\"active\":true}}]".into(),
             ));
         }
-        if let Some(name) = stage_object
-            .keys()
-            .find(|name| matches!(name.as_str(), "$out" | "$merge" | "$currentOp"))
-        {
+        if let Some(name) = stage_object.keys().find(|name| {
+            matches!(
+                name.as_str(),
+                "$out"
+                    | "$merge"
+                    | "$currentOp"
+                    | "$listSessions"
+                    | "$collStats"
+                    | "$planCacheStats"
+            )
+        }) {
             return Err(SafeselectError::QueryRejected(format!(
                 "Aggregation stage '{name}' is not read-only"
             )));
         }
+        self.validate_nested_aggregate_namespaces(database, stage_object)?;
         self.validate_document_mql(stage)
+    }
+
+    fn validate_nested_aggregate_namespaces(
+        &self,
+        database: &str,
+        stage: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<()> {
+        let Some((operator, value)) = stage.iter().next() else {
+            return Ok(());
+        };
+        match operator.as_str() {
+            "$lookup" => self.validate_lookup_stage(database, value),
+            "$unionWith" => self.validate_union_with_stage(database, value),
+            "$graphLookup" => self.validate_graph_lookup_stage(database, value),
+            "$facet" => self.validate_facet_stage(database, value),
+            _ => Ok(()),
+        }
+    }
+
+    fn validate_lookup_stage(&self, database: &str, value: &serde_json::Value) -> Result<()> {
+        let lookup = value.as_object().ok_or_else(|| {
+            SafeselectError::QueryRejected("MongoDB $lookup stage must be an object".into())
+        })?;
+        self.validate_nested_collection(database, lookup.get("from"))?;
+        self.validate_nested_pipeline(database, lookup.get("pipeline"))
+    }
+
+    fn validate_union_with_stage(&self, database: &str, value: &serde_json::Value) -> Result<()> {
+        let (collection, pipeline) = match value {
+            serde_json::Value::String(collection) => (Some(collection.as_str()), None),
+            serde_json::Value::Object(union) => (
+                union.get("coll").and_then(|value| value.as_str()),
+                union.get("pipeline"),
+            ),
+            _ => (None, None),
+        };
+        self.validate_nested_collection_value(database, collection)?;
+        self.validate_nested_pipeline(database, pipeline)
+    }
+
+    fn validate_graph_lookup_stage(&self, database: &str, value: &serde_json::Value) -> Result<()> {
+        let graph_lookup = value.as_object().ok_or_else(|| {
+            SafeselectError::QueryRejected("MongoDB $graphLookup stage must be an object".into())
+        })?;
+        self.validate_nested_collection(database, graph_lookup.get("from"))
+    }
+
+    fn validate_facet_stage(&self, database: &str, value: &serde_json::Value) -> Result<()> {
+        let facets = value.as_object().ok_or_else(|| {
+            SafeselectError::QueryRejected("MongoDB $facet stage must be an object".into())
+        })?;
+        for pipeline in facets.values() {
+            self.validate_nested_pipeline(database, Some(pipeline))?;
+        }
+        Ok(())
+    }
+
+    fn validate_nested_collection(
+        &self,
+        database: &str,
+        collection: Option<&serde_json::Value>,
+    ) -> Result<()> {
+        self.validate_nested_collection_value(database, collection.and_then(|value| value.as_str()))
+    }
+
+    fn validate_nested_collection_value(
+        &self,
+        database: &str,
+        collection: Option<&str>,
+    ) -> Result<()> {
+        if let Some(collection) = collection {
+            self.validate_document_collection(&DocumentCollectionRequest {
+                database: database.into(),
+                collection: collection.into(),
+            })?;
+        }
+        Ok(())
+    }
+
+    fn validate_nested_pipeline(
+        &self,
+        database: &str,
+        pipeline: Option<&serde_json::Value>,
+    ) -> Result<()> {
+        let Some(pipeline) = pipeline else {
+            return Ok(());
+        };
+        let Some(stages) = pipeline.as_array() else {
+            return Err(SafeselectError::QueryRejected(
+                "Nested MongoDB aggregation pipelines must be JSON arrays".into(),
+            ));
+        };
+        self.validate_aggregate_pipeline(database, stages)
     }
 
     pub fn validate_document_distinct(&self, request: &DocumentDistinctRequest) -> Result<()> {
@@ -430,6 +593,12 @@ impl SecurityEngine {
                 "Query exceeds maximum size ({} bytes)",
                 MAX_SQL_BYTES
             )));
+        }
+
+        if contains_nested_sql_block_comment(trimmed) {
+            return Err(SafeselectError::QueryRejected(
+                "Nested SQL block comments are not supported".into(),
+            ));
         }
 
         self.validate_policy_constraints(trimmed)?;
@@ -654,6 +823,7 @@ impl SecurityEngine {
         const FORBIDDEN: &[&str] = &[
             "SET_CONFIG",
             "PG_SLEEP",
+            "SETVAL",
             "PG_ADVISORY_LOCK",
             "PG_ADVISORY_XACT_LOCK",
             "PG_CREATE_PHYSICAL_REPLICATION_SLOT",
@@ -1513,6 +1683,17 @@ mod tests {
     }
 
     #[test]
+    fn test_read_only_rejects_sequence_mutation_and_nested_comments() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        assert!(engine
+            .check_read_only("SELECT setval('public.safe_sequence', 99, true)")
+            .is_err());
+        assert!(engine
+            .validate("SELECT /* outer /* nested */ 1 */ 1")
+            .is_err());
+    }
+
+    #[test]
     fn test_read_only_rejects_copy_to_program() {
         let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
         assert!(engine
@@ -1715,6 +1896,57 @@ mod tests {
             limit: 10,
         };
         assert!(engine.validate_document_aggregate(&request).is_err());
+    }
+
+    #[test]
+    fn test_document_aggregate_rejects_nested_denied_namespaces() {
+        let engine = SecurityEngine::new(
+            SecurityPolicy {
+                allowed_collections: vec!["app.users".into()],
+                denied_collections: vec!["app.secrets".into()],
+                ..SecurityPolicy::default()
+            },
+            LimitsConfig::default(),
+        );
+        for pipeline in [
+            serde_json::json!([{"$lookup": {"from": "secrets", "pipeline": [], "as": "leak"}}]),
+            serde_json::json!([{"$unionWith": {"coll": "secrets", "pipeline": []}}]),
+            serde_json::json!([{"$graphLookup": {"from": "secrets", "startWith": "$id", "connectFromField": "id", "connectToField": "id", "as": "leak"}}]),
+        ] {
+            let request = DocumentAggregateRequest {
+                database: "app".into(),
+                collection: "users".into(),
+                pipeline,
+                limit: 10,
+            };
+            assert!(engine.validate_document_aggregate(&request).is_err());
+        }
+    }
+
+    #[test]
+    fn test_document_aggregate_rejects_recursive_write_stages() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        let request = DocumentAggregateRequest {
+            database: "app".into(),
+            collection: "users".into(),
+            pipeline: serde_json::json!([{"$facet": {"writes": [{"$merge": "copy"}]}}]),
+            limit: 10,
+        };
+        assert!(engine.validate_document_aggregate(&request).is_err());
+    }
+
+    #[test]
+    fn test_document_options_reject_unbounded_resource_requests() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        assert!(engine
+            .validate_document_find_arguments(&serde_json::json!({"maxTimeMS": 0}))
+            .is_err());
+        assert!(engine
+            .validate_document_find_arguments(&serde_json::json!({"batchSize": 100_000}))
+            .is_err());
+        assert!(engine
+            .validate_document_aggregate_arguments(&serde_json::json!({"allowDiskUse": true}))
+            .is_err());
     }
 
     #[test]

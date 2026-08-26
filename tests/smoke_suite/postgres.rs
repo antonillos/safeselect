@@ -154,12 +154,14 @@ pub fn setup_database() {
     psql(
         &test_db,
         &format!(
-            "CREATE TABLE public.safe_table (id int primary key, name text, payload text); \
+            "CREATE TABLE public.safe_table (id int primary key, name text, payload text, \"select\" text); \
              CREATE VIEW public.safe_view AS SELECT id, name FROM public.safe_table; \
              CREATE TABLE public.large_payload (id int primary key, payload text); \
              CREATE TABLE public.secret_table (id int primary key, secret text); \
              CREATE FUNCTION public.writer_function() RETURNS void LANGUAGE plpgsql AS $$ BEGIN UPDATE public.safe_table SET name = 'changed' WHERE id = 1; END; $$; \
              CREATE PROCEDURE public.writer_procedure() LANGUAGE plpgsql AS $$ BEGIN DELETE FROM public.safe_table WHERE id = 1; END; $$; \
+             CREATE FUNCTION public.security_definer_probe() RETURNS integer LANGUAGE plpgsql SECURITY DEFINER AS $$ BEGIN RETURN (SELECT count(*) FROM public.secret_table); END; $$; \
+             CREATE FUNCTION public.dynamic_sql_probe(command text) RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$ BEGIN EXECUTE command; END; $$; \
              CREATE FUNCTION public.safe_trigger_function() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END; $$; \
              CREATE TRIGGER safe_trigger BEFORE INSERT ON public.safe_table FOR EACH ROW EXECUTE FUNCTION public.safe_trigger_function(); \
              INSERT INTO public.safe_table VALUES (1, 'alpha', repeat('a', 20)), (2, 'beta', repeat('b', 20)), (3, 'gamma', repeat('c', 200)); \
@@ -170,6 +172,8 @@ pub fn setup_database() {
              GRANT SELECT ON public.safe_table, public.safe_view, public.large_payload TO {test_user}; \
              REVOKE EXECUTE ON FUNCTION public.writer_function() FROM PUBLIC; \
              REVOKE EXECUTE ON PROCEDURE public.writer_procedure() FROM PUBLIC; \
+             REVOKE EXECUTE ON FUNCTION public.security_definer_probe() FROM PUBLIC; \
+             REVOKE EXECUTE ON FUNCTION public.dynamic_sql_probe(text) FROM PUBLIC; \
              CREATE TABLE public.after_grant_table (id int primary key, value text); \
              INSERT INTO public.after_grant_table VALUES (1, 'not-readable-by-agent');"
         ),

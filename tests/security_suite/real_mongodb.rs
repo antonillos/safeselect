@@ -3,6 +3,8 @@
 use crate::mongodb;
 use serde_json::json;
 
+use super::manifest;
+
 pub fn run() {
     if std::env::var("SAFESELECT_SECURITY_TEST").is_err() {
         eprintln!("Skipping: set SAFESELECT_SECURITY_TEST=1 to run real MongoDB security tests");
@@ -33,6 +35,31 @@ pub fn run() {
         log_step(&format!("captured baseline MongoDB state: {:?}", baseline));
 
         let mut harness = mongodb::McpHarness::start(&repo_root, &config_dir);
+
+        for (offset, case) in manifest::implemented_for("mongodb").into_iter().enumerate() {
+            assert_eq!(
+                case.expected_decision, "reject",
+                "manifest case {}",
+                case.id
+            );
+            let mut args = case
+                .payload
+                .as_object()
+                .unwrap_or_else(|| panic!("manifest case {} must contain an object", case.id))
+                .clone();
+            args.entry("database")
+                .or_insert_with(|| json!(mongodb::test_db()));
+            args.entry("collection")
+                .or_insert_with(|| json!("safe_docs"));
+            assert_rejected(
+                &mut harness,
+                900 + offset as u64,
+                &case.id,
+                &case.operation,
+                serde_json::Value::Object(args),
+                &baseline,
+            );
+        }
 
         log_check("MCP tools/list exposes document tools and guidance");
         let tools = harness.list_tools(9);

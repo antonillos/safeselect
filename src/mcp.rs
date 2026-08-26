@@ -302,6 +302,7 @@ impl McpServer {
         let stdin = std::io::stdin();
         let mut reader = BufReader::new(stdin.lock());
         let mut line = String::new();
+        let mut seen_requests = Vec::new();
 
         loop {
             line.clear();
@@ -326,6 +327,22 @@ impl McpServer {
 
             if msg.jsonrpc.as_deref() != Some("2.0") || msg.method.is_none() {
                 self.send_error(msg.id.clone(), -32600, "Invalid Request")?;
+                continue;
+            }
+
+            if let Some(id) = msg.id.as_ref() {
+                let fingerprint = serde_json::json!({
+                    "id": id,
+                    "method": msg.method,
+                    "params": msg.params
+                });
+                if seen_requests.iter().any(|seen| seen == &fingerprint) {
+                    self.send_error(Some(id.clone()), -32600, "Duplicate request id")?;
+                    continue;
+                }
+                seen_requests.push(fingerprint);
+            } else {
+                // JSON-RPC notifications are valid input but never receive a response.
                 continue;
             }
             let method = msg.method.as_deref().expect("validated above");
@@ -1533,6 +1550,16 @@ impl McpServer {
             limit,
         };
 
+        if let Err(e) = self.security.validate_document_find_arguments(args) {
+            self.audit.record_tool(
+                "REJECT",
+                "reject",
+                "find_documents",
+                started.elapsed().as_millis() as u64,
+            )?;
+            return self.send_error(id, -32000, format!("Request rejected: {e}"));
+        }
+
         if let Err(e) = self.security.validate_document_find(&request) {
             self.audit.record_tool(
                 "REJECT",
@@ -1729,7 +1756,11 @@ impl McpServer {
         self.handle_document_value(
             id,
             "aggregate_documents",
-            |security| security.validate_document_aggregate(&request),
+            |security| {
+                security
+                    .validate_document_aggregate_arguments(args)
+                    .and_then(|()| security.validate_document_aggregate(&request))
+            },
             |sidecar| sidecar.aggregate_documents(&request),
         )
     }
@@ -4141,7 +4172,10 @@ impl McpServer {
         next_suggestion: &str,
     ) -> Result<()> {
         let boundary = format!("safeselect-untrusted-data-{}", uuid::Uuid::new_v4());
-        let framed_detail = format!("<{boundary}>\n{detail}\n</{boundary}>");
+        let framed_detail = format!(
+            "<{boundary}>\n{}\n</{boundary}>",
+            redact_error_detail(detail)
+        );
         let message = trusted_backend_error_message(trusted_message, next_suggestion);
         let resp = JsonRpcResponse {
             jsonrpc: "2.0",
@@ -4173,31 +4207,55 @@ fn trusted_backend_error_message(trusted_message: &str, next_suggestion: &str) -
     format!("{trusted_message} Next suggestion: {next_suggestion}")
 }
 
+fn redact_error_detail(detail: &str) -> String {
+    detail
+        .split_whitespace()
+        .map(|token| {
+            if let Some((prefix, _)) = token.split_once("password=") {
+                format!("{prefix}password=[redacted]")
+            } else {
+                token.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn error_next_suggestion(message: &str) -> &'static str {
     let lower = message.to_ascii_lowercase();
-    if lower.contains("startup")
-        || lower.contains("safe_select_sidecar_connection_failed")
-        || lower.contains("safeselect_sidecar_connection_failed")
-        || lower.contains("not read-only")
-        || lower.contains("security")
-    {
-        "Stop and report this security or startup failure to the user; do not retry or call reconnect."
-    } else if lower.contains("timeout") || lower.contains("timed out") {
-        "Call explain_documents for MongoDB or explain for SQL with the same namespace and predicates; then retry once with narrower predicates while preserving every safety restriction."
-    } else if lower.contains("unknown tool") {
-        "Call tools/list and choose an exact available tool name; do not repeat the unknown tool."
-    } else if lower.contains("method not found") {
-        "Use initialize, tools/list, or tools/call as defined by MCP; do not repeat the unknown method."
-    } else if lower.contains("server-side javascript") || lower.contains("javascript operator") {
-        "Keep the same database, collection, and safety limits; replace the JavaScript expression with declarative MQL operators, then retry that corrected request once. Never enable JavaScript."
-    } else if lower.contains("missing") || lower.contains("invalid") || lower.contains("required") {
-        "Use the exact database, collection, table, or field values from the preceding SafeSelect discovery response, correct only the reported argument, then retry once."
-    } else if lower.contains("connection closed") {
-        "Call check now; call reconnect once only if check reports a stale connection, otherwise report the connection failure."
-    } else {
-        "Stop and report this SafeSelect error to the user; no further tool call is safe until the user provides a changed request."
-    }
+    let rules: &[(&[&str], &str)] = &[
+        (&["startup"], SECURITY_ERROR_SUGGESTION),
+        (&["safe_select_sidecar_connection_failed"], SECURITY_ERROR_SUGGESTION),
+        (&["safeselect_sidecar_connection_failed"], SECURITY_ERROR_SUGGESTION),
+        (&["not read-only"], SECURITY_ERROR_SUGGESTION),
+        (&["security"], SECURITY_ERROR_SUGGESTION),
+        (&["timeout"], TIMEOUT_SUGGESTION),
+        (&["timed out"], TIMEOUT_SUGGESTION),
+        (&["unknown tool"], "Call tools/list and choose an exact available tool name; do not repeat the unknown tool."),
+        (&["method not found"], "Use initialize, tools/list, or tools/call as defined by MCP; do not repeat the unknown method."),
+        (&["server-side javascript"], JAVASCRIPT_SUGGESTION),
+        (&["javascript operator"], JAVASCRIPT_SUGGESTION),
+        (&["missing"], ARGUMENT_SUGGESTION),
+        (&["invalid"], ARGUMENT_SUGGESTION),
+        (&["required"], ARGUMENT_SUGGESTION),
+        (&["connection closed"], "Call check now; call reconnect once only if check reports a stale connection, otherwise report the connection failure."),
+    ];
+    rules.iter()
+        .find(|(terms, _)| terms.iter().any(|term| lower.contains(term)))
+        .map_or(
+            "Stop and report this SafeSelect error to the user; no further tool call is safe until the user provides a changed request.",
+            |(_, suggestion)| *suggestion,
+        )
 }
+
+const SECURITY_ERROR_SUGGESTION: &str =
+    "Stop and report this security or startup failure to the user; do not retry or call reconnect.";
+const TIMEOUT_SUGGESTION: &str =
+    "Call explain_documents for MongoDB or explain for SQL with the same namespace and predicates; then retry once with narrower predicates while preserving every safety restriction.";
+const JAVASCRIPT_SUGGESTION: &str =
+    "Keep the same database, collection, and safety limits; replace the JavaScript expression with declarative MQL operators, then retry that corrected request once. Never enable JavaScript.";
+const ARGUMENT_SUGGESTION: &str =
+    "Use the exact database, collection, table, or field values from the preceding SafeSelect discovery response, correct only the reported argument, then retry once.";
 
 fn split_error_message_and_suggestion(message: String) -> (String, String) {
     if let Some((trusted_message, next_suggestion)) = message.rsplit_once("Next suggestion: ") {
@@ -5135,47 +5193,46 @@ fn document_read_preference_status(uri: &str) -> Vec<String> {
 
 fn sql_query_error_message(message: &str) -> String {
     let lower = message.to_lowercase();
-    let suggestion = if lower.contains("column") && lower.contains("does not exist") {
-        " Next suggestion: call describe_table for each referenced target relation, then retry using only the returned column names and types."
-    } else if lower.contains("relation") && lower.contains("does not exist") {
-        " Next suggestion: call list_tables, then describe_table for an existing relation."
-    } else if lower.contains("statement timeout exceeded")
-        || lower.contains("canceling statement due to statement timeout")
-    {
-        " Next suggestion: do not retry unchanged or with a broader query. Preserve or narrow every selective predicate, especially time bounds; never remove one during recovery. Avoid leading-wildcard LIKE or ILIKE on large relations. Use a bounded discovery query to find exact values, then use equality or IN. For row retrieval, add or reduce LIMIT. LIMIT does not by itself bound work for DISTINCT, GROUP BY, COUNT, or ORDER BY, so narrow their input in WHERE. Then call the explain tool with analyze=false to inspect scan and index usage without executing the query; do not put EXPLAIN in select. Do not increase the timeout automatically."
-    } else if lower.contains("aggregate functions are not allowed in group by") {
-        " Next suggestion: remove aggregate expressions or their ordinal positions from GROUP BY; group only by non-aggregate columns, or omit GROUP BY for a single aggregate result."
-    } else if lower.contains("is an aggregate function") {
-        " Next suggestion: do not call pg_get_functiondef for aggregates. Use list_functions, which excludes pg_aggregate entries, or exclude them with NOT EXISTS (SELECT 1 FROM pg_aggregate WHERE aggfnoid = p.oid)."
-    } else if lower.contains("operator does not exist")
-        && (lower.contains("jsonb[]") || lower.contains("json[]"))
-    {
-        " Next suggestion: call describe_table and inspect udt_name. A value such as _jsonb identifies a JSONB array; use EXISTS with unnest(array_column), then apply JSON operators such as -> or ->> to each observed element. Never cast the array to text or use LIKE/ILIKE as a fallback."
-    } else if lower.contains("operator does not exist") && lower.contains("json") {
-        " Next suggestion: call describe_table for the target relation and compare data_type and udt_name before retrying with type-compatible operators. For json/jsonb values, use JSON operators such as -> or ->> against observed fields; do not cast blindly."
-    } else if lower.contains("operator does not exist") {
-        " Next suggestion: call describe_table for the target relation and compare data_type and udt_name before retrying with type-compatible operators; do not add casts unless the intended semantics require them."
-    } else {
-        ""
-    };
+    let rules: &[(fn(&str) -> bool, &str)] = &[
+        (|text| contains_all(text, &["column", "does not exist"]), " Next suggestion: call describe_table for each referenced target relation, then retry using only the returned column names and types."),
+        (|text| contains_all(text, &["relation", "does not exist"]), " Next suggestion: call list_tables, then describe_table for an existing relation."),
+        (|text| contains_any(text, &["statement timeout exceeded", "canceling statement due to statement timeout"]), " Next suggestion: do not retry unchanged or with a broader query. Preserve or narrow every selective predicate, especially time bounds; never remove one during recovery. Avoid leading-wildcard LIKE or ILIKE on large relations. Use a bounded discovery query to find exact values, then use equality or IN. For row retrieval, add or reduce LIMIT. LIMIT does not by itself bound work for DISTINCT, GROUP BY, COUNT, or ORDER BY, so narrow their input in WHERE. Then call the explain tool with analyze=false to inspect scan and index usage without executing the query; do not put EXPLAIN in select. Do not increase the timeout automatically."),
+        (|text| text.contains("aggregate functions are not allowed in group by"), " Next suggestion: remove aggregate expressions or their ordinal positions from GROUP BY; group only by non-aggregate columns, or omit GROUP BY for a single aggregate result."),
+        (|text| text.contains("is an aggregate function"), " Next suggestion: do not call pg_get_functiondef for aggregates. Use list_functions, which excludes pg_aggregate entries, or exclude them with NOT EXISTS (SELECT 1 FROM pg_aggregate WHERE aggfnoid = p.oid)."),
+        (|text| contains_all(text, &["operator does not exist"]) && contains_any(text, &["jsonb[]", "json[]"]), " Next suggestion: call describe_table and inspect udt_name. A value such as _jsonb identifies a JSONB array; use EXISTS with unnest(array_column), then apply JSON operators such as -> or ->> to each observed element. Never cast the array to text or use LIKE/ILIKE as a fallback."),
+        (|text| contains_all(text, &["operator does not exist", "json"]), " Next suggestion: call describe_table for the target relation and compare data_type and udt_name before retrying with type-compatible operators. For json/jsonb values, use JSON operators such as -> or ->> against observed fields; do not cast blindly."),
+        (|text| text.contains("operator does not exist"), " Next suggestion: call describe_table for the target relation and compare data_type and udt_name before retrying with type-compatible operators; do not add casts unless the intended semantics require them."),
+    ];
+    let suggestion = rules
+        .iter()
+        .find_map(|(matches, suggestion)| matches(&lower).then_some(*suggestion))
+        .unwrap_or("");
     format!("Query execution failed: {message}{suggestion}")
+}
+
+fn contains_all(message: &str, terms: &[&str]) -> bool {
+    terms.iter().all(|term| message.contains(term))
+}
+
+fn contains_any(message: &str, terms: &[&str]) -> bool {
+    terms.iter().any(|term| message.contains(term))
 }
 
 fn document_operation_error_message(operation: &str, message: &str) -> String {
     let lower = message.to_lowercase();
-    let field_error = (lower.contains("field") || lower.contains("path"))
-        && (lower.contains("unknown")
-            || lower.contains("not found")
-            || lower.contains("does not exist")
-            || lower.contains("unrecognized"));
-    let suggestion = if operation != "discover_document_schema" && field_error {
-        " Next suggestion: call discover_document_schema for the target collection, then retry using observed fields."
-    } else if is_recoverable_connection_error(message) {
-        " Next suggestion: call check, then reconnect once only if check reports a stale existing connection."
-    } else {
-        ""
+    let suggestion = match (operation == "discover_document_schema", is_unknown_document_field(&lower), is_recoverable_connection_error(message)) {
+        (false, true, _) => " Next suggestion: call discover_document_schema for the target collection, then retry using observed fields.",
+        (_, _, true) => " Next suggestion: call check, then reconnect once only if check reports a stale existing connection.",
+        _ => "",
     };
     format!("{operation} failed: {message}{suggestion}")
+}
+
+fn is_unknown_document_field(message: &str) -> bool {
+    (message.contains("field") || message.contains("path"))
+        && ["unknown", "not found", "does not exist", "unrecognized"]
+            .iter()
+            .any(|term| message.contains(term))
 }
 
 fn document_backend_error_next_suggestion(message: &str) -> &'static str {
@@ -5372,6 +5429,16 @@ mod tests {
 
     fn response_json(response: &JsonRpcResponse) -> serde_json::Value {
         serde_json::to_value(response).unwrap()
+    }
+
+    #[test]
+    fn redacts_driver_passwords_from_backend_error_details() {
+        let detail = redact_error_detail(
+            "jdbc:postgresql://db:5432/app password=super-secret SQLSTATE=08001",
+        );
+        assert!(!detail.contains("super-secret"));
+        assert!(detail.contains("password=[redacted]"));
+        assert!(detail.contains("SQLSTATE=08001"));
     }
 
     fn test_server(repo_root: &Path) -> McpServer {
