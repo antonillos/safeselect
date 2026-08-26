@@ -264,6 +264,20 @@ pub fn run() {
             &baseline,
         );
 
+        log_check("system catalogs remain denied without an explicit schema allowlist");
+        let project_path = repo_root.join(".safeselect/project.toml");
+        let project_config = std::fs::read_to_string(&project_path).unwrap();
+        let unrestricted_config = project_config.replace("allowed_schemas = [\"public\"]\n", "");
+        std::fs::write(&project_path, unrestricted_config).unwrap();
+        assert_rejected(
+            &repo_root,
+            &config_dir,
+            "direct pg_catalog access without allowlist",
+            "SELECT count(*) FROM pg_catalog.pg_inherits",
+            &baseline,
+        );
+        std::fs::write(project_path, project_config).unwrap();
+
         log_check("baseline remained unchanged after all rejections");
         assert_eq!(database_state(), baseline);
     });
