@@ -1,0 +1,16 @@
+name: Real Integration Gate
+
+on:
+  pull_request:
+    types:
+      - labeled
+
+permissions:
+  contents: read
+
+jobs:
+  real-integration:
+    if: github.event.label.name == 'safe-to-merge'
+    uses: ./.github/workflows/integration-tests.yml
+    with:
+      target_ref: ${{ github.event.pull_request.head.sha }}

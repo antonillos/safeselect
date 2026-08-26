@@ -70,7 +70,7 @@ jobs:
         run: cargo build --release
 
       - name: Download PostgreSQL JDBC driver
-        run: cargo run -- driver download --vendor postgresql
+        run: ./target/release/safeselect driver download --vendor postgresql
 
       - name: Run security tests
         env:
@@ -86,7 +86,7 @@ jobs:
           SAFESELECT_MONGODB_DOCKER_CONTAINER: safeselect-mongodb-1
         run: |
           echo "=== Running Security Tests ==="
-          cargo test --test security -- --nocapture
+          cargo test --release --test security -- --nocapture
 
       - name: Run smoke tests
         env:
@@ -97,7 +97,7 @@ jobs:
           SAFESELECT_SECURITY_ADMIN_PASSWORD: testpass
         run: |
           echo "=== Running Smoke Tests ==="
-          cargo test --test smoke_suite postgres_smoke_errors_and_timeouts -- --nocapture
+          cargo test --release --test smoke_suite postgres_smoke_errors_and_timeouts -- --nocapture
 
       - name: Run reconnect test
         env:
@@ -109,7 +109,7 @@ jobs:
           SAFESELECT_SECURITY_ADMIN_PASSWORD: testpass
         run: |
           echo "=== Running Reconnect Test ==="
-          cargo test --test smoke_suite postgres_reconnect_after_docker_restart -- --nocapture
+          cargo test --release --test smoke_suite postgres_reconnect_after_docker_restart -- --nocapture
 
       - name: Upload test logs
         if: always()
