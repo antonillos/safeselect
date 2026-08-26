@@ -11,6 +11,12 @@ on:
       - develop
       - main
   workflow_dispatch:
+    inputs:
+      badge_only:
+        description: Refresh the CRAP badge without running the full verification suite
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -24,6 +30,7 @@ env:
 jobs:
   unit:
     name: Unit & Smoke
+    if: inputs.badge_only != true
     needs: crap-report
     runs-on: ubuntu-latest
     steps:

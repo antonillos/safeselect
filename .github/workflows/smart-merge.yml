@@ -708,7 +708,7 @@ jobs:
             }
 
             // GITHUB_TOKEN merges do not trigger downstream push workflows.
-            // Dispatch Verify explicitly so develop publishes the latest CRAP badge.
+            // Refresh only the CRAP badge instead of repeating the full verification suite.
             if (base === "develop") {
               try {
                 await github.rest.actions.createWorkflowDispatch({
@@ -716,14 +716,15 @@ jobs:
                   repo,
                   workflow_id: "verify.yml",
                   ref: "develop",
+                  inputs: { badge_only: "true" },
                   request: githubApiRequest,
                 });
-                await comment("📊 Verify dispatched on `develop` to refresh the CRAP badge.");
+                await comment("📊 CRAP badge refresh dispatched on `develop`.");
               } catch (error) {
-                core.warning(`Could not dispatch Verify on develop: ${error.message}`);
+                core.warning(`Could not dispatch CRAP badge refresh on develop: ${error.message}`);
                 await comment(
-                  "⚠️ Merge completed, but Verify could not be dispatched on `develop`; " +
-                  "run the Verify workflow manually to refresh the CRAP badge."
+                  "⚠️ Merge completed, but the CRAP badge refresh could not be dispatched on `develop`; " +
+                  "run Verify manually with the badge_only input."
                 );
               }
             }
