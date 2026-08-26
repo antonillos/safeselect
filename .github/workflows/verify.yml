@@ -20,6 +20,8 @@ on:
 
 permissions:
   contents: read
+  issues: write
+  pull-requests: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -28,13 +30,99 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  unit:
-    name: Unit & Smoke
-    if: inputs.badge_only != true
-    needs: crap-report
+  classify:
+    name: Classify changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      profile: ${{ steps.policy.outputs.profile }}
+      docs: ${{ steps.policy.outputs.docs }}
+      crap: ${{ steps.policy.outputs.crap }}
+      unit: ${{ steps.policy.outputs.unit }}
+      postgres: ${{ steps.policy.outputs.postgres }}
+      mongodb: ${{ steps.policy.outputs.mongodb }}
+      security: ${{ steps.policy.outputs.security }}
+      real_integration: ${{ steps.policy.outputs.real_integration }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: policy
+        name: Select validation profile
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const { classifyPaths, fullPolicy } = require("./.github/scripts/ci-path-policy.js");
+            const pull = context.payload.pull_request;
+            let policy;
+            if (pull) {
+              const files = await github.paginate(github.rest.pulls.listFiles, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pull.number,
+                per_page: 100,
+              });
+              policy = classifyPaths(files.map((file) => file.filename));
+              const label = "safe-to-merge";
+              const labels = pull.labels.map((item) => item.name);
+              if (!pull.head.repo.fork) {
+                if (policy.realIntegration && !labels.includes(label)) {
+                  await github.rest.issues.addLabels({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: pull.number,
+                    labels: [label],
+                  });
+                } else if (!policy.realIntegration && labels.includes(label)) {
+                  await github.rest.issues.removeLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: pull.number,
+                    name: label,
+                  });
+                }
+              } else if (policy.realIntegration) {
+                core.warning("Fork PR requires real integration but cannot be labelled with the read-only token.");
+              }
+            } else {
+              policy = fullPolicy("full");
+              policy.realIntegration = false;
+            }
+            for (const [name, value] of Object.entries({
+              profile: policy.profile,
+              docs: policy.docs,
+              crap: policy.crap,
+              unit: policy.unit,
+              postgres: policy.postgres,
+              mongodb: policy.mongodb,
+              security: policy.security,
+              real_integration: policy.realIntegration,
+            })) core.setOutput(name, String(value));
+            await core.summary.addHeading("Validation profile").addTable([
+              [{data: "Profile", header: true}, {data: policy.profile}],
+              [{data: "Jobs", header: true}, {data: Object.entries(policy)
+                .filter(([name, value]) => name !== "profile" && value)
+                .map(([name]) => name).join(", ") || "none"}],
+            ]).write();
+
+  docs:
+    name: Documentation
+    needs: classify
+    if: inputs.badge_only != true && needs.classify.outputs.docs == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - name: Validate Markdown and internal links
+        run: python3 tools/ci/validate_docs.py
+
+  unit:
+    name: Unit & Smoke
+    if: >-
+      always() && inputs.badge_only != true &&
+      needs.classify.outputs.unit == 'true' && needs.crap-report.result == 'success'
+    needs: [classify, crap-report]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Test CI path policy
+        run: node --test .github/scripts/ci-path-policy.test.js
       - name: Install Rust
         run: rustup toolchain install stable --profile minimal
       - name: Install Java
@@ -80,7 +168,10 @@ jobs:
 
   integration:
     name: Integration (PostgreSQL)
-    needs: unit
+    needs: [classify, unit]
+    if: >-
+      always() && inputs.badge_only != true &&
+      needs.classify.outputs.postgres == 'true' && needs.unit.result == 'success'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -122,7 +213,10 @@ jobs:
 
   integration-mongodb:
     name: Integration (MongoDB)
-    needs: unit
+    needs: [classify, unit]
+    if: >-
+      always() && inputs.badge_only != true &&
+      needs.classify.outputs.mongodb == 'true' && needs.unit.result == 'success'
     runs-on: ubuntu-latest
     services:
       mongodb:
@@ -166,7 +260,10 @@ jobs:
 
   security:
     name: Security & Licenses
-    needs: unit
+    needs: [classify, unit]
+    if: >-
+      always() && inputs.badge_only != true &&
+      needs.classify.outputs.security == 'true' && needs.unit.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -186,6 +283,8 @@ jobs:
 
   crap-report:
     name: CRAP (ratchet <=80)
+    needs: classify
+    if: inputs.badge_only == true || needs.classify.outputs.crap == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -261,3 +360,54 @@ jobs:
       - name: Deploy CRAP badge
         id: deployment
         uses: actions/deploy-pages@v5
+
+  real-integration:
+    name: Real Integration Tests
+    needs: classify
+    if: inputs.badge_only != true && needs.classify.outputs.real_integration == 'true'
+    uses: ./.github/workflows/integration-tests.yml
+    with:
+      target_ref: ${{ github.event.pull_request.head.sha }}
+
+  verify:
+    name: Verify
+    needs: [classify, docs, crap-report, unit, integration, integration-mongodb, security, real-integration]
+    if: always() && inputs.badge_only != true
+    runs-on: ubuntu-latest
+    env:
+      DOCS_REQUIRED: ${{ needs.classify.outputs.docs }}
+      CRAP_REQUIRED: ${{ needs.classify.outputs.crap }}
+      UNIT_REQUIRED: ${{ needs.classify.outputs.unit }}
+      POSTGRES_REQUIRED: ${{ needs.classify.outputs.postgres }}
+      MONGODB_REQUIRED: ${{ needs.classify.outputs.mongodb }}
+      SECURITY_REQUIRED: ${{ needs.classify.outputs.security }}
+      REAL_INTEGRATION_REQUIRED: ${{ needs.classify.outputs.real_integration }}
+      DOCS_RESULT: ${{ needs.docs.result }}
+      CRAP_RESULT: ${{ needs.crap-report.result }}
+      UNIT_RESULT: ${{ needs.unit.result }}
+      POSTGRES_RESULT: ${{ needs.integration.result }}
+      MONGODB_RESULT: ${{ needs.integration-mongodb.result }}
+      SECURITY_RESULT: ${{ needs.security.result }}
+      REAL_INTEGRATION_RESULT: ${{ needs.real-integration.result }}
+    steps:
+      - name: Enforce selected verification jobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          failed=0
+          check() {
+            local name="$1" required="$2" result="$3"
+            if [[ "$required" == "true" && "$result" != "success" ]]; then
+              echo "::error title=Required validation failed::$name concluded $result"
+              failed=1
+            fi
+            printf '%-24s required=%-5s result=%s\n' "$name" "$required" "$result"
+          }
+          check Documentation "$DOCS_REQUIRED" "$DOCS_RESULT"
+          check CRAP "$CRAP_REQUIRED" "$CRAP_RESULT"
+          check 'Unit & Smoke' "$UNIT_REQUIRED" "$UNIT_RESULT"
+          check 'Integration (PostgreSQL)' "$POSTGRES_REQUIRED" "$POSTGRES_RESULT"
+          check 'Integration (MongoDB)' "$MONGODB_REQUIRED" "$MONGODB_RESULT"
+          check 'Security & Licenses' "$SECURITY_REQUIRED" "$SECURITY_RESULT"
+          check 'Real Integration Tests' "$REAL_INTEGRATION_REQUIRED" "$REAL_INTEGRATION_RESULT"
+          exit "$failed"
