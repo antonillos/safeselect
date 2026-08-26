@@ -2554,19 +2554,20 @@ impl McpServer {
         sql: &str,
         next_suggestion: &str,
     ) -> Result<()> {
-        if let Err(error) = self.security.validate_system(sql) {
-            self.audit.record("REJECT", "reject", sql)?;
+        let sql = format!("{sql} LIMIT {}", self.security.limits().max_rows);
+        if let Err(error) = self.security.validate_system(&sql) {
+            self.audit.record("REJECT", "reject", &sql)?;
             let _ = self.send_error(id, -32000, format!("Query rejected: {error}"));
             self.fail_closed("Security violation");
             return Ok(());
         }
         let start = std::time::Instant::now();
-        match self.execute_with_reconnect(sql) {
+        match self.execute_with_reconnect(&sql) {
             Ok(result) => {
                 self.audit.record_with_details(
                     "PASS",
                     "allow",
-                    sql,
+                    &sql,
                     Some(AuditDetails {
                         tool: tool.into(),
                         elapsed_ms: start.elapsed().as_millis() as u64,
@@ -2581,7 +2582,7 @@ impl McpServer {
                 self.audit.record_with_details(
                     "JDBC_ERROR",
                     "error",
-                    sql,
+                    &sql,
                     Some(AuditDetails {
                         tool: tool.into(),
                         elapsed_ms: start.elapsed().as_millis() as u64,
