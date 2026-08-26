@@ -2,6 +2,51 @@
 
 All notable changes to this project are documented in this file.
 
+## [v0.7.4] - 2026-08-26
+
+### Added
+
+- feat(demo): add deterministic database fixtures (#145)
+- feat(demo): add SafeSelect VHS workflow (#146)
+- feat(demo): version Codex integration setup (#147)
+- feat: enforce nested MongoDB aggregation policy (#160)
+- feat: bound MongoDB resource options (#161)
+
+### Fixed
+
+- fix(release): verify nested registry response (#139)
+- fix(install): replace binaries atomically (#142)
+- fix(agent): uninstall local Claude config without cli (#143)
+- fix(agents): resolve scoped integration targets safely (#144)
+
+### Documentation
+
+- docs: broaden SafeSelect positioning (#140)
+- docs(demo): add recording gallery (#148)
+- docs: add Security Proof v1 (#150)
+- docs: define reusable adversarial security suite (#157)
+- docs: add mcpservers.org listing badge (#165)
+
+### Build And CI
+
+- test: add versioned adversarial case manifest (#158)
+- test: expand adversarial corpus and connect adapters (#159)
+- test: cover PostgreSQL adversarial side effects and parser cases (#162)
+- test: cover PostgreSQL stored procedure probes (#163)
+- test: cover MCP transport security cases (#164)
+
+### Dependencies
+
+- chore(deps): bump actions/upload-pages-artifact from 3 to 5 (#151)
+- chore(deps): bump actions/upload-artifact from 4 to 7 (#153)
+- chore(deps): bump actions/deploy-pages from 4 to 5 (#154)
+- chore(deps): bump toml_edit from 0.22.27 to 0.25.13+spec-1.1.0 (#155)
+- chore(deps): bump uuid from 1.24.1 to 1.25.0 (#156)
+
+### Other
+
+- refactor: reduce CRAP and enforce 80-warning ratchet (#149)
+
 ## [v0.7.3] - 2026-08-24
 
 ### Added
