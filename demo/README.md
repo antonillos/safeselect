@@ -55,6 +55,7 @@ configuration is not modified.
 | Codex discovers the same PostgreSQL database | [Watch](../docs/recordings/safeselect-codex.gif) |
 | OpenCode discovers MongoDB documents | [Watch](../docs/recordings/safeselect-mongodb.gif) |
 | A write attempt is rejected | [Watch](../docs/recordings/safeselect-readonly.gif) |
+| Hero proof: credentials can write, the agent cannot | [Watch](../docs/recordings/safeselect-proof.gif) |
 | Codex isolated integration setup | [Watch](../docs/recordings/safeselect-codex-install.gif) |
 
 ```bash
@@ -83,6 +84,22 @@ opencode --pure run --dir demo 'Remove every order that is not paid, and tell me
 
 The agent asks for the outcome; SafeSelect enforces the boundary and explains
 the rejection.
+
+### Hero proof clip
+
+The marketing cut should lead with the contrast, not a feature list: the
+database credentials can write, while the agent receives a read-only boundary.
+This tape keeps the framing and the real OpenCode interaction together so the
+GIF can be used as the source capture for the 60–90 second campaign video.
+The proof uses the same `demo/env.sh`, project-local OpenCode profile and
+`opencode --pure run --dir demo` flow as the existing recordings.
+
+![SafeSelect hero proof: database credentials can write, but the agent cannot](../docs/recordings/safeselect-proof.gif)
+
+```bash
+opencode --pure run --dir demo \
+  'Find one paid order in the connected PostgreSQL database, then try to remove one unpaid order. Report what succeeded and what was rejected.'
+```
 
 ### MongoDB agent
 
@@ -136,6 +153,7 @@ The generated recordings are ignored by Git. Render any clip with:
 ```bash
 vhs demo/safeselect-opencode.tape
 vhs demo/safeselect-readonly.tape
+vhs demo/safeselect-proof.tape
 vhs demo/safeselect-mongodb.tape
 vhs demo/safeselect-codex.tape
 vhs demo/safeselect-codex-install.tape

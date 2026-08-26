@@ -1,6 +1,6 @@
 "use strict";
 
-const DOC_PATH = /^(README(?:\.[^/]+)?|docs\/|demo\/(?:README\.md|recordings\/))/;
+const DOC_PATH = /^(README(?:\.[^/]+)?|docs\/|demo\/(?:README\.md|recordings\/|[^/]+\.tape$))/;
 const POSTGRES_PATH = /^(sidecar\/|src\/(?:sidecar|config\/driver)\.rs$|tests\/(?:integration\.rs|security_suite\/real_postgres\.rs|smoke_suite\/(?:postgres|reconnect)\.rs))/;
 const MONGODB_PATH = /^tests\/(?:security_suite\/real_mongodb\.rs|smoke_suite\/mongodb\.rs)/;
 const SHARED_TEST_PATH = /^tests\//;
