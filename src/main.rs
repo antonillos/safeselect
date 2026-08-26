@@ -11,6 +11,7 @@ mod dbeaver;
 mod diagnostics;
 mod error;
 mod mcp;
+mod posture;
 mod security;
 mod sidecar;
 
@@ -103,6 +104,16 @@ fn run(cli: Cli) -> Result<()> {
         } => {
             let dir = resolve_project_dir(&loader, project)?;
             cmd_check(&loader, &dir, &environment, false)
+        }
+        Command::Posture {
+            project,
+            environment,
+            format,
+            strict,
+            acknowledge,
+        } => {
+            let dir = resolve_project_dir(&loader, project)?;
+            cmd_posture(&loader, &dir, &environment, &format, strict, acknowledge)
         }
         Command::Query {
             project,
@@ -1243,43 +1254,40 @@ fn load_reusable_ssh_configs(
 
     for entry in entries {
         let entry = entry?;
-        let path = entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) != Some("toml") {
-            continue;
+        if let Some(item) = reusable_ssh_entry(&project, &entry.path(), current_env_name) {
+            reusable.push(item);
         }
-
-        let Some(name) = path.file_stem().and_then(|stem| stem.to_str()) else {
-            continue;
-        };
-        if name == current_env_name {
-            continue;
-        }
-
-        let Ok(content) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        let Ok(mut environment) = toml::from_str::<config::EnvironmentConfig>(&content) else {
-            continue;
-        };
-        if config::merge_project_ssh(&project, &mut environment).is_err() {
-            continue;
-        }
-        let Some(ssh) = environment.ssh else {
-            continue;
-        };
-        if !ssh.enabled {
-            continue;
-        }
-        if ssh.host.as_deref().is_none_or(str::is_empty) {
-            continue;
-        }
-
-        let bastion_name = ssh.bastion.clone().unwrap_or_else(|| name.to_string());
-        reusable.push((bastion_name, ssh));
     }
 
     reusable.sort_by(|left, right| left.0.cmp(&right.0));
     Ok(reusable)
+}
+
+fn reusable_ssh_entry(
+    project: &config::ProjectConfig,
+    path: &Path,
+    current_env_name: &str,
+) -> Option<(String, config::SshConfig)> {
+    let name = reusable_environment_name(path, current_env_name)?;
+    let ssh = reusable_ssh_config(project, path)?;
+    let bastion_name = ssh.bastion.clone().unwrap_or_else(|| name.clone());
+    Some((bastion_name, ssh))
+}
+
+fn reusable_environment_name(path: &Path, current: &str) -> Option<String> {
+    (path.extension().and_then(|ext| ext.to_str()) == Some("toml"))
+        .then(|| path.file_stem().and_then(|stem| stem.to_str()))
+        .flatten()
+        .filter(|name| *name != current)
+        .map(str::to_owned)
+}
+
+fn reusable_ssh_config(project: &config::ProjectConfig, path: &Path) -> Option<config::SshConfig> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let mut environment = toml::from_str::<config::EnvironmentConfig>(&content).ok()?;
+    config::merge_project_ssh(project, &mut environment).ok()?;
+    let ssh = environment.ssh?;
+    (ssh.enabled && ssh.host.as_deref().is_some_and(|host| !host.is_empty())).then_some(ssh)
 }
 
 fn collect_reusable_ssh_configs(
@@ -3912,6 +3920,42 @@ fn cmd_query(
     Ok(())
 }
 
+fn cmd_posture(
+    loader: &ConfigLoader,
+    repo_root: &Path,
+    environment: &str,
+    format: &str,
+    strict: bool,
+    acknowledge: bool,
+) -> Result<()> {
+    let resolved = loader.resolve_local(repo_root, environment)?;
+    let report = posture::inspect(&resolved, loader.config_dir())?;
+    if acknowledge && report.status == "warning" {
+        posture::acknowledge(loader.config_dir(), &report.fingerprint)?;
+    }
+    if format == "json" {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report)
+                .map_err(|e| SafeselectError::Other(e.to_string()))?
+        );
+    } else if format == "text" {
+        println!("PostgreSQL posture: {}", report.status);
+        println!("Role: {}  Database: {}", report.role, report.database);
+        for finding in &report.findings {
+            println!("- [{}] {}", finding.severity, finding.message);
+        }
+    } else {
+        return Err(SafeselectError::Other(
+            "--format must be text or json".into(),
+        ));
+    }
+    if strict && report.status == "unsafe" {
+        return Err(SafeselectError::Other("security posture is unsafe".into()));
+    }
+    Ok(())
+}
+
 fn cmd_connectivity_action(
     loader: &ConfigLoader,
     repo_root: &std::path::Path,
@@ -5193,5 +5237,13 @@ username = "usr_app"
         let root =
             std::env::temp_dir().join(format!("safeselect-missing-{}", uuid::Uuid::new_v4()));
         assert!(list_environment_names(&root).is_err());
+    }
+
+    #[test]
+    fn reusable_ssh_entry_skips_non_environment_files() {
+        let project = config::ProjectConfig::default();
+        assert!(reusable_ssh_entry(&project, Path::new("notes.txt"), "dev").is_none());
+        assert!(reusable_ssh_entry(&project, Path::new("dev.toml"), "dev").is_none());
+        assert!(reusable_ssh_entry(&project, Path::new("missing.toml"), "dev").is_none());
     }
 }

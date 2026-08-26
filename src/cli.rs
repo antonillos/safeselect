@@ -86,6 +86,19 @@ pub enum Command {
         #[arg(long)]
         environment: String,
     },
+    /// Inspect the effective PostgreSQL security posture
+    Posture {
+        #[arg(long)]
+        project: Option<PathBuf>,
+        #[arg(long)]
+        environment: String,
+        #[arg(long, default_value = "text")]
+        format: String,
+        #[arg(long, default_value_t = false)]
+        strict: bool,
+        #[arg(long, default_value_t = false)]
+        acknowledge: bool,
+    },
     /// Execute a SQL query and display results
     Query {
         /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
