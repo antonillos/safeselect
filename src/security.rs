@@ -54,6 +54,11 @@ impl SecurityEngine {
     }
 
     pub fn validate_relation_access(&self, schema: &str, relation: &str) -> Result<()> {
+        if is_system_schema(schema) {
+            return Err(SafeselectError::QueryRejected(format!(
+                "Schema '{schema}' is reserved for PostgreSQL system catalogs"
+            )));
+        }
         if !self.policy.allowed_schemas.is_empty()
             && !self
                 .policy
@@ -609,6 +614,7 @@ impl SecurityEngine {
         if self.policy.require_single_statement {
             self.check_single_statement(query)?;
         }
+        self.check_system_schema_references(query)?;
         if !self.policy.allowed_schemas.is_empty() {
             self.check_allowed_schemas(query)?;
         }
@@ -874,6 +880,19 @@ impl SecurityEngine {
         Ok(())
     }
 
+    fn check_system_schema_references(&self, sql: &str) -> Result<()> {
+        let sql_lower = sql.to_lowercase();
+        if ["pg_catalog.", "information_schema.", "pg_toast."]
+            .iter()
+            .any(|schema| sql_lower.contains(schema))
+        {
+            return Err(SafeselectError::QueryRejected(
+                "Query references a PostgreSQL system catalog schema".into(),
+            ));
+        }
+        Ok(())
+    }
+
     fn check_denied_relations(&self, sql: &str) -> Result<()> {
         let sql_lower = sql.to_lowercase();
         for relation in &self.policy.denied_relations {
@@ -954,6 +973,14 @@ impl SecurityEngine {
         }
         Ok(())
     }
+}
+
+fn is_system_schema(schema: &str) -> bool {
+    let lower = schema.to_ascii_lowercase();
+    lower == "pg_catalog"
+        || lower == "information_schema"
+        || lower == "pg_toast"
+        || lower.starts_with("pg_")
 }
 
 fn has_schema_reference(sql_lower: &str, allowed_patterns: &[String]) -> bool {
@@ -1822,6 +1849,34 @@ mod tests {
         };
         let engine = SecurityEngine::new(policy, LimitsConfig::default());
         assert!(engine.validate("SELECT * FROM public.users").is_ok());
+    }
+
+    #[test]
+    fn system_catalogs_are_denied_even_without_an_allowlist() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        assert!(engine
+            .validate_relation_access("pg_catalog", "pg_inherits")
+            .is_err());
+        assert!(engine
+            .validate("SELECT * FROM pg_catalog.pg_inherits")
+            .is_err());
+        assert!(engine
+            .validate("SELECT * FROM information_schema.tables")
+            .is_err());
+        assert!(engine
+            .validate_system("SELECT * FROM information_schema.tables")
+            .is_ok());
+    }
+
+    #[test]
+    fn system_schema_prefixes_are_denied_for_exact_relations() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        for schema in ["pg_toast", "pg_temp_3", "PG_CATALOG"] {
+            assert!(
+                engine.validate_relation_access(schema, "relation").is_err(),
+                "system schema {schema} must be denied"
+            );
+        }
     }
 
     #[test]
