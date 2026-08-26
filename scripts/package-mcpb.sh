@@ -58,6 +58,8 @@ cleanup() { rm -rf "$work_dir"; }
 trap cleanup EXIT
 
 mkdir -p "$work_dir/server" "$(dirname "$output")"
+output_dir="$(CDPATH= cd -- "$(dirname "$output")" && pwd)"
+output="$output_dir/$(basename "$output")"
 cp "$binary" "$work_dir/server/safeselect"
 chmod 0755 "$work_dir/server/safeselect"
 sed -e "s/__VERSION__/$version/g" -e "s/__PLATFORM__/$platform/g" "$template" > "$work_dir/manifest.json"
