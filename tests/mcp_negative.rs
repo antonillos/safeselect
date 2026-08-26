@@ -12,8 +12,10 @@ struct McpHarness {
 
 impl McpHarness {
     fn start() -> (Self, PathBuf) {
-        let tmp =
-            std::env::temp_dir().join(format!("safeselect-mcp-negative-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!(
+            "safeselect-mcp-negative-{}",
+            uuid::Uuid::new_v4()
+        ));
         let _ = std::fs::remove_dir_all(&tmp);
         let repo_root = tmp.join("repo");
         let safeselect_dir = repo_root.join(".safeselect");
@@ -123,6 +125,11 @@ sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
             panic!("MCP server closed stdout before responding\nstderr:\n{stderr}");
         }
         serde_json::from_str(&line).expect("stdout must contain JSON-RPC only")
+    }
+
+    fn send_without_response(&mut self, request: &str) {
+        writeln!(self.stdin, "{request}").unwrap();
+        self.stdin.flush().unwrap();
     }
 
     fn finish(mut self) -> String {
@@ -250,5 +257,33 @@ fn mcp_negative_validation_preserves_jsonrpc_and_recovers_until_eof() {
         !stderr.contains(secret),
         "stderr leaked unknown request payload: {stderr}"
     );
+    let _ = std::fs::remove_dir_all(tmp);
+}
+
+#[test]
+fn mcp_manifest_protocol_cases_are_enforced() {
+    let (mut mcp, tmp) = McpHarness::start();
+
+    let first = mcp.send(&serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 100,
+        "method": "ping"
+    }));
+    assert_error(&first, serde_json::json!(100), -32601);
+
+    let duplicate = mcp.send(&serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 100,
+        "method": "ping"
+    }));
+    assert_error(&duplicate, serde_json::json!(100), -32600);
+    assert!(duplicate["error"]["message"] == "Duplicate request id");
+
+    mcp.send_without_response("{\"jsonrpc\":\"2.0\",\"method\":\"tools/list\"}");
+    let crlf = mcp.send_raw("{\"jsonrpc\":\"2.0\",\"id\":101,\"method\":\"ping\"}\r");
+    assert_error(&crlf, serde_json::json!(101), -32601);
+
+    let stderr = mcp.finish();
+    assert!(!stderr.contains("super-secret"));
     let _ = std::fs::remove_dir_all(tmp);
 }

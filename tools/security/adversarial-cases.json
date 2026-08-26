@@ -414,7 +414,7 @@
       "expected_decision": "reject",
       "expected_state_unchanged": true,
       "controls": ["json_rpc_id_policy"],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "id": "mcp.notification-without-id",
@@ -424,7 +424,7 @@
       "expected_decision": "allow",
       "expected_state_unchanged": true,
       "controls": ["json_rpc_notification_policy"],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "id": "mcp.crlf-framing",
@@ -434,7 +434,7 @@
       "expected_decision": "allow",
       "expected_state_unchanged": true,
       "controls": ["json_rpc_framing"],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "id": "mcp.truncated-sidecar-response",
@@ -444,7 +444,7 @@
       "expected_decision": "reject",
       "expected_state_unchanged": true,
       "controls": ["sidecar_fail_closed"],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "id": "mcp.driver-error-secret-redaction",
@@ -454,7 +454,7 @@
       "expected_decision": "reject",
       "expected_state_unchanged": true,
       "controls": ["error_redaction"],
-      "status": "planned"
+      "status": "implemented"
     }
   ]
 }
