@@ -7,7 +7,7 @@ use crate::backend::{
     DocumentFixtureRequest, DocumentSchemaRequest,
 };
 use crate::compose;
-use crate::config::{ConfigLoader, EnvironmentConfig, ProjectConfig};
+use crate::config::{ConfigLoader, DriverConfig, EnvironmentConfig, ProjectConfig, ResolvedConfig};
 use crate::diagnostics::{self, DiagnosticCode, DiagnosticStatus};
 use crate::error::{Result, SafeselectError};
 use crate::security::SecurityEngine;
@@ -225,6 +225,9 @@ pub struct McpServer {
     config_dir: PathBuf,
     verbose_sidecar: bool,
     backend: BackendDescriptor,
+    posture_project: ProjectConfig,
+    posture_environment: EnvironmentConfig,
+    posture_ready: bool,
 }
 
 impl McpServer {
@@ -269,6 +272,9 @@ impl McpServer {
             config_dir: config_dir.to_path_buf(),
             verbose_sidecar: false,
             backend,
+            posture_project: project_config,
+            posture_environment: env_config,
+            posture_ready: false,
         })
     }
 
@@ -438,6 +444,10 @@ impl McpServer {
 
     fn handle_tools_list(&mut self, msg: &JsonRpcMessage) -> Result<()> {
         let mut tools = vec![ToolDefinition {
+            name: "security_posture".into(),
+            description: self.tool_description("inspect PostgreSQL security posture before any discovery or query; warning findings require explicit user acknowledgement"),
+            input_schema: serde_json::json!({"type":"object","properties":{"acknowledge":{"type":"boolean"}},"additionalProperties":false}),
+        }, ToolDefinition {
             name: "database_info".into(),
             description: self.tool_description(
                 "show active database backend and capabilities; if the user only asked about available capabilities, report them and stop",
@@ -1253,7 +1263,32 @@ impl McpServer {
             .cloned()
             .unwrap_or(serde_json::json!({}));
 
+        if requires_posture(tool_name) && !self.posture_ready {
+            if tool_name == "select"
+                && args
+                    .get("sql")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|sql| sql.contains(';'))
+            {
+                let sql = args.get("sql").and_then(|v| v.as_str()).unwrap_or_default();
+                self.audit.record("REJECT", "reject", sql)?;
+                self.send_error(
+                    msg.id.clone(),
+                    -32000,
+                    "Query rejected by SafeSelect security policy.",
+                )?;
+                self.fail_closed("query rejected before posture preflight");
+                return Ok(());
+            }
+            return self.send_error(
+                msg.id.clone(),
+                -32001,
+                "Run security_posture first; acknowledge warnings only after explicit user approval.",
+            );
+        }
+
         match tool_name {
+            "security_posture" => self.handle_security_posture(msg.id.clone(), &args),
             "database_info" => self.handle_database_info(msg.id.clone()),
             "audit_status" => self.handle_audit_status(msg.id.clone(), &args),
             "audit_recent" => self.handle_audit_recent(msg.id.clone(), &args),
@@ -1320,6 +1355,71 @@ impl McpServer {
             "reconnect" => self.handle_reconnect(msg.id.clone()),
             _ => self.send_error(msg.id.clone(), -32602, format!("Unknown tool: {tool_name}")),
         }
+    }
+
+    fn handle_security_posture(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        if !self.is_postgres() {
+            return self.send_error(
+                id,
+                -32601,
+                "security_posture is currently available only for PostgreSQL",
+            );
+        }
+        self.run_security_posture(id, args)
+    }
+
+    fn run_security_posture(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        let driver = DriverConfig {
+            version: 1,
+            vendor: "postgresql".into(),
+            path: self.driver_path.clone(),
+            class: self.driver_class.clone(),
+            sha256: String::new(),
+        };
+        let resolved = ResolvedConfig {
+            project: self.posture_project.clone(),
+            environment: self.posture_environment.clone(),
+            driver: Some(driver),
+            password: self.db_password.clone(),
+            repo_root: self.repo_root.clone(),
+        };
+        let mut report = crate::posture::inspect(&resolved, &self.config_dir)?;
+        Self::acknowledge_posture(&mut report, args, &self.config_dir)?;
+        self.posture_ready = matches!(report.status, "safe" | "accepted");
+        let payload =
+            serde_json::to_string(&report).map_err(|e| SafeselectError::Other(e.to_string()))?;
+        self.write_response(&trusted_tool_response(
+            id,
+            "ok",
+            payload,
+            "Use security_posture before discovery or queries; acknowledge warnings only after explicit user approval.",
+        ))
+    }
+
+    fn acknowledge_posture(
+        report: &mut crate::posture::Report,
+        args: &serde_json::Value,
+        dir: &Path,
+    ) -> Result<()> {
+        if args
+            .get("acknowledge")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+            && report.status == "warning"
+        {
+            crate::posture::acknowledge(dir, &report.fingerprint)?;
+            report.acknowledged = true;
+            report.status = "accepted";
+        }
+        Ok(())
     }
 
     fn handle_audit_status(
@@ -2687,6 +2787,7 @@ impl McpServer {
     }
 
     fn handle_connect(&mut self, id: Option<serde_json::Value>) -> Result<()> {
+        self.posture_ready = false;
         if let Err(e) = self.ensure_ssh_ready_for_query().map(|_| ()) {
             return self.send_error(id, -32000, format!("SSH tunnel is not ready: {e}"));
         }
@@ -3971,6 +4072,7 @@ impl McpServer {
     }
 
     fn handle_reconnect(&mut self, id: Option<serde_json::Value>) -> Result<()> {
+        self.posture_ready = false;
         let start = std::time::Instant::now();
         tracing::info!("Reconnect started");
 
@@ -4927,6 +5029,33 @@ fn is_valid_identifier(s: &str) -> bool {
         .all(|b| b.is_ascii_alphanumeric() || *b == b'_')
 }
 
+fn requires_posture(name: &str) -> bool {
+    matches!(
+        name,
+        "select"
+            | "list_tables"
+            | "describe_table"
+            | "list_table_indexes"
+            | "get_database_stats"
+            | "get_table_stats"
+            | "list_functions"
+            | "list_triggers"
+            | "list_scheduled_jobs"
+            | "explain"
+            | "list_databases"
+            | "list_collections"
+            | "list_collection_indexes"
+            | "get_collection_stats"
+            | "find_documents"
+            | "aggregate_documents"
+            | "count_documents"
+            | "distinct_values"
+            | "profile_fields"
+            | "explain_find"
+            | "explain_aggregate"
+    )
+}
+
 fn has_only_keys(value: &serde_json::Value, allowed: &[&str]) -> bool {
     value
         .as_object()
@@ -5529,6 +5658,18 @@ mod tests {
             .exists());
         std::fs::remove_dir_all(repo_root).unwrap();
         std::fs::remove_dir_all(bad_path).unwrap();
+    }
+
+    #[test]
+    fn security_posture_propagates_connection_failure() {
+        let root =
+            std::env::temp_dir().join(format!("safeselect-mcp-posture-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut server = test_server(&root);
+        assert!(server
+            .handle_security_posture(Some(serde_json::json!(1)), &serde_json::json!({}))
+            .is_err());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -6516,6 +6657,61 @@ services:
                 &serde_json::json!({"schema":"private"})
             )
             .is_err());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn posture_gate_classifies_database_tools() {
+        assert!(requires_posture("select"));
+        assert!(requires_posture("list_tables"));
+        assert!(requires_posture("find_documents"));
+        assert!(!requires_posture("security_posture"));
+        assert!(!requires_posture("database_info"));
+    }
+
+    #[test]
+    fn posture_gate_blocks_query_until_preflight() {
+        let root =
+            std::env::temp_dir().join(format!("safeselect-mcp-gate-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut server = test_server(&root);
+        let message = JsonRpcMessage {
+            id: Some(serde_json::json!(1)),
+            method: Some("tools/call".into()),
+            params: Some(serde_json::json!({"name":"select", "arguments":{"sql":"SELECT 1"}})),
+            jsonrpc: Some("2.0".into()),
+        };
+        server.handle_tools_call(&message).unwrap();
+        assert!(!server.posture_ready);
+        assert!(server.sidecar.is_none());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn posture_acknowledgement_and_reconnect_reset_are_explicit() {
+        let root =
+            std::env::temp_dir().join(format!("safeselect-mcp-ack-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut report = crate::posture::Report {
+            version: 1,
+            backend: "postgresql",
+            role: "reader".into(),
+            database: "app".into(),
+            status: "warning",
+            findings: vec![crate::posture::Finding {
+                code: "X",
+                severity: "warning",
+                message: "warning".into(),
+            }],
+            fingerprint: "abc".into(),
+            acknowledged: false,
+        };
+        McpServer::acknowledge_posture(&mut report, &serde_json::json!({"acknowledge":true}), &root).unwrap();
+        assert_eq!(report.status, "accepted");
+        let mut server = test_server(&root);
+        server.posture_ready = true;
+        let _ = server.handle_reconnect(Some(serde_json::json!(2)));
+        assert!(!server.posture_ready);
         let _ = std::fs::remove_dir_all(root);
     }
 }

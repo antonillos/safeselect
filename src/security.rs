@@ -1281,33 +1281,36 @@ fn extract_with_query_body(sql: &str) -> Option<&str> {
         i = skip_sql_whitespace(sql, i);
     }
 
+    consume_cte_list(sql, i)
+}
+
+fn consume_cte_list(sql: &str, mut i: usize) -> Option<&str> {
     loop {
-        let as_index = find_top_level_keyword(sql, i, "AS")?;
-        i = skip_sql_whitespace(sql, as_index + 2);
-
-        if starts_with_keyword_at(sql, i, "NOT") {
-            i += 3;
-            i = skip_sql_whitespace(sql, i);
+        let (next, done) = parse_cte(sql, i)?;
+        if done {
+            return sql.get(next..);
         }
-        if starts_with_keyword_at(sql, i, "MATERIALIZED") {
-            i += "MATERIALIZED".len();
-            i = skip_sql_whitespace(sql, i);
-        }
+        i = next;
+    }
+}
 
-        if sql.get(i..=i)? != "(" {
-            return None;
-        }
-
-        i = skip_balanced_parentheses(sql, i)?;
-        i = skip_sql_whitespace(sql, i);
-
-        if sql.get(i..=i) == Some(",") {
-            i += 1;
-            i = skip_sql_whitespace(sql, i);
-            continue;
-        }
-
-        return sql.get(i..);
+fn parse_cte(sql: &str, mut i: usize) -> Option<(usize, bool)> {
+    let as_index = find_top_level_keyword(sql, i, "AS")?;
+    i = skip_sql_whitespace(sql, as_index + 2);
+    if starts_with_keyword_at(sql, i, "NOT") {
+        i = skip_sql_whitespace(sql, i + 3);
+    }
+    if starts_with_keyword_at(sql, i, "MATERIALIZED") {
+        i = skip_sql_whitespace(sql, i + "MATERIALIZED".len());
+    }
+    if sql.get(i..=i)? != "(" {
+        return None;
+    }
+    i = skip_sql_whitespace(sql, skip_balanced_parentheses(sql, i)?);
+    if sql.get(i..=i) == Some(",") {
+        Some((skip_sql_whitespace(sql, i + 1), false))
+    } else {
+        Some((i, true))
     }
 }
 
@@ -1786,6 +1789,22 @@ mod tests {
     fn test_with_cte() {
         let sql = "WITH x AS (SELECT 1) SELECT * FROM x";
         assert_eq!(count_statements(sql), 1);
+    }
+
+    #[test]
+    fn test_extract_with_query_body_variants() {
+        assert_eq!(extract_with_query_body("SELECT 1"), None);
+        assert_eq!(
+            extract_with_query_body(
+                "WITH RECURSIVE x AS NOT MATERIALIZED (SELECT 1) SELECT * FROM x"
+            ),
+            Some("SELECT * FROM x")
+        );
+        assert_eq!(
+            extract_with_query_body("WITH a AS (SELECT 1), b AS (SELECT 2) SELECT * FROM b"),
+            Some("SELECT * FROM b")
+        );
+        assert_eq!(extract_with_query_body("WITH broken AS SELECT 1"), None);
     }
 
     #[test]

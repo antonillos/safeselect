@@ -538,13 +538,22 @@ fn write_config_and_verify(
     let temp = parent.join(format!(".safeselect-{}.tmp", uuid::Uuid::new_v4()));
     write_private_file(&temp, updated)?;
     std::fs::rename(&temp, path)?;
-    if !verify_config_contents(path, updated)? {
-        rollback_config(path, original, original_existed)?;
-        return Err(SafeselectError::Other(
-            "Write verification failed, rolled back".into(),
-        ));
+    verify_or_rollback(path, updated, original, original_existed)
+}
+
+fn verify_or_rollback(
+    path: &Path,
+    updated: &str,
+    original: &str,
+    original_existed: bool,
+) -> Result<()> {
+    if verify_config_contents(path, updated)? {
+        return Ok(());
     }
-    Ok(())
+    rollback_config(path, original, original_existed)?;
+    Err(SafeselectError::Other(
+        "Write verification failed, rolled back".into(),
+    ))
 }
 
 fn verify_config_contents(path: &Path, expected: &str) -> Result<bool> {
@@ -2456,6 +2465,17 @@ mod tests {
         assert!(uninstall_entry("opencode", "missing", Some(&root)).is_err());
         std::fs::write(&path, r#"{"mcp":{"safeselect-demo-pre":{"command":}}}"#).unwrap();
         assert!(uninstall_entry("opencode", "safeselect-demo-pre", Some(&root)).is_err());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn writes_and_verifies_private_config() {
+        let root =
+            std::env::temp_dir().join(format!("safeselect-agent-write-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("config.json");
+        write_config_and_verify(&path, "", "updated", false).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "updated");
         let _ = std::fs::remove_dir_all(root);
     }
 }
