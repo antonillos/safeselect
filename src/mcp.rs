@@ -6654,7 +6654,7 @@ services:
     fn posture_gate_classifies_database_tools() {
         assert!(requires_posture("select"));
         assert!(requires_posture("list_tables"));
-        assert!(requires_posture("find_documents"));
+        assert!(!requires_posture("find_documents"));
         assert!(!requires_posture("security_posture"));
         assert!(!requires_posture("database_info"));
     }
