@@ -18,6 +18,9 @@ test("classifies documentation-only changes as lightweight", () =>
 test("classifies VHS tapes as documentation-only", () =>
   expected(["demo/safeselect-proof.tape", "docs/recordings/safeselect-proof.gif"], "docs", ["docs"]));
 
+test("classifies CI path policy changes without backend integration", () =>
+  expected([".github/scripts/ci-path-policy.js", "README.md"], "ci-policy", ["docs", "crap", "unit"]));
+
 test("classifies shared Rust as CRAP and unit only", () =>
   expected(["src/mcp.rs"], "shared-rust", ["crap", "unit"]));
 test("classifies PostgreSQL, JDBC, and sidecar changes", () =>

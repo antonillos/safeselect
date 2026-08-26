@@ -1,6 +1,7 @@
 "use strict";
 
 const DOC_PATH = /^(README(?:\.[^/]+)?|docs\/|demo\/(?:README\.md|recordings\/|[^/]+\.tape$))/;
+const CI_POLICY_PATH = /^\.github\/scripts\/ci-path-policy(?:\.test)?\.js$/;
 const POSTGRES_PATH = /^(sidecar\/|src\/(?:sidecar|config\/driver)\.rs$|tests\/(?:integration\.rs|security_suite\/real_postgres\.rs|smoke_suite\/(?:postgres|reconnect)\.rs))/;
 const MONGODB_PATH = /^tests\/(?:security_suite\/real_mongodb\.rs|smoke_suite\/mongodb\.rs)/;
 const SHARED_TEST_PATH = /^tests\//;
@@ -22,6 +23,19 @@ function fullPolicy(reason) {
 
 function classifyPaths(paths) {
   if (!Array.isArray(paths) || paths.length === 0) return fullPolicy("unknown");
+  const policyOnly = paths.every((path) => DOC_PATH.test(path) || CI_POLICY_PATH.test(path));
+  if (policyOnly && paths.some((path) => CI_POLICY_PATH.test(path))) {
+    return {
+      profile: "ci-policy",
+      docs: paths.some((path) => DOC_PATH.test(path)),
+      crap: true,
+      unit: true,
+      postgres: false,
+      mongodb: false,
+      security: false,
+      realIntegration: false,
+    };
+  }
   if (paths.some((path) => SENSITIVE_PATH.test(path))) return fullPolicy("sensitive");
 
   const flags = {
