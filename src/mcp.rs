@@ -1263,7 +1263,7 @@ impl McpServer {
             .cloned()
             .unwrap_or(serde_json::json!({}));
 
-        if requires_posture(tool_name) && !self.posture_ready {
+        if self.is_postgres() && requires_posture(tool_name) && !self.posture_ready {
             if tool_name == "select"
                 && args
                     .get("sql")
@@ -5042,17 +5042,7 @@ fn requires_posture(name: &str) -> bool {
             | "list_triggers"
             | "list_scheduled_jobs"
             | "explain"
-            | "list_databases"
-            | "list_collections"
-            | "list_collection_indexes"
-            | "get_collection_stats"
-            | "find_documents"
-            | "aggregate_documents"
-            | "count_documents"
-            | "distinct_values"
-            | "profile_fields"
-            | "explain_find"
-            | "explain_aggregate"
+            | "list_databases" // MongoDB posture is delivered in a separate iteration.
     )
 }
 
@@ -6706,7 +6696,12 @@ services:
             fingerprint: "abc".into(),
             acknowledged: false,
         };
-        McpServer::acknowledge_posture(&mut report, &serde_json::json!({"acknowledge":true}), &root).unwrap();
+        McpServer::acknowledge_posture(
+            &mut report,
+            &serde_json::json!({"acknowledge":true}),
+            &root,
+        )
+        .unwrap();
         assert_eq!(report.status, "accepted");
         let mut server = test_server(&root);
         server.posture_ready = true;
