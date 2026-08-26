@@ -14,6 +14,10 @@ function expected(paths, profile, enabled) {
 
 test("classifies documentation-only changes as lightweight", () =>
   expected(["README.md", "docs/security-proof.md"], "docs", ["docs"]));
+
+test("classifies VHS tapes as documentation-only", () =>
+  expected(["demo/safeselect-proof.tape", "docs/recordings/safeselect-proof.gif"], "docs", ["docs"]));
+
 test("classifies shared Rust as CRAP and unit only", () =>
   expected(["src/mcp.rs"], "shared-rust", ["crap", "unit"]));
 test("classifies PostgreSQL, JDBC, and sidecar changes", () =>
