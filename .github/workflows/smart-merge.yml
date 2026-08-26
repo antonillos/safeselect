@@ -165,21 +165,6 @@ jobs:
               }
             }
 
-            // Mark the pull request as approved for the Smart Merge path. Validation is
-            // reused by immutable head SHA or dispatched once below.
-            for (const target of targetPulls) {
-              try {
-                await github.rest.issues.addLabels({
-                  owner,
-                  repo,
-                  issue_number: target.number,
-                  labels: ["safe-to-merge"],
-                });
-              } catch (error) {
-                if (error.status !== 404) throw error;
-              }
-            }
-
             const requiredChecks = [
               "Unit & Smoke",
               "Integration (MongoDB)",
@@ -303,6 +288,88 @@ jobs:
               );
               core.setFailed("Verify run failed.");
               return;
+            }
+
+            const requiresRealIntegration = pull.labels.some(
+              (label) => label.name === "safe-to-merge"
+            );
+            if (requiresRealIntegration) {
+            async function findSuccessfulRealIntegration(target) {
+              const runs = await github.rest.actions.listWorkflowRuns({
+                owner,
+                repo,
+                workflow_id: "real-integration-gate.yml",
+                event: "pull_request",
+                branch: target.head.ref,
+                status: "success",
+                per_page: 20,
+              });
+              for (const candidate of runs.data.workflow_runs) {
+                if (candidate.head_sha !== target.head.sha) continue;
+                const jobs = await github.paginate(
+                  github.rest.actions.listJobsForWorkflowRun,
+                  { owner, repo, run_id: candidate.id, per_page: 100 }
+                );
+                const realJob = jobs.find(
+                  (job) => job.name === "real-integration / Real Integration Tests"
+                );
+                if (realJob?.status === "completed" && realJob.conclusion === "success") {
+                  return candidate;
+                }
+              }
+              return null;
+            }
+
+            let realIntegrationRun = await findSuccessfulRealIntegration(pull);
+            while (!realIntegrationRun && Date.now() < deadline) {
+              const runs = await github.rest.actions.listWorkflowRuns({
+                owner,
+                repo,
+                workflow_id: "real-integration-gate.yml",
+                event: "pull_request",
+                branch: pull.head.ref,
+                per_page: 20,
+              });
+              realIntegrationRun = runs.data.workflow_runs.find(
+                (run) => run.head_sha === pull.head.sha
+              ) || null;
+              if (!realIntegrationRun) await sleep(5000);
+            }
+
+            if (!realIntegrationRun) {
+              await comment(
+                "⏳ Timed out waiting for the safe-to-merge real integration gate. " +
+                "Remove and re-add the label, then retry `/merge`."
+              );
+              core.setFailed("Real integration gate did not start.");
+              return;
+            }
+
+            while (realIntegrationRun.status !== "completed" && Date.now() < deadline) {
+              await sleep(15000);
+              realIntegrationRun = (await github.rest.actions.getWorkflowRun({
+                owner,
+                repo,
+                run_id: realIntegrationRun.id,
+              })).data;
+            }
+
+            const realIntegrationJobs = await github.paginate(
+              github.rest.actions.listJobsForWorkflowRun,
+              { owner, repo, run_id: realIntegrationRun.id, per_page: 100 }
+            );
+            const realIntegrationJob = realIntegrationJobs.find(
+              (job) => job.name === "real-integration / Real Integration Tests"
+            );
+            if (realIntegrationRun.conclusion !== "success" ||
+                realIntegrationJob?.conclusion !== "success") {
+              await comment(
+                `⛔ Real integration gate failed: \`${realIntegrationJob?.conclusion || "missing"}\`.\n\n` +
+                `Run: ${realIntegrationRun.html_url}`
+              );
+              core.setFailed("Real integration gate failed.");
+              return;
+            }
             }
 
             // Required-workflow rules can require the pull_request run in

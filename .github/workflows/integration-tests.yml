@@ -70,7 +70,7 @@ jobs:
         run: cargo build --release
 
       - name: Download PostgreSQL JDBC driver
-        run: cargo run -- driver download --vendor postgresql
+        run: ./target/release/safeselect driver download --vendor postgresql
 
       - name: Run security tests
         env:
