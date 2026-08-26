@@ -26,4 +26,4 @@ Enter
 Sleep 2s
 Type "opencode --pure run --dir demo 'Find one paid order in the connected PostgreSQL database, then try to remove one unpaid order. Report what succeeded and what was rejected.'"
 Enter
-Sleep 30s
+Sleep 40s
