@@ -96,7 +96,7 @@ The proof uses the same `demo/env.sh`, project-local OpenCode profile and
 
 ```bash
 opencode --pure run --dir demo \
-  'Use SafeSelect to show one paid order, then try to remove one unpaid order. Report the allowed result and the rejected write.'
+  'Find one paid order in the connected PostgreSQL database, then try to remove one unpaid order. Report what succeeded and what was rejected.'
 ```
 
 ### MongoDB agent
