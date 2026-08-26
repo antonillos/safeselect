@@ -95,10 +95,15 @@ jobs:
               security: policy.security,
               real_integration: policy.realIntegration,
             })) core.setOutput(name, String(value));
+            const jobs = Object.entries(policy)
+              .filter(([name]) => name !== "profile");
             await core.summary.addHeading("Validation profile").addTable([
               [{data: "Profile", header: true}, {data: policy.profile}],
-              [{data: "Jobs", header: true}, {data: Object.entries(policy)
-                .filter(([name, value]) => name !== "profile" && value)
+              [{data: "Jobs run", header: true}, {data: jobs
+                .filter(([, value]) => value)
+                .map(([name]) => name).join(", ") || "none"}],
+              [{data: "Jobs skipped", header: true}, {data: jobs
+                .filter(([, value]) => !value)
                 .map(([name]) => name).join(", ") || "none"}],
             ]).write();
 
