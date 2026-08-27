@@ -1,0 +1,9 @@
+{
+  "version": "v0.1.10",
+  "source_commit": "c0f16f93b64bd69c702dd6a57ce26b70b2f8ce02",
+  "sha256": {
+    "aarch64-apple-darwin": "cd256382452764d8ff48589cf57f24e496cdd571418c6dae96ea38be628eb1e4",
+    "x86_64-apple-darwin": "174a1be71018fa9b551a5546c1f4c0312b8276660113f8355cd37f57504c734d",
+    "x86_64-unknown-linux-gnu": "198bc35e8436422c9e091538f0f07b0d901ab85dcb3bb2170cccfb4110f7ebd0"
+  }
+}

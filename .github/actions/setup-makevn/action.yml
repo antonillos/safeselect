@@ -1,0 +1,10 @@
+name: Setup makevn
+description: Install a reviewed makevn release for the runner, with locked SHA-256 verification
+runs:
+  using: composite
+  steps:
+    - name: Install pinned makevn
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+      run: bash "$ACTION_PATH/../../../tools/ci/install-makevn.sh"

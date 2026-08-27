@@ -51,11 +51,16 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
+      - name: Checkout CI tooling
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          path: .ci-tools
+          sparse-checkout: |
+            .github/actions/setup-makevn
+            tools/ci
       - name: Install makevn
-        shell: bash
-        run: |
-          curl -fsSL https://raw.githubusercontent.com/antonillos/makevn/main/packaging/install/install-release.sh | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        uses: ./.ci-tools/.github/actions/setup-makevn
       - name: Resolve next version
         id: version
         shell: bash

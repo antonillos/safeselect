@@ -121,6 +121,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - name: Test release pipeline and installer
+        run: python3 -m unittest discover -s tools/ci -p 'test_*.py' -v
+      - name: Validate workflow syntax
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -shellcheck= -pyflakes=
       - name: Test CI path policy
         run: node --test .github/scripts/ci-path-policy.test.js
       - name: Install Rust
@@ -131,9 +135,7 @@ jobs:
           distribution: temurin
           java-version: 17
       - name: Install makevn
-        run: |
-          curl -fsSL https://raw.githubusercontent.com/antonillos/makevn/main/packaging/install/install-release.sh | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        uses: ./.github/actions/setup-makevn
       - name: Initialize, test, and package sidecar
         run: |
           makevn doctor init test package
@@ -194,9 +196,7 @@ jobs:
           distribution: temurin
           java-version: 17
       - name: Install makevn
-        run: |
-          curl -fsSL https://raw.githubusercontent.com/antonillos/makevn/main/packaging/install/install-release.sh | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        uses: ./.github/actions/setup-makevn
       - name: Initialize, test, and package sidecar
         run: |
           makevn doctor init test package
@@ -240,9 +240,7 @@ jobs:
           distribution: temurin
           java-version: 17
       - name: Install makevn
-        run: |
-          curl -fsSL https://raw.githubusercontent.com/antonillos/makevn/main/packaging/install/install-release.sh | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        uses: ./.github/actions/setup-makevn
       - name: Initialize, test, and package sidecar
         run: |
           makevn doctor init test package
@@ -300,9 +298,7 @@ jobs:
       - name: Install cargo-crap
         run: cargo binstall cargo-crap --locked -q
       - name: Install makevn
-        run: |
-          curl -fsSL https://raw.githubusercontent.com/antonillos/makevn/main/packaging/install/install-release.sh | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        uses: ./.github/actions/setup-makevn
       - name: Build sidecar for Rust embedding
         run: |
           makevn doctor init test package
