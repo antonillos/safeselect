@@ -1,0 +1,10 @@
+AllowUsers demo
+AuthorizedKeysFile .ssh/authorized_keys
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin no
+AllowTcpForwarding yes
+GatewayPorts no
+X11Forwarding no
+PermitUserEnvironment no
+StrictModes no

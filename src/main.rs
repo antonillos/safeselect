@@ -1840,12 +1840,18 @@ fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
         let ssh = planned.ssh;
 
         // URL points through the SSH tunnel when one is configured
-        // Azure PostgreSQL requires SSL at protocol level.
+        // Preserve an explicit source SSL mode (for example Azure PostgreSQL)
+        // while allowing the JDBC driver default when DBeaver did not specify one.
         let url = if let Some(ref ssh) = ssh {
             let local_forward_port = ssh.local_port.unwrap_or(DEFAULT_SSH_LOCAL_PORT);
+            let sslmode = conn
+                .sslmode
+                .as_deref()
+                .map(|mode| format!("?sslmode={mode}"))
+                .unwrap_or_default();
             format!(
-                "jdbc:postgresql://localhost:{}/{}?sslmode=require",
-                local_forward_port, conn.database
+                "jdbc:postgresql://localhost:{}/{}{}",
+                local_forward_port, conn.database, sslmode
             )
         } else {
             format!(
@@ -2957,6 +2963,12 @@ fn build_tunnel_ssh_args(ssh: &config::SshConfig) -> Vec<String> {
     ];
     if let Some(port) = ssh.port.filter(|port| *port != 22) {
         args.extend(["-p".into(), port.to_string()]);
+    }
+    if let Some(identity_file) = ssh.identity_file.as_deref() {
+        args.extend(["-i".into(), identity_file.to_string()]);
+    }
+    if let Some(known_hosts) = ssh.known_hosts.as_deref() {
+        args.extend(["-o".into(), format!("UserKnownHostsFile={known_hosts}")]);
     }
     args
 }
@@ -4251,23 +4263,43 @@ mod tests {
             port: Some(2222),
             username: Some("tunnel".into()),
             secret_account: None,
-            identity_file: None,
-            known_hosts: None,
+            identity_file: Some("/tmp/demo_ed25519".into()),
+            known_hosts: Some("/tmp/known_hosts".into()),
             local_host: Some("127.0.0.1".into()),
             local_port: Some(15432),
             forward_host: Some("db.internal".into()),
             forward_port: Some(5432),
-            auth_type: Some("PASSWORD".into()),
+            auth_type: Some("KEY".into()),
         };
 
         assert!(missing_ssh_fields(&ssh).is_empty());
-        assert!(ssh_uses_password(&ssh));
+        assert!(!ssh_uses_password(&ssh));
         let args = build_tunnel_ssh_args(&ssh);
         assert!(args.windows(2).any(|pair| pair == ["-p", "2222"]));
         assert!(args
             .iter()
             .any(|arg| arg == "127.0.0.1:15432:db.internal:5432"));
         assert!(args.iter().any(|arg| arg == "tunnel@jump.example.com"));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["-i", "/tmp/demo_ed25519"]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["-o", "UserKnownHostsFile=/tmp/known_hosts"]));
+
+        let mut password_ssh = ssh.clone();
+        password_ssh.auth_type = Some("PASSWORD".into());
+        password_ssh.identity_file = None;
+        password_ssh.known_hosts = None;
+        assert!(ssh_uses_password(&password_ssh));
+        let password_args = build_tunnel_ssh_args(&password_ssh);
+        assert!(!password_args.iter().any(|arg| arg == "-i"));
+        assert!(!password_args
+            .iter()
+            .any(|arg| arg == "UserKnownHostsFile=/tmp/known_hosts"));
+        assert!(password_args
+            .iter()
+            .any(|arg| arg == "127.0.0.1:15432:db.internal:5432"));
 
         ssh.forward_host = None;
         ssh.forward_port = None;
@@ -4727,6 +4759,7 @@ enabled = true
             driver: "postgresql".to_string(),
             username: "postgres".to_string(),
             password: None,
+            sslmode: None,
             ssh_host: Some("localhost".to_string()),
             ssh_port: Some(2222),
             ssh_user: None,
