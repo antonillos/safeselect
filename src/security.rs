@@ -611,9 +611,10 @@ impl SecurityEngine {
     }
 
     fn validate_policy_constraints(&self, query: &str) -> Result<()> {
-        if self.policy.require_single_statement {
-            self.check_single_statement(query)?;
-        }
+        self.policy
+            .require_single_statement
+            .then(|| self.check_single_statement(query))
+            .transpose()?;
         self.check_system_schema_references(query)?;
         if !self.policy.allowed_schemas.is_empty() {
             self.check_allowed_schemas(query)?;
