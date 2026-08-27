@@ -1,12 +1,14 @@
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
-from io import BytesIO
+from io import BytesIO, StringIO
 from urllib.error import HTTPError
 
 import release
@@ -249,6 +251,14 @@ class ReleaseTests(unittest.TestCase):
 
 
 class ApiTests(unittest.TestCase):
+    def test_successful_json_read(self):
+        response = subprocess.CompletedProcess([], 0, '{"id": 1}', "")
+        with patch("release.subprocess.run", return_value=response):
+            self.assertEqual(release.release_info("owner/repo", VERSION), {"id": 1})
+
+    def test_checked_command_executes_without_shell(self):
+        self.assertEqual(release.command(sys.executable, "-c", "print('ok')"), "ok")
+
     def test_403_is_not_absent_release(self):
         response = subprocess.CompletedProcess([], 1, "", "gh: Forbidden (HTTP 403)")
         with patch("release.subprocess.run", return_value=response), self.assertRaises(RuntimeError):
@@ -267,6 +277,16 @@ class ApiTests(unittest.TestCase):
 
 
 class PublicationTests(unittest.TestCase):
+    def test_package_version_missing_unknown_and_prerelease(self):
+        with tempfile.TemporaryDirectory() as work:
+            formula = Path(work) / "formula.rb"
+            check_package_version.check(formula, VERSION)
+            with self.assertRaisesRegex(ValueError, "stable semver"):
+                check_package_version.check(formula, "v1.2.3-rc1")
+            formula.write_text("unknown formula layout")
+            with self.assertRaisesRegex(ValueError, "Cannot determine"):
+                check_package_version.check(formula, VERSION)
+
     def test_registry_checks_exact_version_and_equal_metadata(self):
         metadata = {"name": "io.github.owner/tool", "version": "1.2.3", "packages": []}
         response = BytesIO(json.dumps({"server": metadata}).encode())
@@ -330,6 +350,47 @@ class PublicationTests(unittest.TestCase):
                 with self.assertRaises(OSError):
                     publish_registry.publish(metadata, Path("publisher"), "owner/repo", VERSION)
             command.assert_not_called()
+
+
+class CliTests(unittest.TestCase):
+    def test_cli_verifies_real_fixture_directory(self):
+        with tempfile.TemporaryDirectory() as work:
+            fixtures(Path(work))
+            with patch.object(sys, "argv", ["release.py", "verify", "--version", VERSION, "--directory", work]):
+                release.main()
+
+    def test_cli_dispatches_operations(self):
+        for operation in ("resolve", "reuse", "publish", "check-public"):
+            with self.subTest(operation=operation), patch.object(sys, "argv", [
+                "release.py", operation, "--repo", "owner/repo", "--version", VERSION,
+                "--sha", SHA, "--target", release.TARGETS[0],
+            ]), patch.object(release, operation.replace("-", "_")) as call:
+                release.main()
+                call.assert_called_once()
+
+    def test_cli_rejects_invalid_arguments_before_any_side_effect(self):
+        cases = [
+            ["verify", "--version", "../bad"], ["verify"],
+            ["resolve"], ["publish", "--repo", "owner/repo", "--version", VERSION],
+            ["reuse", "--repo", "owner/repo", "--version", VERSION],
+        ]
+        with patch.dict(os.environ, {}, clear=True), patch.object(sys, "stderr", StringIO()):
+            for case in cases:
+                with self.subTest(case=case), patch.object(sys, "argv", ["release.py", *case]), self.assertRaises(SystemExit) as error:
+                    release.main()
+                self.assertEqual(error.exception.code, 2)
+
+    def test_cli_reports_operational_errors(self):
+        with patch.object(sys, "argv", ["release.py", "resolve", "--repo", "owner/repo"]), patch.object(release, "resolve", side_effect=RuntimeError("failure")), patch.object(sys, "stderr", StringIO()), self.assertRaises(SystemExit) as error:
+            release.main()
+        self.assertEqual(error.exception.code, 1)
+
+    def test_github_outputs_are_written(self):
+        with tempfile.TemporaryDirectory() as work:
+            output = Path(work) / "output"
+            with patch.dict(os.environ, {"GITHUB_OUTPUT": str(output)}), patch.object(sys, "stdout", StringIO()):
+                release.write_outputs({"version": VERSION})
+            self.assertEqual(output.read_text(), f"version={VERSION}\n")
 
 
 if __name__ == "__main__":
