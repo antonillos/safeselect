@@ -1445,6 +1445,8 @@ fn prompt_ssh_config(
         .trim()
         .to_string();
 
+    let (forward_host, forward_port) = prompt_dbeaver_forward_target(conn)?;
+
     let auth_method =
         inquire::Select::new("  Authentication method:", vec!["Key file", "Password"])
             .with_starting_cursor(if default_auth == "PASSWORD" { 1 } else { 0 })
@@ -1498,10 +1500,41 @@ fn prompt_ssh_config(
             .filter(|s| !s.is_empty())
             .map(str::to_string),
         local_port: conn.ssh_local_port,
-        forward_host: Some(conn.host.clone()),
-        forward_port: Some(conn.port),
+        forward_host: Some(forward_host),
+        forward_port: Some(forward_port),
         auth_type,
     })
+}
+
+fn dbeaver_forward_target_defaults(conn: &dbeaver::DBeaverConnection) -> (String, u16) {
+    let looks_like_local_endpoint = conn
+        .ssh_local_host
+        .as_deref()
+        .is_some_and(|host| host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1")
+        && conn.ssh_local_port == Some(conn.port);
+    if looks_like_local_endpoint {
+        (String::new(), conn.port)
+    } else {
+        (conn.host.clone(), conn.port)
+    }
+}
+
+fn prompt_dbeaver_forward_target(conn: &dbeaver::DBeaverConnection) -> Result<(String, u16)> {
+    let (default_host, default_port) = dbeaver_forward_target_defaults(conn);
+    let host = inquire::Text::new("  Database target host through bastion:")
+        .with_default(&default_host)
+        .prompt()
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let port = inquire::Text::new("  Database target port through bastion:")
+        .with_default(&default_port.to_string())
+        .prompt()
+        .unwrap_or_default()
+        .trim()
+        .parse::<u16>()
+        .unwrap_or(default_port);
+    Ok((host, port))
 }
 
 fn dbeaver_shared_tunnel_warning(conn: &dbeaver::DBeaverConnection) -> Option<String> {
@@ -4788,6 +4821,24 @@ enabled = true
         let warning = dbeaver_shared_tunnel_warning(&conn);
 
         assert!(warning.is_none());
+    }
+
+    #[test]
+    fn dbeaver_forward_target_defaults_ignore_local_tunnel_endpoint() {
+        let mut conn = sample_dbeaver_connection();
+        conn.ssh_local_host = Some("localhost".to_string());
+        conn.ssh_local_port = Some(conn.port);
+
+        assert_eq!(
+            dbeaver_forward_target_defaults(&conn),
+            (String::new(), 5432)
+        );
+
+        conn.ssh_local_port = Some(15432);
+        assert_eq!(
+            dbeaver_forward_target_defaults(&conn),
+            ("db.example.com".to_string(), 5432)
+        );
     }
 
     #[test]

@@ -611,9 +611,10 @@ impl SecurityEngine {
     }
 
     fn validate_policy_constraints(&self, query: &str) -> Result<()> {
-        if self.policy.require_single_statement {
-            self.check_single_statement(query)?;
-        }
+        self.policy
+            .require_single_statement
+            .then(|| self.check_single_statement(query))
+            .transpose()?;
         self.check_system_schema_references(query)?;
         if !self.policy.allowed_schemas.is_empty() {
             self.check_allowed_schemas(query)?;
@@ -1849,6 +1850,19 @@ mod tests {
         };
         let engine = SecurityEngine::new(policy, LimitsConfig::default());
         assert!(engine.validate("SELECT * FROM public.users").is_ok());
+    }
+
+    #[test]
+    fn validates_all_policy_constraints_on_a_valid_query() {
+        let policy = SecurityPolicy {
+            require_single_statement: true,
+            allowed_schemas: vec!["public".into()],
+            denied_relations: vec!["public.secrets".into()],
+            ..SecurityPolicy::default()
+        };
+        let engine = SecurityEngine::new(policy, LimitsConfig::default());
+
+        assert!(engine.validate("SELECT * FROM public.orders").is_ok());
     }
 
     #[test]
