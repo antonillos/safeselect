@@ -72,6 +72,11 @@ const css = (await readFile("app/globals.css", "utf8")).replace(
 await writeFile("out/site.css", css);
 await copyFile("public/og.png", "out/og.png");
 await copyFile("public/onboarding.gif", "out/onboarding.gif");
+// Keep Google's supplied ownership proof byte-for-byte on every Pages deploy.
+await copyFile(
+  "public/googled7be89f4207cbfe7.html",
+  "out/googled7be89f4207cbfe7.html",
+);
 await writeFile("out/.nojekyll", "");
 await writeFile(
   "out/sitemap.xml",

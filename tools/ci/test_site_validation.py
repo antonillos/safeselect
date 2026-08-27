@@ -23,6 +23,7 @@ class SiteValidationTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        (self.root / site.GOOGLE_VERIFICATION_FILE).write_bytes(site.GOOGLE_VERIFICATION_CONTENT)
         for route in site.ROUTES:
             directory = self.root / route.strip("/")
             directory.mkdir(parents=True, exist_ok=True)
@@ -39,6 +40,16 @@ class SiteValidationTests(unittest.TestCase):
 
     def test_complete_static_site(self):
         site.validate(self.root)
+
+    def test_missing_google_verification_file(self):
+        (self.root / site.GOOGLE_VERIFICATION_FILE).unlink()
+        with self.assertRaisesRegex(AssertionError, "missing Google verification file"):
+            site.validate(self.root)
+
+    def test_changed_google_verification_content(self):
+        (self.root / site.GOOGLE_VERIFICATION_FILE).write_bytes(b"<html>Not the supplied proof</html>")
+        with self.assertRaisesRegex(AssertionError, "changed Google verification content"):
+            site.validate(self.root)
 
     def test_missing_base_path(self):
         self.replace('href="/safeselect/compare/"', 'href="/compare/"')
