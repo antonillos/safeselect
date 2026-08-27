@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented in this file.
 
+## [v0.7.6] - 2026-08-27
+
+### Fixed
+
+- fix: prefer DBeaver JDBC URL fields (#183)
+- fix: make DBeaver SSH onboarding deterministic (#185)
+
 ## [v0.7.5] - 2026-08-27
 
 ### Added
