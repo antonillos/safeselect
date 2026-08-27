@@ -51,6 +51,7 @@ configuration is not modified.
 
 | Scenario | Recording |
 |---|---|
+| Complete first-time onboarding: Homebrew, DBeaver SSH, Keychain and OpenCode | [Watch](recordings/onboarding-full-local.gif) |
 | OpenCode discovers a PostgreSQL database | [Watch](../docs/recordings/safeselect-opencode.gif) |
 | Codex discovers the same PostgreSQL database | [Watch](../docs/recordings/safeselect-codex.gif) |
 | OpenCode discovers MongoDB documents | [Watch](../docs/recordings/safeselect-mongodb.gif) |
@@ -148,9 +149,11 @@ source /private/tmp/safeselect-codex-agent/codex.env
 Codex receives the same single business prompt as OpenCode and independently
 discovers the PostgreSQL schema through SafeSelect.
 
-The generated recordings are ignored by Git. Render any clip with:
+Generated recordings are ignored by Git, except the versioned full onboarding
+recording. Render any clip with:
 
 ```bash
+vhs demo/onboarding-full-local.tape
 vhs demo/safeselect-opencode.tape
 vhs demo/safeselect-readonly.tape
 vhs demo/safeselect-proof.tape
