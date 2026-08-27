@@ -2,7 +2,14 @@
 
 ## Agents can look. They cannot mutate.
 
-**Secure, fail-closed, read-only database access for AI agents over MCP.**
+**Read-only PostgreSQL & MongoDB access for coding agents.**
+
+Debug with database context, without exposing write tools. Local MCP enforcement,
+project-scoped policies, and reproducible security tests.
+
+[Website](https://antonillos.github.io/safeselect/) ·
+[Compare approaches](docs/compare.md) ·
+[DBeaver → Codex guide](docs/guides/dbeaver-codex.md)
 
 [![CI](https://github.com/antonillos/safeselect/actions/workflows/verify.yml/badge.svg)](https://github.com/antonillos/safeselect/actions/workflows/verify.yml)
 [![CRAP](https://img.shields.io/endpoint?url=https%3A%2F%2Fantonillos.github.io%2Fsafeselect%2Fcrap-badge.json)](https://github.com/antonillos/safeselect/actions/workflows/verify.yml)
@@ -20,7 +27,10 @@ inspect production-shaped data, explain queries, diagnose connectivity, and
 recover stale connections without ever receiving write-capable tools or direct
 access to database credentials.
 
-Most database MCP servers make it easy to connect an agent to a database. SafeSelect is built for the harder problem: letting an agent inspect production-shaped data without turning the database into an unrestricted tool surface.
+SafeSelect lets an agent inspect application data without turning the database
+into an unrestricted tool surface. Start with development data or a sanitized
+replica, then review the policy and effective database permissions before
+connecting to a more sensitive environment.
 
 > [!NOTE]
 > SafeSelect is a safety boundary for agent access, not a replacement for database permissions. Use least-privilege database users when you can; SafeSelect still constrains overpowered credentials when agents connect through it.
@@ -51,20 +61,18 @@ SafeSelect is intentionally narrower than general-purpose database MCP servers. 
 
 ## What Makes It Different?
 
-| General database MCP servers | SafeSelect |
-|---|---|
-| Often expose configurable tools | Exposes a fixed, read-only tool surface |
-| May support remote HTTP transports | Uses local MCP stdio by default |
-| Usually optimize for broad backend coverage | Optimizes for enforceable policy and agent safety |
-| Often rely on least-privilege database users | Enforces read-only behavior even when credentials are overpowered |
-| Often keep connection setup separate | Imports from DBeaver, Docker Compose, and MongoDB Compass |
-| May log queries for debugging | Hashes query text before audit logging |
-| Treat security failures as recoverable errors | Fails closed and terminates the MCP process |
+The combination matters: PostgreSQL **and** MongoDB inspection, a fixed database
+read surface, local stdio, project policy, connection import and reproducible
+security evidence. Read-only modes and layered controls also exist in other
+projects; they are not exclusive to SafeSelect.
 
-The product promise is simple: **agents can look, but they cannot mutate**. Even if the configured database user is a DBA, the agent still only receives SafeSelect's constrained read-only operations.
+See the [dated comparison](docs/compare.md) for DBHub, MongoDB MCP Server,
+Postgres MCP Pro and SchemaBrain—including when each is a better fit.
 
-> [!TIP]
-> This is useful when teams already have DBeaver, Docker Compose, or MongoDB Compass connections and need to expose them to agents without redesigning database users first.
+**Agents can look, but they cannot mutate through SafeSelect's database tools.**
+This boundary does not cover a shell, another MCP server or direct credentials
+also available to the agent. Use least-privilege database users and review the
+[threat model and limits](docs/security-proof.md).
 
 ## Backend Support
 
