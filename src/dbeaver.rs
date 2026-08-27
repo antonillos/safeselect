@@ -12,6 +12,7 @@ pub struct DBeaverConnection {
     pub driver: String,
     pub username: String,
     pub password: Option<String>,
+    pub sslmode: Option<String>,
     pub ssh_host: Option<String>,
     pub ssh_port: Option<u16>,
     pub ssh_user: Option<String>,
@@ -139,6 +140,7 @@ fn parse_data_sources(content: &str) -> Result<Vec<DBeaverConnection>> {
 
         let jdbc_url = src.url.clone().or_else(|| cfg.and_then(|c| c.url.clone()));
         let parsed_url = jdbc_url.as_deref().and_then(parse_postgres_jdbc_url);
+        let sslmode = jdbc_url.as_deref().and_then(parse_sslmode);
 
         let host = src
             .host
@@ -238,6 +240,7 @@ fn parse_data_sources(content: &str) -> Result<Vec<DBeaverConnection>> {
                 .unwrap_or_default(),
             username,
             password,
+            sslmode,
             ssh_host,
             ssh_port,
             ssh_user,
@@ -277,6 +280,15 @@ fn parse_postgres_jdbc_url(url: &str) -> Option<ParsedJdbcUrl> {
     })
 }
 
+fn parse_sslmode(url: &str) -> Option<String> {
+    let query = url.split_once('?')?.1;
+    query.split('&').find_map(|parameter| {
+        let (key, value) = parameter.split_once('=')?;
+        key.eq_ignore_ascii_case("sslmode")
+            .then(|| value.to_string())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -309,6 +321,15 @@ mod tests {
     fn rejects_incomplete_postgres_jdbc_url() {
         assert!(parse_postgres_jdbc_url("jdbc:postgresql://").is_none());
         assert!(parse_postgres_jdbc_url("jdbc:postgresql://db").is_none());
+    }
+
+    #[test]
+    fn preserves_explicit_sslmode_from_jdbc_url() {
+        assert_eq!(
+            parse_sslmode("jdbc:postgresql://db:5432/app?sslmode=require&connectTimeout=5"),
+            Some("require".to_string())
+        );
+        assert_eq!(parse_sslmode("jdbc:postgresql://db:5432/app"), None);
     }
 
     #[test]
