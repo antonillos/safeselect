@@ -142,28 +142,34 @@ fn parse_data_sources(content: &str) -> Result<Vec<DBeaverConnection>> {
         let parsed_url = jdbc_url.as_deref().and_then(parse_postgres_jdbc_url);
         let sslmode = jdbc_url.as_deref().and_then(parse_sslmode);
 
-        let host = src
-            .host
+        // A DBeaver connection configured by URL can retain stale individual
+        // host, port, and database fields. Treat the parsed JDBC URL as the
+        // authoritative source whenever it is available.
+        let host = parsed_url
+            .as_ref()
+            .map(|p| p.host.clone())
+            .or(src.host)
             .or_else(|| cfg.and_then(|c| c.host.clone()))
-            .or_else(|| parsed_url.as_ref().map(|p| p.host.clone()))
             .unwrap_or_default();
 
         if host.is_empty() {
             continue;
         }
 
-        let port_str = src
-            .port
+        let port_str = parsed_url
+            .as_ref()
+            .map(|p| p.port.to_string())
+            .or(src.port)
             .or_else(|| cfg.and_then(|c| c.port.clone()))
-            .or_else(|| parsed_url.as_ref().map(|p| p.port.to_string()))
             .unwrap_or_else(|| "5432".into());
 
         let port = port_str.parse::<u16>().unwrap_or(5432);
 
-        let database = src
-            .database
+        let database = parsed_url
+            .as_ref()
+            .map(|p| p.database.clone())
+            .or(src.database)
             .or_else(|| cfg.and_then(|c| c.database.clone()))
-            .or_else(|| parsed_url.as_ref().map(|p| p.database.clone()))
             .unwrap_or_default();
 
         let username = src
@@ -343,6 +349,25 @@ mod tests {
         assert_eq!(connections[0].driver, "postgresql");
         assert_eq!(connections[1].host, "db2");
         assert_eq!(connections[1].port, 5433);
+    }
+
+    #[test]
+    fn prefers_jdbc_url_when_dbeaver_fields_are_stale() {
+        let content = r#"{
+          "connections": [{
+            "name":"url-configured",
+            "host":"localhost",
+            "port":"5432",
+            "database":"postgres",
+            "url":"jdbc:postgresql://localhost:15432/safeselect_demo"
+          }]
+        }"#;
+
+        let connections = parse_data_sources(content).unwrap();
+        assert_eq!(connections.len(), 1);
+        assert_eq!(connections[0].host, "localhost");
+        assert_eq!(connections[0].port, 15432);
+        assert_eq!(connections[0].database, "safeselect_demo");
     }
 
     #[test]
