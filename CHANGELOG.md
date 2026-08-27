@@ -2,6 +2,27 @@
 
 All notable changes to this project are documented in this file.
 
+## [v0.7.5] - 2026-08-27
+
+### Added
+
+- feat: add PostgreSQL security posture preflight (#173)
+- feat: add safe PostgreSQL partition metadata (#174)
+- feat: add visual read-only proof demo (#178)
+
+### Fixed
+
+- fix: make PostgreSQL posture advisory (#175)
+- fix: deny direct PostgreSQL system catalogs (#177)
+- fix: support DBeaver SSH key imports (#179)
+
+### Build And CI
+
+- ci: reuse release artifacts for integration tests (#170)
+- ci: refresh only CRAP badge after develop merges (#171)
+- ci: select validation by changed paths
+- ci: remove redundant cargo check (#176)
+
 ## [v0.7.4] - 2026-08-26
 
 ### Added
