@@ -82,6 +82,14 @@ document. Record dates, observation windows and definitions.
 For a property you control, verify the URL-prefix property in Google Search
 Console and submit `https://antonillos.github.io/safeselect/sitemap.xml`.
 Use a verification file or tag only from that account—never invent a token.
+The supplied file `site/public/googled7be89f4207cbfe7.html` is copied unchanged
+into the static export. After its PR is merged and Pages deploys, confirm that
+`https://antonillos.github.io/safeselect/googled7be89f4207cbfe7.html` returns
+the supplied content, then select **Verify** in Search Console for the exact
+URL-prefix property `https://antonillos.github.io/safeselect/`.
+Keep the file published after verification; Google may recheck ownership.
+It is an ownership proof, not an editorial page, so it is not in the sitemap.
+Publishing the file does not itself verify the account or request indexing.
 The repository cannot control the owner site's root `robots.txt` through a
 file served beneath `/safeselect/`.
 
