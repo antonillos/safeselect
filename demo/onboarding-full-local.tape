@@ -1,4 +1,4 @@
-Output "/Users/antonillos/Projects/antonillos/safeselect/demo/recordings/onboarding-full-local.gif"
+Output "/Users/antonillos/Projects/antonillos/safeselect/docs/recordings/onboarding-full-local.gif"
 Require opencode
 Set Shell "bash"
 Set FontSize 19
