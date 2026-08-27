@@ -15,7 +15,10 @@ Show
 Sleep 1s
 Type "brew install antonillos/tap/safeselect"
 Enter
-Sleep 5s
+Sleep 30s
+Type "y"
+Enter
+Sleep 10s
 Type "safeselect --version"
 Enter
 Sleep 2s
