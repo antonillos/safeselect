@@ -112,6 +112,37 @@ jobs:
       - name: Validate Markdown and internal links
         run: python3 tools/ci/validate_docs.py
 
+  website:
+    name: Website and positioning
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate Markdown and internal links
+        run: python3 tools/ci/validate_docs.py
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - name: Install locked website dependencies
+        run: npm ci --prefix site --ignore-scripts
+      - name: Build and validate static website
+        run: |
+          npm run build:pages --prefix site
+          npm run typecheck --prefix site
+          npm run lint --prefix site
+          python3 tools/ci/validate_site.py
+          python3 -m unittest discover -s tools/ci -p 'test_site_validation.py' -v
+      - name: Upload static website
+        if: >-
+          (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+          github.ref == 'refs/heads/develop'
+        uses: actions/upload-artifact@v4
+        with:
+          name: website-pages
+          path: site/out/
+          include-hidden-files: true
+
   unit:
     name: Unit & Smoke
     if: >-
@@ -329,17 +360,18 @@ jobs:
         run: |
           mkdir -p target/crap-pages
           cp target/crap/badge.json target/crap-pages/crap-badge.json
-      - name: Upload CRAP badge Pages artifact
+      - name: Upload CRAP badge for combined Pages publication
         if: >-
           (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
           github.ref == 'refs/heads/develop'
-        uses: actions/upload-pages-artifact@v5
+        uses: actions/upload-artifact@v4
         with:
+          name: pages-badge
           path: target/crap-pages/
 
   deploy-crap-badge:
-    name: Publish CRAP badge
-    needs: crap-report
+    name: Publish website and CRAP badge
+    needs: [crap-report, website]
     if: >-
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
       github.ref == 'refs/heads/develop'
@@ -351,7 +383,26 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - name: Deploy CRAP badge
+      - name: Download static website
+        uses: actions/download-artifact@v4
+        with:
+          name: website-pages
+          path: target/pages/
+      - name: Add current CRAP badge without replacing website
+        uses: actions/download-artifact@v4
+        with:
+          name: pages-badge
+          path: target/pages/
+      - name: Verify combined publication
+        run: |
+          test -s target/pages/index.html
+          test -s target/pages/sitemap.xml
+          test -s target/pages/crap-badge.json
+      - name: Upload single Pages artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: target/pages/
+      - name: Deploy website and CRAP badge
         id: deployment
         uses: actions/deploy-pages@v5
 
@@ -365,7 +416,7 @@ jobs:
 
   verify:
     name: Verify
-    needs: [classify, docs, crap-report, unit, integration, integration-mongodb, security, real-integration]
+    needs: [classify, docs, website, crap-report, unit, integration, integration-mongodb, security, real-integration]
     if: always() && inputs.badge_only != true
     runs-on: ubuntu-latest
     env:
@@ -377,6 +428,7 @@ jobs:
       SECURITY_REQUIRED: ${{ needs.classify.outputs.security }}
       REAL_INTEGRATION_REQUIRED: ${{ needs.classify.outputs.real_integration }}
       DOCS_RESULT: ${{ needs.docs.result }}
+      WEBSITE_RESULT: ${{ needs.website.result }}
       CRAP_RESULT: ${{ needs.crap-report.result }}
       UNIT_RESULT: ${{ needs.unit.result }}
       POSTGRES_RESULT: ${{ needs.integration.result }}
@@ -398,6 +450,7 @@ jobs:
             printf '%-24s required=%-5s result=%s\n' "$name" "$required" "$result"
           }
           check Documentation "$DOCS_REQUIRED" "$DOCS_RESULT"
+          check 'Website and positioning' true "$WEBSITE_RESULT"
           check CRAP "$CRAP_REQUIRED" "$CRAP_RESULT"
           check 'Unit & Smoke' "$UNIT_REQUIRED" "$UNIT_RESULT"
           check 'Integration (PostgreSQL)' "$POSTGRES_REQUIRED" "$POSTGRES_RESULT"
