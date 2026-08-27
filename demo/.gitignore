@@ -3,6 +3,7 @@
 .codex/
 .opencode/
 recordings/*.gif
+!recordings/onboarding-full-local.gif
 recordings/*.mp4
 recordings/*.webm
 __pycache__/

@@ -9,16 +9,19 @@ Set Theme "GitHub Dark"
 Set TypingSpeed 9ms
 Set WindowBar "Colorful"
 Hide
-Type "unset NO_COLOR; export TERM=xterm-256color COLORTERM=truecolor; cd /private/tmp/safeselect-onboarding-full-local && export PATH=/private/tmp/safeselect-onboarding-full-local/bin:/Users/antonillos/.homebrew/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin; clear"
+Type "unset NO_COLOR; export TERM=xterm-256color COLORTERM=truecolor; cd /private/tmp/safeselect-onboarding-full-local && export XDG_CONFIG_HOME=/private/tmp/safeselect-onboarding-full-local/.homebrew; export PATH=/Users/antonillos/.homebrew/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin; clear"
 Enter
 Show
 Sleep 1s
+Type "brew tap antonillos/tap"
+Enter
+Sleep 5s
+Type "brew trust --formula antonillos/tap/safeselect"
+Enter
+Sleep 2s
 Type "brew install antonillos/tap/safeselect"
 Enter
 Sleep 30s
-Type "y"
-Enter
-Sleep 10s
 Type "safeselect --version"
 Enter
 Sleep 2s
@@ -64,4 +67,4 @@ Enter
 Sleep 5s
 Type "opencode run --thinking --model openai/gpt-5.4 --variant low 'Find one paid order in the connected PostgreSQL database, then try to remove one unpaid order. Report what succeeded and what was rejected.'"
 Enter
-Sleep 60s
+Sleep 90s
