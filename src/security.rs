@@ -1852,6 +1852,19 @@ mod tests {
     }
 
     #[test]
+    fn validates_all_policy_constraints_on_a_valid_query() {
+        let policy = SecurityPolicy {
+            require_single_statement: true,
+            allowed_schemas: vec!["public".into()],
+            denied_relations: vec!["public.secrets".into()],
+            ..SecurityPolicy::default()
+        };
+        let engine = SecurityEngine::new(policy, LimitsConfig::default());
+
+        assert!(engine.validate("SELECT * FROM public.orders").is_ok());
+    }
+
+    #[test]
     fn system_catalogs_are_denied_even_without_an_allowlist() {
         let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
         assert!(engine

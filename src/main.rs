@@ -1524,21 +1524,16 @@ fn prompt_dbeaver_forward_target(conn: &dbeaver::DBeaverConnection) -> Result<(S
     let host = inquire::Text::new("  Database target host through bastion:")
         .with_default(&default_host)
         .prompt()
-        .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?
+        .unwrap_or_default()
         .trim()
         .to_string();
-    if host.is_empty() {
-        return Err(SafeselectError::Other(
-            "Database target host through bastion is required".into(),
-        ));
-    }
     let port = inquire::Text::new("  Database target port through bastion:")
         .with_default(&default_port.to_string())
         .prompt()
-        .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?
+        .unwrap_or_default()
         .trim()
         .parse::<u16>()
-        .map_err(|_| SafeselectError::Other("Invalid database target port".into()))?;
+        .unwrap_or(default_port);
     Ok((host, port))
 }
 
@@ -4826,6 +4821,24 @@ enabled = true
         let warning = dbeaver_shared_tunnel_warning(&conn);
 
         assert!(warning.is_none());
+    }
+
+    #[test]
+    fn dbeaver_forward_target_defaults_ignore_local_tunnel_endpoint() {
+        let mut conn = sample_dbeaver_connection();
+        conn.ssh_local_host = Some("localhost".to_string());
+        conn.ssh_local_port = Some(conn.port);
+
+        assert_eq!(
+            dbeaver_forward_target_defaults(&conn),
+            (String::new(), 5432)
+        );
+
+        conn.ssh_local_port = Some(15432);
+        assert_eq!(
+            dbeaver_forward_target_defaults(&conn),
+            ("db.example.com".to_string(), 5432)
+        );
     }
 
     #[test]
