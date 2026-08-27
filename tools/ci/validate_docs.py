@@ -12,7 +12,16 @@ LINK = re.compile(r"(?<!!)\[[^\]]*\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
 
 
 def markdown_files() -> list[Path]:
-    return sorted(path for path in ROOT.rglob("*.md") if ".git" not in path.parts)
+    # Website dependencies/builds are not repository documentation. Prune them
+    # before traversal, rather than validating thousands of third-party READMEs.
+    import os
+
+    excluded = {".git", "node_modules", ".next", ".vinext", ".wrangler", ".build", "target", "out", "dist"}
+    files = []
+    for directory, children, names in os.walk(ROOT):
+        children[:] = [name for name in children if name not in excluded]
+        files.extend(Path(directory) / name for name in names if name.endswith(".md"))
+    return sorted(files)
 
 
 def local_target(source: Path, raw: str) -> Path | None:
