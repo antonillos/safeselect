@@ -9,6 +9,8 @@ ROOT = Path(__file__).resolve().parents[2] / "site" / "out"
 ORIGIN = "https://antonillos.github.io"
 BASE = "/safeselect"
 ROUTES = ["/", "/compare/", "/guides/dbeaver-codex/", "/read-only-is-not-a-boolean/"]
+GOOGLE_VERIFICATION_FILE = "googled7be89f4207cbfe7.html"
+GOOGLE_VERIFICATION_CONTENT = b"google-site-verification: googled7be89f4207cbfe7.html"
 
 
 class Page(HTMLParser):
@@ -54,6 +56,9 @@ class Page(HTMLParser):
 
 
 def validate(root=ROOT):
+    verification = root / GOOGLE_VERIFICATION_FILE
+    assert verification.is_file(), "missing Google verification file"
+    assert verification.read_bytes() == GOOGLE_VERIFICATION_CONTENT, "changed Google verification content"
     pages = {route: Page((root / route.strip("/") / "index.html").read_text()) for route in ROUTES}
     for route, page in pages.items():
         assert page.h1 == 1, f"{route}: expected one h1"
