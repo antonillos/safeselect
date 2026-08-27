@@ -54,6 +54,11 @@ impl SecurityEngine {
     }
 
     pub fn validate_relation_access(&self, schema: &str, relation: &str) -> Result<()> {
+        if is_system_schema(schema) {
+            return Err(SafeselectError::QueryRejected(format!(
+                "Schema '{schema}' is reserved for PostgreSQL system catalogs"
+            )));
+        }
         if !self.policy.allowed_schemas.is_empty()
             && !self
                 .policy
@@ -609,6 +614,7 @@ impl SecurityEngine {
         if self.policy.require_single_statement {
             self.check_single_statement(query)?;
         }
+        self.check_system_schema_references(query)?;
         if !self.policy.allowed_schemas.is_empty() {
             self.check_allowed_schemas(query)?;
         }
@@ -874,6 +880,19 @@ impl SecurityEngine {
         Ok(())
     }
 
+    fn check_system_schema_references(&self, sql: &str) -> Result<()> {
+        let sql_lower = sql.to_lowercase();
+        if ["pg_catalog.", "information_schema.", "pg_toast."]
+            .iter()
+            .any(|schema| sql_lower.contains(schema))
+        {
+            return Err(SafeselectError::QueryRejected(
+                "Query references a PostgreSQL system catalog schema".into(),
+            ));
+        }
+        Ok(())
+    }
+
     fn check_denied_relations(&self, sql: &str) -> Result<()> {
         let sql_lower = sql.to_lowercase();
         for relation in &self.policy.denied_relations {
@@ -954,6 +973,14 @@ impl SecurityEngine {
         }
         Ok(())
     }
+}
+
+fn is_system_schema(schema: &str) -> bool {
+    let lower = schema.to_ascii_lowercase();
+    lower == "pg_catalog"
+        || lower == "information_schema"
+        || lower == "pg_toast"
+        || lower.starts_with("pg_")
 }
 
 fn has_schema_reference(sql_lower: &str, allowed_patterns: &[String]) -> bool {
@@ -1281,33 +1308,36 @@ fn extract_with_query_body(sql: &str) -> Option<&str> {
         i = skip_sql_whitespace(sql, i);
     }
 
+    consume_cte_list(sql, i)
+}
+
+fn consume_cte_list(sql: &str, mut i: usize) -> Option<&str> {
     loop {
-        let as_index = find_top_level_keyword(sql, i, "AS")?;
-        i = skip_sql_whitespace(sql, as_index + 2);
-
-        if starts_with_keyword_at(sql, i, "NOT") {
-            i += 3;
-            i = skip_sql_whitespace(sql, i);
+        let (next, done) = parse_cte(sql, i)?;
+        if done {
+            return sql.get(next..);
         }
-        if starts_with_keyword_at(sql, i, "MATERIALIZED") {
-            i += "MATERIALIZED".len();
-            i = skip_sql_whitespace(sql, i);
-        }
+        i = next;
+    }
+}
 
-        if sql.get(i..=i)? != "(" {
-            return None;
-        }
-
-        i = skip_balanced_parentheses(sql, i)?;
-        i = skip_sql_whitespace(sql, i);
-
-        if sql.get(i..=i) == Some(",") {
-            i += 1;
-            i = skip_sql_whitespace(sql, i);
-            continue;
-        }
-
-        return sql.get(i..);
+fn parse_cte(sql: &str, mut i: usize) -> Option<(usize, bool)> {
+    let as_index = find_top_level_keyword(sql, i, "AS")?;
+    i = skip_sql_whitespace(sql, as_index + 2);
+    if starts_with_keyword_at(sql, i, "NOT") {
+        i = skip_sql_whitespace(sql, i + 3);
+    }
+    if starts_with_keyword_at(sql, i, "MATERIALIZED") {
+        i = skip_sql_whitespace(sql, i + "MATERIALIZED".len());
+    }
+    if sql.get(i..=i)? != "(" {
+        return None;
+    }
+    i = skip_sql_whitespace(sql, skip_balanced_parentheses(sql, i)?);
+    if sql.get(i..=i) == Some(",") {
+        Some((skip_sql_whitespace(sql, i + 1), false))
+    } else {
+        Some((i, true))
     }
 }
 
@@ -1789,6 +1819,22 @@ mod tests {
     }
 
     #[test]
+    fn test_extract_with_query_body_variants() {
+        assert_eq!(extract_with_query_body("SELECT 1"), None);
+        assert_eq!(
+            extract_with_query_body(
+                "WITH RECURSIVE x AS NOT MATERIALIZED (SELECT 1) SELECT * FROM x"
+            ),
+            Some("SELECT * FROM x")
+        );
+        assert_eq!(
+            extract_with_query_body("WITH a AS (SELECT 1), b AS (SELECT 2) SELECT * FROM b"),
+            Some("SELECT * FROM b")
+        );
+        assert_eq!(extract_with_query_body("WITH broken AS SELECT 1"), None);
+    }
+
+    #[test]
     fn test_max_sql_bytes() {
         let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
         let big_sql = "SELECT ".to_string() + &"a".repeat(MAX_SQL_BYTES);
@@ -1803,6 +1849,34 @@ mod tests {
         };
         let engine = SecurityEngine::new(policy, LimitsConfig::default());
         assert!(engine.validate("SELECT * FROM public.users").is_ok());
+    }
+
+    #[test]
+    fn system_catalogs_are_denied_even_without_an_allowlist() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        assert!(engine
+            .validate_relation_access("pg_catalog", "pg_inherits")
+            .is_err());
+        assert!(engine
+            .validate("SELECT * FROM pg_catalog.pg_inherits")
+            .is_err());
+        assert!(engine
+            .validate("SELECT * FROM information_schema.tables")
+            .is_err());
+        assert!(engine
+            .validate_system("SELECT * FROM information_schema.tables")
+            .is_ok());
+    }
+
+    #[test]
+    fn system_schema_prefixes_are_denied_for_exact_relations() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        for schema in ["pg_toast", "pg_temp_3", "PG_CATALOG"] {
+            assert!(
+                engine.validate_relation_access(schema, "relation").is_err(),
+                "system schema {schema} must be denied"
+            );
+        }
     }
 
     #[test]

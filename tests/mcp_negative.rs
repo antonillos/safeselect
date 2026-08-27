@@ -261,6 +261,43 @@ fn mcp_negative_validation_preserves_jsonrpc_and_recovers_until_eof() {
 }
 
 #[test]
+fn postgres_posture_preflight_does_not_block_or_close_mcp() {
+    let (mut mcp, tmp) = McpHarness::start();
+
+    let query = mcp.send(&serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {"name": "select", "arguments": {"sql": "SELECT 1"}}
+    }));
+    assert!(
+        query["error"].is_null(),
+        "query must not be posture-blocked: {query}"
+    );
+    assert_eq!(
+        query["result"]["isError"], true,
+        "fixture connection should fail normally: {query}"
+    );
+
+    let listed = mcp.send(&serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/list"
+    }));
+    assert!(
+        listed["error"].is_null(),
+        "MCP must remain available: {listed}"
+    );
+    assert!(
+        listed["result"]["tools"].is_array(),
+        "tools/list must still work: {listed}"
+    );
+
+    let _ = mcp.finish();
+    let _ = std::fs::remove_dir_all(tmp);
+}
+
+#[test]
 fn mcp_manifest_protocol_cases_are_enforced() {
     let (mut mcp, tmp) = McpHarness::start();
 

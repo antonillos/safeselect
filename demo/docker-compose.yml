@@ -18,6 +18,17 @@ services:
       timeout: 5s
       retries: 30
 
+  ssh-bastion:
+    build:
+      context: ./ssh
+    ports:
+      - "55222:22"
+    volumes:
+      - ./.runtime/ssh/authorized_keys:/home/demo/.ssh/authorized_keys:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   mongodb:
     image: mongo:8@sha256:49f1d7b87c2ddf918372be5defe7edff8c46703d0b2a56023a3f825e32e1250c
     environment:

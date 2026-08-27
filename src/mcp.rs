@@ -7,7 +7,7 @@ use crate::backend::{
     DocumentFixtureRequest, DocumentSchemaRequest,
 };
 use crate::compose;
-use crate::config::{ConfigLoader, EnvironmentConfig, ProjectConfig};
+use crate::config::{ConfigLoader, DriverConfig, EnvironmentConfig, ProjectConfig, ResolvedConfig};
 use crate::diagnostics::{self, DiagnosticCode, DiagnosticStatus};
 use crate::error::{Result, SafeselectError};
 use crate::security::SecurityEngine;
@@ -225,6 +225,8 @@ pub struct McpServer {
     config_dir: PathBuf,
     verbose_sidecar: bool,
     backend: BackendDescriptor,
+    posture_project: ProjectConfig,
+    posture_environment: EnvironmentConfig,
 }
 
 impl McpServer {
@@ -269,6 +271,8 @@ impl McpServer {
             config_dir: config_dir.to_path_buf(),
             verbose_sidecar: false,
             backend,
+            posture_project: project_config,
+            posture_environment: env_config,
         })
     }
 
@@ -438,6 +442,10 @@ impl McpServer {
 
     fn handle_tools_list(&mut self, msg: &JsonRpcMessage) -> Result<()> {
         let mut tools = vec![ToolDefinition {
+            name: "security_posture".into(),
+            description: self.tool_description("inspect PostgreSQL security posture; warning findings can be acknowledged after explicit user approval to avoid repeating the same unchanged warning"),
+            input_schema: serde_json::json!({"type":"object","properties":{"acknowledge":{"type":"boolean"}},"additionalProperties":false}),
+        }, ToolDefinition {
             name: "database_info".into(),
             description: self.tool_description(
                 "show active database backend and capabilities; if the user only asked about available capabilities, report them and stop",
@@ -530,6 +538,22 @@ impl McpServer {
             tools.push(ToolDefinition {
                 name: "list_table_indexes".into(),
                 description: self.tool_description("list safe PostgreSQL index metadata for one exact allowed table or view; copy schema and table from list_tables, then use the returned columns or expressions in explain before any targeted select"),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "schema": {"type": "string", "description": "Exact table_schema copied from list_tables"},
+                        "table": {"type": "string", "description": "Exact table_name copied from the same list_tables row"}
+                    },
+                    "required": ["schema", "table"],
+                    "additionalProperties": false
+                }),
+            });
+        }
+
+        if self.is_postgres() {
+            tools.push(ToolDefinition {
+                name: "list_table_partitions".into(),
+                description: self.tool_description("list all descendant PostgreSQL partitions for one exact allowed table; returns bounded partition metadata, total count, and whether the list was truncated"),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -1254,6 +1278,7 @@ impl McpServer {
             .unwrap_or(serde_json::json!({}));
 
         match tool_name {
+            "security_posture" => self.handle_security_posture(msg.id.clone(), &args),
             "database_info" => self.handle_database_info(msg.id.clone()),
             "audit_status" => self.handle_audit_status(msg.id.clone(), &args),
             "audit_recent" => self.handle_audit_recent(msg.id.clone(), &args),
@@ -1261,6 +1286,14 @@ impl McpServer {
             "list_tables" => self.handle_list_tables(msg.id.clone(), &args),
             "describe_table" => self.handle_describe_table(msg.id.clone(), &args),
             "list_table_indexes" => self.handle_list_table_indexes(msg.id.clone(), &args),
+            "list_table_partitions" if self.is_postgres() => {
+                self.handle_list_table_partitions(msg.id.clone(), &args)
+            }
+            "list_table_partitions" => self.send_error(
+                msg.id.clone(),
+                -32601,
+                "list_table_partitions is available only for PostgreSQL backends",
+            ),
             "get_database_stats" => match self.backend.kind {
                 BackendKind::Document => {
                     self.handle_get_mongodb_database_stats(msg.id.clone(), &args)
@@ -1320,6 +1353,70 @@ impl McpServer {
             "reconnect" => self.handle_reconnect(msg.id.clone()),
             _ => self.send_error(msg.id.clone(), -32602, format!("Unknown tool: {tool_name}")),
         }
+    }
+
+    fn handle_security_posture(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        if !self.is_postgres() {
+            return self.send_error(
+                id,
+                -32601,
+                "security_posture is currently available only for PostgreSQL",
+            );
+        }
+        self.run_security_posture(id, args)
+    }
+
+    fn run_security_posture(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        let driver = DriverConfig {
+            version: 1,
+            vendor: "postgresql".into(),
+            path: self.driver_path.clone(),
+            class: self.driver_class.clone(),
+            sha256: String::new(),
+        };
+        let resolved = ResolvedConfig {
+            project: self.posture_project.clone(),
+            environment: self.posture_environment.clone(),
+            driver: Some(driver),
+            password: self.db_password.clone(),
+            repo_root: self.repo_root.clone(),
+        };
+        let mut report = crate::posture::inspect(&resolved, &self.config_dir)?;
+        Self::acknowledge_posture(&mut report, args, &self.config_dir)?;
+        let payload =
+            serde_json::to_string(&report).map_err(|e| SafeselectError::Other(e.to_string()))?;
+        self.write_response(&trusted_tool_response(
+            id,
+            "ok",
+            payload,
+            "Review warnings with the user; acknowledge an unchanged warning only after explicit user approval. Database access remains protected by SafeSelect read-only enforcement.",
+        ))
+    }
+
+    fn acknowledge_posture(
+        report: &mut crate::posture::Report,
+        args: &serde_json::Value,
+        dir: &Path,
+    ) -> Result<()> {
+        if args
+            .get("acknowledge")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+            && report.status == "warning"
+        {
+            crate::posture::acknowledge(dir, &report.fingerprint)?;
+            report.acknowledged = true;
+            report.status = "accepted";
+        }
+        Ok(())
     }
 
     fn handle_audit_status(
@@ -2276,6 +2373,49 @@ impl McpServer {
             "Call explain with a SELECT using one returned index column or expression and a selective predicate; only then make a targeted select if the user still needs rows.",
             "Call list_tables, choose one exact allowed relation, then retry list_table_indexes once.",
         )
+    }
+
+    fn handle_list_table_partitions(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        let (schema, table) =
+            match self.exact_catalog_relation(id.clone(), args, "list_table_partitions")? {
+                Some(target) => target,
+                None => return Ok(()),
+            };
+        let limit = self.security.limits().max_rows.max(1);
+        let sql = build_list_table_partitions_sql(&schema, &table, limit);
+        if let Err(error) = self.security.validate_system(&sql) {
+            self.audit.record("REJECT", "reject", &sql)?;
+            let _ = self.write_response(&tool_error_response(
+                id,
+                format!("list_table_partitions rejected: {error}"),
+                "Do not infer partition metadata. Stop and report this SafeSelect security rejection.",
+            ));
+            self.fail_closed("Security violation");
+            return Ok(());
+        }
+        match self.execute_with_reconnect(&sql) {
+            Ok(result) => {
+                self.audit.record("PASS", "allow", &sql)?;
+                let result = partition_tool_result(&result)?;
+                self.write_response(&data_tool_response(
+                    id,
+                    &result,
+                    "Use only these returned partition names and counts; do not query PostgreSQL catalogs with select.",
+                )?)
+            }
+            Err(_) => {
+                self.audit.record("JDBC_ERROR", "error", &sql)?;
+                self.write_response(&tool_error_response(
+                    id,
+                    "list_table_partitions failed.".into(),
+                    "No partition data was returned. Call check, then report the failure without inferring a partition count.",
+                ))
+            }
+        }
     }
 
     fn handle_get_postgres_database_stats(
@@ -4158,7 +4298,8 @@ impl McpServer {
                 code,
                 message,
                 data: Some(serde_json::json!({
-                    "next_suggestion": next_suggestion
+                    "no_data": true,
+                    "next_suggestion": format!("No data was returned. Do not infer results from this failed call. {next_suggestion}")
                 })),
             }),
         };
@@ -4389,7 +4530,7 @@ fn tool_error_response(
     let boundary = format!("safeselect-untrusted-data-{}", uuid::Uuid::new_v4());
     let framed_detail = format!("<{boundary}>\n{text}\n</{boundary}>");
     let rendered = format!(
-        "SafeSelect tool execution failed.\n{UNTRUSTED_DATA_WARNING}\n{framed_detail}\nNext suggestion: {next_suggestion}"
+        "SafeSelect tool execution failed. No data was returned; do not infer results from this failed call.\n{UNTRUSTED_DATA_WARNING}\n{framed_detail}\nNext suggestion: {next_suggestion}"
     );
     JsonRpcResponse {
         jsonrpc: "2.0",
@@ -4401,6 +4542,7 @@ fn tool_error_response(
             }],
             "structuredContent": {
                 "status": "error",
+                "no_data": true,
                 "message": "SafeSelect tool execution failed.",
                 "detail": framed_detail,
                 "next_suggestion": next_suggestion
@@ -4995,6 +5137,39 @@ fn build_table_stats_sql(schema: &str, table: &str) -> String {
     )
 }
 
+fn build_list_table_partitions_sql(schema: &str, table: &str, limit: u64) -> String {
+    format!(
+        "WITH RECURSIVE partition_tree AS (SELECT child.oid AS relation_oid, child_ns.nspname AS schema_name, child.relname AS table_name, 1::integer AS depth FROM pg_inherits AS inheritance JOIN pg_class AS parent ON parent.oid = inheritance.inhparent JOIN pg_namespace AS parent_ns ON parent_ns.oid = parent.relnamespace JOIN pg_class AS child ON child.oid = inheritance.inhrelid JOIN pg_namespace AS child_ns ON child_ns.oid = child.relnamespace WHERE parent_ns.nspname = '{}' AND parent.relname = '{}' UNION ALL SELECT child.oid AS relation_oid, child_ns.nspname AS schema_name, child.relname AS table_name, tree.depth + 1 AS depth FROM partition_tree AS tree JOIN pg_inherits AS inheritance ON inheritance.inhparent = tree.relation_oid JOIN pg_class AS child ON child.oid = inheritance.inhrelid JOIN pg_namespace AS child_ns ON child_ns.oid = child.relnamespace) SELECT schema_name, table_name, depth, (SELECT COUNT(*) FROM partition_tree) AS total_partitions FROM partition_tree ORDER BY depth, schema_name, table_name LIMIT {limit}",
+        schema.replace('\'', "''"),
+        table.replace('\'', "''"),
+    )
+}
+
+fn partition_tool_result(result: &crate::sidecar::QueryResult) -> Result<serde_json::Value> {
+    let total = result
+        .rows
+        .first()
+        .and_then(|row| row.get(3))
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let partitions: Vec<serde_json::Value> = result
+        .rows
+        .iter()
+        .filter_map(|row| {
+            Some(serde_json::json!({
+                "schema": row.first()?.as_str()?,
+                "table": row.get(1)?.as_str()?,
+                "depth": row.get(2)?.as_u64()?
+            }))
+        })
+        .collect();
+    Ok(serde_json::json!({
+        "partitions": partitions,
+        "total": total,
+        "truncated": total > result.row_count
+    }))
+}
+
 fn catalog_schema_predicate(schema: Option<&str>) -> String {
     match schema {
         Some(schema) => format!(" AND n.nspname = '{}'", schema.replace('\'', "''")),
@@ -5532,6 +5707,18 @@ mod tests {
     }
 
     #[test]
+    fn security_posture_propagates_connection_failure() {
+        let root =
+            std::env::temp_dir().join(format!("safeselect-mcp-posture-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut server = test_server(&root);
+        assert!(server
+            .handle_security_posture(Some(serde_json::json!(1)), &serde_json::json!({}))
+            .is_err());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn tool_definitions_require_next_suggestion_in_output_schema() {
         let definition = ToolDefinition {
             name: "example".into(),
@@ -5786,6 +5973,78 @@ mod tests {
             value["result"]["structuredContent"]["next_suggestion"],
             "Correct the filter, then retry once."
         );
+        assert_eq!(value["result"]["structuredContent"]["no_data"], true);
+        assert!(value["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("do not infer results"));
+    }
+
+    #[test]
+    fn partition_metadata_is_bounded_and_structured() {
+        let sql = build_list_table_partitions_sql("public", "inbox", 2);
+        assert!(sql.contains("WITH RECURSIVE partition_tree"));
+        assert!(sql.contains("pg_inherits"));
+        assert!(sql.ends_with("LIMIT 2"));
+        let result = crate::sidecar::QueryResult {
+            columns: vec![],
+            rows: vec![
+                vec![
+                    serde_json::json!("public"),
+                    serde_json::json!("inbox_2026"),
+                    serde_json::json!(1),
+                    serde_json::json!(3),
+                ],
+                vec![
+                    serde_json::json!("public"),
+                    serde_json::json!("inbox_2026_01"),
+                    serde_json::json!(2),
+                    serde_json::json!(3),
+                ],
+            ],
+            row_count: 2,
+            byte_count: 0,
+            elapsed_ms: 0,
+            elapsed: String::new(),
+        };
+        let value = partition_tool_result(&result).unwrap();
+        assert_eq!(value["total"], 3);
+        assert_eq!(value["truncated"], true);
+        assert_eq!(value["partitions"][1]["depth"], 2);
+    }
+
+    #[test]
+    fn partition_metadata_handles_tables_without_partitions() {
+        let result = crate::sidecar::QueryResult {
+            columns: vec![],
+            rows: vec![],
+            row_count: 0,
+            byte_count: 0,
+            elapsed_ms: 0,
+            elapsed: String::new(),
+        };
+        assert_eq!(
+            partition_tool_result(&result).unwrap(),
+            serde_json::json!({"partitions": [], "total": 0, "truncated": false})
+        );
+    }
+
+    #[test]
+    fn partition_tool_uses_the_catalog_execution_boundary() {
+        let root = std::env::temp_dir().join(format!(
+            "safeselect-mcp-partitions-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut server = test_server(&root);
+        server
+            .handle_list_table_partitions(
+                Some(serde_json::json!(1)),
+                &serde_json::json!({"schema":"public", "table":"inbox"}),
+            )
+            .unwrap();
+        assert!(server.sidecar.is_none());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -6516,6 +6775,37 @@ services:
                 &serde_json::json!({"schema":"private"})
             )
             .is_err());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn posture_acknowledgement_is_explicit_and_persistent() {
+        let root =
+            std::env::temp_dir().join(format!("safeselect-mcp-ack-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut report = crate::posture::Report {
+            version: 1,
+            backend: "postgresql",
+            role: "reader".into(),
+            database: "app".into(),
+            status: "warning",
+            findings: vec![crate::posture::Finding {
+                code: "X",
+                severity: "warning",
+                message: "warning".into(),
+            }],
+            fingerprint: "abc".into(),
+            acknowledged: false,
+        };
+        McpServer::acknowledge_posture(
+            &mut report,
+            &serde_json::json!({"acknowledge":true}),
+            &root,
+        )
+        .unwrap();
+        assert_eq!(report.status, "accepted");
+        let saved = std::fs::read_to_string(root.join("posture-acknowledgements.json")).unwrap();
+        assert_eq!(saved, "[\"abc\"]");
         let _ = std::fs::remove_dir_all(root);
     }
 }

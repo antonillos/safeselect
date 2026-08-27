@@ -165,12 +165,10 @@ jobs:
               }
             }
 
-            const requiredChecks = [
-              "Unit & Smoke",
-              "Integration (MongoDB)",
-              "Integration (PostgreSQL)",
-              "Security & Licenses",
-            ];
+            // Verify is the stable branch-protection gate. It evaluates the
+            // path-selected jobs for this exact head SHA, including the real
+            // Docker integration suite when the policy requires it.
+            const requiredChecks = ["Verify"];
             const deadline = Date.now() + 30 * 60 * 1000;
 
             async function loadRequiredJobs(runId) {
@@ -288,88 +286,6 @@ jobs:
               );
               core.setFailed("Verify run failed.");
               return;
-            }
-
-            const requiresRealIntegration = pull.labels.some(
-              (label) => label.name === "safe-to-merge"
-            );
-            if (requiresRealIntegration) {
-            async function findSuccessfulRealIntegration(target) {
-              const runs = await github.rest.actions.listWorkflowRuns({
-                owner,
-                repo,
-                workflow_id: "real-integration-gate.yml",
-                event: "pull_request",
-                branch: target.head.ref,
-                status: "success",
-                per_page: 20,
-              });
-              for (const candidate of runs.data.workflow_runs) {
-                if (candidate.head_sha !== target.head.sha) continue;
-                const jobs = await github.paginate(
-                  github.rest.actions.listJobsForWorkflowRun,
-                  { owner, repo, run_id: candidate.id, per_page: 100 }
-                );
-                const realJob = jobs.find(
-                  (job) => job.name === "real-integration / Real Integration Tests"
-                );
-                if (realJob?.status === "completed" && realJob.conclusion === "success") {
-                  return candidate;
-                }
-              }
-              return null;
-            }
-
-            let realIntegrationRun = await findSuccessfulRealIntegration(pull);
-            while (!realIntegrationRun && Date.now() < deadline) {
-              const runs = await github.rest.actions.listWorkflowRuns({
-                owner,
-                repo,
-                workflow_id: "real-integration-gate.yml",
-                event: "pull_request",
-                branch: pull.head.ref,
-                per_page: 20,
-              });
-              realIntegrationRun = runs.data.workflow_runs.find(
-                (run) => run.head_sha === pull.head.sha
-              ) || null;
-              if (!realIntegrationRun) await sleep(5000);
-            }
-
-            if (!realIntegrationRun) {
-              await comment(
-                "⏳ Timed out waiting for the safe-to-merge real integration gate. " +
-                "Remove and re-add the label, then retry `/merge`."
-              );
-              core.setFailed("Real integration gate did not start.");
-              return;
-            }
-
-            while (realIntegrationRun.status !== "completed" && Date.now() < deadline) {
-              await sleep(15000);
-              realIntegrationRun = (await github.rest.actions.getWorkflowRun({
-                owner,
-                repo,
-                run_id: realIntegrationRun.id,
-              })).data;
-            }
-
-            const realIntegrationJobs = await github.paginate(
-              github.rest.actions.listJobsForWorkflowRun,
-              { owner, repo, run_id: realIntegrationRun.id, per_page: 100 }
-            );
-            const realIntegrationJob = realIntegrationJobs.find(
-              (job) => job.name === "real-integration / Real Integration Tests"
-            );
-            if (realIntegrationRun.conclusion !== "success" ||
-                realIntegrationJob?.conclusion !== "success") {
-              await comment(
-                `⛔ Real integration gate failed: \`${realIntegrationJob?.conclusion || "missing"}\`.\n\n` +
-                `Run: ${realIntegrationRun.html_url}`
-              );
-              core.setFailed("Real integration gate failed.");
-              return;
-            }
             }
 
             // Required-workflow rules can require the pull_request run in
@@ -708,7 +624,7 @@ jobs:
             }
 
             // GITHUB_TOKEN merges do not trigger downstream push workflows.
-            // Dispatch Verify explicitly so develop publishes the latest CRAP badge.
+            // Refresh only the CRAP badge instead of repeating the full verification suite.
             if (base === "develop") {
               try {
                 await github.rest.actions.createWorkflowDispatch({
@@ -716,14 +632,15 @@ jobs:
                   repo,
                   workflow_id: "verify.yml",
                   ref: "develop",
+                  inputs: { badge_only: "true" },
                   request: githubApiRequest,
                 });
-                await comment("📊 Verify dispatched on `develop` to refresh the CRAP badge.");
+                await comment("📊 CRAP badge refresh dispatched on `develop`.");
               } catch (error) {
-                core.warning(`Could not dispatch Verify on develop: ${error.message}`);
+                core.warning(`Could not dispatch CRAP badge refresh on develop: ${error.message}`);
                 await comment(
-                  "⚠️ Merge completed, but Verify could not be dispatched on `develop`; " +
-                  "run the Verify workflow manually to refresh the CRAP badge."
+                  "⚠️ Merge completed, but the CRAP badge refresh could not be dispatched on `develop`; " +
+                  "run Verify manually with the badge_only input."
                 );
               }
             }
