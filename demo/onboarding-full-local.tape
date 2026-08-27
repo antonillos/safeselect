@@ -13,6 +13,9 @@ Type "unset NO_COLOR; export TERM=xterm-256color COLORTERM=truecolor; cd /privat
 Enter
 Show
 Sleep 1s
+Type "brew install antonillos/tap/safeselect"
+Enter
+Sleep 5s
 Type "safeselect --version"
 Enter
 Sleep 2s
