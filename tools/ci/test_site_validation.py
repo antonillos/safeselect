@@ -75,6 +75,19 @@ class SiteValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Duplicate id"):
             site.Page('<h1 id="x">One</h1><p id="x">Two</p>')
 
+    def test_explicit_decorative_image(self):
+        site.Page('<a href="/"><img alt="" aria-hidden="true" src="/icon.svg">SafeSelect MCP</a>')
+
+    def test_informative_image(self):
+        site.Page('<img alt="A recorded database inspection" src="/demo.gif">')
+
+    def test_missing_alt_is_not_decorative(self):
+        for attributes in ('', 'aria-hidden="true"', 'alt=""', 'alt=" "',
+                           'alt="" aria-hidden="false"', 'alt=" " aria-hidden="true"'):
+            with self.subTest(attributes=attributes):
+                with self.assertRaisesRegex(ValueError, "alternative text"):
+                    site.Page(f'<img src="/icon.svg" {attributes}>')
+
     def test_docs_skip_generated_dependencies(self):
         (self.root / "docs").mkdir()
         (self.root / "docs/guide.md").write_text("# Guide\n")

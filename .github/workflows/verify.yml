@@ -126,6 +126,10 @@ jobs:
           cache-dependency-path: site/package-lock.json
       - name: Install locked website dependencies
         run: npm ci --prefix site --ignore-scripts
+      - name: Validate generated icon assets
+        run: |
+          npm run icons:export --prefix site -- --check
+          npm run test:icons --prefix site
       - name: Build and validate static website
         run: |
           npm run build:pages --prefix site

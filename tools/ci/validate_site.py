@@ -43,8 +43,12 @@ class Page(HTMLParser):
             url = attrs.get("href", attrs.get("src"))
             if url:
                 self.links.append(url)
-        if tag == "img" and not attrs.get("alt"):
-            raise ValueError("Image missing alternative text")
+        if tag == "img":
+            # Explicitly decorative images may use null alt; missing alt is
+            # still an error, even when aria-hidden is present.
+            decorative = attrs.get("alt") == "" and attrs.get("aria-hidden") == "true"
+            if not (attrs.get("alt") or "").strip() and not decorative:
+                raise ValueError("Image missing alternative text")
 
     def handle_endtag(self, tag):
         if tag == "title":
