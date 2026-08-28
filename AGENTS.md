@@ -46,6 +46,29 @@ SQL proxy for AI agents. Fail-closed security model: any incident terminates the
   or confidential information. Use a public contributor handle and a GitHub noreply
   address rather than personal contact details. Inspect staged content before committing.
 
+## Development Principles
+
+Apply these principles, adapted from
+[multica-ai/andrej-karpathy-skills](https://github.com/multica-ai/andrej-karpathy-skills/blob/main/CLAUDE.md):
+
+- **Think Before Coding**: Inspect relevant code, make assumptions explicit and
+  explain meaningful trade-offs. Resolve ambiguities that affect correctness,
+  scope or safety before editing instead of silently choosing an interpretation.
+- **Simplicity First**: Implement only the requested behavior with the smallest
+  clear solution. Avoid speculative features, unnecessary dependencies and
+  abstractions without a current need. Simplicity must not weaken security checks.
+- **Surgical Changes**: Keep each edit tied to the task and follow local style.
+  Preserve unrelated code and user changes. Remove only dead code introduced by
+  your edits; report unrelated cleanup opportunities without acting on them.
+- **Goal-Driven Execution**: Define observable acceptance criteria before coding.
+  For bugs, add a reproducing test first where feasible; for refactors, verify
+  behavior before and after. Map multi-step work to checks and report actual
+  results and remaining gaps, not assumed success.
+
+Scale planning and verification to the change. These principles do not override
+review-only restrictions, existing CI ownership, privacy rules or fail-closed
+security. Review consumes existing CI evidence rather than executing CRAP again.
+
 ## Code Review Rules
 
 These rules apply to review requests, not implementation tasks. See
@@ -68,6 +91,9 @@ These rules apply to review requests, not implementation tasks. See
   checks. Flag removed tests, weakened thresholds and exclusions that hide regressions.
 - Review concrete coupling, duplicated invariants and testability regressions.
   Do not mistake high coverage for meaningful assertions or sound design.
+- Apply the Development Principles to the diff: identify unsupported assumptions,
+  unnecessary complexity, unrelated edits and missing verification with concrete
+  consequences, not subjective style preferences.
 
 ### Evidence and review-only behavior
 

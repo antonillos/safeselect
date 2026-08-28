@@ -4,6 +4,9 @@
 
 - Check existing issues and PRs before starting work.
 - Open an issue first for significant changes so we can discuss the approach.
+- Follow the [Development Principles](AGENTS.md#development-principles): make
+  assumptions explicit, prefer simple solutions, limit edits to the task and
+  define verifiable acceptance criteria before implementation.
 
 ## Development Setup
 
