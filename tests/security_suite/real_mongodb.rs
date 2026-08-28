@@ -78,7 +78,12 @@ pub fn run() {
             tools
                 .to_string()
                 .contains("\"items\":{\"type\":\"object\"}")
-                && tools.to_string().contains("do not call list_mcp_resources")
+                && tools
+                    .to_string()
+                    .contains("Use tools for database discovery")
+                && tools
+                    .to_string()
+                    .contains("read-only debugging resource is static guidance")
                 && definitions.iter().all(|tool| {
                     tool["outputSchema"]["required"]
                         .as_array()
@@ -89,12 +94,14 @@ pub fn run() {
             "agent guidance missing from tools/list: {tools}"
         );
 
-        log_check("MCP database_info declares document backend and no resources");
+        log_check("MCP database_info distinguishes static guidance from database resources");
         let info = harness.call_tool(10, "database_info", json!({}));
         assert!(info.success, "database_info failed: {}", info.text);
         assert!(
             info.text.contains("\"kind\":\"document\"")
-                && info.text.contains("\"resources_supported\":false")
+                && info.text.contains("\"resources_supported\":true")
+                && info.text.contains("\"database_resources_supported\":false")
+                && info.text.contains("static read-only debugging resource")
                 && info.text.contains("\"next_suggestion\"")
                 && info.text.contains("discover_document_schema"),
             "unexpected database_info: {}",

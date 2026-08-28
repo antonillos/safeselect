@@ -375,10 +375,25 @@ fn mcp_exposes_static_read_only_prompt_and_resource_without_database_access() {
                 && !text.contains("password")
         }));
 
+    let database_info = mcp.send(&serde_json::json!({
+        "jsonrpc": "2.0", "id": 6, "method": "tools/call",
+        "params": {"name": "database_info", "arguments": {}}
+    }));
+    assert_eq!(
+        database_info["result"]["structuredContent"]["untrusted_data"]["value"]
+            ["resources_supported"],
+        true
+    );
+    assert_eq!(
+        database_info["result"]["structuredContent"]["untrusted_data"]["value"]
+            ["database_resources_supported"],
+        false
+    );
+
     for (id, method, params) in [
-        (6, "prompts/get", serde_json::json!({"name": "unknown"})),
+        (7, "prompts/get", serde_json::json!({"name": "unknown"})),
         (
-            7,
+            8,
             "resources/read",
             serde_json::json!({"uri": "safeselect://unknown"}),
         ),

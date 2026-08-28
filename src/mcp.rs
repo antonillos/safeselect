@@ -1607,8 +1607,9 @@ impl McpServer {
                 "kind": self.backend.kind,
                 "vendor": self.backend.vendor,
                 "capabilities": capabilities,
-                "resources_supported": false,
-                "discovery": "Use the backend-specific SafeSelect discovery tools; SafeSelect does not expose MCP resources."
+                "resources_supported": true,
+                "database_resources_supported": false,
+                "discovery": "Use the backend-specific SafeSelect discovery tools. SafeSelect also exposes a static read-only debugging resource, but it never contains database data."
             }),
             next_suggestion,
         )?;
