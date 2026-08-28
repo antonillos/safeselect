@@ -1,10 +1,11 @@
-# LobeHub tool metadata
+# LobeHub MCP metadata
 
-Regenerate the marketplace tool definitions when MCP names, descriptions or
-schemas change. Requires Python 3.9+, a trusted SafeSelect executable matching
-the manifest version, and an existing PostgreSQL JDBC JAR with an independently
-verified SHA-256. Select a binary built from the code being documented: matching
-version numbers alone cannot establish that the executable includes local changes.
+Regenerate the marketplace tool, prompt and resource definitions when their MCP
+names, descriptions, schemas or content metadata change. Requires Python 3.9+, a
+trusted SafeSelect executable matching the manifest version, and an existing
+PostgreSQL JDBC JAR with an independently verified SHA-256. Select a binary built
+from the code being documented: matching version numbers alone cannot establish
+that the executable includes local changes.
 
 ```bash
 python3 tools/distribution/update_lobehub_manifest.py \
@@ -16,8 +17,8 @@ python3 tools/distribution/update_lobehub_manifest.py \
 
 Remove `--check` to update `lhm.plugin.json`, or use `--manifest` for a different
 file. Exit codes: 0 = current/updated, 1 = drift in check mode, 2 = failure.
-Review the diff before committing. Version, SEO description and all other
-non-tool fields are preserved; Prepare Release owns the version bump.
+Review the diff before committing. Version, SEO description and all unrelated
+metadata are preserved; Prepare Release owns the version bump.
 
 ## Determinism and idempotence
 
@@ -37,20 +38,22 @@ exporter does not hide changes in descriptions, schemas or array order.
 
 The script uses temporary PostgreSQL/MongoDB project configurations, synthetic
 credentials, isolated HOME/global configuration, and localhost port 1. It sends
-only `initialize`, `notifications/initialized`, and `tools/list`. SafeSelect's
-`initialize` handler currently pre-starts the sidecar, so each capture may launch
-Java and attempt the configured localhost database handshake; failures are logged
-by the server and the metadata response can still continue. No database queries
-or MCP tool calls are made. The subprocess is bounded by a 20-second timeout.
+only `initialize`, `notifications/initialized`, `tools/list`, `prompts/list` and
+`resources/list`. SafeSelect's `initialize` handler currently pre-starts the
+sidecar, so each capture may launch Java and attempt the configured localhost
+database handshake; failures are logged by the server and the metadata response
+can still continue. No database queries, MCP tool calls, prompt retrievals or
+resource reads are made. The subprocess is bounded by a 20-second timeout.
 This is not an OS sandbox for arbitrary executables: pass only a trusted
 SafeSelect binary. Nothing is downloaded or published to LobeHub, and
 authentication files are not read.
 
 Backend-specific tools are labelled; `get_database_stats` preserves both backend
-input schemas with `anyOf`. Unknown backend differences, pagination, duplicate
-names, version mismatch and checksum mismatch fail rather than silently exporting
-incomplete metadata. If MCP output or contextual descriptions change, review and
-adapt the exporter. No resources or prompts are invented.
+input schemas with `anyOf`. Prompt and resource definitions must be identical
+for PostgreSQL and MongoDB captures. Unknown backend differences, pagination,
+duplicate names, version mismatch and checksum mismatch fail rather than silently
+exporting incomplete metadata. If MCP output or contextual descriptions change,
+review and adapt the exporter.
 
 ```bash
 python3 -m unittest discover -s tools/distribution -p 'test_*.py'
@@ -78,9 +81,10 @@ continues to synchronize the version separately.
 Both modes validate the saved manifest before introspection and the proposed
 result before writing. Checks cover required strings, identifier syntax, known
 top-level fields, URL fields, tags, capability arrays, tool names/object-schema
-shapes and localization field types. Duplicate JSON keys, non-JSON numeric
-constants and duplicate tool names/locales are rejected. Validation errors return
-2 with fixed field-level messages, without printing supplied values.
+shapes, prompt names/arguments, resource URIs and localization field types.
+Duplicate JSON keys, non-JSON numeric constants and duplicate identifiers are
+rejected. Validation errors return 2 with fixed field-level messages, without
+printing supplied values.
 
 These are local checks based on the official reference reviewed on 2026-08-28,
 **not an official LobeHub JSON Schema**. As a stricter local policy, unknown
