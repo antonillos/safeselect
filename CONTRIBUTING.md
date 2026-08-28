@@ -10,12 +10,17 @@
 
 ## Development Setup
 
-```bash
-# Build Rust binary
-cargo build
+Use [antonillos/makevn](https://github.com/antonillos/makevn) for Java build and
+test tasks. Run the following from the repository root; do not invoke Maven
+directly from the sidecar directory.
 
-# Build Java sidecar
-cd sidecar && mvn package && cp target/safeselect-sidecar-*.jar target/safeselect-sidecar.jar
+```bash
+# Initialize, test, and package the Java sidecar
+makevn doctor init test package
+cp sidecar/target/safeselect-sidecar-*.jar sidecar/target/safeselect-sidecar.jar
+
+# Build Rust binary with the packaged sidecar
+cargo build
 
 # Run tests
 cargo test

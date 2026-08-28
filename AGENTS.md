@@ -24,6 +24,9 @@ SQL proxy for AI agents. Fail-closed security model: any incident terminates the
 
 ## Development Workflow
 
+Java build commands use [antonillos/makevn](https://github.com/antonillos/makevn)
+from the repository root, not direct Maven invocations.
+
 1. `cargo build` — builds the Rust binary with embedded sidecar
 2. `cargo test` — runs Rust unit tests
 3. `makevn doctor init test package` — run from the Git repository root to initialize, test, and rebuild the Java sidecar (do not call `mvn` directly)
