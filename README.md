@@ -1,7 +1,7 @@
 <p>
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="site/public/icon-dark.svg">
-    <img src="site/public/icon.svg" width="32" height="32" align="middle" alt="" aria-hidden="true">
+    <img src="site/public/icon.svg" width="32" height="32" align="absmiddle" alt="" aria-hidden="true">
   </picture>
   &nbsp;<strong>SafeSelect</strong> <code>MCP</code>
 </p>
