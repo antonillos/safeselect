@@ -283,6 +283,7 @@ Requirements: Rust 1.81+, Java 17+, Maven 3.8+. `sshpass` is optional for passwo
 
 - [Installation guide](docs/install.md)
 - [AI agent integration](docs/agents.md)
+- [On-demand Codex code review](docs/code-review.md)
 - [Security model](docs/security.md)
 - [Security Proof](docs/security-proof.md)
 - [Security test suite](docs/security-test-suite.md)

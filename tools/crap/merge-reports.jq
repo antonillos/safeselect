@@ -55,3 +55,12 @@ def java_entries:
     missing_coverage: ((($rust.entries // []) + ($java.entries // [])) | map(select(.crap == null)) | length)
   }
 }
+| (.entries | map(select(.crap != null and .crap > $threshold)) | length) as $warnings
+| ($ARGS.named.ratchet_max_warnings // "") as $limit
+| . + {gate: (
+    if $limit == "" then {mode: "report-only"}
+    else ($limit | tonumber) as $maximum
+      | {mode: "ratchet", max_warnings: $maximum, warnings: $warnings,
+         status: (if $warnings > $maximum then "failed" else "passed" end)}
+    end
+  )}

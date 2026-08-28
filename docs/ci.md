@@ -28,6 +28,37 @@ unknown paths retain full verification even when combined with website files.
 Consequently, a PR changing this classification policy must itself run the full
 suite; the optimization must not exempt its own implementation from review.
 
+## Java CRAP analyzer
+
+Java CRAP metrics use [antonillos/crap4java](https://github.com/antonillos/crap4java).
+Java build and coverage steps run through
+[antonillos/makevn](https://github.com/antonillos/makevn) from the repository root.
+Verify pins crap4java release **v0.1.0** and checks the JAR's SHA-256 before use. The Java
+wrapper supplies JaCoCo coverage and collects JSON in report-only mode; the
+combined CRAP wrapper enforces the existing warning-count gate. Code review
+reads the generated CI artifacts rather than rerunning the analyzer.
+
+## Commit policy
+
+The independent **Commit Policy** workflow runs on PRs to `develop` and `main`,
+without path filters or a dependency on Verify. Its **Conventional Commits and
+signatures** check validates every PR commit's header and body separator, and
+requires GitHub to verify its SSH signature. Custom types, optional scopes and
+breaking-change markers are supported; bot and merge commits are not exempt.
+
+The check reads GitHub commit metadata only: it does not check out PR code,
+execute tests or CRAP, or use signing secrets. Logs contain short commit SHAs
+and fixed failure categories, not messages or author details. API failures,
+unverified signatures, stale revisions and incomplete commit lists fail the
+check. PRs above the API's 250-commit limit must be split rather than partially
+validated. It does not check a future merge commit or replace privacy review.
+
+Workflow checks and required-check configuration are separate. This change does
+not modify repository protections or the existing Verify/CRAP gates.
+
+References: [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/),
+[GitHub signature verification](https://docs.github.com/en/rest/git/commits#get-a-commit-object).
+
 ## Publication and manual runs
 
 This optimization applies to the PR path classifier. Pushes and ordinary manual
