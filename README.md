@@ -160,6 +160,14 @@ project-scoped entry where the client supports it. See
 [AI agent integration](docs/agents.md) for exact paths, scopes, and manual
 configuration.
 
+## Guided MCP Context
+
+Clients that support MCP prompts can invoke `read_only_database_debugging` for a
+safe investigation checklist. Clients can also read
+`safeselect://guide/read-only-database-debugging` for the same static workflow
+and boundary notes. Neither capability exposes database data, credentials, or
+write access; use the database tools below for discovery and bounded reads.
+
 ## Agent Workflow
 
 Agents should use SafeSelect in this order:

@@ -14,7 +14,9 @@ Product direction for agents:
 - Agent-ready workflows take priority over manual-only ergonomics.
 
 Agents should treat SafeSelect as their database boundary:
-- Use SafeSelect MCP tools only; SafeSelect does not expose MCP resources, so `list_mcp_resources` is not a database discovery step.
+- Use SafeSelect MCP tools for database discovery. The static
+  `safeselect://guide/read-only-database-debugging` resource is guidance only;
+  it never contains database data, so `resources/list` is not a discovery step.
 - For SQL, use `list_tables` then `describe_table`; never guess column names.
 - For MongoDB, use `list_databases`, `list_collections`, then `discover_document_schema`; never guess field names.
 - Follow `next_suggestion` from discovery results instead of repeating an invalid query unchanged.

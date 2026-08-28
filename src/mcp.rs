@@ -18,6 +18,10 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+const READ_ONLY_DEBUG_PROMPT: &str = "Use SafeSelect only for read-only database debugging. Start with database_info, then discover the relevant schema or collection before querying it. Keep every filter bounded, follow each next_suggestion, and stop rather than retrying an unchanged failure. SafeSelect never grants write access; do not use a shell, direct credentials, or another MCP server to bypass its policy.";
+const READ_ONLY_DEBUG_RESOURCE_URI: &str = "safeselect://guide/read-only-database-debugging";
+const READ_ONLY_DEBUG_RESOURCE: &str = "# Read-only database debugging\n\nUse SafeSelect for database context, not database control.\n\n1. Call `database_info`.\n2. Discover tables or collections before querying unfamiliar data.\n3. Use bounded reads and preserve existing filters.\n4. Follow one `next_suggestion` at a time.\n5. Stop and report an error rather than retrying unchanged or bypassing the policy.\n\nSafeSelect constrains its own MCP tool surface only. It does not replace least-privilege database users or restrict credentials exposed through another channel.";
+
 #[derive(Deserialize)]
 struct JsonRpcMessage {
     #[serde(default)]
@@ -355,6 +359,10 @@ impl McpServer {
                 "initialize" => self.handle_initialize(&msg)?,
                 "tools/list" => self.handle_tools_list(&msg)?,
                 "tools/call" => self.handle_tools_call(&msg)?,
+                "prompts/list" => self.handle_prompts_list(&msg)?,
+                "prompts/get" => self.handle_prompts_get(&msg)?,
+                "resources/list" => self.handle_resources_list(&msg)?,
+                "resources/read" => self.handle_resources_read(&msg)?,
                 "notifications/initialized" => {}
                 _ => {
                     let resp = JsonRpcResponse {
@@ -365,7 +373,7 @@ impl McpServer {
                             code: -32601,
                             message: format!("Method not found: {method}"),
                             data: Some(serde_json::json!({
-                                "next_suggestion": "Use initialize, tools/list, or tools/call as defined by MCP; do not repeat the unknown method."
+                                "next_suggestion": "Use initialize, tools/list, prompts/list, resources/list, or tools/call as defined by MCP; do not repeat the unknown method."
                             })),
                         }),
                     };
@@ -385,7 +393,7 @@ impl McpServer {
 
     fn tool_description(&self, action: &str) -> String {
         format!(
-            "SafeSelect database query MCP for project '{}' environment '{}': {action}. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+            "SafeSelect database query MCP for project '{}' environment '{}': {action}. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
             self.project_name, self.env_name
         )
     }
@@ -428,12 +436,103 @@ impl McpServer {
                 "capabilities": {
                     "tools": {
                         "list": {}
+                    },
+                    "prompts": {
+                        "listChanged": false
+                    },
+                    "resources": {
+                        "subscribe": false,
+                        "listChanged": false
                     }
                 },
                 "serverInfo": {
                     "name": format!("safeselect-{}-{}", self.project_name, self.env_name),
                     "version": env!("CARGO_PKG_VERSION")
                 }
+            })),
+            error: None,
+        };
+        self.write_response(&resp)
+    }
+
+    fn handle_prompts_list(&mut self, msg: &JsonRpcMessage) -> Result<()> {
+        let resp = JsonRpcResponse {
+            jsonrpc: "2.0",
+            id: msg.id.clone(),
+            result: Some(serde_json::json!({
+                "prompts": [{
+                    "name": "read_only_database_debugging",
+                    "title": "Read-only database debugging",
+                    "description": "Guide a safe, bounded SafeSelect database investigation.",
+                    "arguments": []
+                }]
+            })),
+            error: None,
+        };
+        self.write_response(&resp)
+    }
+
+    fn handle_prompts_get(&mut self, msg: &JsonRpcMessage) -> Result<()> {
+        let name = msg
+            .params
+            .as_ref()
+            .and_then(|params| params.get("name"))
+            .and_then(|value| value.as_str());
+        if name != Some("read_only_database_debugging") {
+            return self.send_error(msg.id.clone(), -32602,
+                "Unknown prompt. Next suggestion: call prompts/list and request an exact listed prompt name.");
+        }
+        let resp = JsonRpcResponse {
+            jsonrpc: "2.0",
+            id: msg.id.clone(),
+            result: Some(serde_json::json!({
+                "description": "Guide a safe, bounded SafeSelect database investigation.",
+                "messages": [{
+                    "role": "user",
+                    "content": {"type": "text", "text": READ_ONLY_DEBUG_PROMPT}
+                }]
+            })),
+            error: None,
+        };
+        self.write_response(&resp)
+    }
+
+    fn handle_resources_list(&mut self, msg: &JsonRpcMessage) -> Result<()> {
+        let resp = JsonRpcResponse {
+            jsonrpc: "2.0",
+            id: msg.id.clone(),
+            result: Some(serde_json::json!({
+                "resources": [{
+                    "uri": READ_ONLY_DEBUG_RESOURCE_URI,
+                    "name": "Read-only database debugging guide",
+                    "description": "SafeSelect workflow and boundaries; contains no database data.",
+                    "mimeType": "text/markdown"
+                }]
+            })),
+            error: None,
+        };
+        self.write_response(&resp)
+    }
+
+    fn handle_resources_read(&mut self, msg: &JsonRpcMessage) -> Result<()> {
+        let uri = msg
+            .params
+            .as_ref()
+            .and_then(|params| params.get("uri"))
+            .and_then(|value| value.as_str());
+        if uri != Some(READ_ONLY_DEBUG_RESOURCE_URI) {
+            return self.send_error(msg.id.clone(), -32602,
+                "Unknown resource URI. Next suggestion: call resources/list and request an exact listed URI.");
+        }
+        let resp = JsonRpcResponse {
+            jsonrpc: "2.0",
+            id: msg.id.clone(),
+            result: Some(serde_json::json!({
+                "contents": [{
+                    "uri": READ_ONLY_DEBUG_RESOURCE_URI,
+                    "mimeType": "text/markdown",
+                    "text": READ_ONLY_DEBUG_RESOURCE
+                }]
             })),
             error: None,
         };
@@ -1508,8 +1607,9 @@ impl McpServer {
                 "kind": self.backend.kind,
                 "vendor": self.backend.vendor,
                 "capabilities": capabilities,
-                "resources_supported": false,
-                "discovery": "Use the backend-specific SafeSelect discovery tools; SafeSelect does not expose MCP resources."
+                "resources_supported": true,
+                "database_resources_supported": false,
+                "discovery": "Use the backend-specific SafeSelect discovery tools. SafeSelect also exposes a static read-only debugging resource, but it never contains database data."
             }),
             next_suggestion,
         )?;

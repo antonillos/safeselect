@@ -12,10 +12,8 @@ struct McpHarness {
 
 impl McpHarness {
     fn start() -> (Self, PathBuf) {
-        let tmp = std::env::temp_dir().join(format!(
-            "safeselect-mcp-negative-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let tmp =
+            std::env::temp_dir().join(format!("safeselect-mcp-negative-{}", uuid::Uuid::new_v4()));
         let _ = std::fs::remove_dir_all(&tmp);
         let repo_root = tmp.join("repo");
         let safeselect_dir = repo_root.join(".safeselect");
@@ -322,5 +320,90 @@ fn mcp_manifest_protocol_cases_are_enforced() {
 
     let stderr = mcp.finish();
     assert!(!stderr.contains("super-secret"));
+    let _ = std::fs::remove_dir_all(tmp);
+}
+
+#[test]
+fn mcp_exposes_static_read_only_prompt_and_resource_without_database_access() {
+    let (mut mcp, tmp) = McpHarness::start();
+
+    let initialize = mcp.send(&serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": "2025-06-18", "clientInfo": {"name": "test", "version": "1"}}
+    }));
+    assert_eq!(
+        initialize["result"]["capabilities"]["prompts"]["listChanged"],
+        false
+    );
+    assert_eq!(
+        initialize["result"]["capabilities"]["resources"]["subscribe"],
+        false
+    );
+
+    let prompts =
+        mcp.send(&serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "prompts/list"}));
+    assert_eq!(
+        prompts["result"]["prompts"][0]["name"],
+        "read_only_database_debugging"
+    );
+    assert_eq!(
+        prompts["result"]["prompts"][0]["arguments"],
+        serde_json::json!([])
+    );
+    let prompt = mcp.send(&serde_json::json!({
+        "jsonrpc": "2.0", "id": 3, "method": "prompts/get",
+        "params": {"name": "read_only_database_debugging"}
+    }));
+    assert!(prompt["result"]["messages"][0]["content"]["text"]
+        .as_str()
+        .is_some_and(|text| text.contains("never grants write access")));
+
+    let resources =
+        mcp.send(&serde_json::json!({"jsonrpc": "2.0", "id": 4, "method": "resources/list"}));
+    assert_eq!(
+        resources["result"]["resources"][0]["uri"],
+        "safeselect://guide/read-only-database-debugging"
+    );
+    let resource = mcp.send(&serde_json::json!({
+        "jsonrpc": "2.0", "id": 5, "method": "resources/read",
+        "params": {"uri": "safeselect://guide/read-only-database-debugging"}
+    }));
+    assert!(resource["result"]["contents"][0]["text"]
+        .as_str()
+        .is_some_and(|text| {
+            text.contains("does not replace least-privilege database users")
+                && !text.contains("password")
+        }));
+
+    let database_info = mcp.send(&serde_json::json!({
+        "jsonrpc": "2.0", "id": 6, "method": "tools/call",
+        "params": {"name": "database_info", "arguments": {}}
+    }));
+    assert_eq!(
+        database_info["result"]["structuredContent"]["untrusted_data"]["value"]
+            ["resources_supported"],
+        true
+    );
+    assert_eq!(
+        database_info["result"]["structuredContent"]["untrusted_data"]["value"]
+            ["database_resources_supported"],
+        false
+    );
+
+    for (id, method, params) in [
+        (7, "prompts/get", serde_json::json!({"name": "unknown"})),
+        (
+            8,
+            "resources/read",
+            serde_json::json!({"uri": "safeselect://unknown"}),
+        ),
+    ] {
+        let response = mcp.send(&serde_json::json!({
+            "jsonrpc": "2.0", "id": id, "method": method, "params": params
+        }));
+        assert_error(&response, serde_json::json!(id), -32602);
+    }
+
+    let _ = mcp.finish();
     let _ = std::fs::remove_dir_all(tmp);
 }

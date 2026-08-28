@@ -203,7 +203,7 @@ jobs:
             "${asset}=${checksum}"
           python3 -m json.tool "${RUNNER_TEMP}/server.json" >/dev/null
 
-      - name: Check LobeHub tools against the current source
+      - name: Check LobeHub MCP capabilities against the current source
         shell: bash
         run: |
           set -euo pipefail
