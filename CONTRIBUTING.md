@@ -37,7 +37,16 @@ cargo clippy
 
 ## Commit Messages
 
-Use conventional commits:
+Every commit must follow Conventional Commits and carry a verifiable SSH
+signature. This applies to every commit in a PR, not only its title or the final
+squash commit. A `Signed-off-by` trailer does not replace a cryptographic signature.
+
+Commit messages, committed files and metadata must not contain private, personal
+or confidential information. Use a public contributor handle and a GitHub noreply
+address instead of personal contact details. Inspect staged changes and the commit
+message before committing; never include credentials, private logs or real user data.
+
+Examples:
 
 ```
 feat: add new feature

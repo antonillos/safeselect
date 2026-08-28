@@ -41,8 +41,10 @@ SQL proxy for AI agents. Fail-closed security model: any incident terminates the
 
 - Use `fff` MCP tools for file and code search.
 - Prefer `rtk` wrappers for shell commands when available.
-- Sign commits with SSH.
-- Follow conventional commits.
+- Every commit must follow Conventional Commits and have a verifiable SSH signature.
+- Commit messages, committed files and metadata must not disclose private, personal
+  or confidential information. Use a public contributor handle and a GitHub noreply
+  address rather than personal contact details. Inspect staged content before committing.
 
 ## Code Review Rules
 
@@ -69,6 +71,11 @@ These rules apply to review requests, not implementation tasks. See
 
 ### Evidence and review-only behavior
 
+- Check every PR commit, not just the PR title, against the
+  [commit requirements](CONTRIBUTING.md#commit-messages): Conventional Commits,
+  verified signatures and no private, personal or confidential information.
+  Missing verification evidence is unverified, not passed. Never quote sensitive
+  content in public findings; use the private reporting process.
 - This repository is public. Keep published feedback limited to necessary code
   evidence; exclude account details, credentials, private logs and internal access
   settings. Follow [SECURITY.md](SECURITY.md) for confidential vulnerability reports.

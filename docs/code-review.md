@@ -31,6 +31,11 @@ Avoid speculative findings and style-only changes.
 
 ## Public information boundaries
 
+Check every PR commit against the [commit requirements](../CONTRIBUTING.md#commit-messages):
+Conventional Commits, a verified signature, and no private, personal or confidential
+information in messages, files or metadata. Do not reproduce sensitive content
+in public review comments. If verification evidence is unavailable, say so.
+
 This repository and its PR discussions are public. Publish only the technical
 context needed to understand and verify the change. Do not include account or
 billing details, credentials, private logs, local paths, internal access settings
