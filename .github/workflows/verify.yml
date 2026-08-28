@@ -154,6 +154,8 @@ jobs:
       - uses: actions/checkout@v7
       - name: Test release pipeline and installer
         run: python3 -m unittest discover -s tools/ci -p 'test_*.py' -v
+      - name: Test LobeHub manifest exporter
+        run: python3 -m unittest discover -s tools/distribution -p 'test_*.py' -v
       - name: Validate workflow syntax
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -shellcheck= -pyflakes=
       - name: Test CI policies
@@ -196,6 +198,23 @@ jobs:
             --output "${RUNNER_TEMP}/server.json" \
             "${asset}=${checksum}"
           python3 -m json.tool "${RUNNER_TEMP}/server.json" >/dev/null
+
+      - name: Check LobeHub tools against the current source
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Never use a preinstalled binary or automatically rewrite the manifest.
+          cargo build --locked
+          driver="${RUNNER_TEMP}/lobehub-postgresql-42.7.4.jar"
+          driver_sha="188976721ead8e8627eb6d8389d500dccc0c9bebd885268a3047180274a6031e"
+          curl --fail --silent --show-error --location --max-time 60 \
+            https://jdbc.postgresql.org/download/postgresql-42.7.4.jar --output "$driver"
+          printf '%s  %s\n' "$driver_sha" "$driver" | sha256sum --check
+          python3 tools/distribution/update_lobehub_manifest.py \
+            --binary "${GITHUB_WORKSPACE}/target/debug/safeselect" \
+            --postgres-driver "$driver" \
+            --driver-sha256 "$driver_sha" \
+            --check
 
   integration:
     name: Integration (PostgreSQL)
