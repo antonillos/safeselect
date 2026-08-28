@@ -29,6 +29,9 @@ Temporary directory names are never included in the generated definitions.
 When the definitions already match, update mode does not write the manifest:
 both its bytes and modification time remain unchanged. `--check` never writes,
 whether it succeeds or detects drift. Failed introspection leaves the file alone.
+Updates are written to a temporary file in the manifest's directory, flushed and
+synced, then atomically replaced while preserving file permissions. A partial
+write or failed replacement leaves the original manifest intact.
 Determinism assumes the trusted binary returns the same actual definitions; the
 exporter does not hide changes in descriptions, schemas or array order.
 
@@ -65,3 +68,21 @@ When CI detects drift, regenerate manually using a build of the changed source,
 review the diff and include the JSON in the same PR. CI does not regenerate,
 commit or publish metadata, and needs no LobeHub credentials. Release preparation
 continues to synchronize the version separately.
+
+## Local manifest contract validation
+
+Both modes validate the saved manifest before introspection and the proposed
+result before writing. Checks cover required strings, identifier syntax, known
+top-level fields, URL fields, tags, capability arrays, tool names/object-schema
+shapes and localization field types. Duplicate JSON keys, non-JSON numeric
+constants and duplicate tool names/locales are rejected. Validation errors return
+2 with fixed field-level messages, without printing supplied values.
+
+These are local checks based on the official reference reviewed on 2026-08-28,
+**not an official LobeHub JSON Schema**. As a stricter local policy, unknown
+top-level fields are rejected instead of silently discarded; URL fields require
+HTTP(S) and cannot contain credentials. Tool extension fields are preserved.
+This is not a full JSON Schema metaschema validator for nested input/output
+schemas. Marketplace category/locale availability, first-publication requirements
+(including description/new translations), ownership and remote acceptance still
+require LobeHub validation. No remote schemas or URLs are fetched by these checks.

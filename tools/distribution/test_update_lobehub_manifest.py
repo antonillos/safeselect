@@ -1,4 +1,5 @@
 import copy
+from contextlib import contextmanager
 import json
 from pathlib import Path
 import tempfile
@@ -14,6 +15,47 @@ def tool(name="select"):
 
 
 class ManifestTests(unittest.TestCase):
+    def test_atomic_write_preserves_permissions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            file = Path(tmp) / "manifest.json"
+            file.write_bytes(b"original")
+            file.chmod(0o640)
+            updater.atomic_write(file, b"replacement")
+            self.assertEqual(file.read_bytes(), b"replacement")
+            self.assertEqual(file.stat().st_mode & 0o777, 0o640)
+            self.assertEqual(list(Path(tmp).iterdir()), [file])
+
+    def test_atomic_write_failures_preserve_original_and_remove_temp(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            file = Path(tmp) / "manifest.json"
+            file.write_bytes(b"original")
+            before = file.read_bytes(), file.stat().st_mtime_ns
+            for operation in ("fsync", "replace"):
+                with patch.object(updater.os, operation, side_effect=OSError("synthetic failure")):
+                    with self.assertRaises(OSError):
+                        updater.atomic_write(file, b"replacement")
+                self.assertEqual((file.read_bytes(), file.stat().st_mtime_ns), before)
+                self.assertEqual(list(Path(tmp).iterdir()), [file])
+            original = tempfile.NamedTemporaryFile
+
+            @contextmanager
+            def partial_write(**kwargs):
+                with original(**kwargs) as output:
+                    real_write = output.write
+
+                    def fail(payload):
+                        real_write(payload[:3])
+                        raise OSError("synthetic disk full")
+
+                    with patch.object(output, "write", side_effect=fail):
+                        yield output
+
+            with patch.object(updater.tempfile, "NamedTemporaryFile", side_effect=partial_write):
+                with self.assertRaises(OSError):
+                    updater.atomic_write(file, b"replacement")
+            self.assertEqual((file.read_bytes(), file.stat().st_mtime_ns), before)
+            self.assertEqual(list(Path(tmp).iterdir()), [file])
+
     def test_ci_checks_fresh_binary_without_publishing(self):
         root = Path(__file__).resolve().parents[2]
         workflow = (root / ".github/workflows/verify.yml").read_text()
@@ -106,7 +148,8 @@ class ManifestTests(unittest.TestCase):
     def test_check_and_update_preserve_metadata(self):
         with tempfile.TemporaryDirectory() as tmp:
             file = Path(tmp) / "manifest.json"
-            before = {"version": "1.2.3", "description": "SEO copy", "tags": ["mcp"]}
+            before = {"identifier": "example", "name": "Example", "version": "1.2.3",
+                      "description": "SEO copy", "tags": ["mcp"]}
             file.write_text(json.dumps(before))
             argv = ["script", "--binary", str(file), "--postgres-driver", str(file),
                     "--driver-sha256", "0" * 64, "--manifest", str(file)]
@@ -120,7 +163,7 @@ class ManifestTests(unittest.TestCase):
                 saved = file.read_bytes()
                 modified = file.stat().st_mtime_ns
                 # Repeating an update is a true no-op, not just equal JSON.
-                with patch("sys.argv", argv), patch.object(Path, "write_bytes") as write:
+                with patch("sys.argv", argv), patch.object(updater, "atomic_write") as write:
                     self.assertEqual(updater.main(), 0)
                     write.assert_not_called()
                 with patch("sys.argv", argv + ["--check"]):
@@ -131,7 +174,7 @@ class ManifestTests(unittest.TestCase):
     def test_failed_generation_does_not_modify_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:
             file = Path(tmp) / "manifest.json"
-            original = b'{"version":"1.2.3", "description":"unchanged"}\n'
+            original = b'{"identifier":"example","name":"Example","version":"1.2.3", "description":"unchanged"}\n'
             file.write_bytes(original)
             modified = file.stat().st_mtime_ns
             argv = ["script", "--binary", str(file), "--postgres-driver", str(file),

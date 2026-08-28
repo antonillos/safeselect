@@ -9,8 +9,11 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
+
+from manifest_contract import ManifestError, load_manifest, validate_manifest
 
 
 PREFIX = "SafeSelect database query MCP for project 'example-project' environment 'example': "
@@ -129,6 +132,23 @@ def generate(binary, driver, expected_sha, version):
         return tools
 
 
+def atomic_write(path, payload):
+    """Leave the original intact until the same-directory replacement succeeds."""
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".lhm-manifest-",
+                                         suffix=".tmp", delete=False) as output:
+            temporary = Path(output.name)
+            output.write(payload)
+            output.flush()
+            os.fsync(output.fileno())
+            os.fchmod(output.fileno(), stat.S_IMODE(path.stat().st_mode))
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None and temporary.exists():
+            temporary.unlink()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, required=True, help="Trusted SafeSelect executable")
@@ -139,20 +159,25 @@ def main():
     parser.add_argument("--check", action="store_true", help="Exit 1 on drift without writing")
     args = parser.parse_args()
     try:
-        manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
+        manifest = load_manifest(args.manifest.read_text(encoding="utf-8"))
+        validate_manifest(manifest)
         tools = generate(args.binary.resolve(strict=True), args.postgres_driver.resolve(strict=True),
                          args.driver_sha256, manifest["version"])
+        updated = {**manifest, "tools": tools}
+        validate_manifest(updated)
         if manifest.get("tools") == tools:
             print(f"Manifest is current: {len(tools)} tools")
             return 0
         if args.check:
             print("Manifest tools differ; rerun without --check to update")
             return 1
-        manifest["tools"] = tools
-        args.manifest.write_bytes(
-            (json.dumps(manifest, indent=2, ensure_ascii=False) + "\n").encode("utf-8"))
+        atomic_write(args.manifest,
+            (json.dumps(updated, indent=2, ensure_ascii=False, allow_nan=False) + "\n").encode("utf-8"))
         print(f"Updated {len(tools)} tools; other metadata unchanged")
         return 0
+    except ManifestError as error:
+        print(f"Manifest validation failed: {error}")
+        return 2
     except (OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired):
         # Do not print subprocess output or potentially private local configuration.
         print("Introspection failed. Check binary/version, driver checksum and MCP response compatibility.")
