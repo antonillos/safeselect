@@ -1,36 +1,48 @@
-# SafeSelect MCP
+<p>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="site/public/icon-dark.svg">
+    <img src="site/public/icon.svg" width="32" height="32" align="absmiddle" alt="" aria-hidden="true">
+  </picture>
+  &nbsp;<strong>SafeSelect</strong> <code>MCP</code>
+</p>
 
-## Agents can look. They cannot mutate.
+<h1>Agents can look.<br>They cannot mutate.</h1>
 
 **Read-only PostgreSQL & MongoDB access for coding agents.**
 
-Debug with database context, without exposing write tools. Local MCP enforcement,
-project-scoped policies, and reproducible security tests.
+Debug with real database context, without exposing write tools—even when your
+existing credentials allow writes. SafeSelect puts local, project-scoped policy
+between your agent and your data.
 
+[**Get started →**](#quick-start) ·
 [Website](https://antonillos.github.io/safeselect/) ·
 [Compare approaches](docs/compare.md) ·
 [DBeaver → Codex guide](docs/guides/dbeaver-codex.md)
 
 [![CI](https://github.com/antonillos/safeselect/actions/workflows/verify.yml/badge.svg)](https://github.com/antonillos/safeselect/actions/workflows/verify.yml)
 [![CRAP](https://img.shields.io/endpoint?url=https%3A%2F%2Fantonillos.github.io%2Fsafeselect%2Fcrap-badge.json)](https://github.com/antonillos/safeselect/actions/workflows/verify.yml)
+[![License](https://img.shields.io/badge/License-MIT-225b42)](LICENSE)
+
+[![Listed on mcpservers.org](https://mcpservers.org/badge.svg)](https://mcpservers.org/servers/antonillos/safeselect)
+[![Indexed on TensorBlock MCP Index](https://mcp-index.tensorblock.co/v1/servers/github-antonillos-safeselect-4c99dff4/badge.svg)](https://www.tensorblock.co/mcp/servers/github-antonillos-safeselect-4c99dff4)
+[![MCP Badge](https://lobehub.com/badge/mcp/antonillos-safeselect?style=flat)](https://lobehub.com/mcp/antonillos-safeselect)
+
+<details>
+<summary>Runtime and distribution</summary>
+
 [![Security](https://img.shields.io/badge/Security-fail--closed-success?logo=trustpilot&logoColor=white)]()
 [![Rust](https://img.shields.io/badge/Rust-1.81%2B-dea584?logo=rust&logoColor=white)]()
 [![Java](https://img.shields.io/badge/Java-17%2B-5382a1?logo=openjdk&logoColor=white)]()
 [![MCP](https://img.shields.io/badge/MCP-stdio%20tools-7b68ee)]()
-[![Listed on mcpservers.org](https://mcpservers.org/badge.svg)](https://mcpservers.org/servers/antonillos/safeselect)
 [![Homebrew](https://img.shields.io/badge/Homebrew-tap-FBB040?logo=homebrew&logoColor=white)](https://github.com/antonillos/homebrew-tap)
 [![asdf](https://img.shields.io/badge/asdf-plugin-8A2BE2)](https://github.com/antonillos/asdf-safeselect)
-[![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
 
-SafeSelect gives coding agents a constrained database tool: discover structure,
-inspect production-shaped data, explain queries, diagnose connectivity, and
-recover stale connections without ever receiving write-capable tools or direct
-access to database credentials.
+</details>
 
-SafeSelect lets an agent inspect application data without turning the database
-into an unrestricted tool surface. Start with development data or a sanitized
-replica, then review the policy and effective database permissions before
-connecting to a more sensitive environment.
+Discover structure, inspect bounded rows, explain queries, and diagnose
+connectivity—without giving the agent write-capable tools or database credentials.
+Start with development data or a sanitized replica, then review the policy and
+effective database permissions before connecting to a more sensitive environment.
 
 > [!NOTE]
 > SafeSelect is a safety boundary for agent access, not a replacement for database permissions. Use least-privilege database users when you can; SafeSelect still constrains overpowered credentials when agents connect through it.

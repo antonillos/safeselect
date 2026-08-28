@@ -70,11 +70,10 @@ footer {
   font-size: 22px;
 }
 .brand-mark {
-  background: var(--ink);
-  color: var(--lime);
-  padding: 0 8px;
-  border-radius: 3px;
-  font-family: monospace;
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border-radius: 4px;
 }
 .brand-mcp {
   font-size: 12px;

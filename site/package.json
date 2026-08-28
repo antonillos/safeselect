@@ -6,6 +6,8 @@
     "node": ">=22.13.0"
   },
   "scripts": {
+    "icons:export": "node scripts/export-icons.mjs",
+    "test:icons": "node --test scripts/test-icons.mjs",
     "dev": "vinext dev",
     "build": "vinext build",
     "start": "vinext start",
