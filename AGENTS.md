@@ -49,7 +49,7 @@ SQL proxy for AI agents. Fail-closed security model: any incident terminates the
 ## Development Principles
 
 Apply these principles, adapted from
-[multica-ai/andrej-karpathy-skills](https://github.com/multica-ai/andrej-karpathy-skills/blob/main/CLAUDE.md):
+[antonillos/andrej-karpathy-skills](https://github.com/antonillos/andrej-karpathy-skills/blob/main/CLAUDE.md):
 
 - **Think Before Coding**: Inspect relevant code, make assumptions explicit and
   explain meaningful trade-offs. Resolve ambiguities that affect correctness,
