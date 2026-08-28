@@ -1,5 +1,11 @@
 # SafeSelect MCP
 
+<p align="center">
+  <a href="https://antonillos.github.io/safeselect/">
+    <img src="site/public/icon.svg" width="160" alt="SafeSelect MCP — read-only database inspection for AI coding agents using PostgreSQL and MongoDB">
+  </a>
+</p>
+
 ## Agents can look. They cannot mutate.
 
 **Read-only PostgreSQL & MongoDB access for coding agents.**

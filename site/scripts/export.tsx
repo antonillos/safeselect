@@ -30,6 +30,9 @@ for (const page of pages) {
       <meta name="viewport" content="width=device-width, initial-scale=1" />
       <title>{page.title}</title>
       <meta name="description" content={page.description} />
+      <link rel="icon" href="/safeselect/icon.svg" type="image/svg+xml" />
+      <link rel="icon" href="/safeselect/favicon-32.png" type="image/png" sizes="32x32" />
+      <link rel="apple-touch-icon" href="/safeselect/apple-touch-icon.png" sizes="180x180" />
       <link rel="canonical" href={`${CANONICAL}${page.route}`} />
       <meta property="og:site_name" content="SafeSelect MCP" />
       <meta property="og:title" content={page.title} />
@@ -71,6 +74,9 @@ const css = (await readFile("app/globals.css", "utf8")).replace(
 );
 await writeFile("out/site.css", css);
 await copyFile("public/og.png", "out/og.png");
+for (const asset of ["icon.svg", "icon-512.png", "favicon-32.png", "apple-touch-icon.png"]) {
+  await copyFile(`public/${asset}`, `out/${asset}`);
+}
 await copyFile("public/onboarding.gif", "out/onboarding.gif");
 // Keep Google's supplied ownership proof byte-for-byte on every Pages deploy.
 await copyFile(

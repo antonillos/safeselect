@@ -13,9 +13,7 @@ export function Shell({ children }: { children: ReactNode }) {
       </a>
       <header className="header">
         <a className="brand" href={sitePath("/")}>
-          <span className="brand-mark" aria-hidden="true">
-            S/
-          </span>
+          <img className="brand-mark" src={sitePath("/icon.svg")} width="36" height="36" alt="SafeSelect" />
           SafeSelect <span className="brand-mcp">MCP</span>
         </a>
         <nav aria-label="Main navigation">
