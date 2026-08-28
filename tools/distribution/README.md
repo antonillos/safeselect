@@ -37,10 +37,14 @@ exporter does not hide changes in descriptions, schemas or array order.
 
 The script uses temporary PostgreSQL/MongoDB project configurations, synthetic
 credentials, isolated HOME/global configuration, and localhost port 1. It sends
-only `initialize`, `notifications/initialized`, and `tools/list`. SafeSelect starts
-its sidecar lazily; no database queries or tool calls are made. This is not an OS
-sandbox for arbitrary executables: pass only a trusted SafeSelect binary. Nothing
-is downloaded or published to LobeHub, and authentication files are not read.
+only `initialize`, `notifications/initialized`, and `tools/list`. SafeSelect's
+`initialize` handler currently pre-starts the sidecar, so each capture may launch
+Java and attempt the configured localhost database handshake; failures are logged
+by the server and the metadata response can still continue. No database queries
+or MCP tool calls are made. The subprocess is bounded by a 20-second timeout.
+This is not an OS sandbox for arbitrary executables: pass only a trusted
+SafeSelect binary. Nothing is downloaded or published to LobeHub, and
+authentication files are not read.
 
 Backend-specific tools are labelled; `get_database_stats` preserves both backend
 input schemas with `anyOf`. Unknown backend differences, pagination, duplicate
