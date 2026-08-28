@@ -1,9 +1,10 @@
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="site/public/icon-dark.svg">
-  <img align="right" src="site/public/icon.svg" width="88" height="88" alt="SafeSelect MCP logo">
-</picture>
-
-# SafeSelect MCP
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="site/public/icon-dark.svg">
+    <img src="site/public/icon.svg" width="36" height="36" alt="" aria-hidden="true">
+  </picture>
+  SafeSelect MCP
+</h1>
 
 **Agents can look. They cannot mutate.**
 
