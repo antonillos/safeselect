@@ -25,6 +25,7 @@ ignored. The social card is `public/og.png`.
 
 `public/icon.svg` is the editable source. Its background, tier gaps and lens
 interior are transparent; the lens masks the underlying write-access tier.
+The cylinder tiers have a subtle 1.5-unit white outline on the 512-unit canvas.
 `public/icon-dark.svg` is generated with a lighter palette for dark surfaces.
 The README selects the matching SVG using `<picture>`; the light website uses
 the original. No opaque square is embedded in either variant or the PNGs.

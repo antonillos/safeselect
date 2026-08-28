@@ -8,7 +8,7 @@
       <circle cx="247" cy="336" r="81" fill="#000"/>
     </mask>
   </defs>
-  <g mask="url(#inspection)">
+  <g mask="url(#inspection)" stroke="#fff" stroke-width="1.5" stroke-linejoin="round">
     <ellipse cx="256" cy="105" rx="176" ry="53" fill="#152a27"/>
     <path d="M80 146c40 43 312 43 352 0v112c0 44-352 44-352 0z" fill="#225b42"/>
     <path d="M80 276c40 43 312 43 352 0v37c0 48-352 48-352 0z" fill="#956f5d"/>

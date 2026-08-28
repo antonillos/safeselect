@@ -20,6 +20,10 @@ project-scoped policies, and reproducible security tests.
 [![CRAP](https://img.shields.io/endpoint?url=https%3A%2F%2Fantonillos.github.io%2Fsafeselect%2Fcrap-badge.json)](https://github.com/antonillos/safeselect/actions/workflows/verify.yml)
 [![License](https://img.shields.io/badge/License-MIT-225b42)](LICENSE)
 
+[![Listed on mcpservers.org](https://mcpservers.org/badge.svg)](https://mcpservers.org/servers/antonillos/safeselect)
+[![Indexed on TensorBlock MCP Index](https://mcp-index.tensorblock.co/v1/servers/github-antonillos-safeselect-4c99dff4/badge.svg)](https://www.tensorblock.co/mcp/servers/github-antonillos-safeselect-4c99dff4)
+[![MCP Badge](https://lobehub.com/badge/mcp/antonillos-safeselect?style=flat)](https://lobehub.com/mcp/antonillos-safeselect)
+
 <details>
 <summary>Runtime and distribution</summary>
 
@@ -27,7 +31,6 @@ project-scoped policies, and reproducible security tests.
 [![Rust](https://img.shields.io/badge/Rust-1.81%2B-dea584?logo=rust&logoColor=white)]()
 [![Java](https://img.shields.io/badge/Java-17%2B-5382a1?logo=openjdk&logoColor=white)]()
 [![MCP](https://img.shields.io/badge/MCP-stdio%20tools-7b68ee)]()
-[![Listed on mcpservers.org](https://mcpservers.org/badge.svg)](https://mcpservers.org/servers/antonillos/safeselect)
 [![Homebrew](https://img.shields.io/badge/Homebrew-tap-FBB040?logo=homebrew&logoColor=white)](https://github.com/antonillos/homebrew-tap)
 [![asdf](https://img.shields.io/badge/asdf-plugin-8A2BE2)](https://github.com/antonillos/asdf-safeselect)
 
