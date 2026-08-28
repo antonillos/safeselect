@@ -35,6 +35,8 @@ Check every PR commit against the [commit requirements](../CONTRIBUTING.md#commi
 Conventional Commits, a verified signature, and no private, personal or confidential
 information in messages, files or metadata. Do not reproduce sensitive content
 in public review comments. If verification evidence is unavailable, say so.
+Use the separate [Commit Policy check](ci.md#commit-policy) for deterministic
+format/signature evidence; continue reviewing privacy separately.
 
 This repository and its PR discussions are public. Publish only the technical
 context needed to understand and verify the change. Do not include account or

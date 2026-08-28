@@ -74,6 +74,8 @@ These rules apply to review requests, not implementation tasks. See
 - Check every PR commit, not just the PR title, against the
   [commit requirements](CONTRIBUTING.md#commit-messages): Conventional Commits,
   verified signatures and no private, personal or confidential information.
+  Use the separate Commit Policy workflow's result for format/signature evidence;
+  its success does not establish that content is free of private information.
   Missing verification evidence is unverified, not passed. Never quote sensitive
   content in public findings; use the private reporting process.
 - This repository is public. Keep published feedback limited to necessary code

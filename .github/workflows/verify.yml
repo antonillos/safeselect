@@ -156,8 +156,8 @@ jobs:
         run: python3 -m unittest discover -s tools/ci -p 'test_*.py' -v
       - name: Validate workflow syntax
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -shellcheck= -pyflakes=
-      - name: Test CI path policy
-        run: node --test .github/scripts/ci-path-policy.test.js
+      - name: Test CI policies
+        run: node --test .github/scripts/*.test.js
       - name: Install Rust
         run: rustup toolchain install stable --profile minimal
       - name: Install Java

@@ -40,6 +40,9 @@ cargo clippy
 Every commit must follow Conventional Commits and carry a verifiable SSH
 signature. This applies to every commit in a PR, not only its title or the final
 squash commit. A `Signed-off-by` trailer does not replace a cryptographic signature.
+The separate [Commit Policy workflow](docs/ci.md#commit-policy) checks message
+format and GitHub signature verification; it does not establish that content
+is free of private information.
 
 Commit messages, committed files and metadata must not contain private, personal
 or confidential information. Use a public contributor handle and a GitHub noreply
