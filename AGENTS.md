@@ -65,6 +65,9 @@ These rules apply to review requests, not implementation tasks. See
 
 ### Evidence and review-only behavior
 
+- This repository is public. Keep published feedback limited to necessary code
+  evidence; exclude account details, credentials, private logs and internal access
+  settings. Follow [SECURITY.md](SECURITY.md) for confidential vulnerability reports.
 - Report actionable new issues with precise code evidence, impact and a proportional
   remedy. Check existing guards and intended behavior; avoid style nits and speculation.
 - During review, do not modify code, push, merge or request fixes. Do not claim tests
