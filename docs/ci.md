@@ -28,6 +28,14 @@ unknown paths retain full verification even when combined with website files.
 Consequently, a PR changing this classification policy must itself run the full
 suite; the optimization must not exempt its own implementation from review.
 
+## Java CRAP analyzer
+
+Java CRAP metrics use [antonillos/crap4java](https://github.com/antonillos/crap4java).
+Verify pins release **v0.1.0** and checks the JAR's SHA-256 before use. The Java
+wrapper supplies JaCoCo coverage and collects JSON in report-only mode; the
+combined CRAP wrapper enforces the existing warning-count gate. Code review
+reads the generated CI artifacts rather than rerunning the analyzer.
+
 ## Commit policy
 
 The independent **Commit Policy** workflow runs on PRs to `develop` and `main`,
