@@ -7,7 +7,7 @@
   "homepage": "https://antonillos.github.io/safeselect/",
   "tools": [
     {
-      "description": "detect installed MCP clients that can use database query tools on this system. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "detect installed MCP clients that can use database query tools on this system. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "properties": {},
         "type": "object"
@@ -28,7 +28,7 @@
       }
     },
     {
-      "description": "install a SafeSelect database query MCP entry for a client. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "install a SafeSelect database query MCP entry for a client. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "properties": {
           "client": {
@@ -69,7 +69,7 @@
       }
     },
     {
-      "description": "show SafeSelect database query MCP installation status for all clients. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "show SafeSelect database query MCP installation status for all clients. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "properties": {},
         "type": "object"
@@ -90,7 +90,7 @@
       }
     },
     {
-      "description": "uninstall a SafeSelect database query MCP entry from a client. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "uninstall a SafeSelect database query MCP entry from a client. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "properties": {
           "client": {
@@ -124,7 +124,7 @@
       }
     },
     {
-      "description": "MongoDB only. run a read-only MongoDB aggregation pipeline; use discover_document_schema first and never guess field names. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "MongoDB only. run a read-only MongoDB aggregation pipeline; use discover_document_schema first and never guess field names. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -177,7 +177,7 @@
       }
     },
     {
-      "description": "show up to 20 current-session audit metadata entries; entries contain only timestamp, category, decision, and query hash, never SQL or returned data. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "show up to 20 current-session audit metadata entries; entries contain only timestamp, category, decision, and query hash, never SQL or returned data. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -205,7 +205,7 @@
       }
     },
     {
-      "description": "show audit health and the number of events recorded in this MCP session; no audit entries, SQL, result data, or file paths are returned. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "show audit health and the number of events recorded in this MCP session; no audit entries, SQL, result data, or file paths are returned. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {},
@@ -227,7 +227,7 @@
       }
     },
     {
-      "description": "check database connectivity by starting the sidecar and verifying the backend. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "check database connectivity by starting the sidecar and verifying the backend. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "properties": {},
         "type": "object"
@@ -248,7 +248,7 @@
       }
     },
     {
-      "description": "delete a database environment configuration from the project. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "delete a database environment configuration from the project. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "properties": {
           "name": {
@@ -277,7 +277,7 @@
       }
     },
     {
-      "description": "rename a database environment within the project. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "rename a database environment within the project. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "properties": {
           "new_name": {
@@ -311,7 +311,7 @@
       }
     },
     {
-      "description": "reset all database environments and their keychain entries for the project. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "reset all database environments and their keychain entries for the project. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "properties": {
           "confirm": {
@@ -340,7 +340,7 @@
       }
     },
     {
-      "description": "store a database password in the macOS Keychain for an environment. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "store a database password in the macOS Keychain for an environment. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "properties": {
           "environment": {
@@ -374,7 +374,7 @@
       }
     },
     {
-      "description": "show the resolved database connection configuration for an environment with secrets redacted. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "show the resolved database connection configuration for an environment with secrets redacted. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "properties": {
           "environment": {
@@ -403,7 +403,7 @@
       }
     },
     {
-      "description": "validate the .safeselect configuration. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "validate the .safeselect configuration. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "properties": {
           "environment": {
@@ -429,7 +429,7 @@
       }
     },
     {
-      "description": "connect or reconnect to the database. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "connect or reconnect to the database. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "properties": {},
         "type": "object"
@@ -450,7 +450,7 @@
       }
     },
     {
-      "description": "MongoDB only. count MongoDB documents matching a non-empty filter; full collection counts are rejected because they can scan large PRE collections. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "MongoDB only. count MongoDB documents matching a non-empty filter; full collection counts are rejected because they can scan large PRE collections. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -495,7 +495,7 @@
       }
     },
     {
-      "description": "show active database backend and capabilities; if the user only asked about available capabilities, report them and stop. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "show active database backend and capabilities; if the user only asked about available capabilities, report them and stop. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "properties": {},
         "type": "object"
@@ -516,7 +516,7 @@
       }
     },
     {
-      "description": "PostgreSQL only. describe columns and PostgreSQL underlying type names for exactly one database table or view using read-only catalog metadata; schema and table must be exact values copied from one list_tables row, and placeholders or wildcards are not accepted. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "PostgreSQL only. describe columns and PostgreSQL underlying type names for exactly one database table or view using read-only catalog metadata; schema and table must be exact values copied from one list_tables row, and placeholders or wildcards are not accepted. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -551,7 +551,7 @@
       }
     },
     {
-      "description": "disconnect from the database by closing the backend connection. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "disconnect from the database by closing the backend connection. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "properties": {},
         "type": "object"
@@ -572,7 +572,7 @@
       }
     },
     {
-      "description": "MongoDB only. infer frequent MongoDB fields and types over a bounded, non-exhaustive sample; use observed fields in find_documents, aggregate_documents, or profile_document_field. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "MongoDB only. infer frequent MongoDB fields and types over a bounded, non-exhaustive sample; use observed fields in find_documents, aggregate_documents, or profile_document_field. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -622,7 +622,7 @@
       }
     },
     {
-      "description": "MongoDB only. list distinct values for a MongoDB field. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "MongoDB only. list distinct values for a MongoDB field. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -673,7 +673,7 @@
       }
     },
     {
-      "description": "register a JDBC database driver. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "register a JDBC database driver. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "properties": {
           "class": {
@@ -716,7 +716,7 @@
       }
     },
     {
-      "description": "download and register the official PostgreSQL JDBC database driver. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "download and register the official PostgreSQL JDBC database driver. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "properties": {
           "vendor": {
@@ -745,7 +745,7 @@
       }
     },
     {
-      "description": "list registered JDBC database drivers. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "list registered JDBC database drivers. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "properties": {},
         "type": "object"
@@ -766,7 +766,7 @@
       }
     },
     {
-      "description": "PostgreSQL only. show a query execution plan; after a timeout call this explain tool with analyze=false instead of putting EXPLAIN in the select tool, and place WITH CTEs at the beginning of the explained statement instead of nested in subqueries. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "PostgreSQL only. show a query execution plan; after a timeout call this explain tool with analyze=false instead of putting EXPLAIN in the select tool, and place WITH CTEs at the beginning of the explained statement instead of nested in subqueries. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "properties": {
           "analyze": {
@@ -819,7 +819,7 @@
       }
     },
     {
-      "description": "MongoDB only. explain a read-only MongoDB find query. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "MongoDB only. explain a read-only MongoDB find query. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -888,7 +888,7 @@
       }
     },
     {
-      "description": "MongoDB only. find documents in a collection; use discover_document_schema first and never guess field names. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "MongoDB only. find documents in a collection; use discover_document_schema first and never guess field names. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -961,7 +961,7 @@
       }
     },
     {
-      "description": "MongoDB only. return bounded MongoDB fixture samples without writing files; only fields explicitly named in redact_fields are replaced. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "MongoDB only. return bounded MongoDB fixture samples without writing files; only fields explicitly named in redact_fields are replaced. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -1033,7 +1033,7 @@
       }
     },
     {
-      "description": "MongoDB only. return bounded aggregate storage statistics for one allowed MongoDB collection; no documents or raw collStats response are returned. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "MongoDB only. return bounded aggregate storage statistics for one allowed MongoDB collection; no documents or raw collStats response are returned. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -1066,9 +1066,8 @@
       }
     },
     {
-      "description": "PostgreSQL: show a bounded safe subset of PostgreSQL database activity and size statistics; no raw catalog rows or connection details are returned. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic. MongoDB: return bounded aggregate storage statistics for one allowed MongoDB database; no documents or raw dbStats response are returned. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "PostgreSQL: show a bounded safe subset of PostgreSQL database activity and size statistics; no raw catalog rows or connection details are returned. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic. MongoDB: return bounded aggregate storage statistics for one allowed MongoDB database; no documents or raw dbStats response are returned. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
-        "type": "object",
         "anyOf": [
           {
             "additionalProperties": false,
@@ -1087,7 +1086,8 @@
             ],
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       },
       "name": "get_database_stats",
       "outputSchema": {
@@ -1105,7 +1105,7 @@
       }
     },
     {
-      "description": "PostgreSQL only. show a bounded safe subset of PostgreSQL table and index statistics for one exact allowed relation; copy schema and table from list_tables. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "PostgreSQL only. show a bounded safe subset of PostgreSQL table and index statistics for one exact allowed relation; copy schema and table from list_tables. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -1140,7 +1140,7 @@
       }
     },
     {
-      "description": "scan docker-compose files for PostgreSQL database services and import them into .safeselect. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "scan docker-compose files for PostgreSQL database services and import them into .safeselect. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "properties": {
           "scan_path": {
@@ -1166,7 +1166,7 @@
       }
     },
     {
-      "description": "MongoDB only. list classic MongoDB indexes and, when available, Atlas Search indexes for one allowed collection; use the returned indexed fields with explain_documents or one bounded read. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "MongoDB only. list classic MongoDB indexes and, when available, Atlas Search indexes for one allowed collection; use the returned indexed fields with explain_documents or one bounded read. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -1199,7 +1199,7 @@
       }
     },
     {
-      "description": "MongoDB only. list document collections. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "MongoDB only. list document collections. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "properties": {
           "database": {
@@ -1228,7 +1228,7 @@
       }
     },
     {
-      "description": "MongoDB only. list document databases. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "MongoDB only. list document databases. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "properties": {},
         "type": "object"
@@ -1249,7 +1249,7 @@
       }
     },
     {
-      "description": "PostgreSQL only. list PostgreSQL functions and definitions without inspecting aggregates; optionally restrict results to one allowed schema or a function-name fragment. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "PostgreSQL only. list PostgreSQL functions and definitions without inspecting aggregates; optionally restrict results to one allowed schema or a function-name fragment. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -1280,7 +1280,7 @@
       }
     },
     {
-      "description": "PostgreSQL only. list pg_cron scheduled jobs when the pg_cron extension is installed. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "PostgreSQL only. list pg_cron scheduled jobs when the pg_cron extension is installed. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {},
@@ -1302,7 +1302,7 @@
       }
     },
     {
-      "description": "PostgreSQL only. list safe PostgreSQL index metadata for one exact allowed table or view; copy schema and table from list_tables, then use the returned columns or expressions in explain before any targeted select. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "PostgreSQL only. list safe PostgreSQL index metadata for one exact allowed table or view; copy schema and table from list_tables, then use the returned columns or expressions in explain before any targeted select. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -1337,7 +1337,7 @@
       }
     },
     {
-      "description": "PostgreSQL only. list all descendant PostgreSQL partitions for one exact allowed table; returns bounded partition metadata, total count, and whether the list was truncated. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "PostgreSQL only. list all descendant PostgreSQL partitions for one exact allowed table; returns bounded partition metadata, total count, and whether the list was truncated. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -1372,7 +1372,7 @@
       }
     },
     {
-      "description": "PostgreSQL only. list database tables, optionally filtered by schema; if the user requested data inspection, choose exactly one returned table_schema and table_name pair, then call describe_table without placeholders or wildcards; otherwise report the result and stop. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "PostgreSQL only. list database tables, optionally filtered by schema; if the user requested data inspection, choose exactly one returned table_schema and table_name pair, then call describe_table without placeholders or wildcards; otherwise report the result and stop. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "properties": {
           "schema": {
@@ -1398,7 +1398,7 @@
       }
     },
     {
-      "description": "PostgreSQL only. list PostgreSQL triggers and their definitions; optionally restrict results to one allowed schema. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "PostgreSQL only. list PostgreSQL triggers and their definitions; optionally restrict results to one allowed schema. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -1425,7 +1425,7 @@
       }
     },
     {
-      "description": "MongoDB only. profile a nested MongoDB field over a bounded sample. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "MongoDB only. profile a nested MongoDB field over a bounded sample. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -1479,7 +1479,7 @@
       }
     },
     {
-      "description": "restart the sidecar process and verify database connectivity. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "restart the sidecar process and verify database connectivity. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "properties": {},
         "type": "object"
@@ -1500,7 +1500,7 @@
       }
     },
     {
-      "description": "inspect PostgreSQL security posture; warning findings can be acknowledged after explicit user approval to avoid repeating the same unchanged warning. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "inspect PostgreSQL security posture; warning findings can be acknowledged after explicit user approval to avoid repeating the same unchanged warning. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -1526,7 +1526,7 @@
       }
     },
     {
-      "description": "PostgreSQL only. execute a read-only SELECT query on the target database; use describe_table before querying an unfamiliar relation, never guess column names, use a small LIMIT for row retrieval, place WITH CTEs at the beginning of the statement, and after a timeout preserve or narrow selective predicates instead of broadening the query. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "PostgreSQL only. execute a read-only SELECT query on the target database; use describe_table before querying an unfamiliar relation, never guess column names, use a small LIMIT for row retrieval, place WITH CTEs at the beginning of the statement, and after a timeout preserve or narrow selective predicates instead of broadening the query. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "properties": {
           "sql": {
@@ -1559,7 +1559,7 @@
       }
     },
     {
-      "description": "uninstall SafeSelect database query tooling, config, data, audit, and keychain entries. SafeSelect exposes MCP tools only, not MCP resources; do not call list_mcp_resources for database discovery. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "uninstall SafeSelect database query tooling, config, data, audit, and keychain entries. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "properties": {
           "confirm": {
@@ -1586,6 +1586,22 @@
         ],
         "type": "object"
       }
+    }
+  ],
+  "prompts": [
+    {
+      "arguments": [],
+      "description": "Guide a safe, bounded SafeSelect database investigation.",
+      "name": "read_only_database_debugging",
+      "title": "Read-only database debugging"
+    }
+  ],
+  "resources": [
+    {
+      "description": "SafeSelect workflow and boundaries; contains no database data.",
+      "mimeType": "text/markdown",
+      "name": "Read-only database debugging guide",
+      "uri": "safeselect://guide/read-only-database-debugging"
     }
   ]
 }

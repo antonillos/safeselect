@@ -81,6 +81,32 @@ def validate_manifest(manifest):
     for field in ("tools", "resources", "prompts"):
         if field in manifest:
             objects(manifest[field], field)
+    prompt_names = set()
+    for prompt in manifest.get("prompts", []):
+        string(prompt.get("name"), "prompts.name", nonempty=True)
+        check(prompt["name"] not in prompt_names, "Duplicate prompts.name.")
+        prompt_names.add(prompt["name"])
+        for field in ("title", "description"):
+            if field in prompt:
+                string(prompt[field], "prompts." + field)
+        if "arguments" in prompt:
+            objects(prompt["arguments"], "prompts.arguments")
+            for argument in prompt["arguments"]:
+                string(argument.get("name"), "prompts.arguments.name", nonempty=True)
+                if "description" in argument:
+                    string(argument["description"], "prompts.arguments.description")
+                if "required" in argument:
+                    check(isinstance(argument["required"], bool),
+                          "prompts.arguments.required must be a boolean.")
+    resource_uris = set()
+    for resource in manifest.get("resources", []):
+        for field in ("uri", "name"):
+            string(resource.get(field), "resources." + field, nonempty=True)
+        check(resource["uri"] not in resource_uris, "Duplicate resources.uri.")
+        resource_uris.add(resource["uri"])
+        for field in ("description", "mimeType"):
+            if field in resource:
+                string(resource[field], "resources." + field)
     names = set()
     for tool in manifest.get("tools", []):
         string(tool.get("name"), "tools.name", nonempty=True)

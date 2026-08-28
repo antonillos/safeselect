@@ -65,6 +65,22 @@ class ContractTests(unittest.TestCase):
             with self.assertRaises(ManifestError):
                 validate_manifest({**minimal(), "localizations": locales})
 
+    def test_prompts_and_resources_have_stable_identifiers(self):
+        valid = {**minimal(),
+                 "prompts": [{"name": "debug", "description": "safe", "arguments": []}],
+                 "resources": [{"uri": "safeselect://guide", "name": "Guide",
+                                "description": "safe", "mimeType": "text/markdown"}]}
+        validate_manifest(valid)
+        invalid = [
+            {**valid, "prompts": [{"name": "", "description": "safe"}]},
+            {**valid, "prompts": [{"name": "debug", "arguments": [{"name": "goal", "required": "yes"}]}]},
+            {**valid, "resources": [{"uri": "", "name": "Guide"}]},
+            {**valid, "resources": [{"uri": "safeselect://guide", "name": 2}]},
+        ]
+        for manifest in invalid:
+            with self.assertRaises(ManifestError):
+                validate_manifest(manifest)
+
     def test_duplicate_keys_and_non_json_constants(self):
         for text in ('{"name":"one","name":"two"}', '{"tools":[{"name":1,"name":2}]}',
                      '{"value":NaN}', '{"value":Infinity}', '{"value":-Infinity}', '{bad'):

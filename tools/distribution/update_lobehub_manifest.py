@@ -48,6 +48,8 @@ def capture(binary, base, backend, version):
             "clientInfo": {"name": "manifest-introspection", "version": "1.0"}}},
         {"jsonrpc": "2.0", "method": "notifications/initialized"},
         {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+        {"jsonrpc": "2.0", "id": 3, "method": "prompts/list"},
+        {"jsonrpc": "2.0", "id": 4, "method": "resources/list"},
     ]
     result = subprocess.run(
         [str(binary), "serve", "--project", str(project), "--environment", "example"],
@@ -68,6 +70,10 @@ def capture(binary, base, backend, version):
             "Binary version must match manifest version; rebuild/select the matching binary")
     require(not responses[2].get("nextCursor"),
             "Paginated tools/list is not supported; refusing an incomplete export")
+    require(not responses[3].get("nextCursor"),
+            "Paginated prompts/list is not supported; refusing an incomplete export")
+    require(not responses[4].get("nextCursor"),
+            "Paginated resources/list is not supported; refusing an incomplete export")
     tools = responses[2]["tools"]
     require(isinstance(tools, list) and tools, f"{backend}: no tools returned")
     indexed = {}
@@ -79,7 +85,20 @@ def capture(binary, base, backend, version):
         require(tool["description"].startswith(PREFIX),
                 "Tool description context changed; review normalization before exporting")
         indexed[tool["name"]] = tool
-    return indexed
+    prompts = responses[3].get("prompts")
+    resources = responses[4].get("resources")
+    require(isinstance(prompts, list) and prompts, f"{backend}: no prompts returned")
+    require(isinstance(resources, list) and resources, f"{backend}: no resources returned")
+    for prompt in prompts:
+        require(isinstance(prompt, dict) and isinstance(prompt.get("name"), str)
+                and prompt["name"] and isinstance(prompt.get("description"), str),
+                "Invalid MCP prompt definition")
+    for resource in resources:
+        require(isinstance(resource, dict) and isinstance(resource.get("uri"), str)
+                and resource["uri"] and isinstance(resource.get("name"), str)
+                and resource["name"] and isinstance(resource.get("description"), str)
+                and isinstance(resource.get("mimeType"), str), "Invalid MCP resource definition")
+    return indexed, prompts, resources
 
 
 def merge_tools(postgres, mongo):
@@ -123,13 +142,23 @@ def generate(binary, driver, expected_sha, version):
         (drivers / "postgresql.toml").write_text(
             'version = 1\nvendor = "postgresql"\nclass = "org.postgresql.Driver"\n'
             + f'path = {json.dumps(str(jar))}\nsha256 = "{expected_sha.lower()}"\n')
-        tools = merge_tools(capture(binary, base, "postgresql", version),
-                            capture(binary, base, "mongodb", version))
-        serialized = json.dumps(tools)
+        postgres_tools, postgres_prompts, postgres_resources = capture(
+            binary, base, "postgresql", version)
+        mongo_tools, mongo_prompts, mongo_resources = capture(binary, base, "mongodb", version)
+        require(postgres_prompts == mongo_prompts,
+                "Backend prompt definitions differ; refusing an ambiguous export")
+        require(postgres_resources == mongo_resources,
+                "Backend resource definitions differ; refusing an ambiguous export")
+        generated = {
+            "tools": merge_tools(postgres_tools, mongo_tools),
+            "prompts": json.loads(json.dumps(postgres_prompts, sort_keys=True, ensure_ascii=False)),
+            "resources": json.loads(json.dumps(postgres_resources, sort_keys=True, ensure_ascii=False)),
+        }
+        serialized = json.dumps(generated)
         require(all(value not in serialized for value in (
             str(base), "example-project", "synthetic-not-a-real-password", "127.0.0.1:1")),
             "Fixture context leaked into tool definitions")
-        return tools
+        return generated
 
 
 def atomic_write(path, payload):
@@ -161,19 +190,22 @@ def main():
     try:
         manifest = load_manifest(args.manifest.read_text(encoding="utf-8"))
         validate_manifest(manifest)
-        tools = generate(args.binary.resolve(strict=True), args.postgres_driver.resolve(strict=True),
-                         args.driver_sha256, manifest["version"])
-        updated = {**manifest, "tools": tools}
+        generated = generate(args.binary.resolve(strict=True), args.postgres_driver.resolve(strict=True),
+                             args.driver_sha256, manifest["version"])
+        updated = {**manifest, **generated}
         validate_manifest(updated)
-        if manifest.get("tools") == tools:
-            print(f"Manifest is current: {len(tools)} tools")
+        if all(manifest.get(field) == generated[field] for field in generated):
+            print("Manifest is current: " + ", ".join(
+                f"{len(generated[field])} {field}" for field in ("tools", "prompts", "resources")))
             return 0
         if args.check:
             print("Manifest tools differ; rerun without --check to update")
             return 1
         atomic_write(args.manifest,
             (json.dumps(updated, indent=2, ensure_ascii=False, allow_nan=False) + "\n").encode("utf-8"))
-        print(f"Updated {len(tools)} tools; other metadata unchanged")
+        print("Updated " + ", ".join(
+            f"{len(generated[field])} {field}" for field in ("tools", "prompts", "resources"))
+            + "; other metadata unchanged")
         return 0
     except ManifestError as error:
         print(f"Manifest validation failed: {error}")
