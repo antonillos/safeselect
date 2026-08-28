@@ -1,18 +1,20 @@
-<h1>
+<p>
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="site/public/icon-dark.svg">
-    <img src="site/public/icon.svg" width="36" height="36" alt="" aria-hidden="true">
+    <img src="site/public/icon.svg" width="32" height="32" align="middle" alt="" aria-hidden="true">
   </picture>
-  SafeSelect MCP
-</h1>
+  &nbsp;<strong>SafeSelect</strong> <code>MCP</code>
+</p>
 
-**Agents can look. They cannot mutate.**
+<h1>Agents can look.<br>They cannot mutate.</h1>
 
-Read-only PostgreSQL & MongoDB access for coding agents.
+**Read-only PostgreSQL & MongoDB access for coding agents.**
 
-Debug with database context, without exposing write tools. Local MCP enforcement,
-project-scoped policies, and reproducible security tests.
+Debug with real database context, without exposing write tools—even when your
+existing credentials allow writes. SafeSelect puts local, project-scoped policy
+between your agent and your data.
 
+[**Get started →**](#quick-start) ·
 [Website](https://antonillos.github.io/safeselect/) ·
 [Compare approaches](docs/compare.md) ·
 [DBeaver → Codex guide](docs/guides/dbeaver-codex.md)
@@ -37,15 +39,10 @@ project-scoped policies, and reproducible security tests.
 
 </details>
 
-SafeSelect gives coding agents a constrained database tool: discover structure,
-inspect production-shaped data, explain queries, diagnose connectivity, and
-recover stale connections without ever receiving write-capable tools or direct
-access to database credentials.
-
-SafeSelect lets an agent inspect application data without turning the database
-into an unrestricted tool surface. Start with development data or a sanitized
-replica, then review the policy and effective database permissions before
-connecting to a more sensitive environment.
+Discover structure, inspect bounded rows, explain queries, and diagnose
+connectivity—without giving the agent write-capable tools or database credentials.
+Start with development data or a sanitized replica, then review the policy and
+effective database permissions before connecting to a more sensitive environment.
 
 > [!NOTE]
 > SafeSelect is a safety boundary for agent access, not a replacement for database permissions. Use least-privilege database users when you can; SafeSelect still constrains overpowered credentials when agents connect through it.
