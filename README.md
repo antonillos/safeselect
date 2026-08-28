@@ -1,14 +1,13 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="site/public/icon-dark.svg">
+  <img align="right" src="site/public/icon.svg" width="88" height="88" alt="SafeSelect MCP logo">
+</picture>
+
 # SafeSelect MCP
 
-<p align="center">
-  <a href="https://antonillos.github.io/safeselect/">
-    <img src="site/public/icon.svg" width="160" alt="SafeSelect MCP — read-only database inspection for AI coding agents using PostgreSQL and MongoDB">
-  </a>
-</p>
+**Agents can look. They cannot mutate.**
 
-## Agents can look. They cannot mutate.
-
-**Read-only PostgreSQL & MongoDB access for coding agents.**
+Read-only PostgreSQL & MongoDB access for coding agents.
 
 Debug with database context, without exposing write tools. Local MCP enforcement,
 project-scoped policies, and reproducible security tests.
@@ -19,6 +18,11 @@ project-scoped policies, and reproducible security tests.
 
 [![CI](https://github.com/antonillos/safeselect/actions/workflows/verify.yml/badge.svg)](https://github.com/antonillos/safeselect/actions/workflows/verify.yml)
 [![CRAP](https://img.shields.io/endpoint?url=https%3A%2F%2Fantonillos.github.io%2Fsafeselect%2Fcrap-badge.json)](https://github.com/antonillos/safeselect/actions/workflows/verify.yml)
+[![License](https://img.shields.io/badge/License-MIT-225b42)](LICENSE)
+
+<details>
+<summary>Runtime and distribution</summary>
+
 [![Security](https://img.shields.io/badge/Security-fail--closed-success?logo=trustpilot&logoColor=white)]()
 [![Rust](https://img.shields.io/badge/Rust-1.81%2B-dea584?logo=rust&logoColor=white)]()
 [![Java](https://img.shields.io/badge/Java-17%2B-5382a1?logo=openjdk&logoColor=white)]()
@@ -26,7 +30,8 @@ project-scoped policies, and reproducible security tests.
 [![Listed on mcpservers.org](https://mcpservers.org/badge.svg)](https://mcpservers.org/servers/antonillos/safeselect)
 [![Homebrew](https://img.shields.io/badge/Homebrew-tap-FBB040?logo=homebrew&logoColor=white)](https://github.com/antonillos/homebrew-tap)
 [![asdf](https://img.shields.io/badge/asdf-plugin-8A2BE2)](https://github.com/antonillos/asdf-safeselect)
-[![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
+
+</details>
 
 SafeSelect gives coding agents a constrained database tool: discover structure,
 inspect production-shaped data, explain queries, diagnose connectivity, and

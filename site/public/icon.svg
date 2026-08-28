@@ -1,23 +1,20 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
-  <title id="title">SafeSelect</title>
-  <desc id="desc">A database with write access filtered to read-only inspection.</desc>
-  <rect width="512" height="512" fill="#fff"/>
+  <title id="title">SafeSelect MCP</title>
+  <desc id="desc">Database inspection through a read-only boundary.</desc>
   <defs>
-    <clipPath id="database"><path d="M48 128c0-35 93-55 208-55s208 20 208 55v246c0 40-93 66-208 66S48 414 48 374z"/></clipPath>
+    <mask id="inspection" maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="512">
+      <path fill="#fff" d="M0 0h512v512H0z"/>
+      <path d="m293 382 31 31" stroke="#000" stroke-width="34" stroke-linecap="round"/>
+      <circle cx="247" cy="336" r="81" fill="#000"/>
+    </mask>
   </defs>
-  <g clip-path="url(#database)">
-    <rect x="48" y="73" width="416" height="154" fill="#225b42"/>
-    <rect x="48" y="227" width="416" height="50" fill="#956f5d"/>
-    <rect x="48" y="277" width="416" height="163" fill="#152a27"/>
-    <path d="M48 190c0 35 93 55 208 55s208-20 208-55" fill="none" stroke="#fff" stroke-width="14"/>
-    <path d="M48 267c0 25 93 42 208 42s208-17 208-42" fill="none" stroke="#fff" stroke-width="14"/>
+  <g mask="url(#inspection)">
+    <ellipse cx="256" cy="105" rx="176" ry="53" fill="#152a27"/>
+    <path d="M80 146c40 43 312 43 352 0v112c0 44-352 44-352 0z" fill="#225b42"/>
+    <path d="M80 276c40 43 312 43 352 0v37c0 48-352 48-352 0z" fill="#956f5d"/>
+    <path d="M80 331c40 43 312 43 352 0v70c0 64-352 64-352 0z" fill="#152a27"/>
   </g>
-  <ellipse cx="256" cy="128" rx="208" ry="55" fill="#152a27"/>
-  <path d="M48 128c0 35 93 55 208 55s208-20 208-55" fill="none" stroke="#fff" stroke-width="14"/>
-  <g transform="translate(246 314)">
-    <path d="m51 52 55 55" fill="none" stroke="#fff" stroke-linecap="round" stroke-width="42"/>
-    <path d="m51 52 55 55" fill="none" stroke="#152a27" stroke-linecap="round" stroke-width="26"/>
-    <circle r="75" fill="#fff" stroke="#152a27" stroke-width="18"/>
-    <path d="M0-40c16 14 32 18 45 18v33c0 29-18 48-45 60C-27 59-45 40-45 11v-33c13 0 29-4 45-18z" fill="#225b42"/>
-  </g>
+  <path d="m293 382 31 31" fill="none" stroke="#152a27" stroke-width="18" stroke-linecap="round"/>
+  <circle cx="247" cy="336" r="65" fill="none" stroke="#152a27" stroke-width="14"/>
+  <path d="M247 298c11 10 23 14 34 16v23c0 20-14 36-34 47-20-11-34-27-34-47v-23c11-2 23-6 34-16z" fill="#225b42"/>
 </svg>

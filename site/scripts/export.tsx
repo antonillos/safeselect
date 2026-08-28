@@ -74,7 +74,7 @@ const css = (await readFile("app/globals.css", "utf8")).replace(
 );
 await writeFile("out/site.css", css);
 await copyFile("public/og.png", "out/og.png");
-for (const asset of ["icon.svg", "icon-512.png", "favicon-32.png", "apple-touch-icon.png"]) {
+for (const asset of ["icon.svg", "icon-dark.svg", "icon-512.png", "favicon-32.png", "apple-touch-icon.png"]) {
   await copyFile(`public/${asset}`, `out/${asset}`);
 }
 await copyFile("public/onboarding.gif", "out/onboarding.gif");

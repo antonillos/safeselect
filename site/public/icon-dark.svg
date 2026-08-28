@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">SafeSelect MCP</title>
+  <desc id="desc">Database inspection through a read-only boundary.</desc>
+  <defs>
+    <mask id="inspection" maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="512">
+      <path fill="#fff" d="M0 0h512v512H0z"/>
+      <path d="m293 382 31 31" stroke="#000" stroke-width="34" stroke-linecap="round"/>
+      <circle cx="247" cy="336" r="81" fill="#000"/>
+    </mask>
+  </defs>
+  <g mask="url(#inspection)">
+    <ellipse cx="256" cy="105" rx="176" ry="53" fill="#dbe9e2"/>
+    <path d="M80 146c40 43 312 43 352 0v112c0 44-352 44-352 0z" fill="#7eaf92"/>
+    <path d="M80 276c40 43 312 43 352 0v37c0 48-352 48-352 0z" fill="#b59684"/>
+    <path d="M80 331c40 43 312 43 352 0v70c0 64-352 64-352 0z" fill="#dbe9e2"/>
+  </g>
+  <path d="m293 382 31 31" fill="none" stroke="#dbe9e2" stroke-width="18" stroke-linecap="round"/>
+  <circle cx="247" cy="336" r="65" fill="none" stroke="#dbe9e2" stroke-width="14"/>
+  <path d="M247 298c11 10 23 14 34 16v23c0 20-14 36-34 47-20-11-34-27-34-47v-23c11-2 23-6 34-16z" fill="#7eaf92"/>
+</svg>

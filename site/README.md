@@ -21,6 +21,24 @@ ignored. The social card is `public/og.png`.
 
 ## Validate and build
 
+### Brand assets
+
+`public/icon.svg` is the editable source. Its background, tier gaps and lens
+interior are transparent; the lens masks the underlying write-access tier.
+`public/icon-dark.svg` is generated with a lighter palette for dark surfaces.
+The README selects the matching SVG using `<picture>`; the light website uses
+the original. No opaque square is embedded in either variant or the PNGs.
+
+After editing the source, run `npm run icons:export`. Validate the derivatives
+without writing with `npm run icons:export -- --check`. Equal outputs are not
+rewritten. Exports use sharp from the committed npm lockfile; different renderer
+versions may produce different PNG bytes. Keep the SVG, dark variant and the
+32/180/512px PNG derivatives together in the PR. The existing wide Open Graph
+card remains separate from this square icon.
+
+`npm run test:icons` checks transparency (including the lens), palettes, size
+budgets and that repeated generation/checking leaves current assets unchanged.
+
 ```bash
 npm run build:pages
 npm run typecheck
