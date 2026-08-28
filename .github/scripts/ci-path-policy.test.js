@@ -57,6 +57,14 @@ test("classifies website assets, code, dependencies and exact helpers as website
   }
 });
 
+test("LobeHub manifest and exporter changes require the unit drift check", () => {
+  for (const path of ["lhm.plugin.json", "tools/distribution/update_lobehub_manifest.py",
+    "tools/distribution/test_update_lobehub_manifest.py"]) {
+    expected([path], "unknown", FULL);
+    expected([...WEBSITE_PR, path], "unknown", FULL);
+  }
+});
+
 test("website paths never hide unknown or sensitive changes", () => {
   for (const path of ["tools/ci/release.py", "tools/ci/validate_docs.py",
     "tools/ci/test_site_validation.py.bak", "tools/ci/new_tool.py", "site-other/file.txt"]) {
