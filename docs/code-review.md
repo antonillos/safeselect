@@ -6,7 +6,8 @@ activate the integration.
 
 ## Request a review
 
-Once the maintainer has enabled native GitHub review, request it with a PR comment:
+Once native review is enabled, wait for the existing CI CRAP report to be uploaded
+for the PR revision before requesting a metrics-informed review with a PR comment:
 
 ```text
 @codex review
@@ -43,6 +44,19 @@ private draft or a guaranteed prepublication check.
 ## Quality criteria
 
 Existing [CI checks](ci.md) and CRAP policy remain authoritative and unchanged.
+Read `report.json` and `report.md` from the existing Verify workflow's
+`crap-report` artifact, together with the job result. Verify the run belongs to
+the reviewed PR revision; distinguish its head from a synthetic merge revision.
+Do not execute CRAP or coverage tools, regenerate reports, or dispatch/rerun a
+workflow as part of code review. The existing CI owns report generation.
+
+If CI is pending, defer metric conclusions until the artifact is available. If
+the job was skipped or the artifact is absent, expired, inaccessible or stale,
+state that current CRAP evidence is unavailable; do not substitute a badge or an
+older report. A failed job's available report may explain findings but does not
+make the check pass. Native review is not guaranteed to wait or retrieve artifacts;
+if needed, the maintainer can supply the matching report in a manual app review.
+
 Report-only metrics are not a passing gate; check the configured report mode and
 the corresponding CI result. Missing coverage or metrics remain unknown.
 

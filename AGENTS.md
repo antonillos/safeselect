@@ -58,6 +58,10 @@ These rules apply to review requests, not implementation tasks. See
 
 ### Quality and maintainability
 
+- Read CRAP evidence from the existing Verify workflow's `crap-report` artifact
+  for the reviewed revision. Do not run CRAP/coverage tools or dispatch/rerun CI
+  during review. If the report is pending, missing, inaccessible or stale, defer
+  metric conclusions; do not recalculate or substitute a passing result.
 - CI owns CRAP and other measured gates; never invent metrics or suggest bypassing
   checks. Flag removed tests, weakened thresholds and exclusions that hide regressions.
 - Review concrete coupling, duplicated invariants and testability regressions.
