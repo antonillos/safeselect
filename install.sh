@@ -66,19 +66,21 @@ ensure_makevn() {
     fi
     asdf reshim makevn "${makevn_version}"
     MAKEVN_COMMAND=(env "ASDF_MAKEVN_VERSION=${makevn_version}" asdf exec makevn)
+    MAKEVN_USES_ASDF=true
   else
     printf 'Error: makevn is missing and neither Homebrew nor asdf is available.\n' >&2
     printf 'Install makevn manually, then rerun ./install.sh.\n' >&2
     return 1
   fi
 
-  if ! command -v makevn >/dev/null 2>&1; then
+  if [[ "${MAKEVN_USES_ASDF}" != true ]] && ! command -v makevn >/dev/null 2>&1; then
     printf 'Error: makevn installation completed but makevn is not on PATH.\n' >&2
     return 1
   fi
 }
 
 MAKEVN_COMMAND=(makevn)
+MAKEVN_USES_ASDF=false
 ensure_makevn
 
 printf 'Building Java sidecar...\n'

@@ -92,18 +92,11 @@ case "$1 $2" in
     ;;
   *) exit 1 ;;
 esac
-if [ "$1 $2" = "reshim makevn" ]; then
-  cat > "$FAKE_BIN/makevn" <<'EOF'
-#!/bin/sh
-mkdir -p sidecar/target
-: > sidecar/target/safeselect-sidecar-1.0.0.jar
-EOF
-  chmod +x "$FAKE_BIN/makevn"
-fi
 ''')
         result = self.run_installer("--install-makevn")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Installing makevn with asdf", result.stdout)
+        self.assertFalse((self.bin / "makevn").exists())
         calls = log.read_text()
         self.assertIn("plugin add makevn https://github.com/antonillos/asdf-makevn.git", calls)
         self.assertIn("install makevn 1.0.0", calls)
