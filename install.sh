@@ -81,7 +81,7 @@ ensure_makevn() {
 ensure_makevn
 
 printf 'Building Java sidecar...\n'
-makevn package
+makevn doctor init test package
 sidecar_jar="$(ls sidecar/target/safeselect-sidecar-*.jar 2>/dev/null | sort -V | tail -1)"
 if [[ -n "$sidecar_jar" ]]; then
   cp "$sidecar_jar" sidecar/target/safeselect-sidecar.jar

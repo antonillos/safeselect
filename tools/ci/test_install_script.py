@@ -45,6 +45,19 @@ chmod +x target/release/safeselect
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("--install-makevn", result.stdout)
 
+    def test_runs_required_makevn_build_sequence(self):
+        self.add_build_stubs()
+        log = self.root / "makevn.log"
+        self.env["MAKEVN_LOG"] = str(log)
+        self.executable("makevn", '''#!/bin/sh
+printf '%s\\n' "$*" > "$MAKEVN_LOG"
+mkdir -p sidecar/target
+: > sidecar/target/safeselect-sidecar-1.0.0.jar
+''')
+        result = self.run_installer()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(log.read_text().strip(), "doctor init test package")
+
     def test_bootstrap_prefers_homebrew_and_rechecks_path(self):
         self.add_build_stubs()
         self.executable("brew", '''#!/bin/sh
