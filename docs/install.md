@@ -57,7 +57,8 @@ safeselect --version
 The script builds the Java sidecar and Rust release binary, then installs
 `safeselect` under `~/.local/bin` by default. Use `PREFIX` or `BIN_DIR` to
 select a different destination. Requirements: Rust 1.81+, Java 17+, and
-`makevn`.
+`makevn`. If makevn is missing and you use Homebrew or asdf, opt in to its
+installation with `./install.sh --install-makevn`.
 
 ## Quick install script
 

@@ -8,6 +8,7 @@ BIN_DIR="${BIN_DIR:-${PREFIX}/bin}"
 
 MODE="release"
 RUST_FLAGS="--release"
+INSTALL_MAKEVN=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -19,10 +20,14 @@ while [[ $# -gt 0 ]]; do
       MODE="release"
       RUST_FLAGS="--release"
       ;;
+    --install-makevn)
+      INSTALL_MAKEVN=true
+      ;;
     --help|-h)
-      printf 'Usage: ./install.sh [--release|--debug]\n'
+      printf 'Usage: ./install.sh [--release|--debug] [--install-makevn]\n'
       printf '  --release   Build and install release binary (default)\n'
       printf '  --debug     Build and install debug binary\n'
+      printf '  --install-makevn  Install missing makevn with Homebrew or asdf\n'
       exit 0
       ;;
     *) printf 'Error: unknown option: %s\n' "$1" >&2; exit 1 ;;
@@ -31,6 +36,49 @@ while [[ $# -gt 0 ]]; do
 done
 
 cd "${SCRIPT_DIR}"
+
+ensure_makevn() {
+  if command -v makevn >/dev/null 2>&1; then
+    return
+  fi
+
+  if [[ "${INSTALL_MAKEVN}" != true ]]; then
+    printf 'Error: makevn is required to build the Java sidecar.\n' >&2
+    printf 'Install it first, or rerun: ./install.sh --install-makevn\n' >&2
+    return 1
+  fi
+
+  if command -v brew >/dev/null 2>&1; then
+    printf 'Installing makevn with Homebrew...\n'
+    brew install antonillos/tap/makevn
+  elif command -v asdf >/dev/null 2>&1; then
+    printf 'Installing makevn with asdf...\n'
+    if ! asdf plugin list | grep -Fxq 'makevn'; then
+      asdf plugin add makevn https://github.com/antonillos/asdf-makevn.git
+    fi
+    makevn_version="$(asdf latest makevn | tail -n 1)"
+    if [[ -z "${makevn_version}" ]]; then
+      printf 'Error: asdf did not report a makevn version.\n' >&2
+      return 1
+    fi
+    if ! asdf list makevn "${makevn_version}" >/dev/null 2>&1; then
+      asdf install makevn "${makevn_version}"
+    fi
+    asdf set -u makevn "${makevn_version}"
+    asdf reshim makevn "${makevn_version}"
+  else
+    printf 'Error: makevn is missing and neither Homebrew nor asdf is available.\n' >&2
+    printf 'Install makevn manually, then rerun ./install.sh.\n' >&2
+    return 1
+  fi
+
+  if ! command -v makevn >/dev/null 2>&1; then
+    printf 'Error: makevn installation completed but makevn is not on PATH.\n' >&2
+    return 1
+  fi
+}
+
+ensure_makevn
 
 printf 'Building Java sidecar...\n'
 makevn package
