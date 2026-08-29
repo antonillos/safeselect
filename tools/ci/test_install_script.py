@@ -1,0 +1,152 @@
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+import unittest
+
+
+class InstallScriptTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.bin = self.root / "bin"
+        self.bin.mkdir()
+        shutil.copy(Path(__file__).parents[2] / "install.sh", self.root / "install.sh")
+        (self.root / "Cargo.toml").write_text('version = "1.0.0"\n')
+        self.env = {**os.environ, "PATH": str(self.bin) + os.pathsep + "/usr/bin:/bin",
+                    "FAKE_BIN": str(self.bin), "PREFIX": str(self.root / ".local")}
+
+    def executable(self, name, content):
+        path = self.bin / name
+        path.write_text(content)
+        path.chmod(0o755)
+
+    def run_installer(self, *args):
+        return subprocess.run(["bash", str(self.root / "install.sh"), *args],
+                              cwd=self.root, env=self.env, text=True, capture_output=True)
+
+    def add_build_stubs(self):
+        self.executable("cargo", '''#!/bin/sh
+mkdir -p target/release
+printf '#!/bin/sh\\n' > target/release/safeselect
+chmod +x target/release/safeselect
+''')
+
+    def test_missing_makevn_fails_without_install_opt_in(self):
+        result = self.run_installer()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("makevn is required", result.stderr)
+        self.assertIn("--install-makevn", result.stderr)
+
+    def test_help_describes_opt_in_bootstrap(self):
+        result = self.run_installer("--help")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--install-makevn", result.stdout)
+
+    def test_runs_required_makevn_build_sequence(self):
+        self.add_build_stubs()
+        log = self.root / "makevn.log"
+        self.env["MAKEVN_LOG"] = str(log)
+        self.executable("makevn", '''#!/bin/sh
+printf '%s\\n' "$*" > "$MAKEVN_LOG"
+mkdir -p sidecar/target
+: > sidecar/target/safeselect-sidecar-1.0.0.jar
+''')
+        result = self.run_installer()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(log.read_text().strip(), "doctor init test package")
+
+    def test_bootstrap_prefers_homebrew_and_rechecks_path(self):
+        self.add_build_stubs()
+        brew_prefix = self.root / "brew-makevn"
+        self.env["FAKE_BREW_PREFIX"] = str(brew_prefix)
+        self.executable("brew", '''#!/bin/sh
+case "$1 $2" in
+  "install antonillos/tap/makevn")
+    mkdir -p "$FAKE_BREW_PREFIX/bin"
+    cat > "$FAKE_BREW_PREFIX/bin/makevn" <<'EOF'
+#!/bin/sh
+[ "$1" = --version ] && exit 0
+mkdir -p sidecar/target
+: > sidecar/target/safeselect-sidecar-1.0.0.jar
+EOF
+    chmod +x "$FAKE_BREW_PREFIX/bin/makevn"
+    ;;
+  "--prefix antonillos/tap/makevn") printf '%s\\n' "$FAKE_BREW_PREFIX" ;;
+  *) exit 1 ;;
+esac
+''')
+        result = self.run_installer("--install-makevn")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Installing makevn with Homebrew", result.stdout)
+        self.assertTrue((self.root / ".local/bin/safeselect").is_file())
+
+    def test_bootstrap_uses_asdf_when_homebrew_is_unavailable(self):
+        self.add_build_stubs()
+        log = self.root / "asdf.log"
+        self.env["ASDF_LOG"] = str(log)
+        self.executable("asdf", '''#!/bin/sh
+printf '%s\\n' "$*" >> "$ASDF_LOG"
+case "$1 $2" in
+  "plugin list") exit 1 ;;
+  "plugin add") exit 0 ;;
+  "latest makevn") echo 1.0.0 ;;
+  "list makevn") exit 1 ;;
+  "install makevn"|"reshim makevn") ;;
+  "exec makevn")
+    [ "$3" = --version ] && exit 0
+    mkdir -p sidecar/target
+    : > sidecar/target/safeselect-sidecar-1.0.0.jar
+    ;;
+  *) exit 1 ;;
+esac
+''')
+        result = self.run_installer("--install-makevn")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Installing makevn with asdf", result.stdout)
+        self.assertFalse((self.bin / "makevn").exists())
+        calls = log.read_text()
+        self.assertIn("plugin add makevn https://github.com/antonillos/asdf-makevn.git", calls)
+        self.assertIn("install makevn 1.0.0", calls)
+        self.assertNotIn("set -u makevn", calls)
+        self.assertIn("exec makevn --version", calls)
+        self.assertIn("exec makevn doctor init test package", calls)
+
+    def test_bootstrap_replaces_unselected_asdf_shim(self):
+        self.add_build_stubs()
+        log = self.root / "asdf.log"
+        self.env["ASDF_LOG"] = str(log)
+        self.executable("makevn", '''#!/bin/sh
+printf 'No version is set for command makevn\n' >&2
+exit 126
+''')
+        self.executable("asdf", '''#!/bin/sh
+printf '%s\n' "$*" >> "$ASDF_LOG"
+case "$1 $2" in
+  "plugin list") exit 1 ;;
+  "plugin add") exit 0 ;;
+  "latest makevn") echo 1.0.0 ;;
+  "list makevn") exit 1 ;;
+  "install makevn"|"reshim makevn") ;;
+  "exec makevn")
+    [ "$3" = --version ] && exit 0
+    mkdir -p sidecar/target
+    : > sidecar/target/safeselect-sidecar-1.0.0.jar
+    ;;
+  *) exit 1 ;;
+esac
+''')
+
+        result = self.run_installer("--install-makevn")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Installing makevn with asdf", result.stdout)
+        calls = log.read_text()
+        self.assertIn("exec makevn --version", calls)
+        self.assertIn("exec makevn doctor init test package", calls)
+
+
+if __name__ == "__main__":
+    unittest.main()

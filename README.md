@@ -116,9 +116,27 @@ agent and backend clips remain in the [complete demo gallery](demo/README.md).
 
 ## Quick Start
 
+Install SafeSelect with one of the following package managers:
+
+### Homebrew (macOS)
+
 ```bash
 brew install antonillos/tap/safeselect
+```
 
+### asdf (macOS & Linux)
+
+```bash
+asdf plugin add safeselect https://github.com/antonillos/asdf-safeselect.git
+asdf install safeselect latest
+SAFESELECT_VERSION="$(asdf latest safeselect | sed -n '$p')"
+asdf set -u safeselect "${SAFESELECT_VERSION}"
+asdf reshim safeselect "${SAFESELECT_VERSION}"
+```
+
+After installing the binary, configure a project database and its MCP entry:
+
+```bash
 # Import a project database
 safeselect import-dbeaver ~/Downloads/dbeaver-export.zip
 # or:
@@ -135,9 +153,10 @@ safeselect agent install opencode
 safeselect agent status
 ```
 
-SafeSelect uses any available Java 17+ runtime instead of requiring Homebrew's
-`openjdk@17` formula specifically. If Java is missing or too old, install or
-select a Java 17+ runtime before running database commands.
+SafeSelect uses any available Java 17+ runtime rather than requiring a specific
+package-manager formula. If Java is missing or too old, install or select a
+Java 17+ runtime before running database commands. On macOS with Homebrew, you
+can install one with `brew install openjdk@17`.
 
 The generated MCP name defaults to `safeselect-<project>-<environment>`.
 
@@ -293,11 +312,15 @@ document a project-scoped MCP configuration.
 ## Build From Source
 
 ```bash
-./install.sh
-safeselect --version
+# Installs makevn through Homebrew or asdf only when it is missing.
+./install.sh --install-makevn
+"$HOME/.local/bin/safeselect" --version
 ```
 
-Requirements: Rust 1.81+, Java 17+, Maven 3.8+. `sshpass` is optional for password-based SSH tunnels.
+Requirements: Rust 1.81+ and Java 17+. The bootstrap requires Homebrew or
+asdf; otherwise install `makevn` first. `sshpass` is optional for
+password-based SSH tunnels. Add `~/.local/bin` to your `PATH` before invoking
+`safeselect` without its full path.
 
 ## Documentation
 
