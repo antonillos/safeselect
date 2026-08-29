@@ -60,14 +60,23 @@ mkdir -p sidecar/target
 
     def test_bootstrap_prefers_homebrew_and_rechecks_path(self):
         self.add_build_stubs()
+        brew_prefix = self.root / "brew-makevn"
+        self.env["FAKE_BREW_PREFIX"] = str(brew_prefix)
         self.executable("brew", '''#!/bin/sh
-[ "$1" = install ] && [ "$2" = antonillos/tap/makevn ] || exit 1
-cat > "$FAKE_BIN/makevn" <<'EOF'
+case "$1 $2" in
+  "install antonillos/tap/makevn")
+    mkdir -p "$FAKE_BREW_PREFIX/bin"
+    cat > "$FAKE_BREW_PREFIX/bin/makevn" <<'EOF'
 #!/bin/sh
+[ "$1" = --version ] && exit 0
 mkdir -p sidecar/target
 : > sidecar/target/safeselect-sidecar-1.0.0.jar
 EOF
-chmod +x "$FAKE_BIN/makevn"
+    chmod +x "$FAKE_BREW_PREFIX/bin/makevn"
+    ;;
+  "--prefix antonillos/tap/makevn") printf '%s\\n' "$FAKE_BREW_PREFIX" ;;
+  *) exit 1 ;;
+esac
 ''')
         result = self.run_installer("--install-makevn")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -87,6 +96,7 @@ case "$1 $2" in
   "list makevn") exit 1 ;;
   "install makevn"|"reshim makevn") ;;
   "exec makevn")
+    [ "$3" = --version ] && exit 0
     mkdir -p sidecar/target
     : > sidecar/target/safeselect-sidecar-1.0.0.jar
     ;;
@@ -101,6 +111,40 @@ esac
         self.assertIn("plugin add makevn https://github.com/antonillos/asdf-makevn.git", calls)
         self.assertIn("install makevn 1.0.0", calls)
         self.assertNotIn("set -u makevn", calls)
+        self.assertIn("exec makevn --version", calls)
+        self.assertIn("exec makevn doctor init test package", calls)
+
+    def test_bootstrap_replaces_unselected_asdf_shim(self):
+        self.add_build_stubs()
+        log = self.root / "asdf.log"
+        self.env["ASDF_LOG"] = str(log)
+        self.executable("makevn", '''#!/bin/sh
+printf 'No version is set for command makevn\n' >&2
+exit 126
+''')
+        self.executable("asdf", '''#!/bin/sh
+printf '%s\n' "$*" >> "$ASDF_LOG"
+case "$1 $2" in
+  "plugin list") exit 1 ;;
+  "plugin add") exit 0 ;;
+  "latest makevn") echo 1.0.0 ;;
+  "list makevn") exit 1 ;;
+  "install makevn"|"reshim makevn") ;;
+  "exec makevn")
+    [ "$3" = --version ] && exit 0
+    mkdir -p sidecar/target
+    : > sidecar/target/safeselect-sidecar-1.0.0.jar
+    ;;
+  *) exit 1 ;;
+esac
+''')
+
+        result = self.run_installer("--install-makevn")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Installing makevn with asdf", result.stdout)
+        calls = log.read_text()
+        self.assertIn("exec makevn --version", calls)
         self.assertIn("exec makevn doctor init test package", calls)
 
 

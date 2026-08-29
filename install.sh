@@ -38,7 +38,7 @@ done
 cd "${SCRIPT_DIR}"
 
 ensure_makevn() {
-  if command -v makevn >/dev/null 2>&1; then
+  if command -v makevn >/dev/null 2>&1 && makevn --version >/dev/null 2>&1; then
     return
   fi
 
@@ -51,6 +51,8 @@ ensure_makevn() {
   if command -v brew >/dev/null 2>&1; then
     printf 'Installing makevn with Homebrew...\n'
     brew install antonillos/tap/makevn
+    makevn_prefix="$(brew --prefix antonillos/tap/makevn)"
+    MAKEVN_COMMAND=("${makevn_prefix}/bin/makevn")
   elif command -v asdf >/dev/null 2>&1; then
     printf 'Installing makevn with asdf...\n'
     if ! asdf plugin list | grep -Fxq 'makevn'; then
@@ -66,21 +68,19 @@ ensure_makevn() {
     fi
     asdf reshim makevn "${makevn_version}"
     MAKEVN_COMMAND=(env "ASDF_MAKEVN_VERSION=${makevn_version}" asdf exec makevn)
-    MAKEVN_USES_ASDF=true
   else
     printf 'Error: makevn is missing and neither Homebrew nor asdf is available.\n' >&2
     printf 'Install makevn manually, then rerun ./install.sh.\n' >&2
     return 1
   fi
 
-  if [[ "${MAKEVN_USES_ASDF}" != true ]] && ! command -v makevn >/dev/null 2>&1; then
-    printf 'Error: makevn installation completed but makevn is not on PATH.\n' >&2
+  if ! "${MAKEVN_COMMAND[@]}" --version >/dev/null 2>&1; then
+    printf 'Error: makevn installation completed but the selected executable cannot run.\n' >&2
     return 1
   fi
 }
 
 MAKEVN_COMMAND=(makevn)
-MAKEVN_USES_ASDF=false
 ensure_makevn
 
 printf 'Building Java sidecar...\n'
