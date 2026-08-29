@@ -85,7 +85,11 @@ case "$1 $2" in
   "plugin add") exit 0 ;;
   "latest makevn") echo 1.0.0 ;;
   "list makevn") exit 1 ;;
-  "install makevn"|"set -u"|"reshim makevn") ;;
+  "install makevn"|"reshim makevn") ;;
+  "exec makevn")
+    mkdir -p sidecar/target
+    : > sidecar/target/safeselect-sidecar-1.0.0.jar
+    ;;
   *) exit 1 ;;
 esac
 if [ "$1 $2" = "reshim makevn" ]; then
@@ -103,6 +107,8 @@ fi
         calls = log.read_text()
         self.assertIn("plugin add makevn https://github.com/antonillos/asdf-makevn.git", calls)
         self.assertIn("install makevn 1.0.0", calls)
+        self.assertNotIn("set -u makevn", calls)
+        self.assertIn("exec makevn doctor init test package", calls)
 
 
 if __name__ == "__main__":

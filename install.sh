@@ -64,8 +64,8 @@ ensure_makevn() {
     if ! asdf list makevn "${makevn_version}" >/dev/null 2>&1; then
       asdf install makevn "${makevn_version}"
     fi
-    asdf set -u makevn "${makevn_version}"
     asdf reshim makevn "${makevn_version}"
+    MAKEVN_COMMAND=(asdf exec makevn)
   else
     printf 'Error: makevn is missing and neither Homebrew nor asdf is available.\n' >&2
     printf 'Install makevn manually, then rerun ./install.sh.\n' >&2
@@ -78,10 +78,11 @@ ensure_makevn() {
   fi
 }
 
+MAKEVN_COMMAND=(makevn)
 ensure_makevn
 
 printf 'Building Java sidecar...\n'
-makevn doctor init test package
+"${MAKEVN_COMMAND[@]}" doctor init test package
 sidecar_jar="$(ls sidecar/target/safeselect-sidecar-*.jar 2>/dev/null | sort -V | tail -1)"
 if [[ -n "$sidecar_jar" ]]; then
   cp "$sidecar_jar" sidecar/target/safeselect-sidecar.jar
