@@ -65,7 +65,7 @@ ensure_makevn() {
       asdf install makevn "${makevn_version}"
     fi
     asdf reshim makevn "${makevn_version}"
-    MAKEVN_COMMAND=(asdf exec makevn)
+    MAKEVN_COMMAND=(env "ASDF_MAKEVN_VERSION=${makevn_version}" asdf exec makevn)
   else
     printf 'Error: makevn is missing and neither Homebrew nor asdf is available.\n' >&2
     printf 'Install makevn manually, then rerun ./install.sh.\n' >&2
