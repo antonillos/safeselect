@@ -311,13 +311,14 @@ document a project-scoped MCP configuration.
 ## Build From Source
 
 ```bash
-./install.sh
+# Installs makevn through Homebrew or asdf only when it is missing.
+./install.sh --install-makevn
 safeselect --version
 ```
 
-Requirements: Rust 1.81+, Java 17+, and `makevn`. If makevn is missing, use
-`./install.sh --install-makevn` to install it through Homebrew or asdf.
-`sshpass` is optional for password-based SSH tunnels.
+Requirements: Rust 1.81+ and Java 17+. The bootstrap requires Homebrew or
+asdf; otherwise install `makevn` first. `sshpass` is optional for
+password-based SSH tunnels.
 
 ## Documentation
 
