@@ -3167,8 +3167,10 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
             match spawn_sshpass(&pw) {
                 Ok(c) => c,
                 Err(_) => {
-                    println!("sshpass not installed.");
-                    println!("  Install it: brew install <tap>/sshpass");
+                    println!("sshpass is required for this password-based SSH tunnel but is not installed.");
+                    println!("  macOS/Homebrew: brew install sshpass");
+                    println!("  Other systems: install sshpass with your package manager.");
+                    println!("  Prefer SSH key authentication when possible.");
                     println!("  Then run:  safeselect check --environment {env_name}");
                     let cmd = build_ssh_command(ssh, &cfg.database.url).unwrap_or_default();
                     println!("  Or establish the tunnel manually:\n    {cmd}");
