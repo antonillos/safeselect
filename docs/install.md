@@ -41,8 +41,9 @@ brew install openjdk@17
 ```bash
 asdf plugin add safeselect https://github.com/antonillos/asdf-safeselect.git
 asdf install safeselect latest
-asdf set -u safeselect latest
-asdf reshim safeselect latest
+SAFESELECT_VERSION="$(asdf latest safeselect | sed -n '$p')"
+asdf set -u safeselect "${SAFESELECT_VERSION}"
+asdf reshim safeselect "${SAFESELECT_VERSION}"
 ```
 
 ## From source
