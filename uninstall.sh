@@ -86,20 +86,19 @@ done
 echo
 printf 'Uninstall complete.\n'
 
-# List remaining safeselect entries in agent configs
-MCP_FILES=()
-[ -f "${HOME}/Library/Application Support/opencode/opencode.json" ] && MCP_FILES+=("${HOME}/Library/Application Support/opencode/opencode.json")
-[ -f "${HOME}/.config/opencode/opencode.json" ] && MCP_FILES+=("${HOME}/.config/opencode/opencode.json")
-[ -f "${HOME}/.cursor/config.json" ] && MCP_FILES+=("${HOME}/.cursor/config.json")
-[ -f "${HOME}/.windsurf/config.json" ] && MCP_FILES+=("${HOME}/.windsurf/config.json")
+# List remaining safeselect entries in agent configs. Keep this as individual
+# checks so Bash 3.2 does not expand an empty array under `set -u`.
+check_mcp_file() {
+  local file="$1"
+  if [ -f "$file" ] && grep -q "safeselect" "$file" 2>/dev/null; then
+    printf '\n⚠  Remove safeselect entries from %s manually.\n' "$file"
+  fi
+}
 
-if ((${#MCP_FILES[@]} > 0)); then
-  for f in "${MCP_FILES[@]}"; do
-    if grep -q "safeselect" "$f" 2>/dev/null; then
-      printf '\n⚠  Remove safeselect entries from %s manually.\n' "$f"
-    fi
-  done
-fi
+check_mcp_file "${HOME}/Library/Application Support/opencode/opencode.json"
+check_mcp_file "${HOME}/.config/opencode/opencode.json"
+check_mcp_file "${HOME}/.cursor/config.json"
+check_mcp_file "${HOME}/.windsurf/config.json"
 
 # Check for macOS Keychain entries
 if command -v security &>/dev/null; then
