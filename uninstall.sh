@@ -93,11 +93,13 @@ MCP_FILES=()
 [ -f "${HOME}/.cursor/config.json" ] && MCP_FILES+=("${HOME}/.cursor/config.json")
 [ -f "${HOME}/.windsurf/config.json" ] && MCP_FILES+=("${HOME}/.windsurf/config.json")
 
-for f in "${MCP_FILES[@]}"; do
-  if grep -q "safeselect" "$f" 2>/dev/null; then
-    printf '\n⚠  Remove safeselect entries from %s manually.\n' "$f"
-  fi
-done
+if ((${#MCP_FILES[@]} > 0)); then
+  for f in "${MCP_FILES[@]}"; do
+    if grep -q "safeselect" "$f" 2>/dev/null; then
+      printf '\n⚠  Remove safeselect entries from %s manually.\n' "$f"
+    fi
+  done
+fi
 
 # Check for macOS Keychain entries
 if command -v security &>/dev/null; then
