@@ -315,7 +315,7 @@ document a project-scoped MCP configuration.
 safeselect --version
 ```
 
-Requirements: Rust 1.81+, Java 17+, Maven 3.8+. `sshpass` is optional for password-based SSH tunnels.
+Requirements: Rust 1.81+, Java 17+, and `makevn`. `sshpass` is optional for password-based SSH tunnels.
 
 ## Documentation
 
