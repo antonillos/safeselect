@@ -17,7 +17,12 @@ or you can run:
 safeselect driver download --vendor postgresql
 ```
 
-## Homebrew (macOS)
+## Package managers
+
+Homebrew and asdf are the recommended easy-installation methods. Choose the
+method for your platform, then continue with the common setup below.
+
+### Homebrew (macOS)
 
 ```bash
 brew install antonillos/tap/safeselect
@@ -31,7 +36,7 @@ is missing or too old. If needed:
 brew install openjdk@17
 ```
 
-## asdf (macOS & Linux)
+### asdf (macOS & Linux)
 
 ```bash
 asdf plugin add safeselect https://github.com/antonillos/asdf-safeselect.git

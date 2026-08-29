@@ -116,9 +116,26 @@ agent and backend clips remain in the [complete demo gallery](demo/README.md).
 
 ## Quick Start
 
+Install SafeSelect with one of the following package managers:
+
+### Homebrew (macOS)
+
 ```bash
 brew install antonillos/tap/safeselect
+```
 
+### asdf (macOS & Linux)
+
+```bash
+asdf plugin add safeselect https://github.com/antonillos/asdf-safeselect.git
+asdf install safeselect latest
+asdf set -u safeselect latest
+asdf reshim safeselect latest
+```
+
+After installing the binary, configure a project database and its MCP entry:
+
+```bash
 # Import a project database
 safeselect import-dbeaver ~/Downloads/dbeaver-export.zip
 # or:
@@ -135,9 +152,10 @@ safeselect agent install opencode
 safeselect agent status
 ```
 
-SafeSelect uses any available Java 17+ runtime instead of requiring Homebrew's
-`openjdk@17` formula specifically. If Java is missing or too old, install or
-select a Java 17+ runtime before running database commands.
+SafeSelect uses any available Java 17+ runtime rather than requiring a specific
+package-manager formula. If Java is missing or too old, install or select a
+Java 17+ runtime before running database commands. On macOS with Homebrew, you
+can install one with `brew install openjdk@17`.
 
 The generated MCP name defaults to `safeselect-<project>-<environment>`.
 
