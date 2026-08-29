@@ -51,14 +51,15 @@ asdf reshim safeselect latest
 git clone https://github.com/antonillos/safeselect.git
 cd safeselect
 ./install.sh
-safeselect --version
+"$HOME/.local/bin/safeselect" --version
 ```
 
 The script builds the Java sidecar and Rust release binary, then installs
 `safeselect` under `~/.local/bin` by default. Use `PREFIX` or `BIN_DIR` to
 select a different destination. Requirements: Rust 1.81+, Java 17+, and
 `makevn`. If makevn is missing and you use Homebrew or asdf, opt in to its
-installation with `./install.sh --install-makevn`.
+installation with `./install.sh --install-makevn`. Add `~/.local/bin` to your
+`PATH` before invoking `safeselect` without its full path.
 
 ## Quick install script
 

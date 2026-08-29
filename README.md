@@ -313,12 +313,13 @@ document a project-scoped MCP configuration.
 ```bash
 # Installs makevn through Homebrew or asdf only when it is missing.
 ./install.sh --install-makevn
-safeselect --version
+"$HOME/.local/bin/safeselect" --version
 ```
 
 Requirements: Rust 1.81+ and Java 17+. The bootstrap requires Homebrew or
 asdf; otherwise install `makevn` first. `sshpass` is optional for
-password-based SSH tunnels.
+password-based SSH tunnels. Add `~/.local/bin` to your `PATH` before invoking
+`safeselect` without its full path.
 
 ## Documentation
 
