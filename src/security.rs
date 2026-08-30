@@ -5,7 +5,7 @@ use crate::backend::{
 };
 use crate::config::{LimitsConfig, SecurityPolicy};
 use crate::error::{Result, SafeselectError};
-use sqlparser::ast::{ObjectName, ObjectNamePart, Query, TableFactor, Visit, Visitor};
+use sqlparser::ast::{Expr, ObjectName, ObjectNamePart, Query, TableFactor, Visit, Visitor};
 use sqlparser::dialect::PostgreSqlDialect;
 use sqlparser::parser::Parser;
 use std::collections::HashSet;
@@ -863,6 +863,7 @@ impl SecurityEngine {
             sql,
             &self.policy.allowed_schemas,
             &self.policy.denied_relations,
+            self.policy.require_single_statement,
         )
         .map_err(SafeselectError::QueryRejected)
     }
@@ -884,8 +885,13 @@ impl SecurityEngine {
         if !self.policy.allowed_schemas.is_empty() {
             return Ok(());
         }
-        validate_relation_policy(sql, &[], &self.policy.denied_relations)
-            .map_err(SafeselectError::QueryRejected)
+        validate_relation_policy(
+            sql,
+            &[],
+            &self.policy.denied_relations,
+            self.policy.require_single_statement,
+        )
+        .map_err(SafeselectError::QueryRejected)
     }
 
     fn check_document_name(&self, kind: &str, name: &str) -> Result<()> {
@@ -991,10 +997,14 @@ impl Visitor for RelationPolicyVisitor<'_> {
         if self.violation.is_some() {
             return ControlFlow::Continue(());
         }
-        let TableFactor::Table { name, .. } = factor else {
-            return ControlFlow::Continue(());
+        let result = match factor {
+            TableFactor::Table { name, .. } | TableFactor::Function { name, .. } => {
+                self.validate_relation(name)
+            }
+            TableFactor::TableFunction { expr, .. } => self.validate_table_function(expr),
+            _ => Ok(()),
         };
-        if let Err(message) = self.validate_relation(name) {
+        if let Err(message) = result {
             self.violation = Some(message);
         }
         ControlFlow::Continue(())
@@ -1018,6 +1028,13 @@ impl RelationPolicyVisitor<'_> {
             .iter()
             .rev()
             .any(|scope| scope.contains(name))
+    }
+
+    fn validate_table_function(&self, expr: &Expr) -> std::result::Result<(), String> {
+        match expr {
+            Expr::Function(function) => self.validate_relation(&function.name),
+            _ => Err("SQL policy cannot validate this table-function expression".into()),
+        }
     }
 
     fn validate_allowed_relation(&self, parts: &[String]) -> std::result::Result<(), String> {
@@ -1062,10 +1079,11 @@ fn validate_relation_policy(
     sql: &str,
     allowed_schemas: &[String],
     denied_relations: &[String],
+    require_single_statement: bool,
 ) -> std::result::Result<(), String> {
     let statements = Parser::parse_sql(&PostgreSqlDialect {}, sql)
         .map_err(|error| format!("SQL policy parsing failed: {error}"))?;
-    if statements.len() != 1 {
+    if require_single_statement && statements.len() != 1 {
         return Err("SQL policy requires exactly one parsed statement".into());
     }
     let mut shadowing = CteVisibilityVisitor {
@@ -2060,6 +2078,9 @@ mod tests {
             .validate("SELECT * FROM public.users WHERE id IN (SELECT id FROM private.secrets)")
             .is_err());
         assert!(engine.validate("SELECT * FROM private.expose()").is_err());
+        assert!(engine
+            .validate("SELECT * FROM ROWS FROM (private.expose()) AS exposed")
+            .is_err());
     }
 
     #[test]
@@ -2152,6 +2173,19 @@ mod tests {
             .validate(
                 "WITH x AS (SELECT 1) SELECT * FROM (WITH x AS (SELECT * FROM x) SELECT * FROM x) AS nested"
             )
+            .is_ok());
+    }
+
+    #[test]
+    fn relation_policy_respects_multi_statement_toggle() {
+        let policy = SecurityPolicy {
+            allowed_schemas: vec!["public".into()],
+            require_single_statement: false,
+            ..SecurityPolicy::default()
+        };
+        let engine = SecurityEngine::new(policy, LimitsConfig::default());
+        assert!(engine
+            .validate("SELECT * FROM public.first; SELECT * FROM public.second")
             .is_ok());
     }
 
