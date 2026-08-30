@@ -526,6 +526,7 @@ public class Main {
             connection = null;
         }
         connection = DriverManager.getConnection(databaseUrl, user, password);
+        configureReadOnlyConnection();
         applyStatementTimeout();
         sendResponse(writer, id, Map.of("status", "connected"), null);
     }
