@@ -582,6 +582,20 @@ class MainTest {
     }
 
     @Test
+    void rejectsNonPostgresqlJdbcUrlsBeforeConnecting() throws Exception {
+        setStatic("backend", "jdbc");
+        setStatic("databaseUrl", "jdbc:h2:mem:test");
+        try {
+            invoke("connectBackend", new Class<?>[]{});
+            assertTrue(false, "Non-PostgreSQL JDBC URLs must be rejected");
+        } catch (InvocationTargetException error) {
+            assertInstanceOf(java.sql.SQLException.class, error.getCause());
+        } finally {
+            setStatic("databaseUrl", null);
+        }
+    }
+
+    @Test
     void coversMongoBackendConnectionSetup() throws Exception {
         setStatic("backend", "mongodb");
         setStatic("databaseUrl", "mongodb://localhost:27017/test");

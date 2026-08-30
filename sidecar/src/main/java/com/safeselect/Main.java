@@ -307,6 +307,7 @@ public class Main {
 
     private static void connectBackend() throws Exception {
         if ("jdbc".equals(backend)) {
+            requirePostgresqlJdbc();
             Class.forName(driverClass);
             DriverManager.setLoginTimeout(3);
             log("Connecting JDBC: url=" + databaseUrl + " user=" + user + " driver=" + driverClass);
@@ -338,6 +339,12 @@ public class Main {
         connection.setAutoCommit(false);
         verifyReadOnlyTransaction();
         connection.rollback();
+    }
+
+    private static void requirePostgresqlJdbc() throws SQLException {
+        if (databaseUrl == null || !databaseUrl.regionMatches(true, 0, "jdbc:postgresql:", 0, 16)) {
+            throw new SQLException("SafeSelect JDBC read-only enforcement requires a PostgreSQL JDBC URL");
+        }
     }
 
     private static void verifyReadOnlyTransaction() throws SQLException {
@@ -525,6 +532,7 @@ public class Main {
             }
             connection = null;
         }
+        requirePostgresqlJdbc();
         connection = DriverManager.getConnection(databaseUrl, user, password);
         applyStatementTimeout();
         configureReadOnlyConnection();
