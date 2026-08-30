@@ -5,7 +5,9 @@ use crate::backend::{
 };
 use crate::config::{LimitsConfig, SecurityPolicy};
 use crate::error::{Result, SafeselectError};
-use sqlparser::ast::{Expr, ObjectName, ObjectNamePart, Query, TableFactor, Visit, Visitor};
+use sqlparser::ast::{
+    BinaryOperator, Expr, ObjectName, ObjectNamePart, Query, TableFactor, Visit, Visitor,
+};
 use sqlparser::dialect::PostgreSqlDialect;
 use sqlparser::parser::Parser;
 use std::collections::HashSet;
@@ -1038,16 +1040,37 @@ impl Visitor for RelationPolicyVisitor<'_> {
         if self.violation.is_some() {
             return ControlFlow::Continue(());
         }
-        if let Expr::Function(function) = expr {
-            if let Err(message) = self.validate_scalar_function(&function.name) {
-                self.violation = Some(message);
-            }
+        let result = match expr {
+            Expr::Function(function) => self.validate_scalar_function(&function.name),
+            Expr::BinaryOp {
+                op: BinaryOperator::PGCustomBinaryOperator(parts),
+                ..
+            } => self.validate_custom_operator(parts),
+            _ => Ok(()),
+        };
+        if let Err(message) = result {
+            self.violation = Some(message);
         }
         ControlFlow::Continue(())
     }
 }
 
 impl RelationPolicyVisitor<'_> {
+    fn validate_custom_operator(&self, parts: &[String]) -> std::result::Result<(), String> {
+        if parts.len() < 2 {
+            return Err("Unqualified custom operators are not allowed by SQL policy".into());
+        }
+        if !self.allowed_schemas.is_empty() && !self.allowed_schemas.iter().any(|s| s == &parts[0])
+        {
+            return Err(format!(
+                "Query references schema '{}' outside allowed list ({})",
+                parts[0],
+                self.allowed_schemas.join(", ")
+            ));
+        }
+        Ok(())
+    }
+
     fn validate_scalar_function(&self, name: &ObjectName) -> std::result::Result<(), String> {
         let parts = relation_parts(name)?;
         if parts.len() == 1 {
@@ -1869,10 +1892,13 @@ mod tests {
 
     #[test]
     fn rejects_transaction_control_in_multi_statement_selects() {
-        let engine = SecurityEngine::new(SecurityConfig {
-            require_single_statement: false,
-            ..SecurityConfig::default()
-        });
+        let engine = SecurityEngine::new(
+            SecurityPolicy {
+                require_single_statement: false,
+                ..SecurityPolicy::default()
+            },
+            LimitsConfig::default(),
+        );
         for sql in [
             "SELECT 1; COMMIT",
             "SELECT 1; BEGIN READ WRITE",
@@ -2159,6 +2185,12 @@ mod tests {
         assert!(engine
             .validate("SELECT count(*) FROM public.users")
             .is_err());
+        assert!(engine
+            .validate("SELECT 1 OPERATOR(private.custom) 1")
+            .is_err());
+        assert!(engine
+            .validate("SELECT 1 OPERATOR(public.custom) 1")
+            .is_ok());
     }
 
     #[test]
