@@ -533,9 +533,20 @@ public class Main {
             connection = null;
         }
         requirePostgresqlJdbc();
-        connection = DriverManager.getConnection(databaseUrl, user, password);
-        applyStatementTimeout();
-        configureReadOnlyConnection();
+        Connection candidate = DriverManager.getConnection(databaseUrl, user, password);
+        connection = candidate;
+        try {
+            applyStatementTimeout();
+            configureReadOnlyConnection();
+        } catch (Exception setupFailure) {
+            try {
+                candidate.close();
+            } catch (SQLException closeFailure) {
+                setupFailure.addSuppressed(closeFailure);
+            }
+            connection = null;
+            throw setupFailure;
+        }
         sendResponse(writer, id, Map.of("status", "connected"), null);
     }
 
