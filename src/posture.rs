@@ -138,7 +138,8 @@ fn role_findings(boolean: &impl Fn(usize) -> bool) -> Vec<Finding> {
 
 fn control_findings(resolved: &ResolvedConfig, boolean: &impl Fn(usize) -> bool) -> Vec<Finding> {
     let mut findings = Vec::new();
-    let remote = !jdbc_host(&resolved.environment.database.url).is_some_and(is_loopback_host);
+    let remote = !jdbc_hosts(&resolved.environment.database.url)
+        .is_some_and(|hosts| !hosts.is_empty() && hosts.iter().all(|host| is_loopback_host(host)));
     if remote && !boolean(5) {
         findings.push(Finding {
             code: "POSTURE_TLS_REQUIRED",
@@ -166,21 +167,23 @@ fn control_findings(resolved: &ResolvedConfig, boolean: &impl Fn(usize) -> bool)
     findings
 }
 
-fn jdbc_host(url: &str) -> Option<&str> {
+fn jdbc_hosts(url: &str) -> Option<Vec<&str>> {
     let (_, remainder) = url.split_once("://")?;
     let authority = remainder.split(['/', '?', '#']).next()?;
-    let host_port = authority
+    let authority = authority
         .rsplit_once('@')
         .map_or(authority, |(_, value)| value);
-    if let Some(bracketed) = host_port.strip_prefix('[') {
+    let hosts = authority.split(',').filter_map(endpoint_host).collect();
+    Some(hosts)
+}
+
+fn endpoint_host(endpoint: &str) -> Option<&str> {
+    let endpoint = endpoint.trim();
+    if let Some(bracketed) = endpoint.strip_prefix('[') {
         return bracketed.split_once(']').map(|(host, _)| host);
     }
-    Some(
-        host_port
-            .rsplit_once(':')
-            .map_or(host_port, |(host, _)| host),
-    )
-    .filter(|host| !host.is_empty())
+    let host = endpoint.rsplit_once(':').map_or(endpoint, |(host, _)| host);
+    (!host.is_empty()).then_some(host)
 }
 
 fn is_loopback_host(host: &str) -> bool {
@@ -273,17 +276,21 @@ mod tests {
 
     #[test]
     fn jdbc_locality_uses_the_parsed_authority_host() {
-        assert!(super::jdbc_host("jdbc:postgresql://localhost:5432/app")
-            .is_some_and(super::is_loopback_host));
-        assert!(super::jdbc_host("jdbc:postgresql://[::1]:5432/app")
-            .is_some_and(super::is_loopback_host));
+        assert!(super::jdbc_hosts("jdbc:postgresql://localhost:5432/app")
+            .is_some_and(|hosts| hosts.iter().all(|host| super::is_loopback_host(host))));
+        assert!(super::jdbc_hosts("jdbc:postgresql://[::1]:5432/app")
+            .is_some_and(|hosts| hosts.iter().all(|host| super::is_loopback_host(host))));
         assert!(
-            !super::jdbc_host("jdbc:postgresql://db-localhost.example/app")
-                .is_some_and(super::is_loopback_host)
+            !super::jdbc_hosts("jdbc:postgresql://[::1]:5432,db.example:5432/app")
+                .is_some_and(|hosts| hosts.iter().all(|host| super::is_loopback_host(host)))
         );
         assert!(
-            !super::jdbc_host("jdbc:postgresql://db.example/app?note=127.0.0.1")
-                .is_some_and(super::is_loopback_host)
+            !super::jdbc_hosts("jdbc:postgresql://db-localhost.example/app")
+                .is_some_and(|hosts| hosts.iter().all(|host| super::is_loopback_host(host)))
+        );
+        assert!(
+            !super::jdbc_hosts("jdbc:postgresql://db.example/app?note=127.0.0.1")
+                .is_some_and(|hosts| hosts.iter().all(|host| super::is_loopback_host(host)))
         );
     }
 

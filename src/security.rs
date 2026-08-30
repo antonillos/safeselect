@@ -1071,6 +1071,11 @@ fn validate_relation_policy(
     if statements.len() != 1 {
         return Err("SQL policy requires exactly one parsed statement".into());
     }
+    let mut shadowing = CteShadowingVisitor { violation: None };
+    let _ = statements.visit(&mut shadowing);
+    if let Some(violation) = shadowing.violation {
+        return Err(violation);
+    }
     let mut visitor = RelationPolicyVisitor {
         allowed_schemas,
         denied_relations,
@@ -1079,6 +1084,59 @@ fn validate_relation_policy(
     };
     let _ = statements.visit(&mut visitor);
     visitor.violation.map_or(Ok(()), Err)
+}
+
+struct CteShadowingVisitor {
+    violation: Option<String>,
+}
+
+impl Visitor for CteShadowingVisitor {
+    type Break = ();
+
+    fn pre_visit_query(&mut self, query: &Query) -> ControlFlow<Self::Break> {
+        if !query.with.as_ref().is_some_and(|with| with.recursive) {
+            for cte in query.with.iter().flat_map(|with| &with.cte_tables) {
+                let target = canonical_ident(&cte.alias.name);
+                let mut references = UnqualifiedRelationVisitor {
+                    target: &target,
+                    found: false,
+                };
+                let _ = cte.query.visit(&mut references);
+                if references.found {
+                    self.violation = Some(format!(
+                        "Non-recursive CTE '{}' shadows an unqualified physical relation",
+                        target
+                    ));
+                    return ControlFlow::Break(());
+                }
+            }
+        }
+        ControlFlow::Continue(())
+    }
+}
+
+struct UnqualifiedRelationVisitor<'a> {
+    target: &'a str,
+    found: bool,
+}
+
+impl Visitor for UnqualifiedRelationVisitor<'_> {
+    type Break = ();
+
+    fn pre_visit_table_factor(&mut self, factor: &TableFactor) -> ControlFlow<Self::Break> {
+        if let TableFactor::Table {
+            name, args: None, ..
+        } = factor
+        {
+            if relation_parts(name)
+                .ok()
+                .is_some_and(|parts| parts.len() == 1 && parts[0] == self.target)
+            {
+                self.found = true;
+            }
+        }
+        ControlFlow::Continue(())
+    }
 }
 
 fn relation_parts(name: &ObjectName) -> std::result::Result<Vec<String>, String> {
@@ -1918,6 +1976,19 @@ mod tests {
             .validate(
                 "SELECT * FROM users WHERE EXISTS (WITH users AS (SELECT * FROM public.users) SELECT * FROM users)"
             )
+            .is_err());
+    }
+
+    #[test]
+    fn schema_allowlist_rejects_non_recursive_cte_shadowing() {
+        let policy = SecurityPolicy {
+            allowed_schemas: vec!["public".into()],
+            denied_relations: vec!["users".into()],
+            ..SecurityPolicy::default()
+        };
+        let engine = SecurityEngine::new(policy, LimitsConfig::default());
+        assert!(engine
+            .validate("WITH users AS (SELECT * FROM users) SELECT * FROM users")
             .is_err());
     }
 
