@@ -1020,11 +1020,47 @@ impl Visitor for RelationPolicyVisitor<'_> {
                     if let Err(message) = self.validate_relation(&function.name) {
                         self.violation = Some(message);
                     }
+                } else if !self.allowed_schemas.is_empty()
+                    && !is_trusted_builtin_function(&parts[0])
+                {
+                    self.violation = Some(format!(
+                        "Unqualified function '{}' is not allowed with a schema policy",
+                        parts[0]
+                    ));
                 }
             }
         }
         ControlFlow::Continue(())
     }
+}
+
+fn is_trusted_builtin_function(name: &str) -> bool {
+    matches!(
+        name,
+        "abs"
+            | "array_agg"
+            | "avg"
+            | "ceil"
+            | "coalesce"
+            | "concat"
+            | "count"
+            | "date_part"
+            | "floor"
+            | "greatest"
+            | "least"
+            | "length"
+            | "lower"
+            | "max"
+            | "min"
+            | "nullif"
+            | "replace"
+            | "round"
+            | "string_agg"
+            | "substring"
+            | "sum"
+            | "trim"
+            | "upper"
+    )
 }
 
 impl RelationPolicyVisitor<'_> {
@@ -2103,6 +2139,10 @@ mod tests {
         assert!(engine
             .validate("SELECT private.expose(id) FROM public.users")
             .is_err());
+        assert!(engine
+            .validate("SELECT expose(id) FROM public.users")
+            .is_err());
+        assert!(engine.validate("SELECT count(*) FROM public.users").is_ok());
     }
 
     #[test]
