@@ -821,9 +821,33 @@ impl SecurityEngine {
 
     fn first_forbidden_keyword(compact: &str, allow_with_keyword: bool) -> Option<&'static str> {
         const FORBIDDEN: &[&str] = &[
-            "INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER", "TRUNCATE", "COPY", "PREPARE",
-            "EXECUTE", "CALL", "MERGE", "REPLACE", "GRANT", "REVOKE", "WITH", "DO", "DECLARE",
-            "LOCK", "VACUUM", "REINDEX",
+            "INSERT",
+            "UPDATE",
+            "DELETE",
+            "DROP",
+            "CREATE",
+            "ALTER",
+            "TRUNCATE",
+            "COPY",
+            "PREPARE",
+            "EXECUTE",
+            "CALL",
+            "MERGE",
+            "REPLACE",
+            "GRANT",
+            "REVOKE",
+            "WITH",
+            "DO",
+            "DECLARE",
+            "LOCK",
+            "VACUUM",
+            "REINDEX",
+            "BEGIN",
+            "START",
+            "COMMIT",
+            "ROLLBACK",
+            "SAVEPOINT",
+            "RELEASE",
         ];
         FORBIDDEN.iter().copied().find(|keyword| {
             !(*keyword == "WITH" && (allow_with_keyword || contains_with_ordinality_only(compact)))
@@ -1841,6 +1865,22 @@ mod tests {
     fn test_empty() {
         assert_eq!(count_statements(""), 0);
         assert_eq!(count_statements("   "), 0);
+    }
+
+    #[test]
+    fn rejects_transaction_control_in_multi_statement_selects() {
+        let engine = SecurityEngine::new(SecurityConfig {
+            require_single_statement: false,
+            ..SecurityConfig::default()
+        });
+        for sql in [
+            "SELECT 1; COMMIT",
+            "SELECT 1; BEGIN READ WRITE",
+            "SELECT 1; ROLLBACK",
+            "SELECT 1; SAVEPOINT nested",
+        ] {
+            assert!(engine.check_read_only(sql).is_err(), "{sql}");
+        }
     }
 
     #[test]
