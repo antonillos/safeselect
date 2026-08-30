@@ -544,13 +544,17 @@ public class Main {
             applyStatementTimeout();
             configureReadOnlyConnection();
         } catch (Exception setupFailure) {
-            try {
-                candidate.close();
-            } catch (SQLException closeFailure) {
-                setupFailure.addSuppressed(closeFailure);
-            }
+            closeFailedCandidate(candidate, setupFailure);
             connection = null;
             throw setupFailure;
+        }
+    }
+
+    private static void closeFailedCandidate(Connection candidate, Exception setupFailure) {
+        try {
+            candidate.close();
+        } catch (SQLException closeFailure) {
+            setupFailure.addSuppressed(closeFailure);
         }
     }
 
