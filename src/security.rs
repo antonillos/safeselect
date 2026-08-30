@@ -1009,6 +1009,22 @@ impl Visitor for RelationPolicyVisitor<'_> {
         }
         ControlFlow::Continue(())
     }
+
+    fn pre_visit_expr(&mut self, expr: &Expr) -> ControlFlow<Self::Break> {
+        if self.violation.is_some() {
+            return ControlFlow::Continue(());
+        }
+        if let Expr::Function(function) = expr {
+            if let Ok(parts) = relation_parts(&function.name) {
+                if parts.len() > 1 {
+                    if let Err(message) = self.validate_relation(&function.name) {
+                        self.violation = Some(message);
+                    }
+                }
+            }
+        }
+        ControlFlow::Continue(())
+    }
 }
 
 impl RelationPolicyVisitor<'_> {
@@ -2080,6 +2096,9 @@ mod tests {
         assert!(engine.validate("SELECT * FROM private.expose()").is_err());
         assert!(engine
             .validate("SELECT * FROM ROWS FROM (private.expose()) AS exposed")
+            .is_err());
+        assert!(engine
+            .validate("SELECT private.expose(id) FROM public.users")
             .is_err());
     }
 
