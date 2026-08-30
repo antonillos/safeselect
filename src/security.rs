@@ -1071,7 +1071,7 @@ fn validate_relation_policy(
     if statements.len() != 1 {
         return Err("SQL policy requires exactly one parsed statement".into());
     }
-    let mut shadowing = CteShadowingVisitor { violation: None };
+    let mut shadowing = CteVisibilityVisitor { violation: None };
     let _ = statements.visit(&mut shadowing);
     if let Some(violation) = shadowing.violation {
         return Err(violation);
@@ -1086,29 +1086,39 @@ fn validate_relation_policy(
     visitor.violation.map_or(Ok(()), Err)
 }
 
-struct CteShadowingVisitor {
+struct CteVisibilityVisitor {
     violation: Option<String>,
 }
 
-impl Visitor for CteShadowingVisitor {
+impl Visitor for CteVisibilityVisitor {
     type Break = ();
 
     fn pre_visit_query(&mut self, query: &Query) -> ControlFlow<Self::Break> {
-        if !query.with.as_ref().is_some_and(|with| with.recursive) {
-            for cte in query.with.iter().flat_map(|with| &with.cte_tables) {
-                let target = canonical_ident(&cte.alias.name);
-                let mut references = UnqualifiedRelationVisitor {
-                    target: &target,
-                    found: false,
-                };
-                let _ = cte.query.visit(&mut references);
-                if references.found {
-                    self.violation = Some(format!(
-                        "Non-recursive CTE '{}' shadows an unqualified physical relation",
-                        target
-                    ));
-                    return ControlFlow::Break(());
-                }
+        let Some(with) = query.with.as_ref() else {
+            return ControlFlow::Continue(());
+        };
+        if with.recursive {
+            return ControlFlow::Continue(());
+        }
+        let aliases: Vec<String> = with
+            .cte_tables
+            .iter()
+            .map(|cte| canonical_ident(&cte.alias.name))
+            .collect();
+        for (index, cte) in with.cte_tables.iter().enumerate() {
+            let targets: HashSet<String> = aliases[index..].iter().cloned().collect();
+            let mut references = UnqualifiedRelationVisitor {
+                targets: &targets,
+                local_scopes: Vec::new(),
+                found: None,
+            };
+            let _ = cte.query.visit(&mut references);
+            if let Some(target) = references.found {
+                self.violation = Some(format!(
+                    "Non-recursive CTE '{}' is referenced before it is visible",
+                    target
+                ));
+                return ControlFlow::Break(());
             }
         }
         ControlFlow::Continue(())
@@ -1116,23 +1126,50 @@ impl Visitor for CteShadowingVisitor {
 }
 
 struct UnqualifiedRelationVisitor<'a> {
-    target: &'a str,
-    found: bool,
+    targets: &'a HashSet<String>,
+    local_scopes: Vec<HashSet<String>>,
+    found: Option<String>,
 }
 
 impl Visitor for UnqualifiedRelationVisitor<'_> {
     type Break = ();
+
+    fn pre_visit_query(&mut self, query: &Query) -> ControlFlow<Self::Break> {
+        let aliases = query
+            .with
+            .as_ref()
+            .map(|with| {
+                with.cte_tables
+                    .iter()
+                    .map(|cte| canonical_ident(&cte.alias.name))
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.local_scopes.push(aliases);
+        ControlFlow::Continue(())
+    }
+
+    fn post_visit_query(&mut self, _query: &Query) -> ControlFlow<Self::Break> {
+        self.local_scopes.pop();
+        ControlFlow::Continue(())
+    }
 
     fn pre_visit_table_factor(&mut self, factor: &TableFactor) -> ControlFlow<Self::Break> {
         if let TableFactor::Table {
             name, args: None, ..
         } = factor
         {
-            if relation_parts(name)
-                .ok()
-                .is_some_and(|parts| parts.len() == 1 && parts[0] == self.target)
-            {
-                self.found = true;
+            if let Ok(parts) = relation_parts(name) {
+                if parts.len() == 1
+                    && self.targets.contains(&parts[0])
+                    && !self
+                        .local_scopes
+                        .iter()
+                        .rev()
+                        .any(|scope| scope.contains(&parts[0]))
+                {
+                    self.found = Some(parts[0].clone());
+                }
             }
         }
         ControlFlow::Continue(())
@@ -1990,6 +2027,35 @@ mod tests {
         assert!(engine
             .validate("WITH users AS (SELECT * FROM users) SELECT * FROM users")
             .is_err());
+    }
+
+    #[test]
+    fn schema_allowlist_rejects_forward_cte_references() {
+        let policy = SecurityPolicy {
+            allowed_schemas: vec!["public".into()],
+            denied_relations: vec!["later".into()],
+            ..SecurityPolicy::default()
+        };
+        let engine = SecurityEngine::new(policy, LimitsConfig::default());
+        assert!(engine
+            .validate(
+                "WITH first AS (SELECT * FROM later), later AS (SELECT * FROM public.allowed) SELECT * FROM first"
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn schema_allowlist_allows_nested_cte_shadowing() {
+        let policy = SecurityPolicy {
+            allowed_schemas: vec!["public".into()],
+            ..SecurityPolicy::default()
+        };
+        let engine = SecurityEngine::new(policy, LimitsConfig::default());
+        assert!(engine
+            .validate(
+                "WITH users AS (WITH users AS (SELECT * FROM public.users) SELECT * FROM users) SELECT * FROM users"
+            )
+            .is_ok());
     }
 
     #[test]
