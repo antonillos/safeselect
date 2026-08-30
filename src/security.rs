@@ -727,7 +727,7 @@ impl SecurityEngine {
             return self.check_explain_read_only(trimmed);
         }
 
-        if upper.starts_with("SELECT") {
+        if upper.starts_with("SELECT") || upper.starts_with("TABLE") {
             self.check_forbidden_tokens(trimmed, false)?;
             return Ok(());
         }
@@ -774,7 +774,7 @@ impl SecurityEngine {
         let trimmed = sql.trim_start();
         let upper = trimmed.to_uppercase();
 
-        if upper.starts_with("SELECT") {
+        if upper.starts_with("SELECT") || upper.starts_with("TABLE") {
             self.check_forbidden_tokens(trimmed, false)?;
             return Ok(());
         }
@@ -2214,8 +2214,12 @@ mod tests {
         assert!(engine
             .validate("SELECT 1 OPERATOR(public.custom) 1")
             .is_ok());
-        assert!(engine.validate("TABLE private.secrets").is_err());
-        assert!(engine.validate("TABLE public.users").is_ok());
+        assert!(engine
+            .validate("WITH leaked AS (TABLE private.secrets) SELECT * FROM leaked")
+            .is_err());
+        assert!(engine
+            .validate("WITH visible AS (TABLE public.users) SELECT * FROM visible")
+            .is_ok());
     }
 
     #[test]
