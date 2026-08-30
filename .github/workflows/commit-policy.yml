@@ -28,6 +28,8 @@ jobs:
             function conventional(message) {
               if (typeof message !== "string") return false;
               const lines = message.replace(/\r\n/g, "\n").split("\n");
+              const mergeHeader = /^Merge (?:pull request #\d+ from \S+|(?:remote-tracking )?branch \S+(?: into \S+)?)$/i;
+              if (mergeHeader.test(lines[0])) return lines.length === 1 || lines[1] === "";
               // Types are extensible and case-insensitive; scope and ! are optional.
               const header = /^[a-z][a-z0-9-]*(?:\(([^()\r\n]+)\))?!?: \S[^\r\n]*$/i.exec(lines[0]);
               return header !== null && (header[1] === undefined || header[1].trim() !== "") &&

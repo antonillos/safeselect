@@ -65,11 +65,22 @@ test("accepts conventional headers, custom types, scopes, breaking markers and b
   }
 });
 
-test("rejects malformed messages including fixup, merge and missing blank line", async () => {
+test("rejects malformed messages and missing blank lines", async () => {
   for (const message of ["", null, "update docs", "fix:no space", "fix: ", "fix: \t",
     "fix(): repair", "fix( ): repair", "fix(scope: repair", "fix! (scope): repair", "fixup! fix: repair",
-    "Merge branch 'develop'", "fix: repair\nbody without separator", "fix: repair\rpayload"]) {
+    "fix: repair\nbody without separator", "fix: repair\rpayload"]) {
     assert.equal((await check([signed(1, message)])).failed, true);
+  }
+});
+
+test("accepts standard merge commit messages", async () => {
+  for (const message of [
+    "Merge pull request #42 from owner/feature",
+    "Merge branch 'feature' into develop",
+    "Merge remote-tracking branch 'origin/develop'",
+  ]) {
+    assert.equal((await check([signed(1, message)])).failed, false, message);
+    assert.equal((await check([signed(1, `${message}\n\nDetails`)])).failed, false, message);
   }
 });
 
