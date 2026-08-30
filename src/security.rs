@@ -1071,7 +1071,10 @@ fn validate_relation_policy(
     if statements.len() != 1 {
         return Err("SQL policy requires exactly one parsed statement".into());
     }
-    let mut shadowing = CteVisibilityVisitor { violation: None };
+    let mut shadowing = CteVisibilityVisitor {
+        scopes: Vec::new(),
+        violation: None,
+    };
     let _ = statements.visit(&mut shadowing);
     if let Some(violation) = shadowing.violation {
         return Err(violation);
@@ -1087,6 +1090,7 @@ fn validate_relation_policy(
 }
 
 struct CteVisibilityVisitor {
+    scopes: Vec<QueryScopeFrame>,
     violation: Option<String>,
 }
 
@@ -1094,35 +1098,97 @@ impl Visitor for CteVisibilityVisitor {
     type Break = ();
 
     fn pre_visit_query(&mut self, query: &Query) -> ControlFlow<Self::Break> {
-        let Some(with) = query.with.as_ref() else {
-            return ControlFlow::Continue(());
-        };
-        if with.recursive {
-            return ControlFlow::Continue(());
-        }
-        let aliases: Vec<String> = with
-            .cte_tables
-            .iter()
-            .map(|cte| canonical_ident(&cte.alias.name))
-            .collect();
-        for (index, cte) in with.cte_tables.iter().enumerate() {
-            let targets: HashSet<String> = aliases[index..].iter().cloned().collect();
-            let mut references = UnqualifiedRelationVisitor {
-                targets: &targets,
-                local_scopes: Vec::new(),
-                found: None,
-            };
-            let _ = cte.query.visit(&mut references);
-            if let Some(target) = references.found {
-                self.violation = Some(format!(
-                    "Non-recursive CTE '{}' is referenced before it is visible",
-                    target
-                ));
-                return ControlFlow::Break(());
+        let inherited = self
+            .scopes
+            .last()
+            .and_then(|parent| {
+                let pointer = query as *const Query;
+                parent
+                    .cte_scopes
+                    .iter()
+                    .find(|(cte, _)| *cte == pointer)
+                    .map(|(_, scope)| scope.clone())
+                    .or_else(|| Some(parent.body_scope.clone()))
+            })
+            .unwrap_or_default();
+        let aliases: Vec<String> = query
+            .with
+            .as_ref()
+            .map(|with| {
+                with.cte_tables
+                    .iter()
+                    .map(|cte| canonical_ident(&cte.alias.name))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if query.with.as_ref().is_some_and(|with| !with.recursive) {
+            for (index, cte) in query
+                .with
+                .as_ref()
+                .into_iter()
+                .flat_map(|with| with.cte_tables.iter())
+                .enumerate()
+            {
+                let targets: HashSet<String> = aliases[index..]
+                    .iter()
+                    .filter(|alias| !inherited.contains(*alias))
+                    .cloned()
+                    .collect();
+                let mut references = UnqualifiedRelationVisitor {
+                    targets: &targets,
+                    local_scopes: Vec::new(),
+                    found: None,
+                };
+                let _ = cte.query.visit(&mut references);
+                if let Some(target) = references.found {
+                    self.violation = Some(format!(
+                        "Non-recursive CTE '{}' is referenced before it is visible",
+                        target
+                    ));
+                    return ControlFlow::Break(());
+                }
             }
         }
+        let body_scope: HashSet<String> = inherited
+            .iter()
+            .cloned()
+            .chain(aliases.iter().cloned())
+            .collect();
+        let cte_scopes = query
+            .with
+            .as_ref()
+            .map(|with| {
+                with.cte_tables
+                    .iter()
+                    .enumerate()
+                    .map(|(index, cte)| {
+                        let visible = if with.recursive {
+                            aliases.clone()
+                        } else {
+                            aliases[..index].to_vec()
+                        };
+                        let scope = inherited.iter().cloned().chain(visible).collect();
+                        (cte.query.as_ref() as *const Query, scope)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.scopes.push(QueryScopeFrame {
+            body_scope,
+            cte_scopes,
+        });
         ControlFlow::Continue(())
     }
+
+    fn post_visit_query(&mut self, _query: &Query) -> ControlFlow<Self::Break> {
+        self.scopes.pop();
+        ControlFlow::Continue(())
+    }
+}
+
+struct QueryScopeFrame {
+    body_scope: HashSet<String>,
+    cte_scopes: Vec<(*const Query, HashSet<String>)>,
 }
 
 struct UnqualifiedRelationVisitor<'a> {
