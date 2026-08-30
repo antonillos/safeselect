@@ -2122,6 +2122,11 @@ mod tests {
                 "WITH users AS (WITH users AS (SELECT * FROM public.users) SELECT * FROM users) SELECT * FROM users"
             )
             .is_ok());
+        assert!(engine
+            .validate(
+                "WITH x AS (SELECT 1) SELECT * FROM (WITH x AS (SELECT * FROM x) SELECT * FROM x) AS nested"
+            )
+            .is_ok());
     }
 
     #[test]
