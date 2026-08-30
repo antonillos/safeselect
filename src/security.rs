@@ -5,6 +5,11 @@ use crate::backend::{
 };
 use crate::config::{LimitsConfig, SecurityPolicy};
 use crate::error::{Result, SafeselectError};
+use sqlparser::ast::{ObjectName, ObjectNamePart, Query, TableFactor, Visit, Visitor};
+use sqlparser::dialect::PostgreSqlDialect;
+use sqlparser::parser::Parser;
+use std::collections::HashSet;
+use std::ops::ControlFlow;
 
 const MAX_SQL_BYTES: usize = 102_400;
 const FORBIDDEN_MQL_JAVASCRIPT_OPERATORS: &[&str] = &["$where", "$function", "$accumulator"];
@@ -854,31 +859,12 @@ impl SecurityEngine {
     }
 
     fn check_allowed_schemas(&self, sql: &str) -> Result<()> {
-        let sql_lower = sql.to_lowercase();
-        let schema_patterns: Vec<String> = self
-            .policy
-            .allowed_schemas
-            .iter()
-            .map(|s| format!("{}.", s.to_lowercase()))
-            .collect();
-
-        let has_allowed = schema_patterns
-            .iter()
-            .any(|p| sql_lower.contains(p.as_str()));
-
-        if has_allowed {
-            return Ok(());
-        }
-
-        let has_unknown = has_schema_reference(&sql_lower, &schema_patterns);
-        if has_unknown {
-            return Err(SafeselectError::QueryRejected(format!(
-                "Query references a schema not in allowed list ({})",
-                self.policy.allowed_schemas.join(", ")
-            )));
-        }
-
-        Ok(())
+        validate_relation_policy(
+            sql,
+            &self.policy.allowed_schemas,
+            &self.policy.denied_relations,
+        )
+        .map_err(SafeselectError::QueryRejected)
     }
 
     fn check_system_schema_references(&self, sql: &str) -> Result<()> {
@@ -895,16 +881,11 @@ impl SecurityEngine {
     }
 
     fn check_denied_relations(&self, sql: &str) -> Result<()> {
-        let sql_lower = sql.to_lowercase();
-        for relation in &self.policy.denied_relations {
-            let rel_lower = relation.to_lowercase();
-            if sql_lower.contains(&rel_lower) {
-                return Err(SafeselectError::QueryRejected(format!(
-                    "Query references denied relation: {relation}"
-                )));
-            }
+        if !self.policy.allowed_schemas.is_empty() {
+            return Ok(());
         }
-        Ok(())
+        validate_relation_policy(sql, &[], &self.policy.denied_relations)
+            .map_err(SafeselectError::QueryRejected)
     }
 
     fn check_document_name(&self, kind: &str, name: &str) -> Result<()> {
@@ -976,120 +957,156 @@ impl SecurityEngine {
     }
 }
 
+struct RelationPolicyVisitor<'a> {
+    allowed_schemas: &'a [String],
+    denied_relations: &'a [String],
+    cte_scopes: Vec<HashSet<String>>,
+    violation: Option<String>,
+}
+
+impl Visitor for RelationPolicyVisitor<'_> {
+    type Break = ();
+
+    fn pre_visit_query(&mut self, query: &Query) -> ControlFlow<Self::Break> {
+        let names = query
+            .with
+            .as_ref()
+            .map(|with| {
+                with.cte_tables
+                    .iter()
+                    .map(|cte| canonical_ident(&cte.alias.name))
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.cte_scopes.push(names);
+        ControlFlow::Continue(())
+    }
+
+    fn post_visit_query(&mut self, _query: &Query) -> ControlFlow<Self::Break> {
+        self.cte_scopes.pop();
+        ControlFlow::Continue(())
+    }
+
+    fn pre_visit_table_factor(&mut self, factor: &TableFactor) -> ControlFlow<Self::Break> {
+        if self.violation.is_some() {
+            return ControlFlow::Continue(());
+        }
+        let TableFactor::Table {
+            name, args: None, ..
+        } = factor
+        else {
+            return ControlFlow::Continue(());
+        };
+        if let Err(message) = self.validate_relation(name) {
+            self.violation = Some(message);
+        }
+        ControlFlow::Continue(())
+    }
+}
+
+impl RelationPolicyVisitor<'_> {
+    fn validate_relation(&self, name: &ObjectName) -> std::result::Result<(), String> {
+        let parts = relation_parts(name)?;
+        if parts.len() == 1 && self.is_cte(&parts[0]) {
+            return Ok(());
+        }
+        if !self.allowed_schemas.is_empty() {
+            self.validate_allowed_relation(&parts)?;
+        }
+        self.validate_denied_relation(&parts)
+    }
+
+    fn is_cte(&self, name: &str) -> bool {
+        self.cte_scopes
+            .iter()
+            .rev()
+            .any(|scope| scope.contains(name))
+    }
+
+    fn validate_allowed_relation(&self, parts: &[String]) -> std::result::Result<(), String> {
+        if parts.len() != 2 {
+            return Err(format!(
+                "Schema allowlist requires every relation to use schema.table ({})",
+                self.allowed_schemas.join(", ")
+            ));
+        }
+        if self
+            .allowed_schemas
+            .iter()
+            .any(|schema| schema == &parts[0])
+        {
+            Ok(())
+        } else {
+            Err(format!(
+                "Query references schema '{}' outside allowed list ({})",
+                parts[0],
+                self.allowed_schemas.join(", ")
+            ))
+        }
+    }
+
+    fn validate_denied_relation(&self, parts: &[String]) -> std::result::Result<(), String> {
+        let qualified = parts.join(".").to_ascii_lowercase();
+        let table = parts
+            .last()
+            .map(|part| part.to_ascii_lowercase())
+            .unwrap_or_default();
+        if let Some(denied) = self.denied_relations.iter().find(|denied| {
+            let denied = denied.to_ascii_lowercase();
+            denied == qualified || (!denied.contains('.') && denied == table)
+        }) {
+            return Err(format!("Query references denied relation: {denied}"));
+        }
+        Ok(())
+    }
+}
+
+fn validate_relation_policy(
+    sql: &str,
+    allowed_schemas: &[String],
+    denied_relations: &[String],
+) -> std::result::Result<(), String> {
+    let statements = Parser::parse_sql(&PostgreSqlDialect {}, sql)
+        .map_err(|error| format!("SQL policy parsing failed: {error}"))?;
+    if statements.len() != 1 {
+        return Err("SQL policy requires exactly one parsed statement".into());
+    }
+    let mut visitor = RelationPolicyVisitor {
+        allowed_schemas,
+        denied_relations,
+        cte_scopes: Vec::new(),
+        violation: None,
+    };
+    let _ = statements.visit(&mut visitor);
+    visitor.violation.map_or(Ok(()), Err)
+}
+
+fn relation_parts(name: &ObjectName) -> std::result::Result<Vec<String>, String> {
+    name.0
+        .iter()
+        .map(|part| match part {
+            ObjectNamePart::Identifier(ident) => Ok(canonical_ident(ident)),
+            ObjectNamePart::Function(_) => {
+                Err("Computed relation names are not supported by SQL policy".into())
+            }
+        })
+        .collect()
+}
+
+fn canonical_ident(ident: &sqlparser::ast::Ident) -> String {
+    if ident.quote_style.is_some() {
+        ident.value.clone()
+    } else {
+        ident.value.to_ascii_lowercase()
+    }
+}
+
 fn is_system_schema(schema: &str) -> bool {
     let lower = schema.to_ascii_lowercase();
     lower == "pg_catalog"
         || lower == "information_schema"
         || lower == "pg_toast"
         || lower.starts_with("pg_")
-}
-
-fn has_schema_reference(sql_lower: &str, allowed_patterns: &[String]) -> bool {
-    let bytes = sql_lower.as_bytes();
-    for i in 0..bytes.len().saturating_sub(2) {
-        if let Some(schema) = schema_at(sql_lower, i) {
-            if is_unknown_schema(schema, allowed_patterns) {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-fn schema_at(sql_lower: &str, start: usize) -> Option<&str> {
-    let bytes = sql_lower.as_bytes();
-    if bytes.get(start).is_none_or(|b| !b.is_ascii_alphabetic())
-        || bytes.get(start + 1) != Some(&b'.')
-    {
-        return None;
-    }
-    let mut end = start + 2;
-    while end < bytes.len() && bytes[end].is_ascii_alphabetic() {
-        end += 1;
-    }
-    Some(&sql_lower[start..end])
-}
-
-fn is_unknown_schema(schema: &str, allowed_patterns: &[String]) -> bool {
-    let name = schema.trim_end_matches('.');
-    !name.is_empty()
-        && name
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
-        && !is_sql_keyword(name)
-        && !allowed_patterns
-            .iter()
-            .any(|pattern| pattern.starts_with(name))
-}
-
-fn is_sql_keyword(word: &str) -> bool {
-    matches!(
-        word,
-        "select"
-            | "from"
-            | "where"
-            | "and"
-            | "or"
-            | "not"
-            | "in"
-            | "on"
-            | "as"
-            | "join"
-            | "left"
-            | "right"
-            | "inner"
-            | "outer"
-            | "cross"
-            | "full"
-            | "order"
-            | "group"
-            | "by"
-            | "having"
-            | "limit"
-            | "offset"
-            | "insert"
-            | "update"
-            | "delete"
-            | "into"
-            | "values"
-            | "set"
-            | "create"
-            | "alter"
-            | "drop"
-            | "table"
-            | "index"
-            | "view"
-            | "distinct"
-            | "count"
-            | "sum"
-            | "avg"
-            | "min"
-            | "max"
-            | "exists"
-            | "true"
-            | "false"
-            | "null"
-            | "is"
-            | "like"
-            | "between"
-            | "union"
-            | "all"
-            | "any"
-            | "some"
-            | "case"
-            | "when"
-            | "then"
-            | "else"
-            | "end"
-            | "cast"
-            | "coalesce"
-            | "nullif"
-            | "begin"
-            | "commit"
-            | "rollback"
-            | "grant"
-            | "revoke"
-    )
 }
 
 fn strip_trailing_semicolons(sql: &str) -> &str {
@@ -1853,6 +1870,58 @@ mod tests {
     }
 
     #[test]
+    fn schema_allowlist_rejects_unqualified_and_mixed_relations() {
+        let policy = SecurityPolicy {
+            allowed_schemas: vec!["public".into()],
+            ..SecurityPolicy::default()
+        };
+        let engine = SecurityEngine::new(policy, LimitsConfig::default());
+
+        assert!(engine.validate("SELECT * FROM users").is_err());
+        assert!(engine.validate("SELECT * FROM private.secrets").is_err());
+        assert!(engine
+            .validate("SELECT * FROM public.users JOIN private.secrets ON true")
+            .is_err());
+        assert!(engine
+            .validate("SELECT * FROM public.users WHERE id IN (SELECT id FROM private.secrets)")
+            .is_err());
+    }
+
+    #[test]
+    fn schema_allowlist_allows_ctes_and_derived_tables_over_allowed_relations() {
+        let policy = SecurityPolicy {
+            allowed_schemas: vec!["public".into()],
+            ..SecurityPolicy::default()
+        };
+        let engine = SecurityEngine::new(policy, LimitsConfig::default());
+
+        assert!(engine
+            .validate("WITH active AS (SELECT * FROM public.users) SELECT * FROM active")
+            .is_ok());
+        assert!(engine
+            .validate("SELECT * FROM (SELECT * FROM public.users) AS active")
+            .is_ok());
+        assert!(engine
+            .validate("SELECT * FROM public.users UNION SELECT * FROM public.archived_users")
+            .is_ok());
+    }
+
+    #[test]
+    fn schema_allowlist_keeps_cte_names_scoped_to_their_query() {
+        let policy = SecurityPolicy {
+            allowed_schemas: vec!["public".into()],
+            ..SecurityPolicy::default()
+        };
+        let engine = SecurityEngine::new(policy, LimitsConfig::default());
+
+        assert!(engine
+            .validate(
+                "SELECT * FROM users WHERE EXISTS (WITH users AS (SELECT * FROM public.users) SELECT * FROM users)"
+            )
+            .is_err());
+    }
+
+    #[test]
     fn validates_all_policy_constraints_on_a_valid_query() {
         let policy = SecurityPolicy {
             require_single_statement: true,
@@ -2380,13 +2449,6 @@ mod tests {
     #[test]
     fn rejects_unbalanced_sql_parentheses() {
         assert_eq!(count_statements("SELECT (1"), 1);
-    }
-
-    #[test]
-    fn detects_schema_references_and_allowed_patterns() {
-        assert!(!has_schema_reference("public.", &["public".into()]));
-        assert!(!has_schema_reference("private.x.y.", &[]));
-        assert!(!has_schema_reference("select a.b from users", &[]));
     }
 
     #[test]

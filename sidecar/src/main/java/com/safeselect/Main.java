@@ -312,6 +312,7 @@ public class Main {
             log("Connecting JDBC: url=" + databaseUrl + " user=" + user + " driver=" + driverClass);
             connection = DriverManager.getConnection(databaseUrl, user, password);
             applyStatementTimeout();
+            configureReadOnlyConnection();
             return;
         }
         if ("mongodb".equals(backend)) {
@@ -329,6 +330,43 @@ public class Main {
                 s.execute("SET statement_timeout = " + statementTimeoutMs);
                 log("Statement timeout set to " + statementTimeoutMs + "ms");
             }
+        }
+    }
+
+    private static void configureReadOnlyConnection() throws SQLException {
+        connection.setReadOnly(true);
+        connection.setAutoCommit(false);
+        verifyReadOnlyTransaction();
+        connection.rollback();
+    }
+
+    private static void verifyReadOnlyTransaction() throws SQLException {
+        try (Statement statement = connection.createStatement();
+             ResultSet result = statement.executeQuery("SHOW transaction_read_only")) {
+            if (!result.next() || !"on".equalsIgnoreCase(result.getString(1))) {
+                throw new SQLException("SafeSelect could not establish a read-only transaction");
+            }
+        }
+    }
+
+    private static void rollbackReadOnlyTransaction() {
+        try {
+            if (connection != null && !connection.getAutoCommit()) {
+                connection.rollback();
+            }
+        } catch (SQLException rollbackError) {
+            error("Failed to rollback read-only transaction: " + summarizeException(rollbackError));
+            closeJdbcAfterSecurityFailure();
+        }
+    }
+
+    private static void closeJdbcAfterSecurityFailure() {
+        try {
+            closeJdbcBackend();
+        } catch (SQLException closeError) {
+            error("Failed to close unsafe JDBC connection: " + summarizeException(closeError));
+        } finally {
+            connection = null;
         }
     }
 
@@ -1543,6 +1581,14 @@ public class Main {
 
         log("[EXECUTE] SQL: " + sql.substring(0, Math.min(100, sql.length())) + "...");
 
+        try {
+            verifyReadOnlyTransaction();
+        } catch (SQLException e) {
+            closeJdbcAfterSecurityFailure();
+            sendSqlError(writer, id, e);
+            return;
+        }
+
         try (Statement stmt = connection.createStatement()) {
             configureStatementTimeout(stmt);
             log("[EXECUTE] Executing statement...");
@@ -1558,6 +1604,8 @@ public class Main {
             }
         } catch (SQLException e) {
             sendSqlError(writer, id, e);
+        } finally {
+            rollbackReadOnlyTransaction();
         }
     }
 
