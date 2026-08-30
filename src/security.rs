@@ -2098,6 +2098,9 @@ mod tests {
             .validate("SELECT * FROM ROWS FROM (private.expose()) AS exposed")
             .is_err());
         assert!(engine
+            .validate("SELECT * FROM TABLE(private.expose()) AS exposed")
+            .is_err());
+        assert!(engine
             .validate("SELECT private.expose(id) FROM public.users")
             .is_err());
     }
