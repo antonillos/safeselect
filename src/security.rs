@@ -1015,55 +1015,29 @@ impl Visitor for RelationPolicyVisitor<'_> {
             return ControlFlow::Continue(());
         }
         if let Expr::Function(function) = expr {
-            if let Ok(parts) = relation_parts(&function.name) {
-                if parts.len() > 1 {
-                    if let Err(message) = self.validate_relation(&function.name) {
-                        self.violation = Some(message);
-                    }
-                } else if !self.allowed_schemas.is_empty()
-                    && !is_trusted_builtin_function(&parts[0])
-                {
-                    self.violation = Some(format!(
-                        "Unqualified function '{}' is not allowed with a schema policy",
-                        parts[0]
-                    ));
-                }
+            if let Err(message) = self.validate_scalar_function(&function.name) {
+                self.violation = Some(message);
             }
         }
         ControlFlow::Continue(())
     }
 }
 
-fn is_trusted_builtin_function(name: &str) -> bool {
-    matches!(
-        name,
-        "abs"
-            | "array_agg"
-            | "avg"
-            | "ceil"
-            | "coalesce"
-            | "concat"
-            | "count"
-            | "date_part"
-            | "floor"
-            | "greatest"
-            | "least"
-            | "length"
-            | "lower"
-            | "max"
-            | "min"
-            | "nullif"
-            | "replace"
-            | "round"
-            | "string_agg"
-            | "substring"
-            | "sum"
-            | "trim"
-            | "upper"
-    )
-}
-
 impl RelationPolicyVisitor<'_> {
+    fn validate_scalar_function(&self, name: &ObjectName) -> std::result::Result<(), String> {
+        let parts = relation_parts(name)?;
+        if parts.len() == 1 {
+            if !self.allowed_schemas.is_empty() {
+                return Err(format!(
+                    "Unqualified function '{}' is not allowed with a schema policy",
+                    parts[0]
+                ));
+            }
+            return Ok(());
+        }
+        self.validate_relation(name)
+    }
+
     fn validate_relation(&self, name: &ObjectName) -> std::result::Result<(), String> {
         let parts = relation_parts(name)?;
         if parts.len() == 1 && self.is_cte(&parts[0]) {
@@ -2142,7 +2116,9 @@ mod tests {
         assert!(engine
             .validate("SELECT expose(id) FROM public.users")
             .is_err());
-        assert!(engine.validate("SELECT count(*) FROM public.users").is_ok());
+        assert!(engine
+            .validate("SELECT count(*) FROM public.users")
+            .is_err());
     }
 
     #[test]
