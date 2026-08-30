@@ -20,7 +20,19 @@ use std::time::Instant;
 
 const READ_ONLY_DEBUG_PROMPT: &str = "Use SafeSelect only for read-only database debugging. Start with database_info, then discover the relevant schema or collection before querying it. Keep every filter bounded, follow each next_suggestion, and stop rather than retrying an unchanged failure. SafeSelect never grants write access; do not use a shell, direct credentials, or another MCP server to bypass its policy.";
 const READ_ONLY_DEBUG_RESOURCE_URI: &str = "safeselect://guide/read-only-database-debugging";
+const LATEST_MCP_PROTOCOL_VERSION: &str = "2025-06-18";
+const SUPPORTED_MCP_PROTOCOL_VERSIONS: [&str; 2] = [LATEST_MCP_PROTOCOL_VERSION, "2024-11-05"];
 const READ_ONLY_DEBUG_RESOURCE: &str = "# Read-only database debugging\n\nUse SafeSelect for database context, not database control.\n\n1. Call `database_info`.\n2. Discover tables or collections before querying unfamiliar data.\n3. Use bounded reads and preserve existing filters.\n4. Follow one `next_suggestion` at a time.\n5. Stop and report an error rather than retrying unchanged or bypassing the policy.\n\nSafeSelect constrains its own MCP tool surface only. It does not replace least-privilege database users or restrict credentials exposed through another channel.";
+
+fn negotiated_protocol_version(requested: Option<&str>) -> &'static str {
+    requested
+        .and_then(|version| {
+            SUPPORTED_MCP_PROTOCOL_VERSIONS
+                .into_iter()
+                .find(|supported| *supported == version)
+        })
+        .unwrap_or(LATEST_MCP_PROTOCOL_VERSION)
+}
 
 #[derive(Deserialize)]
 struct JsonRpcMessage {
@@ -408,13 +420,12 @@ impl McpServer {
             .unwrap_or("unknown")
             .to_string();
 
-        let proto_version = msg
-            .params
-            .as_ref()
-            .and_then(|p| p.get("protocolVersion"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("2024-11-05")
-            .to_string();
+        let proto_version = negotiated_protocol_version(
+            msg.params
+                .as_ref()
+                .and_then(|p| p.get("protocolVersion"))
+                .and_then(|v| v.as_str()),
+        );
 
         self.client_name = client_name.clone();
         self.audit.set_mcp_client(&client_name);
@@ -4694,12 +4705,12 @@ fn run_setup_server_with_io<R: BufRead, W: Write>(
 
         match method {
             "initialize" => {
-                let proto_version = msg
-                    .params
-                    .as_ref()
-                    .and_then(|p| p.get("protocolVersion"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("2024-11-05");
+                let proto_version = negotiated_protocol_version(
+                    msg.params
+                        .as_ref()
+                        .and_then(|p| p.get("protocolVersion"))
+                        .and_then(|v| v.as_str()),
+                );
 
                 let resp = JsonRpcResponse {
                     jsonrpc: "2.0",
@@ -5573,6 +5584,22 @@ fn build_explain_sql(sql: &str, args: &serde_json::Value) -> std::result::Result
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
+
+    #[test]
+    fn protocol_negotiation_accepts_only_known_versions() {
+        assert_eq!(
+            super::negotiated_protocol_version(Some("2024-11-05")),
+            "2024-11-05"
+        );
+        assert_eq!(
+            super::negotiated_protocol_version(Some("2099-01-01")),
+            super::LATEST_MCP_PROTOCOL_VERSION
+        );
+        assert_eq!(
+            super::negotiated_protocol_version(None),
+            super::LATEST_MCP_PROTOCOL_VERSION
+        );
+    }
 
     #[test]
     fn setup_server_handles_protocol_lifecycle_requests() {
