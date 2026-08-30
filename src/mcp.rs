@@ -21,7 +21,8 @@ use std::time::Instant;
 const READ_ONLY_DEBUG_PROMPT: &str = "Use SafeSelect only for read-only database debugging. Start with database_info, then discover the relevant schema or collection before querying it. Keep every filter bounded, follow each next_suggestion, and stop rather than retrying an unchanged failure. SafeSelect never grants write access; do not use a shell, direct credentials, or another MCP server to bypass its policy.";
 const READ_ONLY_DEBUG_RESOURCE_URI: &str = "safeselect://guide/read-only-database-debugging";
 const LATEST_MCP_PROTOCOL_VERSION: &str = "2025-06-18";
-const SUPPORTED_MCP_PROTOCOL_VERSIONS: [&str; 2] = [LATEST_MCP_PROTOCOL_VERSION, "2024-11-05"];
+const SUPPORTED_MCP_PROTOCOL_VERSIONS: [&str; 3] =
+    [LATEST_MCP_PROTOCOL_VERSION, "2025-03-26", "2024-11-05"];
 const READ_ONLY_DEBUG_RESOURCE: &str = "# Read-only database debugging\n\nUse SafeSelect for database context, not database control.\n\n1. Call `database_info`.\n2. Discover tables or collections before querying unfamiliar data.\n3. Use bounded reads and preserve existing filters.\n4. Follow one `next_suggestion` at a time.\n5. Stop and report an error rather than retrying unchanged or bypassing the policy.\n\nSafeSelect constrains its own MCP tool surface only. It does not replace least-privilege database users or restrict credentials exposed through another channel.";
 
 fn negotiated_protocol_version(requested: Option<&str>) -> &'static str {
@@ -5590,6 +5591,10 @@ mod tests {
         assert_eq!(
             super::negotiated_protocol_version(Some("2024-11-05")),
             "2024-11-05"
+        );
+        assert_eq!(
+            super::negotiated_protocol_version(Some("2025-03-26")),
+            "2025-03-26"
         );
         assert_eq!(
             super::negotiated_protocol_version(Some("2099-01-01")),
