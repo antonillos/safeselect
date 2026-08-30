@@ -25,12 +25,12 @@ jobs:
         with:
           script: |
             const shaPattern = /^[0-9a-f]{40}$/;
-            function conventional(message) {
+            function conventional(message, isMergeCommit = false) {
               if (typeof message !== "string") return false;
               const lines = message.replace(/\r\n/g, "\n").split("\n");
-              const mergeHeader = /^Merge (?:pull request #\d+ from \S+|(?:remote-tracking )?branch \S+(?: into \S+)?)$/i;
-              if (mergeHeader.test(lines[0])) return lines.length === 1 || lines[1] === "";
               // Types are extensible and case-insensitive; scope and ! are optional.
+              const mergeHeader = /^Merge (?:pull request #\d+ from \S+|(?:remote-tracking )?branch \S+(?: into \S+)?)$/i;
+              if (mergeHeader.test(lines[0])) return isMergeCommit && (lines.length === 1 || lines[1] === "");
               const header = /^[a-z][a-z0-9-]*(?:\(([^()\r\n]+)\))?!?: \S[^\r\n]*$/i.exec(lines[0]);
               return header !== null && (header[1] === undefined || header[1].trim() !== "") &&
                 (lines.length === 1 || lines[1] === "");
@@ -65,7 +65,7 @@ jobs:
                   ...context.repo, commit_sha: sha,
                 });
                 if (commit.sha !== sha) throw new Error("Commit mismatch");
-                const formatOK = conventional(commit.message);
+                const formatOK = conventional(commit.message, Array.isArray(commit.parents) && commit.parents.length > 1);
                 const verification = commit.verification;
                 const mergeCommit = /^Merge (?:pull request #\d+ from \S+|(?:remote-tracking )?branch \S+(?: into \S+)?)$/i
                   .test(commit.message.replace(/\r\n/g, "\n").split("\n")[0]);

@@ -14,6 +14,7 @@ const run = new AsyncFunction("github", "context", "core", script);
 const sha = (n) => n.toString(16).padStart(40, "0");
 const signed = (n = 1, message = "docs: update guide") => ({
   sha: sha(n), message,
+  parents: [{ sha: sha(n + 1000) }],
   verification: { verified: true, reason: "valid", signature: "-----BEGIN SSH SIGNATURE-----\nsynthetic" },
 });
 
@@ -65,29 +66,19 @@ test("accepts conventional headers, custom types, scopes, breaking markers and b
   }
 });
 
-test("rejects malformed messages and missing blank lines", async () => {
+test("rejects malformed messages including fixup, single-parent merge and missing blank line", async () => {
   for (const message of ["", null, "update docs", "fix:no space", "fix: ", "fix: \t",
     "fix(): repair", "fix( ): repair", "fix(scope: repair", "fix! (scope): repair", "fixup! fix: repair",
-    "fix: repair\nbody without separator", "fix: repair\rpayload"]) {
+    "Merge branch 'develop'", "fix: repair\nbody without separator", "fix: repair\rpayload"]) {
     assert.equal((await check([signed(1, message)])).failed, true);
   }
 });
 
-test("accepts standard merge commit messages", async () => {
-  for (const message of [
-    "Merge pull request #42 from owner/feature",
-    "Merge branch 'feature' into develop",
-    "Merge remote-tracking branch 'origin/develop'",
-  ]) {
-    assert.equal((await check([signed(1, message)])).failed, false, message);
-    assert.equal((await check([signed(1, `${message}\n\nDetails`)])).failed, false, message);
-  }
-});
-
-test("accepts GitHub's verified PGP signature on merge commits", async () => {
-  const commit = signed(1, "Merge branch 'feature' into develop");
-  commit.verification.signature = "-----BEGIN PGP SIGNATURE-----\nsynthetic";
-  assert.equal((await check([commit])).failed, false);
+test("accepts recognized merge headers only for multi-parent commits", async () => {
+  const merge = signed(1, "Merge branch 'feature' into develop");
+  merge.parents = [{ sha: sha(2) }, { sha: sha(3) }];
+  assert.equal((await check([merge])).failed, false);
+  assert.equal((await check([signed(1, "Merge branch 'feature' into develop")])).failed, true);
 });
 
 test("requires verified SSH signatures, not Signed-off-by or signature presence", async () => {
