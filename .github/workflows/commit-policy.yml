@@ -67,12 +67,16 @@ jobs:
                 if (commit.sha !== sha) throw new Error("Commit mismatch");
                 const formatOK = conventional(commit.message);
                 const verification = commit.verification;
+                const mergeCommit = /^Merge (?:pull request #\d+ from \S+|(?:remote-tracking )?branch \S+(?: into \S+)?)$/i
+                  .test(commit.message.replace(/\r\n/g, "\n").split("\n")[0]);
+                const signature = verification?.signature || "";
                 const signatureOK = verification?.verified === true &&
                   verification.reason === "valid" &&
-                  verification.signature?.startsWith("-----BEGIN SSH SIGNATURE-----") === true;
+                  (signature.startsWith("-----BEGIN SSH SIGNATURE-----") ||
+                    (mergeCommit && signature.startsWith("-----BEGIN PGP SIGNATURE-----")));
                 // Never echo messages, identities, signatures, payloads or API errors.
                 if (!formatOK) core.error(`${sha.slice(0, 12)}: Conventional Commits format required.`);
-                if (!signatureOK) core.error(`${sha.slice(0, 12)}: verified SSH signature required.`);
+                if (!signatureOK) core.error(`${sha.slice(0, 12)}: verified repository signature required.`);
                 if (!formatOK || !signatureOK) failed++;
               }
               const { data: after } = await github.rest.pulls.get(params);

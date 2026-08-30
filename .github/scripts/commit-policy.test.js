@@ -84,6 +84,12 @@ test("accepts standard merge commit messages", async () => {
   }
 });
 
+test("accepts GitHub's verified PGP signature on merge commits", async () => {
+  const commit = signed(1, "Merge branch 'feature' into develop");
+  commit.verification.signature = "-----BEGIN PGP SIGNATURE-----\nsynthetic";
+  assert.equal((await check([commit])).failed, false);
+});
+
 test("requires verified SSH signatures, not Signed-off-by or signature presence", async () => {
   for (const verification of [undefined, null, {},
     { verified: false, reason: "unsigned" },
