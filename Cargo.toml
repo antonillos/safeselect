@@ -27,6 +27,7 @@ similar = "3.1.1"
 indoc = "2"
 inquire = "0.9"
 rpassword = "7"
+sqlparser = { version = "0.62.0", features = ["visitor"] }
 
 
 [profile.release]
