@@ -6,8 +6,8 @@ use crate::backend::{
 use crate::config::{LimitsConfig, SecurityPolicy};
 use crate::error::{Result, SafeselectError};
 use sqlparser::ast::{
-    BinaryOperator, Expr, ObjectName, ObjectNamePart, Query, SetExpr, Table, TableFactor, Visit,
-    Visitor,
+    BinaryOperator, DataType, Expr, ObjectName, ObjectNamePart, Query, SetExpr, Table, TableFactor,
+    Visit, Visitor,
 };
 use sqlparser::dialect::PostgreSqlDialect;
 use sqlparser::parser::Parser;
@@ -1052,6 +1052,7 @@ impl Visitor for RelationPolicyVisitor<'_> {
                 op: BinaryOperator::PGCustomBinaryOperator(parts),
                 ..
             } => self.validate_custom_operator(parts),
+            Expr::Cast { data_type, .. } => self.validate_data_type(data_type),
             _ => Ok(()),
         };
         if let Err(message) = result {
@@ -1073,10 +1074,21 @@ impl RelationPolicyVisitor<'_> {
         if parts.is_empty() {
             return Err("TABLE command is missing a relation name".into());
         }
+        if parts.len() == 1 && self.is_cte(&parts[0]) {
+            return Ok(());
+        }
         if !self.allowed_schemas.is_empty() {
             self.validate_allowed_relation(&parts)?;
         }
         self.validate_denied_relation(&parts)
+    }
+
+    fn validate_data_type(&self, data_type: &DataType) -> std::result::Result<(), String> {
+        let name = match data_type {
+            DataType::Custom(name, _) | DataType::NamedTable { name, .. } => name,
+            _ => return Ok(()),
+        };
+        self.validate_relation(name)
     }
 
     fn validate_custom_operator(&self, parts: &[String]) -> std::result::Result<(), String> {
@@ -2220,6 +2232,9 @@ mod tests {
         assert!(engine
             .validate("WITH visible AS (TABLE public.users) SELECT * FROM visible")
             .is_ok());
+        assert!(engine
+            .validate("SELECT CAST('x' AS private.leaky_type) FROM public.users")
+            .is_err());
     }
 
     #[test]
