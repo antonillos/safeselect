@@ -991,10 +991,7 @@ impl Visitor for RelationPolicyVisitor<'_> {
         if self.violation.is_some() {
             return ControlFlow::Continue(());
         }
-        let TableFactor::Table {
-            name, args: None, ..
-        } = factor
-        else {
+        let TableFactor::Table { name, .. } = factor else {
             return ControlFlow::Continue(());
         };
         if let Err(message) = self.validate_relation(name) {
@@ -1073,6 +1070,8 @@ fn validate_relation_policy(
     }
     let mut shadowing = CteVisibilityVisitor {
         scopes: Vec::new(),
+        allowed_schemas,
+        denied_relations,
         violation: None,
     };
     let _ = statements.visit(&mut shadowing);
@@ -1089,12 +1088,14 @@ fn validate_relation_policy(
     visitor.violation.map_or(Ok(()), Err)
 }
 
-struct CteVisibilityVisitor {
+struct CteVisibilityVisitor<'a> {
     scopes: Vec<QueryScopeFrame>,
+    allowed_schemas: &'a [String],
+    denied_relations: &'a [String],
     violation: Option<String>,
 }
 
-impl Visitor for CteVisibilityVisitor {
+impl Visitor for CteVisibilityVisitor<'_> {
     type Break = ();
 
     fn pre_visit_query(&mut self, query: &Query) -> ControlFlow<Self::Break> {
@@ -1131,7 +1132,9 @@ impl Visitor for CteVisibilityVisitor {
             {
                 let targets: HashSet<String> = aliases[index..]
                     .iter()
-                    .filter(|alias| !inherited.contains(*alias))
+                    .filter(|alias| {
+                        !inherited.contains(*alias) && self.relation_violates_policy(alias)
+                    })
                     .cloned()
                     .collect();
                 let mut references = UnqualifiedRelationVisitor {
@@ -1183,6 +1186,16 @@ impl Visitor for CteVisibilityVisitor {
     fn post_visit_query(&mut self, _query: &Query) -> ControlFlow<Self::Break> {
         self.scopes.pop();
         ControlFlow::Continue(())
+    }
+}
+
+impl CteVisibilityVisitor<'_> {
+    fn relation_violates_policy(&self, relation: &str) -> bool {
+        !self.allowed_schemas.is_empty()
+            || self
+                .denied_relations
+                .iter()
+                .any(|denied| !denied.contains('.') && denied.eq_ignore_ascii_case(relation))
     }
 }
 
@@ -2046,6 +2059,7 @@ mod tests {
         assert!(engine
             .validate("SELECT * FROM public.users WHERE id IN (SELECT id FROM private.secrets)")
             .is_err());
+        assert!(engine.validate("SELECT * FROM private.expose()").is_err());
     }
 
     #[test]
@@ -2093,6 +2107,18 @@ mod tests {
         assert!(engine
             .validate("WITH users AS (SELECT * FROM users) SELECT * FROM users")
             .is_err());
+    }
+
+    #[test]
+    fn cte_shadowing_check_ignores_unrestricted_relations() {
+        let policy = SecurityPolicy {
+            denied_relations: vec!["public.secrets".into()],
+            ..SecurityPolicy::default()
+        };
+        let engine = SecurityEngine::new(policy, LimitsConfig::default());
+        assert!(engine
+            .validate("WITH users AS (SELECT * FROM users) SELECT * FROM users")
+            .is_ok());
     }
 
     #[test]
