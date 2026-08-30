@@ -332,7 +332,7 @@ jobs:
         run: cargo deny check
 
   crap-report:
-    name: CRAP (ratchet <=80)
+    name: CRAP (ratchet <=79)
     needs: classify
     if: inputs.badge_only == true || needs.classify.outputs.crap == 'true'
     runs-on: ubuntu-latest
@@ -367,7 +367,7 @@ jobs:
             "${GITHUB_WORKSPACE}/../crap4java-0.1.0.jar" \
             | sha256sum --check
       - name: Run CRAP analysis and ratchet
-        run: ./tools/crap/run.sh --summary --ratchet 80
+        run: ./tools/crap/run.sh --summary --ratchet 79
         env:
           CRAP4JAVA_JAR: ${{ github.workspace }}/../crap4java-0.1.0.jar
       - name: Upload CRAP artifacts
