@@ -6,7 +6,8 @@ use crate::backend::{
 use crate::config::{LimitsConfig, SecurityPolicy};
 use crate::error::{Result, SafeselectError};
 use sqlparser::ast::{
-    BinaryOperator, Expr, ObjectName, ObjectNamePart, Query, TableFactor, Visit, Visitor,
+    BinaryOperator, Expr, ObjectName, ObjectNamePart, Query, SetExpr, Table, TableFactor, Visit,
+    Visitor,
 };
 use sqlparser::dialect::PostgreSqlDialect;
 use sqlparser::parser::Parser;
@@ -1000,6 +1001,11 @@ impl Visitor for RelationPolicyVisitor<'_> {
     type Break = ();
 
     fn pre_visit_query(&mut self, query: &Query) -> ControlFlow<Self::Break> {
+        if let SetExpr::Table(table) = query.body.as_ref() {
+            if let Err(message) = self.validate_table_command(table) {
+                self.violation = Some(message);
+            }
+        }
         let names = query
             .with
             .as_ref()
@@ -1056,6 +1062,23 @@ impl Visitor for RelationPolicyVisitor<'_> {
 }
 
 impl RelationPolicyVisitor<'_> {
+    fn validate_table_command(&self, table: &Table) -> std::result::Result<(), String> {
+        let mut parts = Vec::new();
+        if let Some(schema) = &table.schema_name {
+            parts.push(schema.to_ascii_lowercase());
+        }
+        if let Some(name) = &table.table_name {
+            parts.push(name.to_ascii_lowercase());
+        }
+        if parts.is_empty() {
+            return Err("TABLE command is missing a relation name".into());
+        }
+        if !self.allowed_schemas.is_empty() {
+            self.validate_allowed_relation(&parts)?;
+        }
+        self.validate_denied_relation(&parts)
+    }
+
     fn validate_custom_operator(&self, parts: &[String]) -> std::result::Result<(), String> {
         if parts.len() < 2 {
             return Err("Unqualified custom operators are not allowed by SQL policy".into());
@@ -2191,6 +2214,8 @@ mod tests {
         assert!(engine
             .validate("SELECT 1 OPERATOR(public.custom) 1")
             .is_ok());
+        assert!(engine.validate("TABLE private.secrets").is_err());
+        assert!(engine.validate("TABLE public.users").is_ok());
     }
 
     #[test]
