@@ -38,6 +38,13 @@ wrapper supplies JaCoCo coverage and collects JSON in report-only mode; the
 combined CRAP wrapper enforces the existing warning-count gate. Code review
 reads the generated CI artifacts rather than rerunning the analyzer.
 
+CI also enables the Maven dependency cache in `actions/setup-java` and the shared
+`setup-makevn` action writes a temporary Maven settings file that mirrors only
+`central` through Google's public Maven Central mirror. This avoids transient
+Maven Central throttling while keeping the mirror configuration out of local
+developer builds, while the cache reduces repeated dependency requests on later
+runs.
+
 ## Commit policy
 
 The independent **Commit Policy** workflow runs on PRs to `develop` and `main`,

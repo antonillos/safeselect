@@ -115,6 +115,8 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
+          cache: maven
+          cache-dependency-path: '**/pom.xml'
       - name: Install makevn
         if: steps.reuse.outputs.reused != 'true'
         uses: ./.github/actions/setup-makevn

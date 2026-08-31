@@ -44,6 +44,18 @@ class WorkflowTests(unittest.TestCase):
             self.assertNotIn("makevn/main/packaging/install", text)
             self.assertIn("/.github/actions/setup-makevn", text)
 
+    def test_makevn_action_configures_mirror_and_workflows_cache_dependencies(self):
+        action = (ROOT / ".github/actions/setup-makevn/action.yml").read_text()
+        self.assertIn(
+            "https://maven-central.storage-download.googleapis.com/maven2/", action
+        )
+        self.assertIn("<mirrorOf>central</mirrorOf>", action)
+        self.assertIn("MAVEN_ARGS", action)
+        for name in ("release", "prepare-release", "integration-tests", "verify"):
+            text = (ROOT / f".github/workflows/{name}.yml").read_text()
+            self.assertIn("cache: maven", text)
+            self.assertIn("cache-dependency-path: '**/pom.xml'", text)
+
     def test_older_source_uses_current_tooling_and_source_sha(self):
         self.assertIn("path: release-source", self.release)
         self.assertIn("outputs.target-ref", self.jobs["build"])

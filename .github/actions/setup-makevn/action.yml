@@ -8,3 +8,24 @@ runs:
       env:
         ACTION_PATH: ${{ github.action_path }}
       run: bash "$ACTION_PATH/../../../tools/ci/install-makevn.sh"
+    - name: Configure Maven Central mirror
+      shell: bash
+      run: |
+        set -euo pipefail
+        settings="${RUNNER_TEMP}/safeselect-maven-settings.xml"
+        cat > "${settings}" <<'XML'
+        <?xml version="1.0" encoding="UTF-8"?>
+        <settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
+                  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                  xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0 https://maven.apache.org/xsd/settings-1.0.0.xsd">
+          <mirrors>
+            <mirror>
+              <id>google-maven-central</id>
+              <name>Google Cloud Storage Maven Central mirror</name>
+              <url>https://maven-central.storage-download.googleapis.com/maven2/</url>
+              <mirrorOf>central</mirrorOf>
+            </mirror>
+          </mirrors>
+        </settings>
+        XML
+        printf 'MAVEN_ARGS=%s -s %s\n' "${MAVEN_ARGS:-}" "${settings}" >> "${GITHUB_ENV}"
