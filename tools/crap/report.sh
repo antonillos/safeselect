@@ -17,8 +17,8 @@ command -v jq >/dev/null 2>&1 || { printf 'Error: jq is required.\n' >&2; exit 2
 mkdir -p "${OUT_DIR}"
 
 jq -n \
-  --argjson rust "$(cat "${RUST_REPORT}")" \
-  --argjson java "$(cat "${JAVA_REPORT}")" \
+  --slurpfile rust "${RUST_REPORT}" \
+  --slurpfile java "${JAVA_REPORT}" \
   --argjson threshold "${THRESHOLD}" \
   --arg ratchet_max_warnings "${RATCHET_MAX_WARNINGS}" \
   -f "${ROOT_DIR}/tools/crap/merge-reports.jq" \

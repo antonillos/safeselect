@@ -504,7 +504,9 @@ fn assert_timeout_control_visible(repo_root: &std::path::Path, config_dir: &std:
         postgres::run_safeselect(repo_root, config_dir, "SELECT pg_sleep(5)");
     assert!(!success, "pg_sleep unexpectedly succeeded: {stdout}");
     assert!(
-        stderr.contains("Query rejected") && stderr.contains("function PG_SLEEP not allowed"),
+        stderr.contains("Query rejected")
+            && (stderr.contains("function PG_SLEEP not allowed")
+                || stderr.contains("Unqualified function 'pg_sleep' is not allowed")),
         "timeout control rejection was not visible enough\nstdout:\n{stdout}\nstderr:\n{stderr}"
     );
 }
