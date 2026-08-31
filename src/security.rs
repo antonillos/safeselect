@@ -18,6 +18,9 @@ use std::ops::ControlFlow;
 const MAX_SQL_BYTES: usize = 102_400;
 const FORBIDDEN_MQL_JAVASCRIPT_OPERATORS: &[&str] = &["$where", "$function", "$accumulator"];
 const SQL_EXECUTING_ROUTINES: &[&str] = &[
+    "dblink",
+    "dblink_exec",
+    "dblink_send_query",
     "query_to_xml",
     "query_to_xml_and_xmlschema",
     "query_to_xmlschema",
@@ -1242,15 +1245,7 @@ impl RelationPolicyVisitor<'_> {
 
     fn validate_scalar_function(&self, name: &ObjectName) -> std::result::Result<(), String> {
         let parts = relation_parts(name)?;
-        if !self.allowed_schemas.is_empty()
-            && parts.last().is_some_and(|part| {
-                SQL_EXECUTING_ROUTINES
-                    .iter()
-                    .any(|routine| routine.eq_ignore_ascii_case(part))
-            })
-        {
-            return Err("SQL policy rejects routines that execute SQL text".into());
-        }
+        self.reject_sql_executing_routine(&parts)?;
         if parts.len() == 1 {
             if !self.allowed_schemas.is_empty() {
                 return Err(format!(
@@ -1291,6 +1286,7 @@ impl RelationPolicyVisitor<'_> {
 
     fn validate_callable_name(&self, name: &ObjectName) -> std::result::Result<(), String> {
         let parts = relation_parts(name)?;
+        self.reject_sql_executing_routine(&parts)?;
         if parts.len() == 1 {
             return self.validate_unqualified_callable(&parts[0]);
         }
@@ -1316,6 +1312,20 @@ impl RelationPolicyVisitor<'_> {
                 "Unqualified function '{}' is not allowed with a schema policy",
                 name
             ));
+        }
+        Ok(())
+    }
+
+    fn reject_sql_executing_routine(&self, parts: &[String]) -> std::result::Result<(), String> {
+        let policy_active = !self.allowed_schemas.is_empty() || !self.denied_relations.is_empty();
+        if policy_active
+            && parts.last().is_some_and(|part| {
+                SQL_EXECUTING_ROUTINES
+                    .iter()
+                    .any(|routine| routine.eq_ignore_ascii_case(part))
+            })
+        {
+            return Err("SQL policy rejects routines that execute SQL text".into());
         }
         Ok(())
     }
@@ -2418,6 +2428,9 @@ mod tests {
             .validate("SELECT public.query_to_xml('SELECT * FROM private.secrets', true, false, '')")
             .is_err());
         assert!(engine
+            .validate("SELECT * FROM public.dblink('dbname=test', 'SELECT * FROM private.secrets') AS t(id int)")
+            .is_err());
+        assert!(engine
             .validate("WITH expose AS (SELECT 1) SELECT * FROM expose()")
             .is_err());
         assert!(engine
@@ -2510,6 +2523,18 @@ mod tests {
         assert!(engine
             .validate("WITH users AS (SELECT * FROM users) SELECT * FROM users")
             .is_ok());
+    }
+
+    #[test]
+    fn denylist_also_rejects_sql_executing_routines() {
+        let policy = SecurityPolicy {
+            denied_relations: vec!["private.secrets".into()],
+            ..SecurityPolicy::default()
+        };
+        let engine = SecurityEngine::new(policy, LimitsConfig::default());
+        assert!(engine
+            .validate("SELECT query_to_xml('SELECT * FROM private.secrets', true, false, '')")
+            .is_err());
     }
 
     #[test]
