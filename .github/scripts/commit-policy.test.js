@@ -14,6 +14,7 @@ const run = new AsyncFunction("github", "context", "core", script);
 const sha = (n) => n.toString(16).padStart(40, "0");
 const signed = (n = 1, message = "docs: update guide") => ({
   sha: sha(n), message,
+  parents: [{ sha: sha(n + 1000) }],
   verification: { verified: true, reason: "valid", signature: "-----BEGIN SSH SIGNATURE-----\nsynthetic" },
 });
 
@@ -65,12 +66,19 @@ test("accepts conventional headers, custom types, scopes, breaking markers and b
   }
 });
 
-test("rejects malformed messages including fixup, merge and missing blank line", async () => {
+test("rejects malformed messages including fixup, single-parent merge and missing blank line", async () => {
   for (const message of ["", null, "update docs", "fix:no space", "fix: ", "fix: \t",
     "fix(): repair", "fix( ): repair", "fix(scope: repair", "fix! (scope): repair", "fixup! fix: repair",
     "Merge branch 'develop'", "fix: repair\nbody without separator", "fix: repair\rpayload"]) {
     assert.equal((await check([signed(1, message)])).failed, true);
   }
+});
+
+test("accepts recognized merge headers only for multi-parent commits", async () => {
+  const merge = signed(1, "Merge branch 'feature' into develop");
+  merge.parents = [{ sha: sha(2) }, { sha: sha(3) }];
+  assert.equal((await check([merge])).failed, false);
+  assert.equal((await check([signed(1, "Merge branch 'feature' into develop")])).failed, true);
 });
 
 test("requires verified SSH signatures, not Signed-off-by or signature presence", async () => {
