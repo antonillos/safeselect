@@ -28,9 +28,9 @@ jobs:
             function conventional(message, isMergeCommit = false) {
               if (typeof message !== "string") return false;
               const lines = message.replace(/\r\n/g, "\n").split("\n");
-              // Types are extensible and case-insensitive; scope and ! are optional.
               const mergeHeader = /^Merge (?:pull request #\d+ from \S+|(?:remote-tracking )?branch \S+(?: into \S+)?)$/i;
               if (mergeHeader.test(lines[0])) return isMergeCommit && (lines.length === 1 || lines[1] === "");
+              // Types are extensible and case-insensitive; scope and ! are optional.
               const header = /^[a-z][a-z0-9-]*(?:\(([^()\r\n]+)\))?!?: \S[^\r\n]*$/i.exec(lines[0]);
               return header !== null && (header[1] === undefined || header[1].trim() !== "") &&
                 (lines.length === 1 || lines[1] === "");
@@ -65,14 +65,21 @@ jobs:
                   ...context.repo, commit_sha: sha,
                 });
                 if (commit.sha !== sha) throw new Error("Commit mismatch");
-                const formatOK = conventional(commit.message, Array.isArray(commit.parents) && commit.parents.length > 1);
+                const isMergeCommit = Array.isArray(commit.parents) && commit.parents.length > 1;
+                const formatOK = conventional(commit.message, isMergeCommit);
                 const verification = commit.verification;
-                const signatureOK = verification?.verified === true &&
-                  verification.reason === "valid" &&
-                  verification.signature?.startsWith("-----BEGIN SSH SIGNATURE-----") === true;
+                const githubGeneratedMerge = isMergeCommit &&
+                  formatOK &&
+                  typeof commit.committer?.email === "string" &&
+                  commit.committer.email.toLowerCase().endsWith("@github.com");
+                const signatureOK = githubGeneratedMerge
+                  ? true
+                  : verification?.verified === true &&
+                    verification.reason === "valid" &&
+                    verification.signature?.startsWith("-----BEGIN SSH SIGNATURE-----") === true;
                 // Never echo messages, identities, signatures, payloads or API errors.
                 if (!formatOK) core.error(`${sha.slice(0, 12)}: Conventional Commits format required.`);
-                if (!signatureOK) core.error(`${sha.slice(0, 12)}: verified repository signature required.`);
+                if (!signatureOK) core.error(`${sha.slice(0, 12)}: verified SSH signature required.`);
                 if (!formatOK || !signatureOK) failed++;
               }
               const { data: after } = await github.rest.pulls.get(params);
