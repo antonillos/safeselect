@@ -9,6 +9,7 @@ use sqlparser::ast::{
     ArrayElemTypeDef, BinaryOperator, DataType, Expr, ObjectName, ObjectNamePart, Query, SetExpr,
     Table, TableFactor, Visit, Visitor,
 };
+
 use sqlparser::dialect::PostgreSqlDialect;
 use sqlparser::parser::Parser;
 use std::collections::HashSet;
@@ -16,6 +17,26 @@ use std::ops::ControlFlow;
 
 const MAX_SQL_BYTES: usize = 102_400;
 const FORBIDDEN_MQL_JAVASCRIPT_OPERATORS: &[&str] = &["$where", "$function", "$accumulator"];
+const RELATION_POLICY_BLOCKED_ROUTINES: &[&str] = &[
+    "dblink",
+    "dblink_exec",
+    "dblink_fetch",
+    "dblink_open",
+    "dblink_send_query",
+    "cursor_to_xml",
+    "database_to_xml",
+    "database_to_xml_and_xmlschema",
+    "database_to_xmlschema",
+    "query_to_xml",
+    "query_to_xml_and_xmlschema",
+    "query_to_xmlschema",
+    "schema_to_xml",
+    "schema_to_xml_and_xmlschema",
+    "schema_to_xmlschema",
+    "table_to_xml",
+    "table_to_xml_and_xmlschema",
+    "table_to_xmlschema",
+];
 
 pub struct SecurityEngine {
     policy: SecurityPolicy,
@@ -913,6 +934,7 @@ impl SecurityEngine {
             &self.policy.allowed_schemas,
             &self.policy.denied_relations,
             self.policy.require_single_statement,
+
         )
         .map_err(SafeselectError::QueryRejected)
     }
@@ -941,6 +963,7 @@ impl SecurityEngine {
             self.policy.require_single_statement,
         )
         .map_err(SafeselectError::QueryRejected)
+
     }
 
     fn check_document_name(&self, kind: &str, name: &str) -> Result<()> {
@@ -1099,6 +1122,7 @@ fn take_dollar_delimiter(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -
     None
 }
 
+
 struct RelationPolicyVisitor<'a> {
     allowed_schemas: &'a [String],
     denied_relations: &'a [String],
@@ -1115,6 +1139,7 @@ impl Visitor for RelationPolicyVisitor<'_> {
                 self.violation = Some(message);
             }
         }
+
         let names = query
             .with
             .as_ref()
@@ -1160,6 +1185,7 @@ impl Visitor for RelationPolicyVisitor<'_> {
             _ => Ok(()),
         };
         if let Err(message) = result {
+
             self.violation = Some(message);
         }
         ControlFlow::Continue(())
@@ -1231,6 +1257,7 @@ impl RelationPolicyVisitor<'_> {
 
     fn validate_scalar_function(&self, name: &ObjectName) -> std::result::Result<(), String> {
         let parts = relation_parts(name)?;
+        self.reject_sql_executing_routine(&parts)?;
         if parts.len() == 1 {
             if !self.allowed_schemas.is_empty() {
                 return Err(format!(
@@ -1242,6 +1269,7 @@ impl RelationPolicyVisitor<'_> {
         }
         self.validate_relation(name)
     }
+
 
     fn validate_relation(&self, name: &ObjectName) -> std::result::Result<(), String> {
         let parts = relation_parts(name)?;
@@ -1270,6 +1298,7 @@ impl RelationPolicyVisitor<'_> {
 
     fn validate_callable_name(&self, name: &ObjectName) -> std::result::Result<(), String> {
         let parts = relation_parts(name)?;
+        self.reject_sql_executing_routine(&parts)?;
         if parts.len() == 1 {
             return self.validate_unqualified_callable(&parts[0]);
         }
@@ -1299,6 +1328,21 @@ impl RelationPolicyVisitor<'_> {
         Ok(())
     }
 
+    fn reject_sql_executing_routine(&self, parts: &[String]) -> std::result::Result<(), String> {
+        let policy_active = !self.allowed_schemas.is_empty() || !self.denied_relations.is_empty();
+        if policy_active
+            && parts.last().is_some_and(|part| {
+                RELATION_POLICY_BLOCKED_ROUTINES
+                    .iter()
+                    .any(|routine| routine.eq_ignore_ascii_case(part))
+            })
+        {
+            return Err("SQL policy rejects routines that execute SQL text".into());
+        }
+        Ok(())
+    }
+
+
     fn validate_allowed_relation(&self, parts: &[String]) -> std::result::Result<(), String> {
         if parts.len() != 2 {
             return Err(format!(
@@ -1310,6 +1354,7 @@ impl RelationPolicyVisitor<'_> {
             (parts[0].to_ascii_lowercase() == parts[0] && schema.eq_ignore_ascii_case(&parts[0]))
                 || schema == &parts[0]
         }) {
+
             Ok(())
         } else {
             Err(format!(
@@ -1344,6 +1389,7 @@ fn table_relation_parts(table: &Table) -> Vec<String> {
         .collect()
 }
 
+
 fn validate_relation_policy(
     sql: &str,
     allowed_schemas: &[String],
@@ -1353,12 +1399,14 @@ fn validate_relation_policy(
     let statements = Parser::parse_sql(&PostgreSqlDialect {}, sql)
         .map_err(|error| format!("SQL policy parsing failed: {error}"))?;
     if require_single_statement && statements.len() != 1 {
+
         return Err("SQL policy requires exactly one parsed statement".into());
     }
     let mut shadowing = CteVisibilityVisitor {
         scopes: Vec::new(),
         allowed_schemas,
         denied_relations,
+
         violation: None,
     };
     let _ = statements.visit(&mut shadowing);
@@ -1383,6 +1431,7 @@ struct CteVisibilityVisitor<'a> {
 }
 
 impl Visitor for CteVisibilityVisitor<'_> {
+
     type Break = ();
 
     fn pre_visit_query(&mut self, query: &Query) -> ControlFlow<Self::Break> {
@@ -1422,6 +1471,7 @@ impl Visitor for CteVisibilityVisitor<'_> {
                     .filter(|alias| {
                         !inherited.contains(*alias) && self.relation_violates_policy(alias)
                     })
+
                     .cloned()
                     .collect();
                 let mut references = UnqualifiedRelationVisitor {
@@ -1485,6 +1535,7 @@ impl CteVisibilityVisitor<'_> {
                 .any(|denied| !denied.contains('.') && denied.eq_ignore_ascii_case(relation))
     }
 }
+
 
 struct QueryScopeFrame {
     body_scope: HashSet<String>,
@@ -2386,6 +2437,18 @@ mod tests {
             .is_err());
         assert!(engine.validate("SELECT * FROM private.expose()").is_err());
         assert!(engine
+            .validate("SELECT public.query_to_xml('SELECT * FROM private.secrets', true, false, '')")
+            .is_err());
+        assert!(engine
+            .validate("SELECT public.table_to_xml('private.secrets'::regclass, true, false, '')")
+            .is_err());
+        assert!(engine
+            .validate("SELECT * FROM public.dblink('dbname=test', 'SELECT * FROM private.secrets') AS t(id int)")
+            .is_err());
+        assert!(engine
+            .validate("SELECT public.dblink_open('conn', 'SELECT * FROM private.secrets')")
+            .is_err());
+        assert!(engine
             .validate("WITH expose AS (SELECT 1) SELECT * FROM expose()")
             .is_err());
         assert!(engine
@@ -2418,6 +2481,7 @@ mod tests {
         assert!(engine
             .validate("SELECT CAST('x' AS private.leaky_type) FROM public.users")
             .is_err());
+
     }
 
     #[test]
@@ -2480,6 +2544,19 @@ mod tests {
     }
 
     #[test]
+    fn denylist_also_rejects_sql_executing_routines() {
+        let policy = SecurityPolicy {
+            denied_relations: vec!["private.secrets".into()],
+            ..SecurityPolicy::default()
+        };
+        let engine = SecurityEngine::new(policy, LimitsConfig::default());
+        assert!(engine
+            .validate("SELECT query_to_xml('SELECT * FROM private.secrets', true, false, '')")
+            .is_err());
+    }
+
+    #[test]
+
     fn schema_allowlist_rejects_forward_cte_references() {
         let policy = SecurityPolicy {
             allowed_schemas: vec!["public".into()],
@@ -2629,6 +2706,7 @@ mod tests {
     }
 
     #[test]
+
     fn validates_all_policy_constraints_on_a_valid_query() {
         let policy = SecurityPolicy {
             require_single_statement: true,

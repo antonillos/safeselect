@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - **Java 17+** (for the embedded database sidecar)
-- **Rust 1.81+** (only if building from source)
+- **Rust 1.85+** (only if building from source)
 
 The Java sidecar is embedded in the Rust binary, so you only need a Java 17+
 runtime. No Maven or Rust is needed to run SafeSelect.
@@ -57,7 +57,7 @@ cd safeselect
 
 The script builds the Java sidecar and Rust release binary, then installs
 `safeselect` under `~/.local/bin` by default. Use `PREFIX` or `BIN_DIR` to
-select a different destination. Requirements: Rust 1.81+, Java 17+, and
+select a different destination. Requirements: Rust 1.85+, Java 17+, and
 `makevn`. If makevn is missing and you use Homebrew or asdf, opt in to its
 installation with `./install.sh --install-makevn`. Add `~/.local/bin` to your
 `PATH` before invoking `safeselect` without its full path.

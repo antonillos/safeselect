@@ -2,6 +2,7 @@
 name = "safeselect"
 version = "0.7.6"
 edition = "2021"
+rust-version = "1.85"
 description = "Fail-closed read-only database access for AI agents over MCP"
 license = "MIT OR Apache-2.0"
 

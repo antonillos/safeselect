@@ -535,6 +535,7 @@ public class Main {
         requirePostgresqlJdbc();
         Connection candidate = DriverManager.getConnection(databaseUrl, user, password);
         configureJdbcCandidate(candidate);
+
         sendResponse(writer, id, Map.of("status", "connected"), null);
     }
 
