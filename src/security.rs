@@ -17,13 +17,23 @@ use std::ops::ControlFlow;
 
 const MAX_SQL_BYTES: usize = 102_400;
 const FORBIDDEN_MQL_JAVASCRIPT_OPERATORS: &[&str] = &["$where", "$function", "$accumulator"];
-const SQL_EXECUTING_ROUTINES: &[&str] = &[
+const RELATION_POLICY_BLOCKED_ROUTINES: &[&str] = &[
     "dblink",
     "dblink_exec",
     "dblink_send_query",
+    "cursor_to_xml",
+    "database_to_xml",
+    "database_to_xml_and_xmlschema",
+    "database_to_xmlschema",
     "query_to_xml",
     "query_to_xml_and_xmlschema",
     "query_to_xmlschema",
+    "schema_to_xml",
+    "schema_to_xml_and_xmlschema",
+    "schema_to_xmlschema",
+    "table_to_xml",
+    "table_to_xml_and_xmlschema",
+    "table_to_xmlschema",
 ];
 
 pub struct SecurityEngine {
@@ -1320,7 +1330,7 @@ impl RelationPolicyVisitor<'_> {
         let policy_active = !self.allowed_schemas.is_empty() || !self.denied_relations.is_empty();
         if policy_active
             && parts.last().is_some_and(|part| {
-                SQL_EXECUTING_ROUTINES
+                RELATION_POLICY_BLOCKED_ROUTINES
                     .iter()
                     .any(|routine| routine.eq_ignore_ascii_case(part))
             })
@@ -2426,6 +2436,9 @@ mod tests {
         assert!(engine.validate("SELECT * FROM private.expose()").is_err());
         assert!(engine
             .validate("SELECT public.query_to_xml('SELECT * FROM private.secrets', true, false, '')")
+            .is_err());
+        assert!(engine
+            .validate("SELECT public.table_to_xml('private.secrets'::regclass, true, false, '')")
             .is_err());
         assert!(engine
             .validate("SELECT * FROM public.dblink('dbname=test', 'SELECT * FROM private.secrets') AS t(id int)")
