@@ -38,7 +38,20 @@ def api(path):
 
 
 def release_info(repo, version):
-    return api(f"repos/{repo}/releases/tags/{quote(version, safe='')}")
+    info = api(f"repos/{repo}/releases/tags/{quote(version, safe='')}")
+    if info is not None:
+        return info
+    # GitHub does not expose drafts through the tag endpoint.  Listing every
+    # page keeps even a long-lived draft resumable before it is published.
+    page = 1
+    while True:
+        releases = api(f"repos/{repo}/releases?per_page=100&page={page}")
+        draft = next((release for release in releases if release.get("tag_name") == version), None)
+        if draft is not None:
+            return draft
+        if len(releases) < 100:
+            return None
+        page += 1
 
 
 def payloads(version, targets=TARGETS):
@@ -87,6 +100,8 @@ def verify_tag(repo, version, sha, source):
     info = release_info(repo, version)
     if info and not info["draft"] and not tag_sha:
         raise ValueError("A public release must have an existing tag")
+    if info and info["draft"] and info.get("target_commitish") != sha:
+        raise ValueError("Refusing to reuse a draft with a different target")
     return info
 
 
