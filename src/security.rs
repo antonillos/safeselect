@@ -6,8 +6,8 @@ use crate::backend::{
 use crate::config::{LimitsConfig, SecurityPolicy};
 use crate::error::{Result, SafeselectError};
 use sqlparser::ast::{
-    BinaryOperator, DataType, Expr, ObjectName, ObjectNamePart, Query, SetExpr, Table, TableFactor,
-    Visit, Visitor,
+    ArrayElemTypeDef, BinaryOperator, DataType, Expr, ObjectName, ObjectNamePart, Query, SetExpr,
+    Table, TableFactor, Visit, Visitor,
 };
 use sqlparser::dialect::PostgreSqlDialect;
 use sqlparser::parser::Parser;
@@ -1088,11 +1088,21 @@ impl RelationPolicyVisitor<'_> {
     }
 
     fn validate_data_type(&self, data_type: &DataType) -> std::result::Result<(), String> {
-        let name = match data_type {
-            DataType::Custom(name, _) | DataType::NamedTable { name, .. } => name,
-            _ => return Ok(()),
-        };
-        self.validate_relation(name)
+        match data_type {
+            DataType::Custom(name, _) | DataType::NamedTable { name, .. } => {
+                let parts = relation_parts(name)?;
+                if !self.allowed_schemas.is_empty() {
+                    self.validate_allowed_relation(&parts)?;
+                }
+                self.validate_denied_relation(&parts)
+            }
+            DataType::Array(ArrayElemTypeDef::AngleBracket(inner))
+            | DataType::Array(ArrayElemTypeDef::SquareBracket(inner, _))
+            | DataType::Array(ArrayElemTypeDef::Parenthesis(inner)) => {
+                self.validate_data_type(inner)
+            }
+            _ => Ok(()),
+        }
     }
 
     fn validate_custom_operator(&self, parts: &[String]) -> std::result::Result<(), String> {
@@ -1164,6 +1174,13 @@ impl RelationPolicyVisitor<'_> {
     }
 
     fn validate_unqualified_callable(&self, name: &str) -> std::result::Result<(), String> {
+        if self
+            .denied_relations
+            .iter()
+            .any(|denied| denied.eq_ignore_ascii_case(name))
+        {
+            return Err(format!("Query references denied relation: {name}"));
+        }
         if !self.allowed_schemas.is_empty() && !matches!(name, "unnest" | "generate_series") {
             return Err(format!(
                 "Unqualified function '{}' is not allowed with a schema policy",
