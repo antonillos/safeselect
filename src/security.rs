@@ -681,7 +681,23 @@ impl SecurityEngine {
     fn strip_sql_comments(sql: &str) -> String {
         let mut result = String::with_capacity(sql.len());
         let mut chars = sql.chars().peekable();
+        let mut in_single = false;
+        let mut in_double = false;
         while let Some(ch) = chars.next() {
+            if ch == '\'' && !in_double {
+                in_single = !in_single;
+                result.push(ch);
+                continue;
+            }
+            if ch == '"' && !in_single {
+                in_double = !in_double;
+                result.push(ch);
+                continue;
+            }
+            if in_single || in_double {
+                result.push(ch);
+                continue;
+            }
             match (ch, chars.peek().copied()) {
                 ('-', Some('-')) => Self::skip_line_comment(&mut chars, &mut result),
                 ('/', Some('*')) => Self::skip_block_comment(&mut chars),
@@ -1200,7 +1216,7 @@ impl RelationPolicyVisitor<'_> {
         if self
             .allowed_schemas
             .iter()
-            .any(|schema| schema == &parts[0])
+            .any(|schema| schema.eq_ignore_ascii_case(&parts[0]))
         {
             Ok(())
         } else {
