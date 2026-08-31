@@ -685,40 +685,9 @@ impl SecurityEngine {
         let mut in_double = false;
         let mut dollar_delimiter: Option<String> = None;
         while let Some(ch) = chars.next() {
-            if let Some(delimiter) = &dollar_delimiter {
-                result.push(ch);
-                if result.ends_with(delimiter) {
-                    dollar_delimiter = None;
-                }
-                continue;
-            }
-            if ch == '$' {
-                if let Some(delimiter) = take_dollar_delimiter(&mut chars) {
-                    result.push('$');
-                    result.push_str(&delimiter[1..]);
-                    dollar_delimiter = Some(delimiter);
-                    continue;
-                }
-            }
-            if ch == '\'' && !in_double {
-                in_single = !in_single;
-                result.push(ch);
-                continue;
-            }
-            if ch == '\\' && in_single {
-                result.push(ch);
-                if let Some(escaped) = chars.next() {
-                    result.push(escaped);
-                }
-                continue;
-            }
-            if ch == '"' && !in_single {
-                in_double = !in_double;
-                result.push(ch);
-                continue;
-            }
-            if in_single || in_double {
-                result.push(ch);
+            if consume_dollar_quote(&mut chars, ch, &mut result, &mut dollar_delimiter)
+                || consume_quoted_char(&mut chars, ch, &mut result, &mut in_single, &mut in_double)
+            {
                 continue;
             }
             match (ch, chars.peek().copied()) {
@@ -1036,6 +1005,61 @@ impl SecurityEngine {
         }
         Ok(())
     }
+}
+
+fn consume_dollar_quote(
+    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
+    ch: char,
+    result: &mut String,
+    delimiter: &mut Option<String>,
+) -> bool {
+    if let Some(active) = delimiter {
+        result.push(ch);
+        if result.ends_with(active.as_str()) {
+            *delimiter = None;
+        }
+        return true;
+    }
+    if ch == '$' {
+        if let Some(found) = take_dollar_delimiter(chars) {
+            result.push('$');
+            result.push_str(&found[1..]);
+            *delimiter = Some(found);
+            return true;
+        }
+    }
+    false
+}
+
+fn consume_quoted_char(
+    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
+    ch: char,
+    result: &mut String,
+    in_single: &mut bool,
+    in_double: &mut bool,
+) -> bool {
+    if ch == '\'' && !*in_double {
+        *in_single = !*in_single;
+        result.push(ch);
+        return true;
+    }
+    if ch == '\\' && *in_single {
+        result.push(ch);
+        if let Some(escaped) = chars.next() {
+            result.push(escaped);
+        }
+        return true;
+    }
+    if ch == '"' && !*in_single {
+        *in_double = !*in_double;
+        result.push(ch);
+        return true;
+    }
+    if *in_single || *in_double {
+        result.push(ch);
+        return true;
+    }
+    false
 }
 
 fn take_dollar_delimiter(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Option<String> {
