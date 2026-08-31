@@ -364,6 +364,7 @@ jobs:
             const base = stack?.base.ref || pull.base.ref;
             const head = pull.head.ref;
             const author = pull.user.login.toLowerCase();
+            const authorIsBot = pull.user.type === "Bot";
             const policies = targetPulls.map((target) => {
               const targetTitle = target.title.toLowerCase();
               const targetAuthor = target.user.login.toLowerCase();
@@ -423,7 +424,7 @@ jobs:
             // A bot approval lets the authorized command satisfy repositories
             // that require a review. Never attempt to approve the actor's own
             // pull request because GitHub rejects self-approvals.
-            if (actor !== author) {
+            if (actor !== author && !authorIsBot) {
               try {
                 await github.rest.pulls.createReview({
                   owner,
@@ -436,7 +437,11 @@ jobs:
                 core.warning(`Could not submit bot approval: ${error.message}`);
               }
             } else {
-              core.info(`Skipping bot approval because @${actor} authored the pull request.`);
+              core.info(
+                authorIsBot
+                  ? `Skipping bot approval because @${author} authored the pull request.`
+                  : `Skipping bot approval because @${actor} authored the pull request.`
+              );
             }
 
             // Refresh immediately before merging to avoid merging a stale head.
