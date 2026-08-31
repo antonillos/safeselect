@@ -12,7 +12,9 @@ Configuration uses TOML; macOS secrets use Keychain.
   from committed content and public feedback. Use only a public handle and GitHub
   noreply address for commit identity. Report sensitive findings via [SECURITY.md](SECURITY.md).
 - Every commit must follow Conventional Commits and have a verifiable PGP or SSH
-  signature.
+  signature. The Commit Policy workflow's only exception is a GitHub-generated
+  merge commit identified by GitHub's `web-flow` committer association and the
+  standard pull-request merge header; locally-created merges are not exempt.
   Do not merge unless explicitly requested.
 - Keep planning Markdown at the repository root and ignored by Git.
 

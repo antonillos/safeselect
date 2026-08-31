@@ -51,6 +51,8 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
+          cache: maven
+          cache-dependency-path: '**/pom.xml'
       - name: Checkout CI tooling
         uses: actions/checkout@v7
         with:

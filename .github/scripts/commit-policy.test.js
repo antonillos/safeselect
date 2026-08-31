@@ -17,6 +17,12 @@ const signed = (n = 1, message = "docs: update guide", signatureType = "SSH") =>
   parents: [{ sha: sha(n + 1000) }],
   verification: { verified: true, reason: "valid", signature: `-----BEGIN ${signatureType} SIGNATURE-----\nsynthetic` },
 });
+const repositoryCommit = (commit) => ({
+  sha: commit.sha,
+  parents: commit.parents,
+  committer: commit.committer,
+  commit: { message: commit.message, verification: commit.verification },
+});
 
 async function check(commits = [signed()], options = {}) {
   const expected = { number: 193, head: { sha: commits.at(-1)?.sha || sha(1) },
@@ -32,10 +38,10 @@ async function check(commits = [signed()], options = {}) {
         get: async () => ({ data: ++reads === 1 ? { ...expected, ...options.before } :
           { ...expected, ...options.after } }),
       },
-      git: { getCommit: async ({ commit_sha }) => {
-        requests.push(commit_sha);
+      repos: { getCommit: async ({ ref }) => {
+        requests.push(ref);
         if (options.apiError) throw new Error("PRIVATE_API_PAYLOAD");
-        return { data: options.object || commits.find((commit) => commit.sha === commit_sha) };
+        return { data: repositoryCommit(options.object || commits.find((commit) => commit.sha === ref)) };
       } },
     },
     paginate: async (endpoint, params) => {
@@ -79,6 +85,26 @@ test("accepts recognized merge headers only for multi-parent commits", async () 
   merge.parents = [{ sha: sha(2) }, { sha: sha(3) }];
   assert.equal((await check([merge])).failed, false);
   assert.equal((await check([signed(1, "Merge branch 'feature' into develop")])).failed, true);
+});
+
+test("exempts only GitHub-generated merge commits from signature validation", async () => {
+  const merge = signed(1, "Merge branch 'feature' into develop");
+  merge.parents = [{ sha: sha(2) }, { sha: sha(3) }];
+  merge.committer = { login: "web-flow", type: "User" };
+  merge.verification = undefined;
+  assert.equal((await check([merge])).failed, true);
+
+  const githubMerge = signed(1, "Merge pull request #42 from example/feature\n\nfeat: merge feature");
+  githubMerge.parents = [{ sha: sha(2) }, { sha: sha(3) }];
+  githubMerge.committer = { login: "web-flow", type: "User" };
+  githubMerge.verification = undefined;
+  assert.equal((await check([githubMerge])).failed, false);
+
+  const forged = signed(1, "Merge pull request #42 from example/feature");
+  forged.parents = [{ sha: sha(2) }, { sha: sha(3) }];
+  forged.committer = { login: "attacker", type: "User", email: "noreply@github.com" };
+  forged.verification = undefined;
+  assert.equal((await check([forged])).failed, true);
 });
 
 test("requires verified PGP or SSH signatures, not Signed-off-by or signature presence", async () => {

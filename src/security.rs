@@ -9,10 +9,10 @@ use sqlparser::ast::{
     ArrayElemTypeDef, BinaryOperator, DataType, Expr, ObjectName, ObjectNamePart, Query, SetExpr,
     Table, TableFactor, Visit, Visitor,
 };
-
-
 use sqlparser::dialect::PostgreSqlDialect;
+use sqlparser::keywords::Keyword;
 use sqlparser::parser::Parser;
+use sqlparser::tokenizer::{Token, Tokenizer, Whitespace};
 use std::collections::HashSet;
 use std::ops::ControlFlow;
 
@@ -1114,7 +1114,6 @@ fn take_dollar_delimiter(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -
             for _ in 0..tag.len() - 1 {
                 chars.next();
             }
-            chars.next();
             return Some(tag);
         }
         if !(ch.is_ascii_alphanumeric() || ch == '_') || tag.len() > 64 {
@@ -1139,7 +1138,7 @@ impl Visitor for RelationPolicyVisitor<'_> {
 
     fn pre_visit_query(&mut self, query: &Query) -> ControlFlow<Self::Break> {
         if let SetExpr::Table(table) = query.body.as_ref() {
-            if let Err(message) = self.validate_table_command(table) {
+            if let Err(message) = self.validate_table_command(&table_relation_parts(table)) {
                 self.violation = Some(message);
             }
         }
@@ -1214,8 +1213,7 @@ fn validate_table_factor(
 }
 
 impl RelationPolicyVisitor<'_> {
-    fn validate_table_command(&self, table: &Table) -> std::result::Result<(), String> {
-        let parts = table_relation_parts(table);
+    fn validate_table_command(&self, parts: &[String]) -> std::result::Result<(), String> {
         if parts.is_empty() {
             return Err("TABLE command is missing a relation name".into());
         }
@@ -1223,9 +1221,13 @@ impl RelationPolicyVisitor<'_> {
             return Ok(());
         }
         if !self.allowed_schemas.is_empty() {
-            self.validate_allowed_relation(&parts)?;
+            let folded_parts: Vec<String> = parts
+                .iter()
+                .map(|part| part.to_ascii_lowercase())
+                .collect();
+            self.validate_allowed_relation(&folded_parts)?;
         }
-        self.validate_denied_relation(&parts)
+        self.validate_denied_relation(parts)
     }
 
     fn validate_data_type(&self, data_type: &DataType) -> std::result::Result<(), String> {
@@ -1352,26 +1354,7 @@ impl RelationPolicyVisitor<'_> {
 
 
     fn validate_allowed_relation(&self, parts: &[String]) -> std::result::Result<(), String> {
-        if parts.len() != 2 {
-            return Err(format!(
-                "Schema allowlist requires every relation to use schema.table ({})",
-                self.allowed_schemas.join(", ")
-            ));
-        }
-        if self.allowed_schemas.iter().any(|schema| {
-            (parts[0].to_ascii_lowercase() == parts[0] && schema.eq_ignore_ascii_case(&parts[0]))
-                || schema == &parts[0]
-        }) {
-
-
-            Ok(())
-        } else {
-            Err(format!(
-                "Query references schema '{}' outside allowed list ({})",
-                parts[0],
-                self.allowed_schemas.join(", ")
-            ))
-        }
+        validate_allowed_relation_parts(parts, self.allowed_schemas)
     }
 
     fn validate_denied_relation(&self, parts: &[String]) -> std::result::Result<(), String> {
@@ -1390,12 +1373,102 @@ impl RelationPolicyVisitor<'_> {
     }
 }
 
+fn validate_allowed_relation_parts(
+    parts: &[String],
+    allowed_schemas: &[String],
+) -> std::result::Result<(), String> {
+    if parts.len() != 2 {
+        return Err(format!(
+            "Schema allowlist requires every relation to use schema.table ({})",
+            allowed_schemas.join(", ")
+        ));
+    }
+    if allowed_schemas.iter().any(|schema| {
+        (parts[0].to_ascii_lowercase() == parts[0] && schema.eq_ignore_ascii_case(&parts[0]))
+            || schema == &parts[0]
+    }) {
+        Ok(())
+    } else {
+        Err(format!(
+            "Query references schema '{}' outside allowed list ({})",
+            parts[0],
+            allowed_schemas.join(", ")
+        ))
+    }
+}
+
 fn table_relation_parts(table: &Table) -> Vec<String> {
     [table.schema_name.as_ref(), table.table_name.as_ref()]
         .into_iter()
         .flatten()
-        .map(|part| part.to_ascii_lowercase())
+        .cloned()
         .collect()
+}
+
+fn table_command_relation_parts(sql: &str) -> std::result::Result<Vec<Vec<String>>, String> {
+    let tokens = Tokenizer::new(&PostgreSqlDialect {}, sql)
+        .tokenize()
+        .map_err(|error| format!("SQL policy tokenizing failed: {error}"))?;
+    let significant: Vec<&Token> = tokens
+        .iter()
+        .filter(|token| {
+            !matches!(
+                token,
+                Token::Whitespace(
+                    Whitespace::Space
+                        | Whitespace::Newline
+                        | Whitespace::Tab
+                        | Whitespace::SingleLineComment { .. }
+                        | Whitespace::MultiLineComment(_)
+                )
+            )
+        })
+        .collect();
+    let mut relations = Vec::new();
+    for (index, token) in significant.iter().enumerate() {
+        let Token::Word(word) = token else { continue };
+        if word.keyword != Keyword::TABLE
+            || !is_table_command_position(significant.get(index.wrapping_sub(1)).copied())
+        {
+            continue;
+        }
+        let Some(Token::Word(first)) = significant.get(index + 1).copied() else {
+            continue;
+        };
+        if first.keyword == Keyword::ONLY {
+            continue;
+        }
+        let parts = if matches!(significant.get(index + 2), Some(Token::Period)) {
+            let Some(Token::Word(second)) = significant.get(index + 3).copied() else {
+                continue;
+            };
+            vec![canonical_token_word(first), canonical_token_word(second)]
+        } else {
+            vec![canonical_token_word(first)]
+        };
+        relations.push(parts);
+    }
+    Ok(relations)
+}
+
+fn is_table_command_position(previous: Option<&Token>) -> bool {
+    match previous {
+        None
+        | Some(Token::LParen | Token::RParen | Token::Comma | Token::SemiColon) => true,
+        Some(Token::Word(word)) => matches!(
+            word.keyword,
+            Keyword::UNION | Keyword::INTERSECT | Keyword::EXCEPT
+        ),
+        _ => false,
+    }
+}
+
+fn canonical_token_word(word: &sqlparser::tokenizer::Word) -> String {
+    if word.quote_style.is_some() {
+        word.value.clone()
+    } else {
+        word.value.to_ascii_lowercase()
+    }
 }
 
 
@@ -1425,14 +1498,30 @@ fn validate_relation_policy(
     if let Some(violation) = shadowing.violation {
         return Err(violation);
     }
+    // TABLE's AST node loses identifier quote metadata. Validate qualified
+    // TABLE schemas directly from tokens so nested query traversal cannot
+    // associate lexical names with the wrong AST node.
     let mut visitor = RelationPolicyVisitor {
         allowed_schemas,
         denied_relations,
         cte_scopes: Vec::new(),
         violation: None,
     };
+    validate_table_command_schemas(sql, allowed_schemas)?;
     let _ = statements.visit(&mut visitor);
     visitor.violation.map_or(Ok(()), Err)
+}
+
+fn validate_table_command_schemas(
+    sql: &str,
+    allowed_schemas: &[String],
+) -> std::result::Result<(), String> {
+    for parts in table_command_relation_parts(sql)? {
+        if parts.len() == 2 && !allowed_schemas.is_empty() {
+            validate_allowed_relation_parts(&parts, allowed_schemas)?;
+        }
+    }
+    Ok(())
 }
 
 struct CteVisibilityVisitor<'a> {
@@ -1791,6 +1880,14 @@ fn sanitize_for_keyword_scan(sql: &str) -> String {
             continue;
         }
 
+        if c == '$' {
+            if let Some(next) = skip_dollar_quoted_literal(&chars, i) {
+                out.push(' ');
+                i = next;
+                continue;
+            }
+        }
+
         if c == '\'' {
             in_single = true;
             out.push(' ');
@@ -1815,6 +1912,33 @@ fn sanitize_for_keyword_scan(sql: &str) -> String {
     }
 
     out
+}
+
+fn skip_dollar_quoted_literal(chars: &[char], start: usize) -> Option<usize> {
+    let delimiter_end = dollar_delimiter_end(chars, start)?;
+    let delimiter = &chars[start..delimiter_end];
+    let mut end = delimiter_end;
+    while end + delimiter.len() <= chars.len() {
+        if &chars[end..end + delimiter.len()] == delimiter {
+            return Some(end + delimiter.len());
+        }
+        end += 1;
+    }
+    None
+}
+
+fn dollar_delimiter_end(chars: &[char], start: usize) -> Option<usize> {
+    if chars.get(start) != Some(&'$') {
+        return None;
+    }
+    let mut end = start + 1;
+    while end < chars.len()
+        && (chars[end].is_ascii_alphanumeric() || chars[end] == '_')
+        && end - start <= 64
+    {
+        end += 1;
+    }
+    (chars.get(end) == Some(&'$')).then_some(end + 1)
 }
 
 fn contains_keyword(sql: &str, keyword: &str) -> bool {
@@ -2494,10 +2618,41 @@ mod tests {
             .validate("WITH visible AS (TABLE public.users) SELECT * FROM visible")
             .is_ok());
         assert!(engine
+            .validate("WITH visible AS (SELECT 1) TABLE public.users")
+            .is_ok());
+        assert!(engine
+            .validate("WITH visible AS (SELECT 1) TABLE PUBLIC.users")
+            .is_ok());
+        assert!(engine
+            .validate("WITH visible AS (SELECT 1) TABLE Public.users")
+            .is_ok());
+        assert!(engine
+            .validate("WITH visible AS (SELECT 1) TABLE \"PUBLIC\".users")
+            .is_err());
+        assert!(engine
+            .validate("WITH visible AS (TABLE \"PUBLIC\".users) TABLE public.users")
+            .is_err());
+        assert!(engine
             .validate("SELECT CAST('x' AS private.leaky_type) FROM public.users")
             .is_err());
 
 
+    }
+
+    #[test]
+    fn preserves_table_command_identifier_quoting() {
+        assert_eq!(
+            table_command_relation_parts(
+                "WITH a AS (TABLE PUBLIC.users), b AS (TABLE \"PUBLIC\".users) SELECT * FROM a"
+            )
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>(),
+            vec![
+                vec!["public".to_string(), "users".to_string()],
+                vec!["PUBLIC".to_string(), "users".to_string()]
+            ]
+        );
     }
 
     #[test]
@@ -2705,6 +2860,14 @@ mod tests {
             .validate("SELECT 1 OPERATOR(public.custom) 1")
             .is_err());
         assert!(engine.validate("SELECT * FROM \"PUBLIC\".secrets").is_err());
+        assert_eq!(
+            SecurityEngine::strip_sql_comments("SELECT $$XDELETE$$"),
+            "SELECT $$XDELETE$$"
+        );
+        assert_eq!(
+            SecurityEngine::strip_sql_comments("SELECT $tag$XDELETE$tag$"),
+            "SELECT $tag$XDELETE$tag$"
+        );
         assert!(
             SecurityEngine::strip_sql_comments(r#"SELECT E'abc\'--'; COMMIT"#).contains("COMMIT")
         );
@@ -2720,6 +2883,21 @@ mod tests {
             SecurityEngine::strip_sql_comments("SELECT \"identifier\""),
             "SELECT \"identifier\""
         );
+    }
+
+    #[test]
+    fn scans_dollar_quote_delimiters_without_consuming_content() {
+        let tagged: Vec<char> = "$tag$XDELETE$tag$".chars().collect();
+        let untagged: Vec<char> = "$$XDELETE$$".chars().collect();
+        let invalid: Vec<char> = "$bad-tag$X$bad-tag$".chars().collect();
+
+        assert_eq!(dollar_delimiter_end(&tagged, 0), Some(5));
+        assert_eq!(dollar_delimiter_end(&untagged, 0), Some(2));
+        assert_eq!(dollar_delimiter_end(&tagged, 1), None);
+        assert_eq!(dollar_delimiter_end(&invalid, 0), None);
+        assert_eq!(skip_dollar_quoted_literal(&tagged, 0), Some(tagged.len()));
+        assert_eq!(skip_dollar_quoted_literal(&untagged, 0), Some(untagged.len()));
+        assert_eq!(skip_dollar_quoted_literal(&tagged[..10], 0), None);
     }
 
     #[test]

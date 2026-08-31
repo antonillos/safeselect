@@ -69,7 +69,10 @@ cargo clippy
 
 Every commit must follow Conventional Commits and carry a verifiable PGP or SSH
 signature. This applies to every commit in a PR, not only its title or the final
-squash commit. A `Signed-off-by` trailer does not replace a cryptographic signature.
+squash commit. The only Commit Policy exception is a GitHub-generated merge
+identified by GitHub's `web-flow` committer association and the standard
+pull-request merge header; locally-created merges remain subject to signature
+validation. A `Signed-off-by` trailer does not replace a cryptographic signature.
 The separate [Commit Policy workflow](docs/ci.md#commit-policy) checks message
 format and GitHub signature verification; it does not establish that content
 is free of private information.

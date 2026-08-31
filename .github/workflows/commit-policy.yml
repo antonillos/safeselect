@@ -61,27 +61,28 @@ jobs:
               }
               let failed = 0;
               for (const sha of shas) {
-                const { data: commit } = await github.rest.git.getCommit({
-                  ...context.repo, commit_sha: sha,
+                const { data: commit } = await github.rest.repos.getCommit({
+                  ...context.repo, ref: sha,
                 });
                 if (commit.sha !== sha) throw new Error("Commit mismatch");
+                const message = commit.commit?.message;
                 const isMergeCommit = Array.isArray(commit.parents) && commit.parents.length > 1;
-                const formatOK = conventional(commit.message, isMergeCommit);
-                const verification = commit.verification;
-                const githubGeneratedMerge = isMergeCommit &&
-                  formatOK &&
-                  typeof commit.committer?.email === "string" &&
-                  commit.committer.email.toLowerCase().endsWith("@github.com");
+                const formatOK = conventional(message, isMergeCommit);
+                const verification = commit.commit?.verification;
                 const signature = verification?.signature;
-                const signatureOK = githubGeneratedMerge
-                  ? true
-                  : verification?.verified === true &&
-                    verification.reason === "valid" &&
-                    (signature?.startsWith("-----BEGIN SSH SIGNATURE-----") === true ||
-                      signature?.startsWith("-----BEGIN PGP SIGNATURE-----") === true);
+                // GitHub-created merge commits are unsigned; identify them using
+                // GitHub's trusted committer association, never a commit email.
+                const firstLine = typeof message === "string" ? message.replace(/\r\n/g, "\n").split("\n")[0] : "";
+                const githubGeneratedMerge = isMergeCommit &&
+                  /^Merge pull request #\d+ from \S+$/i.test(firstLine) &&
+                  commit.committer?.login === "web-flow" && commit.committer?.type === "User";
+                const signatureOK = githubGeneratedMerge || (verification?.verified === true &&
+                  verification.reason === "valid" &&
+                  (signature?.startsWith("-----BEGIN SSH SIGNATURE-----") === true ||
+                    signature?.startsWith("-----BEGIN PGP SIGNATURE-----") === true));
                 // Never echo messages, identities, signatures, payloads or API errors.
                 if (!formatOK) core.error(`${sha.slice(0, 12)}: Conventional Commits format required.`);
-                if (!signatureOK) core.error(`${sha.slice(0, 12)}: verified PGP or SSH signature required.`);
+                if (!signatureOK) core.error(`${sha.slice(0, 12)}: verified PGP or SSH signature required, except for GitHub-generated merges.`);
                 if (!formatOK || !signatureOK) failed++;
               }
               const { data: after } = await github.rest.pulls.get(params);

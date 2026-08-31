@@ -171,6 +171,8 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
+          cache: maven
+          cache-dependency-path: '**/pom.xml'
       - name: Install makevn
         uses: ./.github/actions/setup-makevn
       - name: Initialize, test, and package sidecar
@@ -249,6 +251,8 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
+          cache: maven
+          cache-dependency-path: '**/pom.xml'
       - name: Install makevn
         uses: ./.github/actions/setup-makevn
       - name: Initialize, test, and package sidecar
@@ -293,6 +297,8 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
+          cache: maven
+          cache-dependency-path: '**/pom.xml'
       - name: Install makevn
         uses: ./.github/actions/setup-makevn
       - name: Initialize, test, and package sidecar
@@ -345,6 +351,8 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
+          cache: maven
+          cache-dependency-path: '**/pom.xml'
       - name: Install coverage tools
         uses: taiki-e/install-action@cargo-llvm-cov
       - name: Install cargo-binstall

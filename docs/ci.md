@@ -38,6 +38,13 @@ wrapper supplies JaCoCo coverage and collects JSON in report-only mode; the
 combined CRAP wrapper enforces the existing warning-count gate. Code review
 reads the generated CI artifacts rather than rerunning the analyzer.
 
+CI also enables the Maven dependency cache in `actions/setup-java` and the shared
+`setup-makevn` action writes a temporary Maven settings file that mirrors only
+`central` through Google's public Maven Central mirror. This avoids transient
+Maven Central throttling while keeping the mirror configuration out of local
+developer builds, while the cache reduces repeated dependency requests on later
+runs.
+
 ## Commit policy
 
 The independent **Commit Policy** workflow runs on PRs to `develop` and `main`,
@@ -46,8 +53,10 @@ signatures** check validates every PR commit's header and body separator, and
 requires GitHub to verify its PGP or SSH signature. New commits should use SSH
 signatures according to the repository contribution policy; accepting verified
 PGP signatures preserves compatibility with existing history. Custom types,
-optional scopes and breaking-change markers are supported; bot and merge
-commits are not exempt.
+optional scopes and breaking-change markers are supported. GitHub-generated
+pull-request merge commits are exempt from signature validation only when the
+GitHub API identifies the `web-flow` committer and the standard merge header;
+locally-created merges and forged GitHub-looking emails are not exempt.
 
 The check reads GitHub commit metadata only: it does not check out PR code,
 execute tests or CRAP, or use signing secrets. Logs contain short commit SHAs
