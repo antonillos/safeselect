@@ -825,6 +825,11 @@ impl SecurityEngine {
                 "Read-only mode: {keyword} not allowed"
             )));
         }
+        if contains_transaction_alias(sql) {
+            return Err(SafeselectError::QueryRejected(
+                "Read-only mode: transaction control not allowed".into(),
+            ));
+        }
         if let Some(function) = Self::first_forbidden_function(&compact) {
             return Err(SafeselectError::QueryRejected(format!(
                 "Read-only mode: function {function} not allowed"
@@ -1224,7 +1229,7 @@ impl RelationPolicyVisitor<'_> {
                     parts[0]
                 ));
             }
-            return Ok(());
+            return self.validate_denied_relation(&parts);
         }
         self.validate_relation(name)
     }
@@ -1741,6 +1746,13 @@ fn contains_keyword(sql: &str, keyword: &str) -> bool {
     sql.split_whitespace().any(|token| token == keyword)
 }
 
+fn contains_transaction_alias(sql: &str) -> bool {
+    let upper = sql.to_ascii_uppercase();
+    ["; END", "; ABORT"]
+        .iter()
+        .any(|alias| upper.contains(alias))
+}
+
 fn contains_with_ordinality_only(sql: &str) -> bool {
     let mut saw_with = false;
     let mut tokens = sql.split_whitespace().peekable();
@@ -2086,6 +2098,8 @@ mod tests {
             "SELECT 1; BEGIN READ WRITE",
             "SELECT 1; ROLLBACK",
             "SELECT 1; SAVEPOINT nested",
+            "SELECT 1; END",
+            "SELECT 1; ABORT",
         ] {
             assert!(engine.check_read_only(sql).is_err(), "{sql}");
         }
@@ -2582,6 +2596,14 @@ mod tests {
             SecurityEngine::strip_sql_comments("SELECT $tag$/*$tag$; COMMIT").contains("COMMIT")
         );
         assert!(SecurityEngine::strip_sql_comments("SELECT $bad; COMMIT").contains("COMMIT"));
+        assert_eq!(
+            SecurityEngine::strip_sql_comments("SELECT 'literal'"),
+            "SELECT 'literal'"
+        );
+        assert_eq!(
+            SecurityEngine::strip_sql_comments("SELECT \"identifier\""),
+            "SELECT \"identifier\""
+        );
     }
 
     #[test]
