@@ -1432,14 +1432,19 @@ fn table_command_relation_parts(sql: &str) -> std::result::Result<Vec<Vec<String
         {
             continue;
         }
-        let Some(Token::Word(first)) = significant.get(index + 1).copied() else {
+        let relation_index = if matches!(
+            significant.get(index + 1),
+            Some(Token::Word(word)) if word.keyword == Keyword::ONLY
+        ) {
+            index + 2
+        } else {
+            index + 1
+        };
+        let Some(Token::Word(first)) = significant.get(relation_index).copied() else {
             continue;
         };
-        if first.keyword == Keyword::ONLY {
-            continue;
-        }
-        let parts = if matches!(significant.get(index + 2), Some(Token::Period)) {
-            let Some(Token::Word(second)) = significant.get(index + 3).copied() else {
+        let parts = if matches!(significant.get(relation_index + 1), Some(Token::Period)) {
+            let Some(Token::Word(second)) = significant.get(relation_index + 2).copied() else {
                 continue;
             };
             vec![canonical_token_word(first), canonical_token_word(second)]
@@ -2643,12 +2648,14 @@ mod tests {
     fn preserves_table_command_identifier_quoting() {
         assert_eq!(
             table_command_relation_parts(
-                "WITH a AS (TABLE PUBLIC.users), b AS (TABLE \"PUBLIC\".users) SELECT * FROM a"
+                "WITH a AS (TABLE PUBLIC.users), b AS (TABLE \"PUBLIC\".users), c AS (TABLE ONLY PUBLIC.users), d AS (TABLE ONLY \"PUBLIC\".users) SELECT * FROM a"
             )
             .unwrap()
             .into_iter()
             .collect::<Vec<_>>(),
             vec![
+                vec!["public".to_string(), "users".to_string()],
+                vec!["PUBLIC".to_string(), "users".to_string()],
                 vec!["public".to_string(), "users".to_string()],
                 vec!["PUBLIC".to_string(), "users".to_string()]
             ]
