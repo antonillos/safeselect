@@ -1604,7 +1604,7 @@ fn toml_entry_names(content: &str) -> Result<Vec<String>> {
     })?;
     Ok(document
         .get("mcp_servers")
-        .and_then(Item::as_table_like)
+        .and_then(Item::as_table)
         .map(|servers| servers.iter().map(|(name, _)| name.to_string()).collect())
         .unwrap_or_default())
 }
@@ -1629,7 +1629,7 @@ fn detect_toml_entry_environment(content: &str, name: &str) -> Result<Option<Str
 fn toml_mcp_entry<'a>(document: &'a DocumentMut, name: &str) -> Option<&'a Item> {
     document
         .get("mcp_servers")
-        .and_then(Item::as_table_like)
+        .and_then(Item::as_table)
         .and_then(|servers| servers.get(name))
 }
 
@@ -2059,6 +2059,18 @@ safe = { command = "safeselect", args = ["serve", "--environment", "dev"] }
             safeselect_entries("codex", inline).unwrap(),
             vec![("safe".into(), Some("dev".into()))]
         );
+    }
+
+    #[test]
+    fn does_not_manage_top_level_inline_codex_mcp_sections() {
+        let inline = r#"
+mcp_servers = { safe = { command = "safeselect", args = ["serve", "--environment", "dev"] } }
+"#;
+
+        assert!(toml_entry_names(inline).unwrap().is_empty());
+        assert!(!entry_uses_safeselect("codex", inline, "safe").unwrap());
+        assert!(safeselect_entries("codex", inline).unwrap().is_empty());
+        assert!(!config_has_entry("codex", inline, "safe").unwrap());
     }
 
     #[test]
