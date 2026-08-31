@@ -68,8 +68,12 @@ jobs:
                 const isMergeCommit = Array.isArray(commit.parents) && commit.parents.length > 1;
                 const formatOK = conventional(commit.message, isMergeCommit);
                 const verification = commit.verification;
-                const signatureOK = isMergeCommit
-                  ? formatOK
+                const githubGeneratedMerge = isMergeCommit &&
+                  formatOK &&
+                  typeof commit.committer?.email === "string" &&
+                  commit.committer.email.toLowerCase().endsWith("@github.com");
+                const signatureOK = githubGeneratedMerge
+                  ? true
                   : verification?.verified === true &&
                     verification.reason === "valid" &&
                     verification.signature?.startsWith("-----BEGIN SSH SIGNATURE-----") === true;
