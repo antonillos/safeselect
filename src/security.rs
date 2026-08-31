@@ -20,6 +20,8 @@ const FORBIDDEN_MQL_JAVASCRIPT_OPERATORS: &[&str] = &["$where", "$function", "$a
 const RELATION_POLICY_BLOCKED_ROUTINES: &[&str] = &[
     "dblink",
     "dblink_exec",
+    "dblink_fetch",
+    "dblink_open",
     "dblink_send_query",
     "cursor_to_xml",
     "database_to_xml",
@@ -2442,6 +2444,9 @@ mod tests {
             .is_err());
         assert!(engine
             .validate("SELECT * FROM public.dblink('dbname=test', 'SELECT * FROM private.secrets') AS t(id int)")
+            .is_err());
+        assert!(engine
+            .validate("SELECT public.dblink_open('conn', 'SELECT * FROM private.secrets')")
             .is_err());
         assert!(engine
             .validate("WITH expose AS (SELECT 1) SELECT * FROM expose()")
