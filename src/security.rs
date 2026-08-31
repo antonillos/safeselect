@@ -775,8 +775,7 @@ impl SecurityEngine {
         let upper = trimmed.to_uppercase();
 
         if upper.starts_with("SELECT") || upper.starts_with("TABLE") {
-            self.check_forbidden_tokens(trimmed, false)?;
-            return Ok(());
+            return self.check_select_like_body(trimmed);
         }
 
         if upper.starts_with("WITH") {
@@ -795,6 +794,10 @@ impl SecurityEngine {
         Err(SafeselectError::QueryRejected(
             "Read-only mode: unrecognized statement type".into(),
         ))
+    }
+
+    fn check_select_like_body(&self, sql: &str) -> Result<()> {
+        self.check_forbidden_tokens(sql, false)
     }
 
     fn validate_with_query_body(&self, body: &str) -> Result<()> {
@@ -1149,15 +1152,7 @@ impl RelationPolicyVisitor<'_> {
     fn validate_callable_name(&self, name: &ObjectName) -> std::result::Result<(), String> {
         let parts = relation_parts(name)?;
         if parts.len() == 1 {
-            if !self.allowed_schemas.is_empty()
-                && !matches!(parts[0].as_str(), "unnest" | "generate_series")
-            {
-                return Err(format!(
-                    "Unqualified function '{}' is not allowed with a schema policy",
-                    parts[0]
-                ));
-            }
-            return Ok(());
+            return self.validate_unqualified_callable(&parts[0]);
         }
         self.validate_allowed_relation(&parts).or_else(|error| {
             if self.allowed_schemas.is_empty() {
@@ -1166,6 +1161,16 @@ impl RelationPolicyVisitor<'_> {
                 Err(error)
             }
         })
+    }
+
+    fn validate_unqualified_callable(&self, name: &str) -> std::result::Result<(), String> {
+        if !self.allowed_schemas.is_empty() && !matches!(name, "unnest" | "generate_series") {
+            return Err(format!(
+                "Unqualified function '{}' is not allowed with a schema policy",
+                name
+            ));
+        }
+        Ok(())
     }
 
     fn validate_allowed_relation(&self, parts: &[String]) -> std::result::Result<(), String> {
