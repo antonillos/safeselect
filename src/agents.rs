@@ -151,7 +151,11 @@ fn entry_uses_safeselect(client: &str, content: &str, name: &str) -> Result<bool
         let document = content.parse::<DocumentMut>().map_err(|error| {
             SafeselectError::Other(format!("Cannot parse Codex TOML config: {error}"))
         })?;
-        return Ok(document["mcp_servers"][name]["command"].as_str() == Some("safeselect"));
+        return Ok(toml_mcp_entry(&document, name)
+            .and_then(Item::as_table)
+            .and_then(|entry| entry.get("command"))
+            .and_then(Item::as_str)
+            == Some("safeselect"));
     }
     let (key, command_key) = json_command_contract(client_format(client)?);
     let command = parse_json_or_jsonc(content)
@@ -1598,8 +1602,9 @@ fn toml_entry_names(content: &str) -> Result<Vec<String>> {
     let document = content.parse::<DocumentMut>().map_err(|error| {
         SafeselectError::Other(format!("Cannot parse Codex TOML config: {error}"))
     })?;
-    Ok(document["mcp_servers"]
-        .as_table()
+    Ok(document
+        .get("mcp_servers")
+        .and_then(Item::as_table)
         .map(|servers| servers.iter().map(|(name, _)| name.to_string()).collect())
         .unwrap_or_default())
 }
@@ -1608,8 +1613,10 @@ fn detect_toml_entry_environment(content: &str, name: &str) -> Result<Option<Str
     let document = content.parse::<DocumentMut>().map_err(|error| {
         SafeselectError::Other(format!("Cannot parse Codex TOML config: {error}"))
     })?;
-    let args = document["mcp_servers"][name]["args"]
-        .as_array()
+    let args = toml_mcp_entry(&document, name)
+        .and_then(Item::as_table)
+        .and_then(|entry| entry.get("args"))
+        .and_then(Item::as_array)
         .map(|array| {
             array
                 .iter()
@@ -1617,6 +1624,13 @@ fn detect_toml_entry_environment(content: &str, name: &str) -> Result<Option<Str
                 .collect::<Vec<_>>()
         });
     Ok(args.as_deref().and_then(extract_environment_from_args))
+}
+
+fn toml_mcp_entry<'a>(document: &'a DocumentMut, name: &str) -> Option<&'a Item> {
+    document
+        .get("mcp_servers")
+        .and_then(Item::as_table)
+        .and_then(|servers| servers.get(name))
 }
 
 fn config_has_entry(client: &str, content: &str, name: &str) -> Result<bool> {
@@ -2003,6 +2017,27 @@ mod tests {
         assert!(config_has_entry("copilot", copilot, "gamma").unwrap());
         assert!(config_has_entry("gemini-cli", json, "beta").unwrap());
         assert!(config_has_entry("unknown-client", json, "alpha").is_err());
+    }
+
+    #[test]
+    fn ignores_incomplete_codex_mcp_entries_without_panicking() {
+        let incomplete = r#"
+model = "gpt-5"
+
+[mcp_servers.other]
+args = ["serve"]
+"#;
+
+        assert_eq!(
+            toml_entry_names("model = \"gpt-5\"").unwrap(),
+            Vec::<String>::new()
+        );
+        assert!(!entry_uses_safeselect("codex", incomplete, "other").unwrap());
+        assert!(safeselect_entries("codex", incomplete).unwrap().is_empty());
+        assert_eq!(
+            detect_toml_entry_environment(incomplete, "other").unwrap(),
+            None
+        );
     }
 
     #[test]
