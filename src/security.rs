@@ -679,7 +679,71 @@ impl SecurityEngine {
     }
 
     fn strip_sql_comments(sql: &str) -> String {
-        sanitize_for_keyword_scan(sql)
+        let mut result = String::with_capacity(sql.len());
+        let mut chars = sql.chars().peekable();
+        let mut in_single = false;
+        let mut in_double = false;
+        let mut dollar_delimiter: Option<String> = None;
+        while let Some(ch) = chars.next() {
+            if let Some(delimiter) = &dollar_delimiter {
+                result.push(ch);
+                if result.ends_with(delimiter) {
+                    dollar_delimiter = None;
+                }
+                continue;
+            }
+            if ch == '$' {
+                if let Some(delimiter) = take_dollar_delimiter(&mut chars) {
+                    result.push('$');
+                    result.push_str(&delimiter[1..]);
+                    dollar_delimiter = Some(delimiter);
+                    continue;
+                }
+            }
+            if ch == '\'' && !in_double {
+                in_single = !in_single;
+                result.push(ch);
+                continue;
+            }
+            if ch == '"' && !in_single {
+                in_double = !in_double;
+                result.push(ch);
+                continue;
+            }
+            if in_single || in_double {
+                result.push(ch);
+                continue;
+            }
+            match (ch, chars.peek().copied()) {
+                ('-', Some('-')) => Self::skip_line_comment(&mut chars, &mut result),
+                ('/', Some('*')) => Self::skip_block_comment(&mut chars),
+                _ => result.push(ch),
+            }
+        }
+        result
+    }
+
+    fn skip_line_comment(
+        chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
+        result: &mut String,
+    ) {
+        for ch in chars.by_ref() {
+            if ch == '\n' {
+                result.push('\n');
+                break;
+            }
+        }
+    }
+
+    fn skip_block_comment(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
+        chars.next();
+        let mut previous = ' ';
+        for ch in chars.by_ref() {
+            if previous == '*' && ch == '/' {
+                break;
+            }
+            previous = ch;
+        }
     }
 
     fn check_read_only(&self, sql: &str) -> Result<()> {
@@ -965,6 +1029,26 @@ impl SecurityEngine {
         }
         Ok(())
     }
+}
+
+fn take_dollar_delimiter(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Option<String> {
+    let mut lookahead = chars.clone();
+    let mut tag = String::from("$");
+    while let Some(ch) = lookahead.next() {
+        if ch == '$' {
+            tag.push('$');
+            for _ in 0..tag.len() - 1 {
+                chars.next();
+            }
+            chars.next();
+            return Some(tag);
+        }
+        if !(ch.is_ascii_alphanumeric() || ch == '_') || tag.len() > 64 {
+            return None;
+        }
+        tag.push(ch);
+    }
+    None
 }
 
 struct RelationPolicyVisitor<'a> {
@@ -1527,36 +1611,11 @@ fn sanitize_for_keyword_scan(sql: &str) -> String {
     let mut i = 0;
     let mut in_single = false;
     let mut in_double = false;
-    let mut dollar_delimiter: Option<Vec<char>> = None;
     let mut in_line_comment = false;
     let mut in_block_comment = false;
 
     while i < chars.len() {
         let c = chars[i];
-
-        if let Some(delimiter) = &dollar_delimiter {
-            if chars[i..].starts_with(delimiter) {
-                out.push_str(&" ".repeat(delimiter.len()));
-                i += delimiter.len();
-                dollar_delimiter = None;
-            } else {
-                i += 1;
-            }
-            continue;
-        }
-
-        if c == '$' && !in_single && !in_double {
-            let mut end = i + 1;
-            while end < chars.len() && (chars[end].is_ascii_alphanumeric() || chars[end] == '_') {
-                end += 1;
-            }
-            if end < chars.len() && chars[end] == '$' {
-                dollar_delimiter = Some(chars[i..=end].to_vec());
-                out.push(' ');
-                i += 1;
-                continue;
-            }
-        }
 
         if in_line_comment {
             if c == '\n' {
@@ -2985,11 +3044,11 @@ mod tests {
     fn strips_sql_comments_without_changing_literals() {
         assert_eq!(
             SecurityEngine::strip_sql_comments("SELECT 1 -- note\n"),
-            "SELECT 1  "
+            "SELECT 1 \n"
         );
         assert_eq!(
             SecurityEngine::strip_sql_comments("SELECT 1 /* remove */"),
-            "SELECT 1  "
+            "SELECT 1 "
         );
     }
 
