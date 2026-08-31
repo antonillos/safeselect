@@ -2423,6 +2423,39 @@ mod tests {
     }
 
     #[test]
+    fn covers_callable_and_wrapped_type_validation() {
+        let allowed = vec!["public".to_string()];
+        let denied = vec!["blocked".to_string()];
+        let visitor = RelationPolicyVisitor {
+            allowed_schemas: &allowed,
+            denied_relations: &denied,
+            cte_scopes: Vec::new(),
+            violation: None,
+        };
+        let unnest = ObjectName(vec![ObjectNamePart::Identifier(
+            sqlparser::ast::Ident::new("unnest"),
+        )]);
+        assert!(visitor.validate_callable_name(&unnest).is_ok());
+        let blocked = ObjectName(vec![ObjectNamePart::Identifier(
+            sqlparser::ast::Ident::new("blocked"),
+        )]);
+        assert!(visitor.validate_callable_name(&blocked).is_err());
+        let private_type = DataType::Custom(
+            ObjectName(vec![
+                ObjectNamePart::Identifier(sqlparser::ast::Ident::new("private")),
+                ObjectNamePart::Identifier(sqlparser::ast::Ident::new("secret")),
+            ]),
+            Vec::new(),
+        );
+        assert!(visitor
+            .validate_data_type(&DataType::Array(ArrayElemTypeDef::SquareBracket(
+                Box::new(private_type),
+                None,
+            )))
+            .is_err());
+    }
+
+    #[test]
     fn validates_all_policy_constraints_on_a_valid_query() {
         let policy = SecurityPolicy {
             require_single_statement: true,
