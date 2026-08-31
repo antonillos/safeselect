@@ -152,7 +152,7 @@ fn entry_uses_safeselect(client: &str, content: &str, name: &str) -> Result<bool
             SafeselectError::Other(format!("Cannot parse Codex TOML config: {error}"))
         })?;
         return Ok(toml_mcp_entry(&document, name)
-            .and_then(Item::as_table)
+            .and_then(Item::as_table_like)
             .and_then(|entry| entry.get("command"))
             .and_then(Item::as_str)
             == Some("safeselect"));
@@ -1604,7 +1604,7 @@ fn toml_entry_names(content: &str) -> Result<Vec<String>> {
     })?;
     Ok(document
         .get("mcp_servers")
-        .and_then(Item::as_table)
+        .and_then(Item::as_table_like)
         .map(|servers| servers.iter().map(|(name, _)| name.to_string()).collect())
         .unwrap_or_default())
 }
@@ -1614,7 +1614,7 @@ fn detect_toml_entry_environment(content: &str, name: &str) -> Result<Option<Str
         SafeselectError::Other(format!("Cannot parse Codex TOML config: {error}"))
     })?;
     let args = toml_mcp_entry(&document, name)
-        .and_then(Item::as_table)
+        .and_then(Item::as_table_like)
         .and_then(|entry| entry.get("args"))
         .and_then(Item::as_array)
         .map(|array| {
@@ -1629,7 +1629,7 @@ fn detect_toml_entry_environment(content: &str, name: &str) -> Result<Option<Str
 fn toml_mcp_entry<'a>(document: &'a DocumentMut, name: &str) -> Option<&'a Item> {
     document
         .get("mcp_servers")
-        .and_then(Item::as_table)
+        .and_then(Item::as_table_like)
         .and_then(|servers| servers.get(name))
 }
 
@@ -2037,6 +2037,27 @@ args = ["serve"]
         assert_eq!(
             detect_toml_entry_environment(incomplete, "other").unwrap(),
             None
+        );
+    }
+
+    #[test]
+    fn preserves_inline_codex_mcp_entries() {
+        let inline = r#"
+[mcp_servers]
+safe = { command = "safeselect", args = ["serve", "--environment", "dev"] }
+"#;
+
+        assert_eq!(toml_entry_names(inline).unwrap(), vec!["safe"]);
+        assert!(entry_uses_safeselect("codex", inline, "safe").unwrap());
+        assert_eq!(
+            detect_toml_entry_environment(inline, "safe")
+                .unwrap()
+                .as_deref(),
+            Some("dev")
+        );
+        assert_eq!(
+            safeselect_entries("codex", inline).unwrap(),
+            vec![("safe".into(), Some("dev".into()))]
         );
     }
 
