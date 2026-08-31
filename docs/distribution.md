@@ -5,19 +5,21 @@ JAR. No installation of the sidecar is needed — it is extracted at runtime.
 
 ## Release Process
 
-1. Merge the feature PRs into `develop`.
-2. Run **Prepare Release** with `base_branch=develop`; it bumps `Cargo.toml`,
+1. Merge the feature PRs into `develop` and wait for its required checks.
+2. Open the promotion PR from `develop` to `main`, wait for every required
+   Verify check, apply `safe-to-merge` only when they are green, and merge
+   through the normal reviewed flow.
+3. Run **Prepare Release** with `base_branch=main`; it bumps `Cargo.toml`,
    `Cargo.lock`, and `sidecar/pom.xml`, updates `CHANGELOG.md`, and opens a
-   signed release PR back into `develop`.
-3. Merge that release PR, then open the release PR from `develop` to `main`.
-   This is the only PR that may promote a release to the public branch.
-4. Wait for every required Verify check on the `develop` → `main` PR, apply
-   `safe-to-merge` only when they are green, and merge through the normal
-   reviewed flow. Do not publish to any directory before this merge.
+   signed release PR from `release/vX.Y.Z` into `main`.
+4. Merge that release PR after its required checks pass. This is the only PR
+   that may change the public release version.
 5. The version change on `main` starts the release workflow; it can also be
    dispatched manually with an explicit tag and target ref.
-6. Integration tests must pass before the GitHub release and assets are published.
-7. GitHub Actions builds for 4 targets:
+6. After publication, synchronize `main` back into `develop` so both branches
+   contain the release version.
+7. Integration tests must pass before the GitHub release and assets are published.
+8. GitHub Actions builds for 4 targets:
    - `aarch64-apple-darwin`
    - `x86_64-apple-darwin`
    - `aarch64-unknown-linux-gnu`

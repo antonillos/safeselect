@@ -16,7 +16,7 @@ on:
         description: Exact version (without v prefix, optional)
         required: false
       base_branch:
-        description: Branch to release from and open the release PR against
+        description: Branch to release from and open the release PR against (normally main)
         required: true
         default: main
 
