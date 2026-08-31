@@ -11,7 +11,8 @@ Configuration uses TOML; macOS secrets use Keychain.
 - This repository is public. Exclude private, personal and confidential data
   from committed content and public feedback. Use only a public handle and GitHub
   noreply address for commit identity. Report sensitive findings via [SECURITY.md](SECURITY.md).
-- Every commit must follow Conventional Commits and have a verifiable SSH signature.
+- Every commit must follow Conventional Commits and have a verifiable PGP or SSH
+  signature.
   Do not merge unless explicitly requested.
 - Keep planning Markdown at the repository root and ignored by Git.
 

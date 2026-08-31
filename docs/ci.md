@@ -43,8 +43,11 @@ reads the generated CI artifacts rather than rerunning the analyzer.
 The independent **Commit Policy** workflow runs on PRs to `develop` and `main`,
 without path filters or a dependency on Verify. Its **Conventional Commits and
 signatures** check validates every PR commit's header and body separator, and
-requires GitHub to verify its SSH signature. Custom types, optional scopes and
-breaking-change markers are supported; bot and merge commits are not exempt.
+requires GitHub to verify its PGP or SSH signature. New commits should use SSH
+signatures according to the repository contribution policy; accepting verified
+PGP signatures preserves compatibility with existing history. Custom types,
+optional scopes and breaking-change markers are supported; bot and merge
+commits are not exempt.
 
 The check reads GitHub commit metadata only: it does not check out PR code,
 execute tests or CRAP, or use signing secrets. Logs contain short commit SHAs

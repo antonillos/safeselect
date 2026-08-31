@@ -67,7 +67,7 @@ cargo clippy
 
 ## Commit Messages
 
-Every commit must follow Conventional Commits and carry a verifiable SSH
+Every commit must follow Conventional Commits and carry a verifiable PGP or SSH
 signature. This applies to every commit in a PR, not only its title or the final
 squash commit. A `Signed-off-by` trailer does not replace a cryptographic signature.
 The separate [Commit Policy workflow](docs/ci.md#commit-policy) checks message

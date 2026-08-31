@@ -12,10 +12,10 @@ const script = workflow.split("          script: |\n")[1]
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 const run = new AsyncFunction("github", "context", "core", script);
 const sha = (n) => n.toString(16).padStart(40, "0");
-const signed = (n = 1, message = "docs: update guide") => ({
+const signed = (n = 1, message = "docs: update guide", signatureType = "SSH") => ({
   sha: sha(n), message,
   parents: [{ sha: sha(n + 1000) }],
-  verification: { verified: true, reason: "valid", signature: "-----BEGIN SSH SIGNATURE-----\nsynthetic" },
+  verification: { verified: true, reason: "valid", signature: `-----BEGIN ${signatureType} SIGNATURE-----\nsynthetic` },
 });
 
 async function check(commits = [signed()], options = {}) {
@@ -81,17 +81,18 @@ test("accepts recognized merge headers only for multi-parent commits", async () 
   assert.equal((await check([signed(1, "Merge branch 'feature' into develop")])).failed, true);
 });
 
-test("requires verified SSH signatures, not Signed-off-by or signature presence", async () => {
+test("requires verified PGP or SSH signatures, not Signed-off-by or signature presence", async () => {
   for (const verification of [undefined, null, {},
     { verified: false, reason: "unsigned" },
     { verified: false, reason: "invalid", signature: "-----BEGIN SSH SIGNATURE-----" },
     { verified: true, reason: "gpgverify_unavailable", signature: "-----BEGIN SSH SIGNATURE-----" },
     { verified: "true", reason: "valid", signature: "-----BEGIN SSH SIGNATURE-----" },
-    { verified: true, reason: "valid", signature: "-----BEGIN PGP SIGNATURE-----" }]) {
+    { verified: true, reason: "valid", signature: "-----BEGIN OTHER SIGNATURE-----" }]) {
     const commit = signed(1, "docs: guide\n\nSigned-off-by: synthetic");
     commit.verification = verification;
     assert.equal((await check([commit])).failed, true);
   }
+  assert.equal((await check([signed(1, "docs: guide", "PGP")])).failed, false);
 });
 
 test("checks every commit, including an invalid earlier commit", async () => {

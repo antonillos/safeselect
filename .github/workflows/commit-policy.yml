@@ -72,14 +72,16 @@ jobs:
                   formatOK &&
                   typeof commit.committer?.email === "string" &&
                   commit.committer.email.toLowerCase().endsWith("@github.com");
+                const signature = verification?.signature;
                 const signatureOK = githubGeneratedMerge
                   ? true
                   : verification?.verified === true &&
                     verification.reason === "valid" &&
-                    verification.signature?.startsWith("-----BEGIN SSH SIGNATURE-----") === true;
+                    (signature?.startsWith("-----BEGIN SSH SIGNATURE-----") === true ||
+                      signature?.startsWith("-----BEGIN PGP SIGNATURE-----") === true);
                 // Never echo messages, identities, signatures, payloads or API errors.
                 if (!formatOK) core.error(`${sha.slice(0, 12)}: Conventional Commits format required.`);
-                if (!signatureOK) core.error(`${sha.slice(0, 12)}: verified SSH signature required.`);
+                if (!signatureOK) core.error(`${sha.slice(0, 12)}: verified PGP or SSH signature required.`);
                 if (!formatOK || !signatureOK) failed++;
               }
               const { data: after } = await github.rest.pulls.get(params);
