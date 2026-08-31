@@ -256,6 +256,19 @@ class ApiTests(unittest.TestCase):
         with patch("release.subprocess.run", return_value=response):
             self.assertEqual(release.release_info("owner/repo", VERSION), {"id": 1})
 
+    def test_draft_release_is_found_from_release_list(self):
+        draft = {"id": 1, "tag_name": VERSION, "draft": True}
+        with patch.object(release, "api", side_effect=[None, [draft]]) as api:
+            self.assertEqual(release.release_info("owner/repo", VERSION), draft)
+        self.assertEqual(api.call_args_list, [
+            unittest.mock.call(f"repos/owner/repo/releases/tags/{VERSION}"),
+            unittest.mock.call("repos/owner/repo/releases?per_page=100"),
+        ])
+
+    def test_absent_release_is_not_found_in_release_list(self):
+        with patch.object(release, "api", side_effect=[None, []]):
+            self.assertIsNone(release.release_info("owner/repo", VERSION))
+
     def test_checked_command_executes_without_shell(self):
         self.assertEqual(release.command(sys.executable, "-c", "print('ok')"), "ok")
 

@@ -38,7 +38,13 @@ def api(path):
 
 
 def release_info(repo, version):
-    return api(f"repos/{repo}/releases/tags/{quote(version, safe='')}")
+    info = api(f"repos/{repo}/releases/tags/{quote(version, safe='')}")
+    if info is not None:
+        return info
+    # GitHub does not expose drafts through the tag endpoint.  Listing releases
+    # keeps a newly-created draft resumable before it is published.
+    releases = api(f"repos/{repo}/releases?per_page=100")
+    return next((release for release in releases if release.get("tag_name") == version), None)
 
 
 def payloads(version, targets=TARGETS):
