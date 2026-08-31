@@ -1138,18 +1138,7 @@ impl Visitor for RelationPolicyVisitor<'_> {
         if self.violation.is_some() {
             return ControlFlow::Continue(());
         }
-        let result = match factor {
-            TableFactor::Table { name, args, .. } => {
-                if args.is_some() {
-                    self.validate_callable_name(name)
-                } else {
-                    self.validate_relation(name)
-                }
-            }
-            TableFactor::Function { name, .. } => self.validate_callable_name(name),
-            TableFactor::TableFunction { expr, .. } => self.validate_table_function(expr),
-            _ => Ok(()),
-        };
+        let result = validate_table_factor(self, factor);
         if let Err(message) = result {
             self.violation = Some(message);
         }
@@ -1174,6 +1163,21 @@ impl Visitor for RelationPolicyVisitor<'_> {
             self.violation = Some(message);
         }
         ControlFlow::Continue(())
+    }
+}
+
+fn validate_table_factor(
+    visitor: &RelationPolicyVisitor<'_>,
+    factor: &TableFactor,
+) -> std::result::Result<(), String> {
+    match factor {
+        TableFactor::Table { name, args, .. } if args.is_some() => {
+            visitor.validate_callable_name(name)
+        }
+        TableFactor::Table { name, .. } => visitor.validate_relation(name),
+        TableFactor::Function { name, .. } => visitor.validate_callable_name(name),
+        TableFactor::TableFunction { expr, .. } => visitor.validate_table_function(expr),
+        _ => Ok(()),
     }
 }
 
