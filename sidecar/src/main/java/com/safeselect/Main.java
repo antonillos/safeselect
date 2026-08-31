@@ -307,6 +307,7 @@ public class Main {
 
     private static void connectBackend() throws Exception {
         if ("jdbc".equals(backend)) {
+            requirePostgresqlJdbc();
             Class.forName(driverClass);
             DriverManager.setLoginTimeout(3);
             log("Connecting JDBC: url=" + databaseUrl + " user=" + user + " driver=" + driverClass);
@@ -339,6 +340,13 @@ public class Main {
         verifyReadOnlyTransaction();
         connection.rollback();
     }
+
+    private static void requirePostgresqlJdbc() throws SQLException {
+        if (databaseUrl == null || !databaseUrl.regionMatches(true, 0, "jdbc:postgresql:", 0, 16)) {
+            throw new SQLException("SafeSelect JDBC read-only enforcement requires a PostgreSQL JDBC URL");
+        }
+    }
+
 
     private static void verifyReadOnlyTransaction() throws SQLException {
         try (Statement statement = connection.createStatement();
@@ -525,10 +533,32 @@ public class Main {
             }
             connection = null;
         }
-        connection = DriverManager.getConnection(databaseUrl, user, password);
-        applyStatementTimeout();
-        configureReadOnlyConnection();
+        requirePostgresqlJdbc();
+        Connection candidate = DriverManager.getConnection(databaseUrl, user, password);
+        configureJdbcCandidate(candidate);
+
+
         sendResponse(writer, id, Map.of("status", "connected"), null);
+    }
+
+    private static void configureJdbcCandidate(Connection candidate) throws Exception {
+        connection = candidate;
+        try {
+            applyStatementTimeout();
+            configureReadOnlyConnection();
+        } catch (Exception setupFailure) {
+            closeFailedCandidate(candidate, setupFailure);
+            connection = null;
+            throw setupFailure;
+        }
+    }
+
+    private static void closeFailedCandidate(Connection candidate, Exception setupFailure) {
+        try {
+            candidate.close();
+        } catch (SQLException closeFailure) {
+            setupFailure.addSuppressed(closeFailure);
+        }
     }
 
     private static void ensureMongoConnected(PrintWriter writer, Object id) throws Exception {

@@ -14,7 +14,7 @@ def suggestion:
   end;
 
 def rust_entries:
-  ($rust.entries // []) | map({
+  ($rust[0].entries // []) | map({
     language: "rust",
     file: .file,
     line: .line,
@@ -29,7 +29,7 @@ def rust_entries:
   });
 
 def java_entries:
-  ($java.entries // []) | map({
+  ($java[0].entries // []) | map({
     language: "java",
     file: .file,
     line: .line,
@@ -50,9 +50,9 @@ def java_entries:
   entries: ((rust_entries) + (java_entries)
     | sort_by([-(.crap // -1), .language, .file, .line, .symbol])),
   diagnostics: {
-    rust_functions: (($rust.entries // []) | length),
-    java_methods: (($java.entries // []) | length),
-    missing_coverage: ((($rust.entries // []) + ($java.entries // [])) | map(select(.crap == null)) | length)
+    rust_functions: (($rust[0].entries // []) | length),
+    java_methods: (($java[0].entries // []) | length),
+    missing_coverage: ((($rust[0].entries // []) + ($java[0].entries // [])) | map(select(.crap == null)) | length)
   }
 }
 | (.entries | map(select(.crap != null and .crap > $threshold)) | length) as $warnings
