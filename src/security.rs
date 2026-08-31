@@ -1139,9 +1139,14 @@ impl Visitor for RelationPolicyVisitor<'_> {
             return ControlFlow::Continue(());
         }
         let result = match factor {
-            TableFactor::Table { name, .. } | TableFactor::Function { name, .. } => {
-                self.validate_relation(name)
+            TableFactor::Table { name, args, .. } => {
+                if args.is_some() {
+                    self.validate_callable_name(name)
+                } else {
+                    self.validate_relation(name)
+                }
             }
+            TableFactor::Function { name, .. } => self.validate_callable_name(name),
             TableFactor::TableFunction { expr, .. } => self.validate_table_function(expr),
             _ => Ok(()),
         };
@@ -1747,10 +1752,19 @@ fn contains_keyword(sql: &str, keyword: &str) -> bool {
 }
 
 fn contains_transaction_alias(sql: &str) -> bool {
-    let upper = sql.to_ascii_uppercase();
-    ["; END", "; ABORT"]
-        .iter()
-        .any(|alias| upper.contains(alias))
+    let normalized = SecurityEngine::strip_sql_comments(sql).replace(';', " ; ");
+    let mut tokens = normalized.split_whitespace();
+    while let Some(token) = tokens.next() {
+        if token == ";"
+            && matches!(
+                tokens.next().map(str::to_ascii_uppercase).as_deref(),
+                Some("END" | "ABORT")
+            )
+        {
+            return true;
+        }
+    }
+    false
 }
 
 fn contains_with_ordinality_only(sql: &str) -> bool {
@@ -2100,6 +2114,7 @@ mod tests {
             "SELECT 1; SAVEPOINT nested",
             "SELECT 1; END",
             "SELECT 1; ABORT",
+            "SELECT 1;\n\tEND",
         ] {
             assert!(engine.check_read_only(sql).is_err(), "{sql}");
         }
@@ -2366,6 +2381,9 @@ mod tests {
             .validate("SELECT * FROM public.users WHERE id IN (SELECT id FROM private.secrets)")
             .is_err());
         assert!(engine.validate("SELECT * FROM private.expose()").is_err());
+        assert!(engine
+            .validate("WITH expose AS (SELECT 1) SELECT * FROM expose()")
+            .is_err());
         assert!(engine
             .validate("SELECT * FROM ROWS FROM (private.expose()) AS exposed")
             .is_err());
