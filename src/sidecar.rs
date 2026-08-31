@@ -360,7 +360,7 @@ impl SidecarProcess {
     fn validate_java(java: PathBuf) -> Result<PathBuf> {
         let output = Command::new(&java).arg("-version").output().map_err(|_| {
             SafeselectError::Sidecar(
-                "Java 17 or newer is required. Install it with: brew install openjdk@17".into(),
+                "Java 17 or newer is required. Install a compatible JDK and ensure `java` is on PATH or JAVA_HOME is set".into(),
             )
         })?;
         let version_output = String::from_utf8_lossy(&output.stderr);
@@ -372,7 +372,7 @@ impl SidecarProcess {
         })?;
         if major < 17 {
             return Err(SafeselectError::Sidecar(format!(
-                "Java 17 or newer is required, but Java {major} was found at '{}'. Install it with: brew install openjdk@17",
+                "Java 17 or newer is required, but Java {major} was found at '{}'. Install a compatible JDK and ensure `java` is on PATH or JAVA_HOME is set",
                 java.display()
             )));
         }

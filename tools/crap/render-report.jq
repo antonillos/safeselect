@@ -19,7 +19,10 @@ def cell:
 [
   "# CRAP Report",
   "",
-  "**Status:** REPORT-ONLY — findings do not block CI.",
+  (if .gate.mode == "ratchet" then
+     ("**Status:** " + (.gate.status | ascii_upcase) + " — " + (.gate.warnings | tostring) +
+      "/" + (.gate.max_warnings | tostring) + " warnings; the wrapper fails above this limit.")
+   else "**Status:** REPORT-ONLY — no warning-count gate configured for this report." end),
   ("**Threshold:** CRAP > " + ($threshold | tostring)),
   "",
   "## Executive summary",
@@ -34,7 +37,9 @@ def cell:
   "1. Start with the first rows in the priority table; they have the highest CRAP risk.",
   "2. Open the exact file and line shown in **Location**.",
   "3. Apply the suggested remediation: split complex control flow and add tests for uncovered branches/error paths.",
-  "4. Re-run `./tools/crap/run.sh --summary` and verify the finding improves.",
+  (if .gate.mode == "ratchet" then
+     ("4. Re-run `./tools/crap/run.sh --summary --ratchet " + (.gate.max_warnings | tostring) + "` and verify the finding improves without exceeding the limit.")
+   else "4. Re-run `./tools/crap/run.sh --summary` and verify the finding improves." end),
   "",
   "## Priority findings",
   "",

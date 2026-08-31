@@ -1,0 +1,1607 @@
+{
+  "identifier": "antonillos-safeselect",
+  "name": "SafeSelect",
+  "icon": "https://antonillos.github.io/safeselect/icon-512.png",
+  "description": "Read-only database MCP for PostgreSQL and MongoDB. Secure, local, fail-closed access for coding agents with project-scoped policies.",
+  "version": "0.7.6",
+  "homepage": "https://antonillos.github.io/safeselect/",
+  "tools": [
+    {
+      "description": "detect installed MCP clients that can use database query tools on this system. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "agent_detect",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "install a SafeSelect database query MCP entry for a client. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "properties": {
+          "client": {
+            "description": "Client name (opencode, cursor, windsurf, claude-code, codex, copilot, gemini-cli)",
+            "type": "string"
+          },
+          "environment": {
+            "description": "Environment name to serve (optional when the project has exactly one)",
+            "type": "string"
+          },
+          "local": {
+            "description": "Install in project scope instead of user scope (default: false)",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "Entry name (optional, defaults to 'safeselect-<project-dir>-<environment>')",
+            "type": "string"
+          }
+        },
+        "required": [
+          "client"
+        ],
+        "type": "object"
+      },
+      "name": "agent_install",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "show SafeSelect database query MCP installation status for all clients. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "agent_status",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "uninstall a SafeSelect database query MCP entry from a client. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "properties": {
+          "client": {
+            "description": "Client name",
+            "type": "string"
+          },
+          "name": {
+            "description": "Entry name to remove",
+            "type": "string"
+          }
+        },
+        "required": [
+          "client",
+          "name"
+        ],
+        "type": "object"
+      },
+      "name": "agent_uninstall",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "MongoDB only. run a read-only MongoDB aggregation pipeline; use discover_document_schema first and never guess field names. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "collection": {
+            "type": "string"
+          },
+          "database": {
+            "type": "string"
+          },
+          "limit": {
+            "description": "Maximum result documents to return",
+            "type": "integer"
+          },
+          "pipeline": {
+            "description": "Read-only MongoDB aggregation pipeline. Pass one nested JSON array of object stages, or a JSON-encoded array string if the client flattens nested arguments. Never use top-level keys such as pipeline[0].$match.name. $out and $merge are rejected.",
+            "oneOf": [
+              {
+                "items": {
+                  "type": "object"
+                },
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "required": [
+          "database",
+          "collection",
+          "pipeline"
+        ],
+        "type": "object"
+      },
+      "name": "aggregate_documents",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "show up to 20 current-session audit metadata entries; entries contain only timestamp, category, decision, and query hash, never SQL or returned data. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "maximum": 20,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "audit_recent",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "show audit health and the number of events recorded in this MCP session; no audit entries, SQL, result data, or file paths are returned. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "name": "audit_status",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "check database connectivity by starting the sidecar and verifying the backend. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "check",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "delete a database environment configuration from the project. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "properties": {
+          "name": {
+            "description": "Environment name to delete",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "name": "config_delete_environment",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "rename a database environment within the project. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "properties": {
+          "new_name": {
+            "description": "New environment name",
+            "type": "string"
+          },
+          "old_name": {
+            "description": "Current environment name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "old_name",
+          "new_name"
+        ],
+        "type": "object"
+      },
+      "name": "config_rename_environment",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "reset all database environments and their keychain entries for the project. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "properties": {
+          "confirm": {
+            "description": "Must be set to true to confirm the reset",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "confirm"
+        ],
+        "type": "object"
+      },
+      "name": "config_reset",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "store a database password in the macOS Keychain for an environment. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "properties": {
+          "environment": {
+            "description": "Environment name",
+            "type": "string"
+          },
+          "password": {
+            "description": "Database password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "environment",
+          "password"
+        ],
+        "type": "object"
+      },
+      "name": "config_set_password",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "show the resolved database connection configuration for an environment with secrets redacted. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "properties": {
+          "environment": {
+            "description": "Environment name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "environment"
+        ],
+        "type": "object"
+      },
+      "name": "config_show",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "validate the .safeselect configuration. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "properties": {
+          "environment": {
+            "description": "Environment name to validate (optional — validates project structure if omitted)",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "config_validate",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "connect or reconnect to the database. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "connect",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "MongoDB only. count MongoDB documents matching a non-empty filter; full collection counts are rejected because they can scan large PRE collections. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "collection": {
+            "type": "string"
+          },
+          "database": {
+            "type": "string"
+          },
+          "filter": {
+            "description": "Required non-empty MongoDB filter as one nested JSON object or JSON-encoded object string. Never use top-level keys such as filter.name. Do not use {} for exploratory counts; use find_documents with limit or an indexed filter.",
+            "oneOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "required": [
+          "database",
+          "collection",
+          "filter"
+        ],
+        "type": "object"
+      },
+      "name": "count_documents",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "show active database backend and capabilities; if the user only asked about available capabilities, report them and stop. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "database_info",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "PostgreSQL only. describe columns and PostgreSQL underlying type names for exactly one database table or view using read-only catalog metadata; schema and table must be exact values copied from one list_tables row, and placeholders or wildcards are not accepted. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "schema": {
+            "description": "Exact table_schema value copied from one list_tables row; placeholders and wildcards are not accepted",
+            "type": "string"
+          },
+          "table": {
+            "description": "Exact table_name value copied from the same list_tables row; placeholders and wildcards such as * or % are not accepted",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema",
+          "table"
+        ],
+        "type": "object"
+      },
+      "name": "describe_table",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "disconnect from the database by closing the backend connection. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "disconnect",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "MongoDB only. infer frequent MongoDB fields and types over a bounded, non-exhaustive sample; use observed fields in find_documents, aggregate_documents, or profile_document_field. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "collection": {
+            "type": "string"
+          },
+          "database": {
+            "type": "string"
+          },
+          "examples": {
+            "type": "integer"
+          },
+          "filter": {
+            "description": "Optional filter as one nested JSON object or JSON-encoded object string; never flatten its keys",
+            "oneOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "sample_size": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "database",
+          "collection"
+        ],
+        "type": "object"
+      },
+      "name": "discover_document_schema",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "MongoDB only. list distinct values for a MongoDB field. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "collection": {
+            "type": "string"
+          },
+          "database": {
+            "type": "string"
+          },
+          "field": {
+            "type": "string"
+          },
+          "filter": {
+            "description": "Optional filter as one nested JSON object or JSON-encoded object string; never flatten its keys",
+            "oneOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "limit": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "database",
+          "collection",
+          "field"
+        ],
+        "type": "object"
+      },
+      "name": "distinct_documents",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "register a JDBC database driver. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "properties": {
+          "class": {
+            "description": "JDBC driver class name (e.g. org.postgresql.Driver)",
+            "type": "string"
+          },
+          "path": {
+            "description": "Path to JDBC JAR file",
+            "type": "string"
+          },
+          "sha256": {
+            "description": "SHA-256 checksum of the JAR (optional, auto-computed if omitted)",
+            "type": "string"
+          },
+          "vendor": {
+            "description": "Vendor name (e.g. postgresql)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "vendor",
+          "path",
+          "class"
+        ],
+        "type": "object"
+      },
+      "name": "driver_add",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "download and register the official PostgreSQL JDBC database driver. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "properties": {
+          "vendor": {
+            "description": "Vendor name (only 'postgresql' is supported)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "vendor"
+        ],
+        "type": "object"
+      },
+      "name": "driver_download",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "list registered JDBC database drivers. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "driver_list",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "PostgreSQL only. show a query execution plan; after a timeout call this explain tool with analyze=false instead of putting EXPLAIN in the select tool, and place WITH CTEs at the beginning of the explained statement instead of nested in subqueries. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "properties": {
+          "analyze": {
+            "description": "Run EXPLAIN ANALYZE to execute the query and include actual runtime statistics",
+            "type": "boolean"
+          },
+          "buffers": {
+            "description": "Include buffer usage details in the execution plan",
+            "type": "boolean"
+          },
+          "explain_verbose": {
+            "description": "Include additional planner output via EXPLAIN VERBOSE",
+            "type": "boolean"
+          },
+          "format": {
+            "description": "Execution plan format; defaults to json for agent consumption",
+            "enum": [
+              "json",
+              "text"
+            ],
+            "type": "string"
+          },
+          "sql": {
+            "description": "SQL query to explain",
+            "type": "string"
+          },
+          "verbose": {
+            "description": "Enable verbose sidecar logging for this execution",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "sql"
+        ],
+        "type": "object"
+      },
+      "name": "explain",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "MongoDB only. explain a read-only MongoDB find query. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "collection": {
+            "type": "string"
+          },
+          "database": {
+            "type": "string"
+          },
+          "filter": {
+            "description": "Optional filter as one nested JSON object or JSON-encoded object string; never flatten its keys",
+            "oneOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "projection": {
+            "description": "Optional projection as one nested JSON object or JSON-encoded object string; never flatten its keys",
+            "oneOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "sort": {
+            "description": "Optional sort as one nested JSON object or JSON-encoded object string; never flatten its keys",
+            "oneOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "required": [
+          "database",
+          "collection"
+        ],
+        "type": "object"
+      },
+      "name": "explain_documents",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "MongoDB only. find documents in a collection; use discover_document_schema first and never guess field names. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "collection": {
+            "description": "Collection name",
+            "type": "string"
+          },
+          "database": {
+            "description": "Database name",
+            "type": "string"
+          },
+          "filter": {
+            "description": "Required document filter. Pass one nested JSON object, or a JSON-encoded object string if the client flattens nested arguments. Never use top-level keys such as filter.name.",
+            "oneOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "limit": {
+            "description": "Maximum number of documents to return",
+            "type": "integer"
+          },
+          "projection": {
+            "description": "Projection document as one nested JSON object or JSON-encoded object string; never flatten its keys",
+            "oneOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "sort": {
+            "description": "Sort document as one nested JSON object or JSON-encoded object string; never flatten its keys",
+            "oneOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "required": [
+          "database",
+          "collection",
+          "filter"
+        ],
+        "type": "object"
+      },
+      "name": "find_documents",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "MongoDB only. return bounded MongoDB fixture samples without writing files; only fields explicitly named in redact_fields are replaced. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "collection": {
+            "type": "string"
+          },
+          "database": {
+            "type": "string"
+          },
+          "filter": {
+            "description": "Optional filter as one nested JSON object or JSON-encoded object string; never flatten its keys",
+            "oneOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "projection": {
+            "description": "Optional projection as one nested JSON object or JSON-encoded object string; never flatten its keys",
+            "oneOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "redact_fields": {
+            "description": "Fields to replace in the returned sample, as one complete JSON string array or JSON-encoded string array. Fields not listed here remain unchanged; never flatten its items.",
+            "oneOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "required": [
+          "database",
+          "collection"
+        ],
+        "type": "object"
+      },
+      "name": "generate_document_fixture",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "MongoDB only. return bounded aggregate storage statistics for one allowed MongoDB collection; no documents or raw collStats response are returned. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "collection": {
+            "type": "string"
+          },
+          "database": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "database",
+          "collection"
+        ],
+        "type": "object"
+      },
+      "name": "get_collection_stats",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "PostgreSQL: show a bounded safe subset of PostgreSQL database activity and size statistics; no raw catalog rows or connection details are returned. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic. MongoDB: return bounded aggregate storage statistics for one allowed MongoDB database; no documents or raw dbStats response are returned. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "anyOf": [
+          {
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "database": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "database"
+            ],
+            "type": "object"
+          }
+        ],
+        "type": "object"
+      },
+      "name": "get_database_stats",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "PostgreSQL only. show a bounded safe subset of PostgreSQL table and index statistics for one exact allowed relation; copy schema and table from list_tables. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "schema": {
+            "description": "Exact table_schema copied from list_tables",
+            "type": "string"
+          },
+          "table": {
+            "description": "Exact table_name copied from the same list_tables row",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema",
+          "table"
+        ],
+        "type": "object"
+      },
+      "name": "get_table_stats",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "scan docker-compose files for PostgreSQL database services and import them into .safeselect. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "properties": {
+          "scan_path": {
+            "description": "Directory to scan for docker-compose files (default: project root)",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "import_compose",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "MongoDB only. list classic MongoDB indexes and, when available, Atlas Search indexes for one allowed collection; use the returned indexed fields with explain_documents or one bounded read. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "collection": {
+            "type": "string"
+          },
+          "database": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "database",
+          "collection"
+        ],
+        "type": "object"
+      },
+      "name": "list_collection_indexes",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "MongoDB only. list document collections. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "properties": {
+          "database": {
+            "description": "Database name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "database"
+        ],
+        "type": "object"
+      },
+      "name": "list_collections",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "MongoDB only. list document databases. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "list_databases",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "PostgreSQL only. list PostgreSQL functions and definitions without inspecting aggregates; optionally restrict results to one allowed schema or a function-name fragment. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "name_contains": {
+            "description": "Optional case-insensitive function-name fragment",
+            "type": "string"
+          },
+          "schema": {
+            "description": "Optional exact allowed schema name",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "list_functions",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "PostgreSQL only. list pg_cron scheduled jobs when the pg_cron extension is installed. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "name": "list_scheduled_jobs",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "PostgreSQL only. list safe PostgreSQL index metadata for one exact allowed table or view; copy schema and table from list_tables, then use the returned columns or expressions in explain before any targeted select. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "schema": {
+            "description": "Exact table_schema copied from list_tables",
+            "type": "string"
+          },
+          "table": {
+            "description": "Exact table_name copied from the same list_tables row",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema",
+          "table"
+        ],
+        "type": "object"
+      },
+      "name": "list_table_indexes",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "PostgreSQL only. list all descendant PostgreSQL partitions for one exact allowed table; returns bounded partition metadata, total count, and whether the list was truncated. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "schema": {
+            "description": "Exact table_schema copied from list_tables",
+            "type": "string"
+          },
+          "table": {
+            "description": "Exact table_name copied from the same list_tables row",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema",
+          "table"
+        ],
+        "type": "object"
+      },
+      "name": "list_table_partitions",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "PostgreSQL only. list database tables, optionally filtered by schema; if the user requested data inspection, choose exactly one returned table_schema and table_name pair, then call describe_table without placeholders or wildcards; otherwise report the result and stop. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "properties": {
+          "schema": {
+            "description": "Schema filter (optional)",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "list_tables",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "PostgreSQL only. list PostgreSQL triggers and their definitions; optionally restrict results to one allowed schema. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "schema": {
+            "description": "Optional exact allowed schema name",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "list_triggers",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "MongoDB only. profile a nested MongoDB field over a bounded sample. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "collection": {
+            "type": "string"
+          },
+          "database": {
+            "type": "string"
+          },
+          "examples": {
+            "type": "integer"
+          },
+          "field": {
+            "type": "string"
+          },
+          "filter": {
+            "description": "Optional filter as one nested JSON object or JSON-encoded object string; never flatten its keys",
+            "oneOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "sample_size": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "database",
+          "collection",
+          "field"
+        ],
+        "type": "object"
+      },
+      "name": "profile_document_field",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "restart the sidecar process and verify database connectivity. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "reconnect",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "inspect PostgreSQL security posture; warning findings can be acknowledged after explicit user approval to avoid repeating the same unchanged warning. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "acknowledge": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "name": "security_posture",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "PostgreSQL only. execute a read-only SELECT query on the target database; use describe_table before querying an unfamiliar relation, never guess column names, use a small LIMIT for row retrieval, place WITH CTEs at the beginning of the statement, and after a timeout preserve or narrow selective predicates instead of broadening the query. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "properties": {
+          "sql": {
+            "description": "SQL SELECT query to execute",
+            "type": "string"
+          },
+          "verbose": {
+            "description": "Enable verbose sidecar logging for this execution",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "sql"
+        ],
+        "type": "object"
+      },
+      "name": "select",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "uninstall SafeSelect database query tooling, config, data, audit, and keychain entries. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "properties": {
+          "confirm": {
+            "description": "Must be set to true to confirm uninstall",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "confirm"
+        ],
+        "type": "object"
+      },
+      "name": "uninstall",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    }
+  ],
+  "prompts": [
+    {
+      "arguments": [],
+      "description": "Guide a safe, bounded SafeSelect database investigation.",
+      "name": "read_only_database_debugging",
+      "title": "Read-only database debugging"
+    }
+  ],
+  "resources": [
+    {
+      "description": "SafeSelect workflow and boundaries; contains no database data.",
+      "mimeType": "text/markdown",
+      "name": "Read-only database debugging guide",
+      "uri": "safeselect://guide/read-only-database-debugging"
+    }
+  ]
+}

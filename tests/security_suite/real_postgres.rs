@@ -92,6 +92,29 @@ pub fn run() {
             &baseline,
         );
 
+        log_check(
+            "write-capable credentials remain usable through SafeSelect read-only transactions",
+        );
+        grant_test_user_write_capabilities();
+        assert_rejected(
+            &repo_root,
+            &config_dir,
+            "write-capable function side effect",
+            "SELECT public.writer_function()",
+            &baseline,
+        );
+
+        for (name, sql) in [
+            ("unqualified relation", "SELECT * FROM safe_table"),
+            ("disallowed schema", "SELECT * FROM private.secrets"),
+            (
+                "mixed allowed and disallowed schemas",
+                "SELECT * FROM public.safe_table CROSS JOIN private.secrets",
+            ),
+        ] {
+            assert_rejected(&repo_root, &config_dir, name, sql, &baseline);
+        }
+
         log_check("SELECT happy path");
         let (stdout, stderr, success) =
             postgres::run_safeselect(&repo_root, &config_dir, "SELECT 1 AS ok");
@@ -310,7 +333,8 @@ fn assert_rejected(
             || stderr.contains("Read-only mode")
             || stderr.contains("RESULT_LIMIT_EXCEEDED")
             || stderr.contains("Limit exceeded")
-            || stderr.contains("permission denied"),
+            || stderr.contains("permission denied")
+            || stderr.contains("read-only transaction"),
         "{name} failed for the wrong reason\nstdout:\n{stdout}\nstderr:\n{stderr}"
     );
     assert_eq!(
@@ -319,6 +343,25 @@ fn assert_rejected(
         "{name} changed database state despite rejection"
     );
     log_step(&format!("confirmed rejection without mutation: {name}"));
+}
+
+fn grant_test_user_write_capabilities() {
+    postgres::psql(
+        &postgres::test_db(),
+        &format!(
+            "GRANT INSERT, UPDATE, DELETE ON public.safe_table TO {}; \
+             GRANT EXECUTE ON FUNCTION public.writer_function() TO {}; \
+             CREATE SCHEMA private; \
+             CREATE TABLE private.secrets (id int primary key, value text); \
+             INSERT INTO private.secrets VALUES (1, 'hidden'); \
+             GRANT USAGE ON SCHEMA private TO {}; \
+             GRANT SELECT ON private.secrets TO {};",
+            postgres::test_user(),
+            postgres::test_user(),
+            postgres::test_user(),
+            postgres::test_user(),
+        ),
+    );
 }
 
 fn assert_allowed(root: &Path, config_dir: &Path, name: &str, sql: &str, baseline: &DatabaseState) {

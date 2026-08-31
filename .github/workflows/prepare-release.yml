@@ -51,11 +51,18 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
+          cache: maven
+          cache-dependency-path: '**/pom.xml'
+      - name: Checkout CI tooling
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          path: .ci-tools
+          sparse-checkout: |
+            .github/actions/setup-makevn
+            tools/ci
       - name: Install makevn
-        shell: bash
-        run: |
-          curl -fsSL https://raw.githubusercontent.com/antonillos/makevn/main/packaging/install/install-release.sh | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        uses: ./.ci-tools/.github/actions/setup-makevn
       - name: Resolve next version
         id: version
         shell: bash
@@ -102,6 +109,7 @@ jobs:
           next_version="${{ steps.version.outputs.next }}"
           perl -0pi -e 'BEGIN { $c = $ENV{CURRENT_VERSION}; $n = $ENV{NEXT_VERSION}; } s/version = "\Q$c\E"/version = "$n"/' Cargo.toml
           perl -0pi -e 'BEGIN { $c = $ENV{CURRENT_VERSION}; $n = $ENV{NEXT_VERSION}; } s/<version>${c}<\/version>/<version>$n<\/version>/' sidecar/pom.xml
+          perl -0pi -e 'BEGIN { $c = $ENV{CURRENT_VERSION}; $n = $ENV{NEXT_VERSION}; } s/"version": "\Q$c\E"/"version": "$n"/' lhm.plugin.json
           cargo update --package safeselect --precise "${next_version}" || true
         env:
           CURRENT_VERSION: ${{ steps.version.outputs.current }}
@@ -221,13 +229,14 @@ jobs:
           git config gpg.format ssh
           git config user.signingkey "${signing_key}"
           git config commit.gpgsign true
-          cp CHANGELOG.md Cargo.toml Cargo.lock sidecar/pom.xml "${release_files}/"
+          cp CHANGELOG.md Cargo.toml Cargo.lock lhm.plugin.json sidecar/pom.xml "${release_files}/"
           git checkout -B "${branch}" "origin/${{ inputs.base_branch }}"
           cp "${release_files}/CHANGELOG.md" CHANGELOG.md
           cp "${release_files}/Cargo.toml" Cargo.toml
           cp "${release_files}/Cargo.lock" Cargo.lock
+          cp "${release_files}/lhm.plugin.json" lhm.plugin.json
           cp "${release_files}/pom.xml" sidecar/pom.xml
-          git add CHANGELOG.md Cargo.toml Cargo.lock sidecar/pom.xml
+          git add CHANGELOG.md Cargo.toml Cargo.lock lhm.plugin.json sidecar/pom.xml
           git commit --gpg-sign -m "release: bump to ${{ steps.version.outputs.next }}"
           git cat-file commit HEAD | grep -q '^gpgsig '
           git push --force-with-lease origin "${branch}"

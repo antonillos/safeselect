@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - **Java 17+** (for the embedded database sidecar)
-- **Rust 1.81+** (only if building from source)
+- **Rust 1.85+** (only if building from source)
 
 The Java sidecar is embedded in the Rust binary, so you only need a Java 17+
 runtime. No Maven or Rust is needed to run SafeSelect.
@@ -17,7 +17,12 @@ or you can run:
 safeselect driver download --vendor postgresql
 ```
 
-## Homebrew (macOS)
+## Package managers
+
+Homebrew and asdf are the recommended easy-installation methods. Choose the
+method for your platform, then continue with the common setup below.
+
+### Homebrew (macOS)
 
 ```bash
 brew install antonillos/tap/safeselect
@@ -31,13 +36,14 @@ is missing or too old. If needed:
 brew install openjdk@17
 ```
 
-## asdf (macOS & Linux)
+### asdf (macOS & Linux)
 
 ```bash
 asdf plugin add safeselect https://github.com/antonillos/asdf-safeselect.git
 asdf install safeselect latest
-asdf set -u safeselect latest
-asdf reshim safeselect latest
+SAFESELECT_VERSION="$(asdf latest safeselect | sed -n '$p')"
+asdf set -u safeselect "${SAFESELECT_VERSION}"
+asdf reshim safeselect "${SAFESELECT_VERSION}"
 ```
 
 ## From source
@@ -45,17 +51,16 @@ asdf reshim safeselect latest
 ```bash
 git clone https://github.com/antonillos/safeselect.git
 cd safeselect
-
-# Build the Java sidecar
-makevn doctor init test package
-cp sidecar/target/safeselect-sidecar-*.jar sidecar/target/safeselect-sidecar.jar
-
-# Build the Rust binary
-cargo build --release
-
-# The binary is at target/release/safeselect
-./target/release/safeselect --version
+./install.sh
+"$HOME/.local/bin/safeselect" --version
 ```
+
+The script builds the Java sidecar and Rust release binary, then installs
+`safeselect` under `~/.local/bin` by default. Use `PREFIX` or `BIN_DIR` to
+select a different destination. Requirements: Rust 1.85+, Java 17+, and
+`makevn`. If makevn is missing and you use Homebrew or asdf, opt in to its
+installation with `./install.sh --install-makevn`. Add `~/.local/bin` to your
+`PATH` before invoking `safeselect` without its full path.
 
 ## Quick install script
 

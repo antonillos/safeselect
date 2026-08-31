@@ -25,8 +25,13 @@ on:
         type: boolean
         default: false
 
+# Serialise publication/recovery, including dispatches for different versions.
+concurrency:
+  group: safeselect-release
+  cancel-in-progress: false
+
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -41,73 +46,146 @@ jobs:
       semver: ${{ steps.parse.outputs.semver }}
       version: ${{ steps.parse.outputs.version }}
       target-ref: ${{ steps.parse.outputs.target-ref }}
-      prerelease: ${{ steps.parse.outputs.prerelease }}
-      draft: ${{ steps.parse.outputs.draft }}
-      exists: ${{ steps.release.outputs.exists }}
+      prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}
+      draft: ${{ github.event_name == 'workflow_dispatch' && inputs.draft || false }}
     steps:
-      - uses: actions/checkout@v7
+      - name: Checkout workflow tooling
+        uses: actions/checkout@v7
+      - name: Checkout release source
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.target_ref || github.sha }}
-      - name: Validate and parse version
+          path: release-source
+      - name: Validate version and freeze source SHA
         id: parse
-        shell: bash
-        run: |
-          set -euo pipefail
-          manifest_version="$(sed -nE 's/^version = "([^"]+)"/\1/p' Cargo.toml | sed -n '1p')"
-          VERSION="${{ github.event_name == 'workflow_dispatch' && inputs.version || '' }}"
-          if [[ -z "$VERSION" ]]; then
-            VERSION="v${manifest_version}"
-          fi
-          case "$VERSION" in
-            v*) ;;
-            *) printf 'Error: version must start with v, got %s\n' "$VERSION" >&2; exit 1 ;;
-          esac
-          SEMVER="${VERSION#v}"
-          if ! [[ "$SEMVER" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
-            printf 'Error: invalid semver: %s\n' "$SEMVER" >&2
-            exit 1
-          fi
-          if [[ "$manifest_version" != "$SEMVER" ]]; then
-            printf 'Error: Cargo.toml version %s does not match release %s\n' "$manifest_version" "$SEMVER" >&2
-            exit 1
-          fi
-          printf 'semver=%s\n' "$SEMVER" >> "$GITHUB_OUTPUT"
-          printf 'version=%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
-          printf 'target-ref=%s\n' "${{ github.event_name == 'workflow_dispatch' && inputs.target_ref || github.sha }}" >> "$GITHUB_OUTPUT"
-          printf 'prerelease=%s\n' "${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}" >> "$GITHUB_OUTPUT"
-          printf 'draft=%s\n' "${{ github.event_name == 'workflow_dispatch' && inputs.draft || false }}" >> "$GITHUB_OUTPUT"
-      - name: Skip existing release
-        id: release
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.parse.outputs.version }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if gh release view "$VERSION" >/dev/null 2>&1; then
-            printf 'Release %s already exists. Nothing to publish.\n' "$VERSION"
-            printf 'exists=true\n' >> "$GITHUB_OUTPUT"
-          else
-            printf 'exists=false\n' >> "$GITHUB_OUTPUT"
-          fi
+          VERSION: ${{ inputs.version }}
+        run: python3 tools/ci/release.py resolve --source release-source --version "$VERSION"
 
   integration-tests:
-    if: needs.validate-version.outputs.exists != 'true'
     needs: validate-version
     uses: ./.github/workflows/integration-tests.yml
     with:
       target_ref: ${{ needs.validate-version.outputs.target-ref }}
 
-  create-release:
-    if: needs.validate-version.outputs.exists != 'true' && needs.integration-tests.result == 'success'
-    runs-on: ubuntu-latest
+  build:
     needs: [validate-version, integration-tests]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ needs.validate-version.outputs.version }}
+      TARGET: ${{ matrix.target }}
+    defaults:
+      run:
+        shell: bash
     steps:
-      - uses: actions/checkout@v7
+      - name: Checkout workflow tooling
+        uses: actions/checkout@v7
+      - name: Checkout release source
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.validate-version.outputs.target-ref }}
+          path: release-source
+      - name: Reuse existing verified release assets
+        id: reuse
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tools/ci/release.py reuse --version "$VERSION" --target "$TARGET"
+      - name: Install Rust
+        if: steps.reuse.outputs.reused != 'true'
+        run: rustup toolchain install stable --profile minimal && rustup target add "$TARGET"
+      - name: Install cross-compiler
+        if: steps.reuse.outputs.reused != 'true' && matrix.target == 'aarch64-unknown-linux-gnu'
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: Install Java
+        if: steps.reuse.outputs.reused != 'true'
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+          cache-dependency-path: '**/pom.xml'
+      - name: Install makevn
+        if: steps.reuse.outputs.reused != 'true'
+        uses: ./.github/actions/setup-makevn
+      - name: Initialize, test, and package sidecar
+        if: steps.reuse.outputs.reused != 'true'
+        working-directory: release-source
+        run: |
+          makevn doctor init test package
+          cp sidecar/target/safeselect-sidecar-*.jar sidecar/target/safeselect-sidecar.jar
+      - name: Build Rust binary
+        if: steps.reuse.outputs.reused != 'true'
+        working-directory: release-source
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+        run: |
+          # A retry must use the same source timestamp, not the current wall clock.
+          build_stamp="$(git show -s --format=%cs HEAD)"
+          SAFESELECT_BUILD_VERSION="$VERSION ($build_stamp)" cargo build --release --target "$TARGET"
+      - name: Run tests (native host only)
+        if: steps.reuse.outputs.reused != 'true' && matrix.target == 'x86_64-unknown-linux-gnu'
+        working-directory: release-source
+        run: cargo test
+      - name: Package assets
+        if: steps.reuse.outputs.reused != 'true'
+        working-directory: release-source
+        env:
+          SEMVER: ${{ needs.validate-version.outputs.semver }}
+        run: |
+          mkdir -p ../dist/release
+          prefix="safeselect-${VERSION}-${TARGET}"
+          tar -czf "../dist/release/$prefix.tar.gz" -C "target/$TARGET/release" safeselect
+          scripts/package-mcpb.sh --binary "target/$TARGET/release/safeselect" \
+            --target "$TARGET" --version "$SEMVER" --output "../dist/release/$prefix.mcpb"
+          cd ../dist/release
+          shasum -a 256 "$prefix.tar.gz" > "$prefix.tar.gz.sha256"
+          shasum -a 256 "$prefix.mcpb" > "$prefix.mcpb.sha256"
+      - name: Stage build artifacts (not a public release)
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ matrix.target }}
+          path: dist/release/*
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: true
+          retention-days: 14
+
+  publish-release:
+    needs: [validate-version, integration-tests, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout workflow tooling
+        uses: actions/checkout@v7
+      - name: Checkout release source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.validate-version.outputs.target-ref }}
+          path: release-source
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: release-*
+          path: dist/release
+          merge-multiple: true
       - name: Generate release notes
         shell: bash
+        working-directory: release-source
         run: |
           version="${{ needs.validate-version.outputs.version }}"
           changelog_entry="$(awk -v version="${version}" '
@@ -140,122 +218,33 @@ jobs:
             printf 'curl -fsSL https://raw.githubusercontent.com/antonillos/safeselect/main/packaging/install/install-release.sh | sh\n'
             printf '```\n\n'
             printf '## Assets\n\n'
-            printf -- '- Runtime archives for Linux `x86_64`, macOS `x86_64`, and macOS `arm64`\n'
+            printf -- '- Runtime archives for Linux `x86_64`/`arm64` and macOS `x86_64`/`arm64`\n'
             printf -- '- SHA-256 checksum files for each archive\n'
           } > release-notes.md
-      - name: Create GitHub release
+      - name: Verify, upload missing assets and publish atomically from draft
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.validate-version.outputs.version }}
+          SOURCE_SHA: ${{ needs.validate-version.outputs.target-ref }}
+          DRAFT: ${{ needs.validate-version.outputs.draft }}
+          PRERELEASE: ${{ needs.validate-version.outputs.prerelease }}
         shell: bash
         run: |
-          args=(
-            "${{ needs.validate-version.outputs.version }}"
-            --target "${{ needs.validate-version.outputs.target-ref }}"
-            --title "${{ needs.validate-version.outputs.version }}"
-            --notes-file release-notes.md
-          )
-          if [[ "${{ needs.validate-version.outputs.prerelease }}" == "true" ]]; then
-            args+=(--prerelease)
-          fi
-          if [[ "${{ needs.validate-version.outputs.draft }}" == "true" ]]; then
-            args+=(--draft)
-          fi
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            gh release delete "${{ needs.validate-version.outputs.version }}" --yes || true
-          fi
-          gh release create "${args[@]}"
-
-  build:
-    needs: [validate-version, create-release, integration-tests]
-    if: needs.validate-version.outputs.exists != 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: aarch64-apple-darwin
-            os: macos-latest
-          - target: x86_64-apple-darwin
-            os: macos-latest
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.validate-version.outputs.target-ref }}
-      - name: Install Rust
-        shell: bash
-        run: rustup target add ${{ matrix.target }} && rustup toolchain install stable --profile minimal
-      - name: Install cross-compiler (aarch64-linux-gnu)
-        if: contains(matrix.target, 'aarch64-unknown-linux-gnu')
-        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
-      - name: Install Java
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: 17
-      - name: Install makevn
-        shell: bash
-        run: |
-          curl -fsSL https://raw.githubusercontent.com/antonillos/makevn/main/packaging/install/install-release.sh | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - name: Initialize, test, and package sidecar
-        run: makevn doctor init test package
-      - name: Copy sidecar JAR
-        run: |
-          jar="$(ls sidecar/target/safeselect-sidecar-*.jar 2>/dev/null | sort -V | tail -1)"
-          if [[ -n "$jar" ]]; then cp "$jar" sidecar/target/safeselect-sidecar.jar; fi
-      - name: Build Rust binary
-        env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
-        run: |
-          build_stamp="$(date +"%Y.%m.%d.%H.%M")"
-          SAFESELECT_BUILD_VERSION="${{ needs.validate-version.outputs.version }} (${build_stamp})" \
-            cargo build --release --target ${{ matrix.target }}
-      - name: Run tests (native host only)
-        run: cargo test
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
-      - name: Package binary
-        run: |
-          cd target/${{ matrix.target }}/release
-          tar czf safeselect-${{ needs.validate-version.outputs.version }}-${{ matrix.target }}.tar.gz safeselect
-          sha256sum safeselect-${{ needs.validate-version.outputs.version }}-${{ matrix.target }}.tar.gz > safeselect-${{ needs.validate-version.outputs.version }}-${{ matrix.target }}.tar.gz.sha256
-      - name: Package MCP Bundle
-        run: |
-          asset="safeselect-${{ needs.validate-version.outputs.version }}-${{ matrix.target }}.mcpb"
-          scripts/package-mcpb.sh \
-            --binary "target/${{ matrix.target }}/release/safeselect" \
-            --target "${{ matrix.target }}" \
-            --version "${{ needs.validate-version.outputs.semver }}" \
-            --output "target/${{ matrix.target }}/release/${asset}"
-          sha256sum "target/${{ matrix.target }}/release/${asset}" > "target/${{ matrix.target }}/release/${asset}.sha256"
-      - name: Upload release assets
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          gh release upload "${{ needs.validate-version.outputs.version }}" \
-            target/${{ matrix.target }}/release/safeselect-${{ needs.validate-version.outputs.version }}-${{ matrix.target }}.tar.gz \
-            target/${{ matrix.target }}/release/safeselect-${{ needs.validate-version.outputs.version }}-${{ matrix.target }}.tar.gz.sha256 \
-            target/${{ matrix.target }}/release/safeselect-${{ needs.validate-version.outputs.version }}-${{ matrix.target }}.mcpb \
-            target/${{ matrix.target }}/release/safeselect-${{ needs.validate-version.outputs.version }}-${{ matrix.target }}.mcpb.sha256 \
-            --clobber
+          flags=()
+          if [[ "$DRAFT" == true ]]; then flags+=(--draft); fi
+          if [[ "$PRERELEASE" == true ]]; then flags+=(--prerelease); fi
+          python3 tools/ci/release.py publish --version "$VERSION" --sha "$SOURCE_SHA" \
+            --source release-source --notes release-source/release-notes.md "${flags[@]}"
 
   publish-mcp-registry:
-    if: needs.validate-version.outputs.exists != 'true' && needs.validate-version.outputs.prerelease != 'true' && needs.validate-version.outputs.draft != 'true' && needs.integration-tests.result == 'success'
+    if: needs.validate-version.outputs.prerelease != 'true' && needs.validate-version.outputs.draft != 'true' && needs.integration-tests.result == 'success'
     runs-on: ubuntu-latest
-    needs: [validate-version, build, integration-tests]
+    needs: [validate-version, publish-release, integration-tests]
     permissions:
       contents: write
       id-token: write
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.validate-version.outputs.target-ref }}
       - name: Download MCPB checksums
         env:
           GH_TOKEN: ${{ github.token }}
@@ -300,179 +289,30 @@ jobs:
             "${package_args[@]}"
       - name: Install MCP Registry publisher
         shell: bash
+        env:
+          MCP_PUBLISHER_VERSION: v1.8.1
+          MCP_PUBLISHER_SHA256: a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc
         run: |
           set -euo pipefail
-          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" \
-            | tar xz mcp-publisher
+          archive="mcp-publisher_linux_amd64.tar.gz"
+          curl --fail --silent --show-error --location --retry 4 --retry-max-time 120 \
+            --output "${archive}" \
+            "https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}/${archive}"
+          printf '%s  %s\n' "${MCP_PUBLISHER_SHA256}" "${archive}" | sha256sum --check --strict
+          tar xzf "${archive}" mcp-publisher
       - name: Validate MCP Registry metadata
         run: ./mcp-publisher validate dist/server.json
-      - name: Publish MCP Registry metadata
-        run: |
-          ./mcp-publisher login github-oidc
-          ./mcp-publisher publish dist/server.json
-      - name: Verify registry publication and attach metadata
+      - name: Publish or verify existing MCP Registry version
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.validate-version.outputs.version }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          curl --fail --silent --show-error \
-            "https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.antonillos/safeselect" \
-            -o dist/registry-search.json
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-
-          payload = json.loads(Path("dist/registry-search.json").read_text())
-          servers = payload.get("servers", [])
-          if not any(
-              item.get("server", item).get("name") == "io.github.antonillos/safeselect"
-              and item.get("server", item).get("version") == "${{ needs.validate-version.outputs.semver }}"
-              for item in servers
-          ):
-              raise SystemExit("SafeSelect version did not appear in the MCP Registry search response")
-          PY
-          gh release upload "${VERSION}" dist/server.json --clobber
+        run: python3 tools/ci/publish_registry.py
 
   publish-package-managers:
-    if: needs.validate-version.outputs.exists != 'true' && needs.validate-version.outputs.prerelease != 'true' && needs.validate-version.outputs.draft != 'true' && needs.integration-tests.result == 'success'
-    runs-on: ubuntu-latest
-    needs: [validate-version, build, integration-tests]
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.validate-version.outputs.target-ref }}
-      - name: Read release asset checksums
-        id: checksums
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.validate-version.outputs.version }}
-          REPOSITORY: ${{ github.repository }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p dist/checksums
-          gh release download "${VERSION}" \
-            --repo "${REPOSITORY}" \
-            --pattern "safeselect-${VERSION}-aarch64-apple-darwin.tar.gz.sha256" \
-            --pattern "safeselect-${VERSION}-x86_64-apple-darwin.tar.gz.sha256" \
-            --dir dist/checksums 2>/dev/null || true
-          gh release download "${VERSION}" \
-            --repo "${REPOSITORY}" \
-            --pattern "safeselect-${VERSION}-aarch64-unknown-linux-gnu.tar.gz.sha256" \
-            --pattern "safeselect-${VERSION}-x86_64-unknown-linux-gnu.tar.gz.sha256" \
-            --dir dist/checksums 2>/dev/null || true
-
-          arm_mac_sha="$(awk '{print $1}' "dist/checksums/safeselect-${VERSION}-aarch64-apple-darwin.tar.gz.sha256" 2>/dev/null || echo "")"
-          intel_mac_sha="$(awk '{print $1}' "dist/checksums/safeselect-${VERSION}-x86_64-apple-darwin.tar.gz.sha256" 2>/dev/null || echo "")"
-          arm_linux_sha="$(awk '{print $1}' "dist/checksums/safeselect-${VERSION}-aarch64-unknown-linux-gnu.tar.gz.sha256" 2>/dev/null || echo "")"
-          intel_linux_sha="$(awk '{print $1}' "dist/checksums/safeselect-${VERSION}-x86_64-unknown-linux-gnu.tar.gz.sha256" 2>/dev/null || echo "")"
-
-          printf 'arm-mac-sha=%s\n' "${arm_mac_sha}" >> "${GITHUB_OUTPUT}"
-          printf 'intel-mac-sha=%s\n' "${intel_mac_sha}" >> "${GITHUB_OUTPUT}"
-          printf 'arm-linux-sha=%s\n' "${arm_linux_sha}" >> "${GITHUB_OUTPUT}"
-          printf 'intel-linux-sha=%s\n' "${intel_linux_sha}" >> "${GITHUB_OUTPUT}"
-      - name: Publish Homebrew tap
-        env:
-          RELEASE_TOKEN: ${{ secrets.SAFESELECT_RELEASE_TOKEN }}
-          VERSION: ${{ needs.validate-version.outputs.version }}
-          ARM_SHA: ${{ steps.checksums.outputs.arm-mac-sha }}
-          INTEL_SHA: ${{ steps.checksums.outputs.intel-mac-sha }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ -z "${RELEASE_TOKEN}" ]]; then
-            printf 'Skipping Homebrew tap update: SAFESELECT_RELEASE_TOKEN is not configured.\n' >> "${GITHUB_STEP_SUMMARY}"
-            exit 0
-          fi
-
-          git clone "https://x-access-token:${RELEASE_TOKEN}@github.com/antonillos/homebrew-tap.git" homebrew-tap
-          cd homebrew-tap
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          mkdir -p Formula
-          cat > Formula/safeselect.rb <<FORMULA
-          class Safeselect < Formula
-            desc "Fail-closed read-only database access for AI agents over MCP"
-            homepage "https://github.com/antonillos/safeselect"
-            license "MIT OR Apache-2.0"
-
-            if Hardware::CPU.arm?
-              url "https://github.com/antonillos/safeselect/releases/download/${VERSION}/safeselect-${VERSION}-aarch64-apple-darwin.tar.gz"
-              sha256 "${ARM_SHA}"
-            else
-              url "https://github.com/antonillos/safeselect/releases/download/${VERSION}/safeselect-${VERSION}-x86_64-apple-darwin.tar.gz"
-              sha256 "${INTEL_SHA}"
-            end
-
-            def install
-              bin.install "safeselect"
-            end
-
-            def caveats
-              <<~EOS
-                SafeSelect has been installed. To get started:
-
-                  safeselect --help
-
-                SafeSelect requires Java 17 or newer at runtime. If needed, install it with:
-
-                  brew install openjdk@17
-
-                PostgreSQL requires a JDBC driver. Download it with:
-
-                  safeselect driver download --vendor postgresql
-
-                For MCP (Model Context Protocol) support, install the integration:
-
-                  safeselect agent install opencode --environment <env> --name <name>
-
-                (Run from your project repo — .safeselect/ is auto-detected.)
-              EOS
-            end
-
-            test do
-              assert_match "safeselect #{version}", shell_output("\#{bin}/safeselect --version")
-            end
-          end
-          FORMULA
-
-          if git diff --quiet; then
-            printf 'Homebrew tap already up to date for %s.\n' "${VERSION}" >> "${GITHUB_STEP_SUMMARY}"
-            exit 0
-          fi
-          git add Formula/safeselect.rb
-          git commit -m "safeselect ${VERSION}"
-          git push origin HEAD:main
-          printf 'Updated Homebrew tap for %s.\n' "${VERSION}" >> "${GITHUB_STEP_SUMMARY}"
-      - name: Publish asdf plugin
-        env:
-          RELEASE_TOKEN: ${{ secrets.SAFESELECT_RELEASE_TOKEN }}
-          VERSION: ${{ needs.validate-version.outputs.version }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ -z "${RELEASE_TOKEN}" ]]; then
-            printf 'Skipping asdf plugin update: SAFESELECT_RELEASE_TOKEN is not configured.\n' >> "${GITHUB_STEP_SUMMARY}"
-            exit 0
-          fi
-
-          git clone "https://x-access-token:${RELEASE_TOKEN}@github.com/antonillos/asdf-safeselect.git" asdf-safeselect 2>/dev/null || {
-            printf 'asdf plugin repo not found. Create it first.\n' >> "${GITHUB_STEP_SUMMARY}"
-            exit 0
-          }
-          cp -R packaging/asdf/. asdf-safeselect/
-          cd asdf-safeselect
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          chmod +x bin/download bin/install bin/list-all
-
-          if git diff --quiet; then
-            printf 'asdf plugin already up to date for %s.\n' "${VERSION}" >> "${GITHUB_STEP_SUMMARY}"
-            exit 0
-          fi
-          git add .
-          git commit -m "Sync safeselect asdf plugin for ${VERSION}"
-          git push origin HEAD:main
-          printf 'Updated asdf plugin for %s.\n' "${VERSION}" >> "${GITHUB_STEP_SUMMARY}"
+    if: needs.validate-version.outputs.prerelease != 'true' && needs.validate-version.outputs.draft != 'true'
+    needs: [validate-version, publish-release]
+    uses: ./.github/workflows/publish-package-managers.yml
+    with:
+      version: ${{ needs.validate-version.outputs.version }}
+      target_ref: ${{ needs.validate-version.outputs.target-ref }}
+    secrets: inherit

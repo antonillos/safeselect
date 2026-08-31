@@ -1,26 +1,48 @@
-# SafeSelect MCP
+<p>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="site/public/icon-dark.svg">
+    <img src="site/public/icon.svg" width="32" height="32" align="absmiddle" alt="" aria-hidden="true">
+  </picture>
+  &nbsp;<strong>SafeSelect</strong> <code>MCP</code>
+</p>
 
-## Agents can look. They cannot mutate.
+<h1>Agents can look.<br>They cannot mutate.</h1>
 
-**Secure, fail-closed, read-only database access for AI agents over MCP.**
+**Read-only PostgreSQL & MongoDB access for coding agents.**
+
+Debug with real database context, without exposing write tools—even when your
+existing credentials allow writes. SafeSelect puts local, project-scoped policy
+between your agent and your data.
+
+[**Get started →**](#quick-start) ·
+[Website](https://antonillos.github.io/safeselect/) ·
+[Compare approaches](docs/compare.md) ·
+[DBeaver → Codex guide](docs/guides/dbeaver-codex.md)
 
 [![CI](https://github.com/antonillos/safeselect/actions/workflows/verify.yml/badge.svg)](https://github.com/antonillos/safeselect/actions/workflows/verify.yml)
 [![CRAP](https://img.shields.io/endpoint?url=https%3A%2F%2Fantonillos.github.io%2Fsafeselect%2Fcrap-badge.json)](https://github.com/antonillos/safeselect/actions/workflows/verify.yml)
+[![License](https://img.shields.io/badge/License-MIT-225b42)](LICENSE)
+
+[![Listed on mcpservers.org](https://mcpservers.org/badge.svg)](https://mcpservers.org/servers/antonillos/safeselect)
+[![Indexed on TensorBlock MCP Index](https://mcp-index.tensorblock.co/v1/servers/github-antonillos-safeselect-4c99dff4/badge.svg)](https://www.tensorblock.co/mcp/servers/github-antonillos-safeselect-4c99dff4)
+[![MCP Badge](https://lobehub.com/badge/mcp/antonillos-safeselect?style=flat)](https://lobehub.com/mcp/antonillos-safeselect)
+
+<details>
+<summary>Runtime and distribution</summary>
+
 [![Security](https://img.shields.io/badge/Security-fail--closed-success?logo=trustpilot&logoColor=white)]()
-[![Rust](https://img.shields.io/badge/Rust-1.81%2B-dea584?logo=rust&logoColor=white)]()
+[![Rust](https://img.shields.io/badge/Rust-1.85%2B-dea584?logo=rust&logoColor=white)]()
 [![Java](https://img.shields.io/badge/Java-17%2B-5382a1?logo=openjdk&logoColor=white)]()
 [![MCP](https://img.shields.io/badge/MCP-stdio%20tools-7b68ee)]()
-[![Listed on mcpservers.org](https://mcpservers.org/badge.svg)](https://mcpservers.org/servers/antonillos/safeselect)
 [![Homebrew](https://img.shields.io/badge/Homebrew-tap-FBB040?logo=homebrew&logoColor=white)](https://github.com/antonillos/homebrew-tap)
 [![asdf](https://img.shields.io/badge/asdf-plugin-8A2BE2)](https://github.com/antonillos/asdf-safeselect)
-[![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
 
-SafeSelect gives coding agents a constrained database tool: discover structure,
-inspect production-shaped data, explain queries, diagnose connectivity, and
-recover stale connections without ever receiving write-capable tools or direct
-access to database credentials.
+</details>
 
-Most database MCP servers make it easy to connect an agent to a database. SafeSelect is built for the harder problem: letting an agent inspect production-shaped data without turning the database into an unrestricted tool surface.
+Discover structure, inspect bounded rows, explain queries, and diagnose
+connectivity—without giving the agent write-capable tools or database credentials.
+Start with development data or a sanitized replica, then review the policy and
+effective database permissions before connecting to a more sensitive environment.
 
 > [!NOTE]
 > SafeSelect is a safety boundary for agent access, not a replacement for database permissions. Use least-privilege database users when you can; SafeSelect still constrains overpowered credentials when agents connect through it.
@@ -51,20 +73,18 @@ SafeSelect is intentionally narrower than general-purpose database MCP servers. 
 
 ## What Makes It Different?
 
-| General database MCP servers | SafeSelect |
-|---|---|
-| Often expose configurable tools | Exposes a fixed, read-only tool surface |
-| May support remote HTTP transports | Uses local MCP stdio by default |
-| Usually optimize for broad backend coverage | Optimizes for enforceable policy and agent safety |
-| Often rely on least-privilege database users | Enforces read-only behavior even when credentials are overpowered |
-| Often keep connection setup separate | Imports from DBeaver, Docker Compose, and MongoDB Compass |
-| May log queries for debugging | Hashes query text before audit logging |
-| Treat security failures as recoverable errors | Fails closed and terminates the MCP process |
+The combination matters: PostgreSQL **and** MongoDB inspection, a fixed database
+read surface, local stdio, project policy, connection import and reproducible
+security evidence. Read-only modes and layered controls also exist in other
+projects; they are not exclusive to SafeSelect.
 
-The product promise is simple: **agents can look, but they cannot mutate**. Even if the configured database user is a DBA, the agent still only receives SafeSelect's constrained read-only operations.
+See the [dated comparison](docs/compare.md) for DBHub, MongoDB MCP Server,
+Postgres MCP Pro and SchemaBrain—including when each is a better fit.
 
-> [!TIP]
-> This is useful when teams already have DBeaver, Docker Compose, or MongoDB Compass connections and need to expose them to agents without redesigning database users first.
+**Agents can look, but they cannot mutate through SafeSelect's database tools.**
+This boundary does not cover a shell, another MCP server or direct credentials
+also available to the agent. Use least-privilege database users and review the
+[threat model and limits](docs/security-proof.md).
 
 ## Backend Support
 
@@ -83,44 +103,40 @@ The agent talks to SafeSelect through MCP stdio. SafeSelect enforces policy in R
 
 ## See it in action
 
-One business prompt is enough: the agent discovers the database structure and
-uses SafeSelect's bounded, read-only MCP tools without being told tables,
-columns, or query syntax. The [complete demo gallery](demo/README.md) also
-covers setup and the read-only rejection path.
-
-### Credentials can write. The agent cannot.
+### Complete onboarding: from Homebrew to a protected agent
 
 <p align="center">
-  <img src="docs/recordings/safeselect-proof.gif" alt="SafeSelect rejects a write attempt from an agent" width="900">
+  <img src="docs/recordings/onboarding-full-local.gif" alt="SafeSelect onboarding: Homebrew, DBeaver SSH import, Keychain and OpenCode" width="900">
 </p>
 
-The [hero proof demo](demo/README.md#hero-proof-clip) shows the memorable
-boundary: the database credentials may be over-privileged, but the agent
-can only use SafeSelect's read-only tools.
-
-### OpenCode discovers PostgreSQL
-
-<p align="center">
-  <img src="docs/recordings/safeselect-opencode.gif" alt="OpenCode discovers PostgreSQL through SafeSelect MCP" width="900">
-</p>
-
-### Codex discovers PostgreSQL
-
-<p align="center">
-  <img src="docs/recordings/safeselect-codex.gif" alt="Codex discovers PostgreSQL through SafeSelect MCP" width="900">
-</p>
-
-### MongoDB, with the same safety boundary
-
-<p align="center">
-  <img src="docs/recordings/safeselect-mongodb.gif" alt="OpenCode discovers MongoDB through SafeSelect MCP" width="900">
-</p>
+Install SafeSelect from Homebrew, import an SSH-backed DBeaver connection,
+keep the password in macOS Keychain, install the OpenCode integration, and see
+the agent read a paid order while its `DELETE` attempt is rejected. Focused
+agent and backend clips remain in the [complete demo gallery](demo/README.md).
 
 ## Quick Start
 
+Install SafeSelect with one of the following package managers:
+
+### Homebrew (macOS)
+
 ```bash
 brew install antonillos/tap/safeselect
+```
 
+### asdf (macOS & Linux)
+
+```bash
+asdf plugin add safeselect https://github.com/antonillos/asdf-safeselect.git
+asdf install safeselect latest
+SAFESELECT_VERSION="$(asdf latest safeselect | sed -n '$p')"
+asdf set -u safeselect "${SAFESELECT_VERSION}"
+asdf reshim safeselect "${SAFESELECT_VERSION}"
+```
+
+After installing the binary, configure a project database and its MCP entry:
+
+```bash
 # Import a project database
 safeselect import-dbeaver ~/Downloads/dbeaver-export.zip
 # or:
@@ -137,9 +153,10 @@ safeselect agent install opencode
 safeselect agent status
 ```
 
-SafeSelect uses any available Java 17+ runtime instead of requiring Homebrew's
-`openjdk@17` formula specifically. If Java is missing or too old, install or
-select a Java 17+ runtime before running database commands.
+SafeSelect uses any available Java 17+ runtime rather than requiring a specific
+package-manager formula. If Java is missing or too old, install or select a
+Java 17+ runtime before running database commands. On macOS with Homebrew, you
+can install one with `brew install openjdk@17`.
 
 The generated MCP name defaults to `safeselect-<project>-<environment>`.
 
@@ -161,6 +178,14 @@ absolute repository path, and defaults to user scope. Add `--local` for a
 project-scoped entry where the client supports it. See
 [AI agent integration](docs/agents.md) for exact paths, scopes, and manual
 configuration.
+
+## Guided MCP Context
+
+Clients that support MCP prompts can invoke `read_only_database_debugging` for a
+safe investigation checklist. Clients can also read
+`safeselect://guide/read-only-database-debugging` for the same static workflow
+and boundary notes. Neither capability exposes database data, credentials, or
+write access; use the database tools below for discovery and bounded reads.
 
 ## Agent Workflow
 
@@ -287,16 +312,21 @@ document a project-scoped MCP configuration.
 ## Build From Source
 
 ```bash
-./install.sh
-safeselect --version
+# Installs makevn through Homebrew or asdf only when it is missing.
+./install.sh --install-makevn
+"$HOME/.local/bin/safeselect" --version
 ```
 
-Requirements: Rust 1.81+, Java 17+, Maven 3.8+. `sshpass` is optional for password-based SSH tunnels.
+Requirements: Rust 1.85+ and Java 17+. The bootstrap requires Homebrew or
+asdf; otherwise install `makevn` first. `sshpass` is optional for
+password-based SSH tunnels. Add `~/.local/bin` to your `PATH` before invoking
+`safeselect` without its full path.
 
 ## Documentation
 
 - [Installation guide](docs/install.md)
 - [AI agent integration](docs/agents.md)
+- [On-demand Codex code review](docs/code-review.md)
 - [Security model](docs/security.md)
 - [Security Proof](docs/security-proof.md)
 - [Security test suite](docs/security-test-suite.md)

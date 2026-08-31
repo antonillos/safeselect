@@ -4,72 +4,69 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Release tag to publish, e.g. v0.1.0
+        description: Existing public release tag to publish
+        required: true
+      target_ref:
+        description: Optional source commit (defaults to the release tag)
+        required: false
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      target_ref:
+        required: false
+        type: string
+    secrets:
+      SAFESELECT_RELEASE_TOKEN:
         required: true
 
 permissions:
   contents: read
 
-env:
-  CARGO_TERM_COLOR: always
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+concurrency:
+  group: safeselect-package-managers
+  cancel-in-progress: false
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - name: Checkout workflow tooling
+        uses: actions/checkout@v7
+      - name: Checkout release source
+        uses: actions/checkout@v7
         with:
-          ref: main
-      - name: Validate release
-        id: release
+          ref: ${{ inputs.target_ref || inputs.version }}
+          path: release-source
+      - name: Verify complete public release and read checksums
+        id: checksums
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
         shell: bash
         run: |
-          set -euo pipefail
-          case "${VERSION}" in
-            v*) ;;
-            *) printf 'Error: version must start with v, got %s\n' "${VERSION}" >&2; exit 1 ;;
-          esac
-          gh release view "${VERSION}" --repo "${{ github.repository }}" >/dev/null
-          printf 'version=%s\n' "${VERSION}" >> "${GITHUB_OUTPUT}"
-      - name: Read release asset checksums
-        id: checksums
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.release.outputs.version }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p dist/checksums
-          gh release download "${VERSION}" \
-            --repo "${{ github.repository }}" \
-            --pattern "safeselect-${VERSION}-aarch64-apple-darwin.tar.gz.sha256" \
-            --pattern "safeselect-${VERSION}-x86_64-apple-darwin.tar.gz.sha256" \
-            --dir dist/checksums
-
-          arm_sha="$(awk '{print $1}' "dist/checksums/safeselect-${VERSION}-aarch64-apple-darwin.tar.gz.sha256")"
-          intel_sha="$(awk '{print $1}' "dist/checksums/safeselect-${VERSION}-x86_64-apple-darwin.tar.gz.sha256")"
-
-          printf 'arm-sha=%s\n' "${arm_sha}" >> "${GITHUB_OUTPUT}"
-          printf 'intel-sha=%s\n' "${intel_sha}" >> "${GITHUB_OUTPUT}"
+          python3 tools/ci/release.py check-public --source release-source --version "$VERSION"
+          arm_mac_sha="$(awk '{print $1}' "dist/release/safeselect-${VERSION}-aarch64-apple-darwin.tar.gz.sha256")"
+          intel_mac_sha="$(awk '{print $1}' "dist/release/safeselect-${VERSION}-x86_64-apple-darwin.tar.gz.sha256")"
+          printf 'arm-mac-sha=%s\n' "$arm_mac_sha" >> "$GITHUB_OUTPUT"
+          printf 'intel-mac-sha=%s\n' "$intel_mac_sha" >> "$GITHUB_OUTPUT"
       - name: Publish Homebrew tap
         env:
           RELEASE_TOKEN: ${{ secrets.SAFESELECT_RELEASE_TOKEN }}
-          VERSION: ${{ steps.release.outputs.version }}
-          ARM_SHA: ${{ steps.checksums.outputs.arm-sha }}
-          INTEL_SHA: ${{ steps.checksums.outputs.intel-sha }}
+          VERSION: ${{ inputs.version }}
+          ARM_SHA: ${{ steps.checksums.outputs.arm-mac-sha }}
+          INTEL_SHA: ${{ steps.checksums.outputs.intel-mac-sha }}
         shell: bash
         run: |
           set -euo pipefail
           if [[ -z "${RELEASE_TOKEN}" ]]; then
-            printf 'Skipping Homebrew tap update: SAFESELECT_RELEASE_TOKEN is not configured.\n' >> "${GITHUB_STEP_SUMMARY}"
-            exit 0
+            printf 'Error: SAFESELECT_RELEASE_TOKEN is required to publish Homebrew.\n' >&2
+            exit 1
           fi
 
           git clone "https://x-access-token:${RELEASE_TOKEN}@github.com/antonillos/homebrew-tap.git" homebrew-tap
+          python3 tools/ci/check_package_version.py homebrew-tap/Formula/safeselect.rb "$VERSION"
           cd homebrew-tap
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -120,7 +117,7 @@ jobs:
           end
           FORMULA
 
-          if git diff --quiet; then
+          if [[ -z "$(git status --porcelain)" ]]; then
             printf 'Homebrew tap already up to date for %s.\n' "${VERSION}" >> "${GITHUB_STEP_SUMMARY}"
             exit 0
           fi
@@ -128,3 +125,30 @@ jobs:
           git commit -m "safeselect ${VERSION}"
           git push origin HEAD:main
           printf 'Updated Homebrew tap for %s.\n' "${VERSION}" >> "${GITHUB_STEP_SUMMARY}"
+      - name: Publish asdf plugin
+        env:
+          RELEASE_TOKEN: ${{ secrets.SAFESELECT_RELEASE_TOKEN }}
+          VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${RELEASE_TOKEN}" ]]; then
+            printf 'Error: SAFESELECT_RELEASE_TOKEN is required to publish asdf.\n' >&2
+            exit 1
+          fi
+
+          git clone "https://x-access-token:${RELEASE_TOKEN}@github.com/antonillos/asdf-safeselect.git" asdf-safeselect
+          cp -R release-source/packaging/asdf/. asdf-safeselect/
+          cd asdf-safeselect
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          chmod +x bin/download bin/install bin/list-all
+
+          if [[ -z "$(git status --porcelain)" ]]; then
+            printf 'asdf plugin already up to date for %s.\n' "${VERSION}" >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+          git add .
+          git commit -m "Sync safeselect asdf plugin for ${VERSION}"
+          git push origin HEAD:main
+          printf 'Updated asdf plugin for %s.\n' "${VERSION}" >> "${GITHUB_STEP_SUMMARY}"

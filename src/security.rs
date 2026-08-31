@@ -5,9 +5,39 @@ use crate::backend::{
 };
 use crate::config::{LimitsConfig, SecurityPolicy};
 use crate::error::{Result, SafeselectError};
+use sqlparser::ast::{
+    ArrayElemTypeDef, BinaryOperator, DataType, Expr, ObjectName, ObjectNamePart, Query, SetExpr,
+    Table, TableFactor, Visit, Visitor,
+};
+use sqlparser::dialect::PostgreSqlDialect;
+use sqlparser::keywords::Keyword;
+use sqlparser::parser::Parser;
+use sqlparser::tokenizer::{Token, Tokenizer, Whitespace};
+use std::collections::HashSet;
+use std::ops::ControlFlow;
 
 const MAX_SQL_BYTES: usize = 102_400;
 const FORBIDDEN_MQL_JAVASCRIPT_OPERATORS: &[&str] = &["$where", "$function", "$accumulator"];
+const RELATION_POLICY_BLOCKED_ROUTINES: &[&str] = &[
+    "dblink",
+    "dblink_exec",
+    "dblink_fetch",
+    "dblink_open",
+    "dblink_send_query",
+    "cursor_to_xml",
+    "database_to_xml",
+    "database_to_xml_and_xmlschema",
+    "database_to_xmlschema",
+    "query_to_xml",
+    "query_to_xml_and_xmlschema",
+    "query_to_xmlschema",
+    "schema_to_xml",
+    "schema_to_xml_and_xmlschema",
+    "schema_to_xmlschema",
+    "table_to_xml",
+    "table_to_xml_and_xmlschema",
+    "table_to_xmlschema",
+];
 
 pub struct SecurityEngine {
     policy: SecurityPolicy,
@@ -673,7 +703,15 @@ impl SecurityEngine {
     fn strip_sql_comments(sql: &str) -> String {
         let mut result = String::with_capacity(sql.len());
         let mut chars = sql.chars().peekable();
+        let mut in_single = false;
+        let mut in_double = false;
+        let mut dollar_delimiter: Option<String> = None;
         while let Some(ch) = chars.next() {
+            if consume_dollar_quote(&mut chars, ch, &mut result, &mut dollar_delimiter)
+                || consume_quoted_char(&mut chars, ch, &mut result, &mut in_single, &mut in_double)
+            {
+                continue;
+            }
             match (ch, chars.peek().copied()) {
                 ('-', Some('-')) => Self::skip_line_comment(&mut chars, &mut result),
                 ('/', Some('*')) => Self::skip_block_comment(&mut chars),
@@ -719,7 +757,7 @@ impl SecurityEngine {
             return self.check_explain_read_only(trimmed);
         }
 
-        if upper.starts_with("SELECT") {
+        if upper.starts_with("SELECT") || upper.starts_with("TABLE") {
             self.check_forbidden_tokens(trimmed, false)?;
             return Ok(());
         }
@@ -766,9 +804,8 @@ impl SecurityEngine {
         let trimmed = sql.trim_start();
         let upper = trimmed.to_uppercase();
 
-        if upper.starts_with("SELECT") {
-            self.check_forbidden_tokens(trimmed, false)?;
-            return Ok(());
+        if upper.starts_with("SELECT") || upper.starts_with("TABLE") {
+            return self.check_select_like_body(trimmed);
         }
 
         if upper.starts_with("WITH") {
@@ -778,11 +815,7 @@ impl SecurityEngine {
                 )
             })?;
 
-            if !body.trim_start().to_uppercase().starts_with("SELECT") {
-                return Err(SafeselectError::QueryRejected(
-                    "Read-only mode: WITH queries must end in SELECT".into(),
-                ));
-            }
+            self.validate_with_query_body(body)?;
 
             self.check_forbidden_tokens(trimmed, true)?;
             return Ok(());
@@ -793,12 +826,31 @@ impl SecurityEngine {
         ))
     }
 
+    fn check_select_like_body(&self, sql: &str) -> Result<()> {
+        self.check_forbidden_tokens(sql, false)
+    }
+
+    fn validate_with_query_body(&self, body: &str) -> Result<()> {
+        let upper = body.trim_start().to_uppercase();
+        if !upper.starts_with("SELECT") && !upper.starts_with("TABLE") {
+            return Err(SafeselectError::QueryRejected(
+                "Read-only mode: WITH queries must end in SELECT or TABLE".into(),
+            ));
+        }
+        Ok(())
+    }
+
     fn check_forbidden_tokens(&self, sql: &str, allow_with_keyword: bool) -> Result<()> {
         let compact = sanitize_for_keyword_scan(sql);
         if let Some(keyword) = Self::first_forbidden_keyword(&compact, allow_with_keyword) {
             return Err(SafeselectError::QueryRejected(format!(
                 "Read-only mode: {keyword} not allowed"
             )));
+        }
+        if contains_transaction_alias(sql) {
+            return Err(SafeselectError::QueryRejected(
+                "Read-only mode: transaction control not allowed".into(),
+            ));
         }
         if let Some(function) = Self::first_forbidden_function(&compact) {
             return Err(SafeselectError::QueryRejected(format!(
@@ -816,9 +868,33 @@ impl SecurityEngine {
 
     fn first_forbidden_keyword(compact: &str, allow_with_keyword: bool) -> Option<&'static str> {
         const FORBIDDEN: &[&str] = &[
-            "INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER", "TRUNCATE", "COPY", "PREPARE",
-            "EXECUTE", "CALL", "MERGE", "REPLACE", "GRANT", "REVOKE", "WITH", "DO", "DECLARE",
-            "LOCK", "VACUUM", "REINDEX",
+            "INSERT",
+            "UPDATE",
+            "DELETE",
+            "DROP",
+            "CREATE",
+            "ALTER",
+            "TRUNCATE",
+            "COPY",
+            "PREPARE",
+            "EXECUTE",
+            "CALL",
+            "MERGE",
+            "REPLACE",
+            "GRANT",
+            "REVOKE",
+            "WITH",
+            "DO",
+            "DECLARE",
+            "LOCK",
+            "VACUUM",
+            "REINDEX",
+            "BEGIN",
+            "START",
+            "COMMIT",
+            "ROLLBACK",
+            "SAVEPOINT",
+            "RELEASE",
         ];
         FORBIDDEN.iter().copied().find(|keyword| {
             !(*keyword == "WITH" && (allow_with_keyword || contains_with_ordinality_only(compact)))
@@ -854,31 +930,15 @@ impl SecurityEngine {
     }
 
     fn check_allowed_schemas(&self, sql: &str) -> Result<()> {
-        let sql_lower = sql.to_lowercase();
-        let schema_patterns: Vec<String> = self
-            .policy
-            .allowed_schemas
-            .iter()
-            .map(|s| format!("{}.", s.to_lowercase()))
-            .collect();
+        validate_relation_policy(
+            sql,
+            &self.policy.allowed_schemas,
+            &self.policy.denied_relations,
+            self.policy.require_single_statement,
 
-        let has_allowed = schema_patterns
-            .iter()
-            .any(|p| sql_lower.contains(p.as_str()));
 
-        if has_allowed {
-            return Ok(());
-        }
-
-        let has_unknown = has_schema_reference(&sql_lower, &schema_patterns);
-        if has_unknown {
-            return Err(SafeselectError::QueryRejected(format!(
-                "Query references a schema not in allowed list ({})",
-                self.policy.allowed_schemas.join(", ")
-            )));
-        }
-
-        Ok(())
+        )
+        .map_err(SafeselectError::QueryRejected)
     }
 
     fn check_system_schema_references(&self, sql: &str) -> Result<()> {
@@ -895,16 +955,18 @@ impl SecurityEngine {
     }
 
     fn check_denied_relations(&self, sql: &str) -> Result<()> {
-        let sql_lower = sql.to_lowercase();
-        for relation in &self.policy.denied_relations {
-            let rel_lower = relation.to_lowercase();
-            if sql_lower.contains(&rel_lower) {
-                return Err(SafeselectError::QueryRejected(format!(
-                    "Query references denied relation: {relation}"
-                )));
-            }
+        if !self.policy.allowed_schemas.is_empty() {
+            return Ok(());
         }
-        Ok(())
+        validate_relation_policy(
+            sql,
+            &[],
+            &self.policy.denied_relations,
+            self.policy.require_single_statement,
+        )
+        .map_err(SafeselectError::QueryRejected)
+
+
     }
 
     fn check_document_name(&self, kind: &str, name: &str) -> Result<()> {
@@ -976,120 +1038,696 @@ impl SecurityEngine {
     }
 }
 
+fn consume_dollar_quote(
+    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
+    ch: char,
+    result: &mut String,
+    delimiter: &mut Option<String>,
+) -> bool {
+    if let Some(active) = delimiter {
+        result.push(ch);
+        if result.ends_with(active.as_str()) {
+            *delimiter = None;
+        }
+        return true;
+    }
+    if ch == '$' {
+        if let Some(found) = take_dollar_delimiter(chars) {
+            result.push('$');
+            result.push_str(&found[1..]);
+            *delimiter = Some(found);
+            return true;
+        }
+    }
+    false
+}
+
+fn consume_quoted_char(
+    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
+    ch: char,
+    result: &mut String,
+    in_single: &mut bool,
+    in_double: &mut bool,
+) -> bool {
+    if ch == '\'' && !*in_double {
+        *in_single = !*in_single;
+        result.push(ch);
+        return true;
+    }
+    if consume_escaped_char(chars, ch, result, *in_single) {
+        return true;
+    }
+    if ch == '"' && !*in_single {
+        *in_double = !*in_double;
+        result.push(ch);
+        return true;
+    }
+    if *in_single || *in_double {
+        result.push(ch);
+        return true;
+    }
+    false
+}
+
+fn consume_escaped_char(
+    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
+    ch: char,
+    result: &mut String,
+    in_single: bool,
+) -> bool {
+    if ch != '\\' || !in_single {
+        return false;
+    }
+    result.push(ch);
+    if let Some(escaped) = chars.next() {
+        result.push(escaped);
+    }
+    true
+}
+
+fn take_dollar_delimiter(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Option<String> {
+    let mut lookahead = chars.clone();
+    let mut tag = String::from("$");
+    while let Some(ch) = lookahead.next() {
+        if ch == '$' {
+            tag.push('$');
+            for _ in 0..tag.len() - 1 {
+                chars.next();
+            }
+            return Some(tag);
+        }
+        if !(ch.is_ascii_alphanumeric() || ch == '_') || tag.len() > 64 {
+            return None;
+        }
+        tag.push(ch);
+    }
+    None
+}
+
+
+
+struct RelationPolicyVisitor<'a> {
+    allowed_schemas: &'a [String],
+    denied_relations: &'a [String],
+    cte_scopes: Vec<HashSet<String>>,
+    violation: Option<String>,
+}
+
+impl Visitor for RelationPolicyVisitor<'_> {
+    type Break = ();
+
+    fn pre_visit_query(&mut self, query: &Query) -> ControlFlow<Self::Break> {
+        if let SetExpr::Table(table) = query.body.as_ref() {
+            if let Err(message) = self.validate_table_command(&table_relation_parts(table)) {
+                self.violation = Some(message);
+            }
+        }
+
+
+        let names = query
+            .with
+            .as_ref()
+            .map(|with| {
+                with.cte_tables
+                    .iter()
+                    .map(|cte| canonical_ident(&cte.alias.name))
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.cte_scopes.push(names);
+        ControlFlow::Continue(())
+    }
+
+    fn post_visit_query(&mut self, _query: &Query) -> ControlFlow<Self::Break> {
+        self.cte_scopes.pop();
+        ControlFlow::Continue(())
+    }
+
+    fn pre_visit_table_factor(&mut self, factor: &TableFactor) -> ControlFlow<Self::Break> {
+        if self.violation.is_some() {
+            return ControlFlow::Continue(());
+        }
+        let result = validate_table_factor(self, factor);
+        if let Err(message) = result {
+            self.violation = Some(message);
+        }
+        ControlFlow::Continue(())
+    }
+
+    fn pre_visit_expr(&mut self, expr: &Expr) -> ControlFlow<Self::Break> {
+        if self.violation.is_some() {
+            return ControlFlow::Continue(());
+        }
+        let result = match expr {
+            Expr::Function(function) => self.validate_scalar_function(&function.name),
+            Expr::BinaryOp {
+                op: BinaryOperator::PGCustomBinaryOperator(parts),
+                ..
+            } => self.validate_custom_operator(parts),
+            Expr::Cast { data_type, .. } => self.validate_data_type(data_type),
+            Expr::TypedString(typed) => self.validate_data_type(&typed.data_type),
+            _ => Ok(()),
+        };
+        if let Err(message) = result {
+
+
+            self.violation = Some(message);
+        }
+        ControlFlow::Continue(())
+    }
+}
+
+fn validate_table_factor(
+    visitor: &RelationPolicyVisitor<'_>,
+    factor: &TableFactor,
+) -> std::result::Result<(), String> {
+    match factor {
+        TableFactor::Table { name, args, .. } if args.is_some() => {
+            visitor.validate_callable_name(name)
+        }
+        TableFactor::Table { name, .. } => visitor.validate_relation(name),
+        TableFactor::Function { name, .. } => visitor.validate_callable_name(name),
+        TableFactor::TableFunction { expr, .. } => visitor.validate_table_function(expr),
+        _ => Ok(()),
+    }
+}
+
+impl RelationPolicyVisitor<'_> {
+    fn validate_table_command(&self, parts: &[String]) -> std::result::Result<(), String> {
+        if parts.is_empty() {
+            return Err("TABLE command is missing a relation name".into());
+        }
+        if parts.len() == 1 && self.is_cte(&parts[0]) {
+            return Ok(());
+        }
+        if !self.allowed_schemas.is_empty() {
+            let folded_parts: Vec<String> = parts
+                .iter()
+                .map(|part| part.to_ascii_lowercase())
+                .collect();
+            self.validate_allowed_relation(&folded_parts)?;
+        }
+        self.validate_denied_relation(parts)
+    }
+
+    fn validate_data_type(&self, data_type: &DataType) -> std::result::Result<(), String> {
+        match data_type {
+            DataType::Custom(name, _) | DataType::NamedTable { name, .. } => {
+                let parts = relation_parts(name)?;
+                if !self.allowed_schemas.is_empty() {
+                    self.validate_allowed_relation(&parts)?;
+                }
+                self.validate_denied_relation(&parts)
+            }
+            DataType::Array(ArrayElemTypeDef::AngleBracket(inner))
+            | DataType::Array(ArrayElemTypeDef::SquareBracket(inner, _))
+            | DataType::Array(ArrayElemTypeDef::Parenthesis(inner)) => {
+                self.validate_data_type(inner)
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn validate_custom_operator(&self, parts: &[String]) -> std::result::Result<(), String> {
+        if parts.len() < 2 {
+            return Err("Unqualified custom operators are not allowed by SQL policy".into());
+        }
+        if !self.allowed_schemas.is_empty() && !self.allowed_schemas.iter().any(|s| s == &parts[0])
+        {
+            return Err(format!(
+                "Query references schema '{}' outside allowed list ({})",
+                parts[0],
+                self.allowed_schemas.join(", ")
+            ));
+        }
+        self.validate_denied_relation(parts)
+    }
+
+    fn validate_scalar_function(&self, name: &ObjectName) -> std::result::Result<(), String> {
+        let parts = relation_parts(name)?;
+        self.reject_sql_executing_routine(&parts)?;
+        if parts.len() == 1 {
+            if !self.allowed_schemas.is_empty() {
+                return Err(format!(
+                    "Unqualified function '{}' is not allowed with a schema policy",
+                    parts[0]
+                ));
+            }
+            return self.validate_denied_relation(&parts);
+        }
+        self.validate_relation(name)
+    }
+
+
+
+    fn validate_relation(&self, name: &ObjectName) -> std::result::Result<(), String> {
+        let parts = relation_parts(name)?;
+        if parts.len() == 1 && self.is_cte(&parts[0]) {
+            return Ok(());
+        }
+        if !self.allowed_schemas.is_empty() {
+            self.validate_allowed_relation(&parts)?;
+        }
+        self.validate_denied_relation(&parts)
+    }
+
+    fn is_cte(&self, name: &str) -> bool {
+        self.cte_scopes
+            .iter()
+            .rev()
+            .any(|scope| scope.contains(name))
+    }
+
+    fn validate_table_function(&self, expr: &Expr) -> std::result::Result<(), String> {
+        match expr {
+            Expr::Function(function) => self.validate_callable_name(&function.name),
+            _ => Err("SQL policy cannot validate this table-function expression".into()),
+        }
+    }
+
+    fn validate_callable_name(&self, name: &ObjectName) -> std::result::Result<(), String> {
+        let parts = relation_parts(name)?;
+        self.reject_sql_executing_routine(&parts)?;
+        if parts.len() == 1 {
+            return self.validate_unqualified_callable(&parts[0]);
+        }
+        self.validate_allowed_relation(&parts).or_else(|error| {
+            if self.allowed_schemas.is_empty() {
+                self.validate_denied_relation(&parts)
+            } else {
+                Err(error)
+            }
+        })
+    }
+
+    fn validate_unqualified_callable(&self, name: &str) -> std::result::Result<(), String> {
+        if self
+            .denied_relations
+            .iter()
+            .any(|denied| denied.eq_ignore_ascii_case(name))
+        {
+            return Err(format!("Query references denied relation: {name}"));
+        }
+        if !self.allowed_schemas.is_empty() && !matches!(name, "unnest" | "generate_series") {
+            return Err(format!(
+                "Unqualified function '{}' is not allowed with a schema policy",
+                name
+            ));
+        }
+        Ok(())
+    }
+
+    fn reject_sql_executing_routine(&self, parts: &[String]) -> std::result::Result<(), String> {
+        let policy_active = !self.allowed_schemas.is_empty() || !self.denied_relations.is_empty();
+        if policy_active
+            && parts.last().is_some_and(|part| {
+                RELATION_POLICY_BLOCKED_ROUTINES
+                    .iter()
+                    .any(|routine| routine.eq_ignore_ascii_case(part))
+            })
+        {
+            return Err("SQL policy rejects routines that execute SQL text".into());
+        }
+        Ok(())
+    }
+
+
+
+    fn validate_allowed_relation(&self, parts: &[String]) -> std::result::Result<(), String> {
+        validate_allowed_relation_parts(parts, self.allowed_schemas)
+    }
+
+    fn validate_denied_relation(&self, parts: &[String]) -> std::result::Result<(), String> {
+        let qualified = parts.join(".").to_ascii_lowercase();
+        let table = parts
+            .last()
+            .map(|part| part.to_ascii_lowercase())
+            .unwrap_or_default();
+        if let Some(denied) = self.denied_relations.iter().find(|denied| {
+            let denied = denied.to_ascii_lowercase();
+            denied == qualified || (!denied.contains('.') && denied == table)
+        }) {
+            return Err(format!("Query references denied relation: {denied}"));
+        }
+        Ok(())
+    }
+}
+
+fn validate_allowed_relation_parts(
+    parts: &[String],
+    allowed_schemas: &[String],
+) -> std::result::Result<(), String> {
+    if parts.len() != 2 {
+        return Err(format!(
+            "Schema allowlist requires every relation to use schema.table ({})",
+            allowed_schemas.join(", ")
+        ));
+    }
+    if allowed_schemas.iter().any(|schema| {
+        (parts[0].to_ascii_lowercase() == parts[0] && schema.eq_ignore_ascii_case(&parts[0]))
+            || schema == &parts[0]
+    }) {
+        Ok(())
+    } else {
+        Err(format!(
+            "Query references schema '{}' outside allowed list ({})",
+            parts[0],
+            allowed_schemas.join(", ")
+        ))
+    }
+}
+
+fn table_relation_parts(table: &Table) -> Vec<String> {
+    [table.schema_name.as_ref(), table.table_name.as_ref()]
+        .into_iter()
+        .flatten()
+        .cloned()
+        .collect()
+}
+
+fn table_command_relation_parts(sql: &str) -> std::result::Result<Vec<Vec<String>>, String> {
+    let tokens = Tokenizer::new(&PostgreSqlDialect {}, sql)
+        .tokenize()
+        .map_err(|error| format!("SQL policy tokenizing failed: {error}"))?;
+    let significant: Vec<&Token> = tokens
+        .iter()
+        .filter(|token| {
+            !matches!(
+                token,
+                Token::Whitespace(
+                    Whitespace::Space
+                        | Whitespace::Newline
+                        | Whitespace::Tab
+                        | Whitespace::SingleLineComment { .. }
+                        | Whitespace::MultiLineComment(_)
+                )
+            )
+        })
+        .collect();
+    let mut relations = Vec::new();
+    for (index, token) in significant.iter().enumerate() {
+        let Token::Word(word) = token else { continue };
+        if word.keyword != Keyword::TABLE
+            || !is_table_command_position(significant.get(index.wrapping_sub(1)).copied())
+        {
+            continue;
+        }
+        let relation_index = if matches!(
+            significant.get(index + 1),
+            Some(Token::Word(word)) if word.keyword == Keyword::ONLY
+        ) {
+            index + 2
+        } else {
+            index + 1
+        };
+        let Some(Token::Word(first)) = significant.get(relation_index).copied() else {
+            continue;
+        };
+        let parts = if matches!(significant.get(relation_index + 1), Some(Token::Period)) {
+            let Some(Token::Word(second)) = significant.get(relation_index + 2).copied() else {
+                continue;
+            };
+            vec![canonical_token_word(first), canonical_token_word(second)]
+        } else {
+            vec![canonical_token_word(first)]
+        };
+        relations.push(parts);
+    }
+    Ok(relations)
+}
+
+fn is_table_command_position(previous: Option<&Token>) -> bool {
+    match previous {
+        None
+        | Some(Token::LParen | Token::RParen | Token::Comma | Token::SemiColon) => true,
+        Some(Token::Word(word)) => matches!(
+            word.keyword,
+            Keyword::UNION | Keyword::INTERSECT | Keyword::EXCEPT
+        ),
+        _ => false,
+    }
+}
+
+fn canonical_token_word(word: &sqlparser::tokenizer::Word) -> String {
+    if word.quote_style.is_some() {
+        word.value.clone()
+    } else {
+        word.value.to_ascii_lowercase()
+    }
+}
+
+
+
+fn validate_relation_policy(
+    sql: &str,
+    allowed_schemas: &[String],
+    denied_relations: &[String],
+    require_single_statement: bool,
+) -> std::result::Result<(), String> {
+    let statements = Parser::parse_sql(&PostgreSqlDialect {}, sql)
+        .map_err(|error| format!("SQL policy parsing failed: {error}"))?;
+    if require_single_statement && statements.len() != 1 {
+
+
+        return Err("SQL policy requires exactly one parsed statement".into());
+    }
+    let mut shadowing = CteVisibilityVisitor {
+        scopes: Vec::new(),
+        allowed_schemas,
+        denied_relations,
+
+
+        violation: None,
+    };
+    let _ = statements.visit(&mut shadowing);
+    if let Some(violation) = shadowing.violation {
+        return Err(violation);
+    }
+    // TABLE's AST node loses identifier quote metadata. Validate qualified
+    // TABLE schemas directly from tokens so nested query traversal cannot
+    // associate lexical names with the wrong AST node.
+    let mut visitor = RelationPolicyVisitor {
+        allowed_schemas,
+        denied_relations,
+        cte_scopes: Vec::new(),
+        violation: None,
+    };
+    validate_table_command_schemas(sql, allowed_schemas)?;
+    let _ = statements.visit(&mut visitor);
+    visitor.violation.map_or(Ok(()), Err)
+}
+
+fn validate_table_command_schemas(
+    sql: &str,
+    allowed_schemas: &[String],
+) -> std::result::Result<(), String> {
+    for parts in table_command_relation_parts(sql)? {
+        if parts.len() == 2 && !allowed_schemas.is_empty() {
+            validate_allowed_relation_parts(&parts, allowed_schemas)?;
+        }
+    }
+    Ok(())
+}
+
+struct CteVisibilityVisitor<'a> {
+    scopes: Vec<QueryScopeFrame>,
+    allowed_schemas: &'a [String],
+    denied_relations: &'a [String],
+    violation: Option<String>,
+}
+
+impl Visitor for CteVisibilityVisitor<'_> {
+
+
+    type Break = ();
+
+    fn pre_visit_query(&mut self, query: &Query) -> ControlFlow<Self::Break> {
+        let inherited = self
+            .scopes
+            .last()
+            .and_then(|parent| {
+                let pointer = query as *const Query;
+                parent
+                    .cte_scopes
+                    .iter()
+                    .find(|(cte, _)| *cte == pointer)
+                    .map(|(_, scope)| scope.clone())
+                    .or_else(|| Some(parent.body_scope.clone()))
+            })
+            .unwrap_or_default();
+        let aliases: Vec<String> = query
+            .with
+            .as_ref()
+            .map(|with| {
+                with.cte_tables
+                    .iter()
+                    .map(|cte| canonical_ident(&cte.alias.name))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if query.with.as_ref().is_some_and(|with| !with.recursive) {
+            for (index, cte) in query
+                .with
+                .as_ref()
+                .into_iter()
+                .flat_map(|with| with.cte_tables.iter())
+                .enumerate()
+            {
+                let targets: HashSet<String> = aliases[index..]
+                    .iter()
+                    .filter(|alias| {
+                        !inherited.contains(*alias) && self.relation_violates_policy(alias)
+                    })
+
+
+                    .cloned()
+                    .collect();
+                let mut references = UnqualifiedRelationVisitor {
+                    targets: &targets,
+                    local_scopes: Vec::new(),
+                    found: None,
+                };
+                let _ = cte.query.visit(&mut references);
+                if let Some(target) = references.found {
+                    self.violation = Some(format!(
+                        "Non-recursive CTE '{}' is referenced before it is visible",
+                        target
+                    ));
+                    return ControlFlow::Break(());
+                }
+            }
+        }
+        let body_scope: HashSet<String> = inherited
+            .iter()
+            .cloned()
+            .chain(aliases.iter().cloned())
+            .collect();
+        let cte_scopes = query
+            .with
+            .as_ref()
+            .map(|with| {
+                with.cte_tables
+                    .iter()
+                    .enumerate()
+                    .map(|(index, cte)| {
+                        let visible = if with.recursive {
+                            aliases.clone()
+                        } else {
+                            aliases[..index].to_vec()
+                        };
+                        let scope = inherited.iter().cloned().chain(visible).collect();
+                        (cte.query.as_ref() as *const Query, scope)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.scopes.push(QueryScopeFrame {
+            body_scope,
+            cte_scopes,
+        });
+        ControlFlow::Continue(())
+    }
+
+    fn post_visit_query(&mut self, _query: &Query) -> ControlFlow<Self::Break> {
+        self.scopes.pop();
+        ControlFlow::Continue(())
+    }
+}
+
+impl CteVisibilityVisitor<'_> {
+    fn relation_violates_policy(&self, relation: &str) -> bool {
+        !self.allowed_schemas.is_empty()
+            || self
+                .denied_relations
+                .iter()
+                .any(|denied| !denied.contains('.') && denied.eq_ignore_ascii_case(relation))
+    }
+}
+
+
+
+struct QueryScopeFrame {
+    body_scope: HashSet<String>,
+    cte_scopes: Vec<(*const Query, HashSet<String>)>,
+}
+
+struct UnqualifiedRelationVisitor<'a> {
+    targets: &'a HashSet<String>,
+    local_scopes: Vec<HashSet<String>>,
+    found: Option<String>,
+}
+
+impl Visitor for UnqualifiedRelationVisitor<'_> {
+    type Break = ();
+
+    fn pre_visit_query(&mut self, query: &Query) -> ControlFlow<Self::Break> {
+        let aliases = query
+            .with
+            .as_ref()
+            .map(|with| {
+                with.cte_tables
+                    .iter()
+                    .map(|cte| canonical_ident(&cte.alias.name))
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.local_scopes.push(aliases);
+        ControlFlow::Continue(())
+    }
+
+    fn post_visit_query(&mut self, _query: &Query) -> ControlFlow<Self::Break> {
+        self.local_scopes.pop();
+        ControlFlow::Continue(())
+    }
+
+    fn pre_visit_table_factor(&mut self, factor: &TableFactor) -> ControlFlow<Self::Break> {
+        if let TableFactor::Table {
+            name, args: None, ..
+        } = factor
+        {
+            if let Ok(parts) = relation_parts(name) {
+                if parts.len() == 1
+                    && self.targets.contains(&parts[0])
+                    && !self
+                        .local_scopes
+                        .iter()
+                        .rev()
+                        .any(|scope| scope.contains(&parts[0]))
+                {
+                    self.found = Some(parts[0].clone());
+                }
+            }
+        }
+        ControlFlow::Continue(())
+    }
+}
+
+fn relation_parts(name: &ObjectName) -> std::result::Result<Vec<String>, String> {
+    name.0
+        .iter()
+        .map(|part| match part {
+            ObjectNamePart::Identifier(ident) => Ok(canonical_ident(ident)),
+            ObjectNamePart::Function(_) => {
+                Err("Computed relation names are not supported by SQL policy".into())
+            }
+        })
+        .collect()
+}
+
+fn canonical_ident(ident: &sqlparser::ast::Ident) -> String {
+    if ident.quote_style.is_some() {
+        ident.value.clone()
+    } else {
+        ident.value.to_ascii_lowercase()
+    }
+}
+
 fn is_system_schema(schema: &str) -> bool {
     let lower = schema.to_ascii_lowercase();
     lower == "pg_catalog"
         || lower == "information_schema"
         || lower == "pg_toast"
         || lower.starts_with("pg_")
-}
-
-fn has_schema_reference(sql_lower: &str, allowed_patterns: &[String]) -> bool {
-    let bytes = sql_lower.as_bytes();
-    for i in 0..bytes.len().saturating_sub(2) {
-        if let Some(schema) = schema_at(sql_lower, i) {
-            if is_unknown_schema(schema, allowed_patterns) {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-fn schema_at(sql_lower: &str, start: usize) -> Option<&str> {
-    let bytes = sql_lower.as_bytes();
-    if bytes.get(start).is_none_or(|b| !b.is_ascii_alphabetic())
-        || bytes.get(start + 1) != Some(&b'.')
-    {
-        return None;
-    }
-    let mut end = start + 2;
-    while end < bytes.len() && bytes[end].is_ascii_alphabetic() {
-        end += 1;
-    }
-    Some(&sql_lower[start..end])
-}
-
-fn is_unknown_schema(schema: &str, allowed_patterns: &[String]) -> bool {
-    let name = schema.trim_end_matches('.');
-    !name.is_empty()
-        && name
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
-        && !is_sql_keyword(name)
-        && !allowed_patterns
-            .iter()
-            .any(|pattern| pattern.starts_with(name))
-}
-
-fn is_sql_keyword(word: &str) -> bool {
-    matches!(
-        word,
-        "select"
-            | "from"
-            | "where"
-            | "and"
-            | "or"
-            | "not"
-            | "in"
-            | "on"
-            | "as"
-            | "join"
-            | "left"
-            | "right"
-            | "inner"
-            | "outer"
-            | "cross"
-            | "full"
-            | "order"
-            | "group"
-            | "by"
-            | "having"
-            | "limit"
-            | "offset"
-            | "insert"
-            | "update"
-            | "delete"
-            | "into"
-            | "values"
-            | "set"
-            | "create"
-            | "alter"
-            | "drop"
-            | "table"
-            | "index"
-            | "view"
-            | "distinct"
-            | "count"
-            | "sum"
-            | "avg"
-            | "min"
-            | "max"
-            | "exists"
-            | "true"
-            | "false"
-            | "null"
-            | "is"
-            | "like"
-            | "between"
-            | "union"
-            | "all"
-            | "any"
-            | "some"
-            | "case"
-            | "when"
-            | "then"
-            | "else"
-            | "end"
-            | "cast"
-            | "coalesce"
-            | "nullif"
-            | "begin"
-            | "commit"
-            | "rollback"
-            | "grant"
-            | "revoke"
-    )
 }
 
 fn strip_trailing_semicolons(sql: &str) -> &str {
@@ -1247,6 +1885,14 @@ fn sanitize_for_keyword_scan(sql: &str) -> String {
             continue;
         }
 
+        if c == '$' {
+            if let Some(next) = skip_dollar_quoted_literal(&chars, i) {
+                out.push(' ');
+                i = next;
+                continue;
+            }
+        }
+
         if c == '\'' {
             in_single = true;
             out.push(' ');
@@ -1273,8 +1919,51 @@ fn sanitize_for_keyword_scan(sql: &str) -> String {
     out
 }
 
+fn skip_dollar_quoted_literal(chars: &[char], start: usize) -> Option<usize> {
+    let delimiter_end = dollar_delimiter_end(chars, start)?;
+    let delimiter = &chars[start..delimiter_end];
+    let mut end = delimiter_end;
+    while end + delimiter.len() <= chars.len() {
+        if &chars[end..end + delimiter.len()] == delimiter {
+            return Some(end + delimiter.len());
+        }
+        end += 1;
+    }
+    None
+}
+
+fn dollar_delimiter_end(chars: &[char], start: usize) -> Option<usize> {
+    if chars.get(start) != Some(&'$') {
+        return None;
+    }
+    let mut end = start + 1;
+    while end < chars.len()
+        && (chars[end].is_ascii_alphanumeric() || chars[end] == '_')
+        && end - start <= 64
+    {
+        end += 1;
+    }
+    (chars.get(end) == Some(&'$')).then_some(end + 1)
+}
+
 fn contains_keyword(sql: &str, keyword: &str) -> bool {
     sql.split_whitespace().any(|token| token == keyword)
+}
+
+fn contains_transaction_alias(sql: &str) -> bool {
+    let normalized = SecurityEngine::strip_sql_comments(sql).replace(';', " ; ");
+    let mut tokens = normalized.split_whitespace();
+    while let Some(token) = tokens.next() {
+        if token == ";"
+            && matches!(
+                tokens.next().map(str::to_ascii_uppercase).as_deref(),
+                Some("END" | "ABORT")
+            )
+        {
+            return true;
+        }
+    }
+    false
 }
 
 fn contains_with_ordinality_only(sql: &str) -> bool {
@@ -1609,6 +2298,28 @@ mod tests {
     }
 
     #[test]
+    fn rejects_transaction_control_in_multi_statement_selects() {
+        let engine = SecurityEngine::new(
+            SecurityPolicy {
+                require_single_statement: false,
+                ..SecurityPolicy::default()
+            },
+            LimitsConfig::default(),
+        );
+        for sql in [
+            "SELECT 1; COMMIT",
+            "SELECT 1; BEGIN READ WRITE",
+            "SELECT 1; ROLLBACK",
+            "SELECT 1; SAVEPOINT nested",
+            "SELECT 1; END",
+            "SELECT 1; ABORT",
+            "SELECT 1;\n\tEND",
+        ] {
+            assert!(engine.check_read_only(sql).is_err(), "{sql}");
+        }
+    }
+
+    #[test]
     fn test_read_only_select() {
         let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
         let sql = "SELECT * FROM users";
@@ -1853,6 +2564,352 @@ mod tests {
     }
 
     #[test]
+    fn schema_allowlist_rejects_unqualified_and_mixed_relations() {
+        let policy = SecurityPolicy {
+            allowed_schemas: vec!["public".into()],
+            ..SecurityPolicy::default()
+        };
+        let engine = SecurityEngine::new(policy, LimitsConfig::default());
+
+        assert!(engine.validate("SELECT * FROM users").is_err());
+        assert!(engine.validate("SELECT * FROM private.secrets").is_err());
+        assert!(engine
+            .validate("SELECT * FROM public.users JOIN private.secrets ON true")
+            .is_err());
+        assert!(engine
+            .validate("SELECT * FROM public.users WHERE id IN (SELECT id FROM private.secrets)")
+            .is_err());
+        assert!(engine.validate("SELECT * FROM private.expose()").is_err());
+        assert!(engine
+            .validate("SELECT public.query_to_xml('SELECT * FROM private.secrets', true, false, '')")
+            .is_err());
+        assert!(engine
+            .validate("SELECT public.table_to_xml('private.secrets'::regclass, true, false, '')")
+            .is_err());
+        assert!(engine
+            .validate("SELECT * FROM public.dblink('dbname=test', 'SELECT * FROM private.secrets') AS t(id int)")
+            .is_err());
+        assert!(engine
+            .validate("SELECT public.dblink_open('conn', 'SELECT * FROM private.secrets')")
+            .is_err());
+        assert!(engine
+            .validate("WITH expose AS (SELECT 1) SELECT * FROM expose()")
+            .is_err());
+        assert!(engine
+            .validate("SELECT * FROM ROWS FROM (private.expose()) AS exposed")
+            .is_err());
+        assert!(engine
+            .validate("SELECT * FROM TABLE(private.expose()) AS exposed")
+            .is_err());
+        assert!(engine
+            .validate("SELECT private.expose(id) FROM public.users")
+            .is_err());
+        assert!(engine
+            .validate("SELECT expose(id) FROM public.users")
+            .is_err());
+        assert!(engine
+            .validate("SELECT count(*) FROM public.users")
+            .is_err());
+        assert!(engine
+            .validate("SELECT 1 OPERATOR(private.custom) 1")
+            .is_err());
+        assert!(engine
+            .validate("SELECT 1 OPERATOR(public.custom) 1")
+            .is_ok());
+        assert!(engine
+            .validate("WITH leaked AS (TABLE private.secrets) SELECT * FROM leaked")
+            .is_err());
+        assert!(engine
+            .validate("WITH visible AS (TABLE public.users) SELECT * FROM visible")
+            .is_ok());
+        assert!(engine
+            .validate("WITH visible AS (SELECT 1) TABLE public.users")
+            .is_ok());
+        assert!(engine
+            .validate("WITH visible AS (SELECT 1) TABLE PUBLIC.users")
+            .is_ok());
+        assert!(engine
+            .validate("WITH visible AS (SELECT 1) TABLE Public.users")
+            .is_ok());
+        assert!(engine
+            .validate("WITH visible AS (SELECT 1) TABLE \"PUBLIC\".users")
+            .is_err());
+        assert!(engine
+            .validate("WITH visible AS (TABLE \"PUBLIC\".users) TABLE public.users")
+            .is_err());
+        assert!(engine
+            .validate("SELECT CAST('x' AS private.leaky_type) FROM public.users")
+            .is_err());
+
+
+    }
+
+    #[test]
+    fn preserves_table_command_identifier_quoting() {
+        assert_eq!(
+            table_command_relation_parts(
+                "WITH a AS (TABLE PUBLIC.users), b AS (TABLE \"PUBLIC\".users), c AS (TABLE ONLY PUBLIC.users), d AS (TABLE ONLY \"PUBLIC\".users) SELECT * FROM a"
+            )
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>(),
+            vec![
+                vec!["public".to_string(), "users".to_string()],
+                vec!["PUBLIC".to_string(), "users".to_string()],
+                vec!["public".to_string(), "users".to_string()],
+                vec!["PUBLIC".to_string(), "users".to_string()]
+            ]
+        );
+    }
+
+    #[test]
+    fn schema_allowlist_allows_ctes_and_derived_tables_over_allowed_relations() {
+        let policy = SecurityPolicy {
+            allowed_schemas: vec!["public".into()],
+            ..SecurityPolicy::default()
+        };
+        let engine = SecurityEngine::new(policy, LimitsConfig::default());
+
+        assert!(engine
+            .validate("WITH active AS (SELECT * FROM public.users) SELECT * FROM active")
+            .is_ok());
+        assert!(engine
+            .validate("SELECT * FROM (SELECT * FROM public.users) AS active")
+            .is_ok());
+        assert!(engine
+            .validate("SELECT * FROM public.users UNION SELECT * FROM public.archived_users")
+            .is_ok());
+    }
+
+    #[test]
+    fn schema_allowlist_keeps_cte_names_scoped_to_their_query() {
+        let policy = SecurityPolicy {
+            allowed_schemas: vec!["public".into()],
+            ..SecurityPolicy::default()
+        };
+        let engine = SecurityEngine::new(policy, LimitsConfig::default());
+
+        assert!(engine
+            .validate(
+                "SELECT * FROM users WHERE EXISTS (WITH users AS (SELECT * FROM public.users) SELECT * FROM users)"
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn schema_allowlist_rejects_non_recursive_cte_shadowing() {
+        let policy = SecurityPolicy {
+            allowed_schemas: vec!["public".into()],
+            denied_relations: vec!["users".into()],
+            ..SecurityPolicy::default()
+        };
+        let engine = SecurityEngine::new(policy, LimitsConfig::default());
+        assert!(engine
+            .validate("WITH users AS (SELECT * FROM users) SELECT * FROM users")
+            .is_err());
+    }
+
+    #[test]
+    fn cte_shadowing_check_ignores_unrestricted_relations() {
+        let policy = SecurityPolicy {
+            denied_relations: vec!["public.secrets".into()],
+            ..SecurityPolicy::default()
+        };
+        let engine = SecurityEngine::new(policy, LimitsConfig::default());
+        assert!(engine
+            .validate("WITH users AS (SELECT * FROM users) SELECT * FROM users")
+            .is_ok());
+    }
+
+    #[test]
+    fn denylist_also_rejects_sql_executing_routines() {
+        let policy = SecurityPolicy {
+            denied_relations: vec!["private.secrets".into()],
+            ..SecurityPolicy::default()
+        };
+        let engine = SecurityEngine::new(policy, LimitsConfig::default());
+        assert!(engine
+            .validate("SELECT query_to_xml('SELECT * FROM private.secrets', true, false, '')")
+            .is_err());
+    }
+
+    #[test]
+
+
+    fn schema_allowlist_rejects_forward_cte_references() {
+        let policy = SecurityPolicy {
+            allowed_schemas: vec!["public".into()],
+            denied_relations: vec!["later".into()],
+            ..SecurityPolicy::default()
+        };
+        let engine = SecurityEngine::new(policy, LimitsConfig::default());
+        assert!(engine
+            .validate(
+                "WITH first AS (SELECT * FROM later), later AS (SELECT * FROM public.allowed) SELECT * FROM first"
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn schema_allowlist_allows_nested_cte_shadowing() {
+        let policy = SecurityPolicy {
+            allowed_schemas: vec!["public".into()],
+            ..SecurityPolicy::default()
+        };
+        let engine = SecurityEngine::new(policy, LimitsConfig::default());
+        assert!(engine
+            .validate(
+                "WITH users AS (WITH users AS (SELECT * FROM public.users) SELECT * FROM users) SELECT * FROM users"
+            )
+            .is_ok());
+        assert!(engine
+            .validate(
+                "WITH x AS (SELECT 1) SELECT * FROM (WITH x AS (SELECT * FROM x) SELECT * FROM x) AS nested"
+            )
+            .is_ok());
+    }
+
+    #[test]
+    fn relation_policy_respects_multi_statement_toggle() {
+        let policy = SecurityPolicy {
+            allowed_schemas: vec!["public".into()],
+            require_single_statement: false,
+            ..SecurityPolicy::default()
+        };
+        let engine = SecurityEngine::new(policy, LimitsConfig::default());
+        assert!(engine
+            .validate("SELECT * FROM public.first; SELECT * FROM public.second")
+            .is_ok());
+    }
+
+    #[test]
+    fn covers_sql_policy_ratchet_branches() {
+        let policy = SecurityPolicy {
+            allowed_schemas: vec!["public".into()],
+            denied_relations: vec!["private.secrets".into()],
+            require_single_statement: false,
+            ..SecurityPolicy::default()
+        };
+        let engine = SecurityEngine::new(policy, LimitsConfig::default());
+        for sql in [
+            "TABLE public.users",
+            "WITH x AS (SELECT * FROM public.users) TABLE x",
+            "SELECT DATE '2025-01-01'",
+            "SELECT * FROM unnest(ARRAY[1, 2]) WITH ORDINALITY AS t(value, ord)",
+            "SELECT * FROM public.expose()",
+            "SELECT * FROM generate_series(1, 2)",
+            "SELECT * FROM public.users",
+            "WITH first AS (SELECT * FROM later), later AS (SELECT * FROM public.allowed) SELECT * FROM first",
+            "SELECT 1 OPERATOR(public.+) 1",
+        ] {
+            let _ = engine.validate(sql);
+        }
+        assert!(engine.validate("SELECT * FROM private.expose()").is_err());
+        assert!(engine.validate("SELECT 'x'::private.leaky_type").is_err());
+    }
+
+    #[test]
+    fn covers_callable_and_wrapped_type_validation() {
+        let allowed = vec!["public".to_string()];
+        let denied = vec!["blocked".to_string()];
+        let visitor = RelationPolicyVisitor {
+            allowed_schemas: &allowed,
+            denied_relations: &denied,
+            cte_scopes: Vec::new(),
+            violation: None,
+        };
+        let unnest = ObjectName(vec![ObjectNamePart::Identifier(
+            sqlparser::ast::Ident::new("unnest"),
+        )]);
+        assert!(visitor.validate_callable_name(&unnest).is_ok());
+        let blocked = ObjectName(vec![ObjectNamePart::Identifier(
+            sqlparser::ast::Ident::new("blocked"),
+        )]);
+        assert!(visitor.validate_callable_name(&blocked).is_err());
+        let private_type = DataType::Custom(
+            ObjectName(vec![
+                ObjectNamePart::Identifier(sqlparser::ast::Ident::new("private")),
+                ObjectNamePart::Identifier(sqlparser::ast::Ident::new("secret")),
+            ]),
+            Vec::new(),
+        );
+        assert!(visitor
+            .validate_data_type(&DataType::Array(ArrayElemTypeDef::SquareBracket(
+                Box::new(private_type),
+                None,
+            )))
+            .is_err());
+        assert!(visitor.validate_data_type(&DataType::Boolean).is_ok());
+        assert!(visitor
+            .validate_data_type(&DataType::Custom(
+                ObjectName(vec![
+                    ObjectNamePart::Identifier(sqlparser::ast::Ident::new("public")),
+                    ObjectNamePart::Identifier(sqlparser::ast::Ident::new("safe")),
+                ]),
+                Vec::new(),
+            ))
+            .is_ok());
+    }
+
+    #[test]
+    fn preserves_dollar_quoted_literals_and_operator_denylists() {
+        let engine = SecurityEngine::new(
+            SecurityPolicy {
+                allowed_schemas: vec!["public".into()],
+                denied_relations: vec!["public.custom".into()],
+                require_single_statement: false,
+                ..SecurityPolicy::default()
+            },
+            LimitsConfig::default(),
+        );
+        assert!(engine.check_read_only("SELECT $$--$$; COMMIT").is_err());
+        assert!(engine
+            .validate("SELECT 1 OPERATOR(public.custom) 1")
+            .is_err());
+        assert!(engine.validate("SELECT * FROM \"PUBLIC\".secrets").is_err());
+        assert_eq!(
+            SecurityEngine::strip_sql_comments("SELECT $$XDELETE$$"),
+            "SELECT $$XDELETE$$"
+        );
+        assert_eq!(
+            SecurityEngine::strip_sql_comments("SELECT $tag$XDELETE$tag$"),
+            "SELECT $tag$XDELETE$tag$"
+        );
+        assert!(
+            SecurityEngine::strip_sql_comments(r#"SELECT E'abc\'--'; COMMIT"#).contains("COMMIT")
+        );
+        assert!(
+            SecurityEngine::strip_sql_comments("SELECT $tag$/*$tag$; COMMIT").contains("COMMIT")
+        );
+        assert!(SecurityEngine::strip_sql_comments("SELECT $bad; COMMIT").contains("COMMIT"));
+        assert_eq!(
+            SecurityEngine::strip_sql_comments("SELECT 'literal'"),
+            "SELECT 'literal'"
+        );
+        assert_eq!(
+            SecurityEngine::strip_sql_comments("SELECT \"identifier\""),
+            "SELECT \"identifier\""
+        );
+    }
+
+    #[test]
+    fn scans_dollar_quote_delimiters_without_consuming_content() {
+        let tagged: Vec<char> = "$tag$XDELETE$tag$".chars().collect();
+        let untagged: Vec<char> = "$$XDELETE$$".chars().collect();
+        let invalid: Vec<char> = "$bad-tag$X$bad-tag$".chars().collect();
+
+        assert_eq!(dollar_delimiter_end(&tagged, 0), Some(5));
+        assert_eq!(dollar_delimiter_end(&untagged, 0), Some(2));
+        assert_eq!(dollar_delimiter_end(&tagged, 1), None);
+        assert_eq!(dollar_delimiter_end(&invalid, 0), None);
+        assert_eq!(skip_dollar_quoted_literal(&tagged, 0), Some(tagged.len()));
+        assert_eq!(skip_dollar_quoted_literal(&untagged, 0), Some(untagged.len()));
+        assert_eq!(skip_dollar_quoted_literal(&tagged[..10], 0), None);
+    }
+
+    #[test]
+
+
     fn validates_all_policy_constraints_on_a_valid_query() {
         let policy = SecurityPolicy {
             require_single_statement: true,
@@ -2380,13 +3437,6 @@ mod tests {
     #[test]
     fn rejects_unbalanced_sql_parentheses() {
         assert_eq!(count_statements("SELECT (1"), 1);
-    }
-
-    #[test]
-    fn detects_schema_references_and_allowed_patterns() {
-        assert!(!has_schema_reference("public.", &["public".into()]));
-        assert!(!has_schema_reference("private.x.y.", &[]));
-        assert!(!has_schema_reference("select a.b from users", &[]));
     }
 
     #[test]

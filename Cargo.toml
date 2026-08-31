@@ -2,6 +2,7 @@
 name = "safeselect"
 version = "0.7.6"
 edition = "2021"
+rust-version = "1.85"
 description = "Fail-closed read-only database access for AI agents over MCP"
 license = "MIT OR Apache-2.0"
 
@@ -27,6 +28,7 @@ similar = "3.1.1"
 indoc = "2"
 inquire = "0.9"
 rpassword = "7"
+sqlparser = { version = "0.62.0", features = ["visitor"] }
 
 
 [profile.release]

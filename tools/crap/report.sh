@@ -6,14 +6,21 @@ OUT_DIR="${ROOT_DIR}/target/crap"
 RUST_REPORT="${1:?Rust report path is required}"
 JAVA_REPORT="${2:?Java report path is required}"
 THRESHOLD="${3:-8.0}"
+RATCHET_MAX_WARNINGS="${4:-}"
+
+if [[ -n "${RATCHET_MAX_WARNINGS}" && ! "${RATCHET_MAX_WARNINGS}" =~ ^[0-9]+$ ]]; then
+  printf 'Error: maximum warning count must be a non-negative integer.\n' >&2
+  exit 2
+fi
 
 command -v jq >/dev/null 2>&1 || { printf 'Error: jq is required.\n' >&2; exit 2; }
 mkdir -p "${OUT_DIR}"
 
 jq -n \
-  --argjson rust "$(cat "${RUST_REPORT}")" \
-  --argjson java "$(cat "${JAVA_REPORT}")" \
+  --slurpfile rust "${RUST_REPORT}" \
+  --slurpfile java "${JAVA_REPORT}" \
   --argjson threshold "${THRESHOLD}" \
+  --arg ratchet_max_warnings "${RATCHET_MAX_WARNINGS}" \
   -f "${ROOT_DIR}/tools/crap/merge-reports.jq" \
   >"${OUT_DIR}/report.json"
 
@@ -53,6 +60,9 @@ jq -r '
   ($entries | map(select(.crap != null and .crap > $threshold))) as $warnings |
   ($entries | group_by(.language) | map({language: .[0].language, total: length, warnings: (map(select(.crap != null and .crap > $threshold)) | length)})) as $languages |
   "CRAP report completed",
+  (if .gate.mode == "ratchet" then
+     ("Gate: " + (.gate.status | ascii_upcase) + " (" + (.gate.warnings | tostring) + "/" + (.gate.max_warnings | tostring) + " warnings)")
+   else "Gate: REPORT-ONLY (no warning-count limit configured)" end),
   ("Functions: " + (($entries | length) | tostring)),
   ("Warnings: " + (($warnings | length) | tostring)),
   ("Missing coverage: " + (($entries | map(select(.coverage_percent == null)) | length) | tostring)),

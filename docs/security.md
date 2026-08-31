@@ -67,6 +67,8 @@ they never accept arbitrary catalog SQL or return raw catalog rows.
 ### 5. Backend Security
 
 - Connection uses `READ ONLY` transaction mode
+- Database roles may retain write privileges; SafeSelect does not change grants or reject those
+  credentials, but every JDBC query it issues runs in a verified `READ ONLY` transaction
 - `statement_timeout` prevents runaway queries
 - Sidecar read timeouts respect `statement_timeout_ms` so MCP calls cannot hang indefinitely on zombie queries
 - No `SET` statements or session modifications allowed
@@ -109,6 +111,10 @@ the compact error summary; database-derived detail is never appended there.
 - Never written to disk or log files
 - Database passwords are passed to the Java sidecar via stdin; SSH passwords are
   supplied to `sshpass` through its environment variable, never through process arguments
+
+When `allowed_schemas` is configured, every database relation in agent-provided SQL must use
+an explicit `schema.table` name. CTE aliases and derived tables remain valid without a schema;
+unqualified database relations are rejected rather than resolved through `search_path`.
 
 ## Threat Model
 

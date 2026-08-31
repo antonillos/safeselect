@@ -5,7 +5,7 @@ on:
     branches:
       - develop
       - main
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, edited]
   push:
     branches:
       - develop
@@ -112,6 +112,41 @@ jobs:
       - name: Validate Markdown and internal links
         run: python3 tools/ci/validate_docs.py
 
+  website:
+    name: Website and positioning
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate Markdown and internal links
+        run: python3 tools/ci/validate_docs.py
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - name: Install locked website dependencies
+        run: npm ci --prefix site --ignore-scripts
+      - name: Validate generated icon assets
+        run: |
+          npm run icons:export --prefix site -- --check
+          npm run test:icons --prefix site
+      - name: Build and validate static website
+        run: |
+          npm run build:pages --prefix site
+          npm run typecheck --prefix site
+          npm run lint --prefix site
+          python3 tools/ci/validate_site.py
+          python3 -m unittest discover -s tools/ci -p 'test_site_validation.py' -v
+      - name: Upload static website
+        if: >-
+          (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+          github.ref == 'refs/heads/develop'
+        uses: actions/upload-artifact@v4
+        with:
+          name: website-pages
+          path: site/out/
+          include-hidden-files: true
+
   unit:
     name: Unit & Smoke
     if: >-
@@ -121,8 +156,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: Test CI path policy
-        run: node --test .github/scripts/ci-path-policy.test.js
+      - name: Test release pipeline and installer
+        run: python3 -m unittest discover -s tools/ci -p 'test_*.py' -v
+      - name: Test LobeHub manifest exporter
+        run: python3 -m unittest discover -s tools/distribution -p 'test_*.py' -v
+      - name: Validate workflow syntax
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -shellcheck= -pyflakes=
+      - name: Test CI policies
+        run: node --test .github/scripts/*.test.js
       - name: Install Rust
         run: rustup toolchain install stable --profile minimal
       - name: Install Java
@@ -130,10 +171,10 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
+          cache: maven
+          cache-dependency-path: '**/pom.xml'
       - name: Install makevn
-        run: |
-          curl -fsSL https://raw.githubusercontent.com/antonillos/makevn/main/packaging/install/install-release.sh | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        uses: ./.github/actions/setup-makevn
       - name: Initialize, test, and package sidecar
         run: |
           makevn doctor init test package
@@ -164,6 +205,23 @@ jobs:
             "${asset}=${checksum}"
           python3 -m json.tool "${RUNNER_TEMP}/server.json" >/dev/null
 
+      - name: Check LobeHub MCP capabilities against the current source
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Never use a preinstalled binary or automatically rewrite the manifest.
+          cargo build --locked
+          driver="${RUNNER_TEMP}/lobehub-postgresql-42.7.4.jar"
+          driver_sha="188976721ead8e8627eb6d8389d500dccc0c9bebd885268a3047180274a6031e"
+          curl --fail --silent --show-error --location --max-time 60 \
+            https://jdbc.postgresql.org/download/postgresql-42.7.4.jar --output "$driver"
+          printf '%s  %s\n' "$driver_sha" "$driver" | sha256sum --check
+          python3 tools/distribution/update_lobehub_manifest.py \
+            --binary "${GITHUB_WORKSPACE}/target/debug/safeselect" \
+            --postgres-driver "$driver" \
+            --driver-sha256 "$driver_sha" \
+            --check
+
   integration:
     name: Integration (PostgreSQL)
     needs: [classify, unit]
@@ -193,10 +251,10 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
+          cache: maven
+          cache-dependency-path: '**/pom.xml'
       - name: Install makevn
-        run: |
-          curl -fsSL https://raw.githubusercontent.com/antonillos/makevn/main/packaging/install/install-release.sh | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        uses: ./.github/actions/setup-makevn
       - name: Initialize, test, and package sidecar
         run: |
           makevn doctor init test package
@@ -239,10 +297,10 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
+          cache: maven
+          cache-dependency-path: '**/pom.xml'
       - name: Install makevn
-        run: |
-          curl -fsSL https://raw.githubusercontent.com/antonillos/makevn/main/packaging/install/install-release.sh | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        uses: ./.github/actions/setup-makevn
       - name: Initialize, test, and package sidecar
         run: |
           makevn doctor init test package
@@ -280,7 +338,7 @@ jobs:
         run: cargo deny check
 
   crap-report:
-    name: CRAP (ratchet <=80)
+    name: CRAP (ratchet <=79)
     needs: classify
     if: inputs.badge_only == true || needs.classify.outputs.crap == 'true'
     runs-on: ubuntu-latest
@@ -293,6 +351,8 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
+          cache: maven
+          cache-dependency-path: '**/pom.xml'
       - name: Install coverage tools
         uses: taiki-e/install-action@cargo-llvm-cov
       - name: Install cargo-binstall
@@ -300,9 +360,7 @@ jobs:
       - name: Install cargo-crap
         run: cargo binstall cargo-crap --locked -q
       - name: Install makevn
-        run: |
-          curl -fsSL https://raw.githubusercontent.com/antonillos/makevn/main/packaging/install/install-release.sh | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        uses: ./.github/actions/setup-makevn
       - name: Build sidecar for Rust embedding
         run: |
           makevn doctor init test package
@@ -317,7 +375,7 @@ jobs:
             "${GITHUB_WORKSPACE}/../crap4java-0.1.0.jar" \
             | sha256sum --check
       - name: Run CRAP analysis and ratchet
-        run: ./tools/crap/run.sh --summary --ratchet 80
+        run: ./tools/crap/run.sh --summary --ratchet 79
         env:
           CRAP4JAVA_JAR: ${{ github.workspace }}/../crap4java-0.1.0.jar
       - name: Upload CRAP artifacts
@@ -333,17 +391,18 @@ jobs:
         run: |
           mkdir -p target/crap-pages
           cp target/crap/badge.json target/crap-pages/crap-badge.json
-      - name: Upload CRAP badge Pages artifact
+      - name: Upload CRAP badge for combined Pages publication
         if: >-
           (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
           github.ref == 'refs/heads/develop'
-        uses: actions/upload-pages-artifact@v5
+        uses: actions/upload-artifact@v4
         with:
+          name: pages-badge
           path: target/crap-pages/
 
   deploy-crap-badge:
-    name: Publish CRAP badge
-    needs: crap-report
+    name: Publish website and CRAP badge
+    needs: [crap-report, website]
     if: >-
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
       github.ref == 'refs/heads/develop'
@@ -355,7 +414,26 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - name: Deploy CRAP badge
+      - name: Download static website
+        uses: actions/download-artifact@v4
+        with:
+          name: website-pages
+          path: target/pages/
+      - name: Add current CRAP badge without replacing website
+        uses: actions/download-artifact@v4
+        with:
+          name: pages-badge
+          path: target/pages/
+      - name: Verify combined publication
+        run: |
+          test -s target/pages/index.html
+          test -s target/pages/sitemap.xml
+          test -s target/pages/crap-badge.json
+      - name: Upload single Pages artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: target/pages/
+      - name: Deploy website and CRAP badge
         id: deployment
         uses: actions/deploy-pages@v5
 
@@ -369,7 +447,7 @@ jobs:
 
   verify:
     name: Verify
-    needs: [classify, docs, crap-report, unit, integration, integration-mongodb, security, real-integration]
+    needs: [classify, docs, website, crap-report, unit, integration, integration-mongodb, security, real-integration]
     if: always() && inputs.badge_only != true
     runs-on: ubuntu-latest
     env:
@@ -381,6 +459,7 @@ jobs:
       SECURITY_REQUIRED: ${{ needs.classify.outputs.security }}
       REAL_INTEGRATION_REQUIRED: ${{ needs.classify.outputs.real_integration }}
       DOCS_RESULT: ${{ needs.docs.result }}
+      WEBSITE_RESULT: ${{ needs.website.result }}
       CRAP_RESULT: ${{ needs.crap-report.result }}
       UNIT_RESULT: ${{ needs.unit.result }}
       POSTGRES_RESULT: ${{ needs.integration.result }}
@@ -402,6 +481,7 @@ jobs:
             printf '%-24s required=%-5s result=%s\n' "$name" "$required" "$result"
           }
           check Documentation "$DOCS_REQUIRED" "$DOCS_RESULT"
+          check 'Website and positioning' true "$WEBSITE_RESULT"
           check CRAP "$CRAP_REQUIRED" "$CRAP_RESULT"
           check 'Unit & Smoke' "$UNIT_REQUIRED" "$UNIT_RESULT"
           check 'Integration (PostgreSQL)' "$POSTGRES_REQUIRED" "$POSTGRES_RESULT"
