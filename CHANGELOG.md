@@ -2,6 +2,41 @@
 
 All notable changes to this project are documented in this file.
 
+## [v0.7.7] - 2026-08-31
+
+### Added
+
+- feat(site): evidence-led positioning and canonical landing (#190)
+- feat(seo): add Google Search Console verification file (#191)
+- feat(review): add manual review guidance and independent commit policy (#193)
+- feat(site): add SafeSelect brand icon (#196)
+- feat(mcp): add read-only guidance capabilities (#197)
+
+### Fixed
+
+- fix(ci): make release publication verified and resumable (#188)
+- fix(ci): run lightweight checks for website-only PRs (#192)
+- fix(distribution): declare LobeHub MCP tool capabilities (#195)
+- fix(ci): enforce CRAP ratchet at 79 (#202)
+- fix(ci): accept merge commit messages (#205)
+- fix(ci): accept GitHub merge commits (#206)
+- fix(security): enforce database read-only policy (#199)
+- fix(release): verify MCP publisher binary (#200)
+- fix(mcp): restrict protocol and TLS host checks (#201)
+- fix(ci): accept verified PGP and SSH signatures (#209)
+- fix(security): close audited policy bypasses (#210)
+- fix(security): validate TABLE ONLY schemas (#211)
+- fix(agents): avoid panics for incomplete Codex MCP config (#212)
+
+### Documentation
+
+- docs(demo): add Homebrew onboarding recording (#189)
+- docs: expose easy installation options (#198)
+
+### Build And CI
+
+- chore(distribution): add LobeHub plugin manifest (#194)
+
 ## [v0.7.6] - 2026-08-27
 
 ### Fixed
