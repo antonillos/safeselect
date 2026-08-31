@@ -126,12 +126,27 @@ class MainTest {
         assertEquals("select 1", invoke("validatedSql", new Class<?>[]{PrintWriter.class, Object.class, Map.class},
                 writer, "id", Map.of("params", Map.of("sql", "select 1"))));
 
+        var readOnlyResult = Proxy.newProxyInstance(MainTest.class.getClassLoader(),
+                new Class<?>[]{java.sql.ResultSet.class}, new java.lang.reflect.InvocationHandler() {
+                    private boolean first = true;
+                    public Object invoke(Object proxy, Method method, Object[] args) {
+                        return switch (method.getName()) {
+                            case "next" -> first ? !(first = false) : false;
+                            case "getString" -> "on";
+                            default -> null;
+                        };
+                    }
+                });
         var statementForExecute = Proxy.newProxyInstance(MainTest.class.getClassLoader(),
-                new Class<?>[]{java.sql.Statement.class}, (proxy, method, args) ->
-                        method.getName().equals("execute") ? false : null);
+                new Class<?>[]{java.sql.Statement.class}, (proxy, method, args) -> switch (method.getName()) {
+                    case "execute" -> false;
+                    case "executeQuery" -> readOnlyResult;
+                    default -> null;
+                });
         connection = Proxy.newProxyInstance(MainTest.class.getClassLoader(),
                 new Class<?>[]{java.sql.Connection.class}, (proxy, method, args) -> switch (method.getName()) {
                     case "isClosed" -> false;
+                    case "getAutoCommit" -> false;
                     case "createStatement" -> statementForExecute;
                     default -> null;
                 });
@@ -162,6 +177,48 @@ class MainTest {
         invoke("writeResultSetResponse", new Class<?>[]{PrintWriter.class, Object.class, java.sql.ResultSet.class, long.class},
                 writer, "id", resultSet, 0L);
         invoke("readResultRow", new Class<?>[]{java.sql.ResultSet.class, int.class}, resultSet, 0);
+        setStatic("connection", null);
+    }
+
+    @Test
+    void configuresAndVerifiesReadOnlyTransactionsForWriteCapableCredentials() throws Exception {
+        List<String> calls = new ArrayList<>();
+        var readOnlyResult = Proxy.newProxyInstance(MainTest.class.getClassLoader(),
+                new Class<?>[]{java.sql.ResultSet.class}, new java.lang.reflect.InvocationHandler() {
+                    private boolean first = true;
+                    public Object invoke(Object proxy, Method method, Object[] args) {
+                        return switch (method.getName()) {
+                            case "next" -> first ? !(first = false) : false;
+                            case "getString" -> "on";
+                            default -> null;
+                        };
+                    }
+                });
+        var statement = Proxy.newProxyInstance(MainTest.class.getClassLoader(),
+                new Class<?>[]{java.sql.Statement.class}, (proxy, method, args) -> {
+                    if (method.getName().equals("executeQuery")) {
+                        calls.add(String.valueOf(args[0]));
+                        return readOnlyResult;
+                    }
+                    return null;
+                });
+        var connection = Proxy.newProxyInstance(MainTest.class.getClassLoader(),
+                new Class<?>[]{java.sql.Connection.class}, (proxy, method, args) -> {
+                    calls.add(method.getName() + (args == null ? "" : List.of(args).toString()));
+                    return switch (method.getName()) {
+                        case "createStatement" -> statement;
+                        case "getAutoCommit" -> false;
+                        default -> null;
+                    };
+                });
+        setStatic("connection", connection);
+
+        invoke("configureReadOnlyConnection", new Class<?>[]{});
+
+        assertTrue(calls.stream().anyMatch(value -> value.startsWith("setReadOnly[true]")));
+        assertTrue(calls.stream().anyMatch(value -> value.startsWith("setAutoCommit[false]")));
+        assertTrue(calls.contains("SHOW transaction_read_only"));
+        assertTrue(calls.contains("rollback"));
         setStatic("connection", null);
     }
 
@@ -522,6 +579,20 @@ class MainTest {
             // Both validation and close failures are intentionally exercised.
         }
         setStatic("connection", null);
+    }
+
+    @Test
+    void rejectsNonPostgresqlJdbcUrlsBeforeConnecting() throws Exception {
+        setStatic("backend", "jdbc");
+        setStatic("databaseUrl", "jdbc:h2:mem:test");
+        try {
+            invoke("connectBackend", new Class<?>[]{});
+            assertTrue(false, "Non-PostgreSQL JDBC URLs must be rejected");
+        } catch (InvocationTargetException error) {
+            assertInstanceOf(java.sql.SQLException.class, error.getCause());
+        } finally {
+            setStatic("databaseUrl", null);
+        }
     }
 
     @Test
