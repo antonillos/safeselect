@@ -2383,6 +2383,10 @@ mod tests {
             "SELECT DATE '2025-01-01'",
             "SELECT * FROM unnest(ARRAY[1, 2]) WITH ORDINALITY AS t(value, ord)",
             "SELECT * FROM public.expose()",
+            "SELECT * FROM generate_series(1, 2)",
+            "SELECT * FROM public.users",
+            "WITH first AS (SELECT * FROM later), later AS (SELECT * FROM public.allowed) SELECT * FROM first",
+            "SELECT 1 OPERATOR(public.+) 1",
         ] {
             let _ = engine.validate(sql);
         }
