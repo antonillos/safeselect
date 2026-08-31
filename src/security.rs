@@ -10,6 +10,7 @@ use sqlparser::ast::{
     Table, TableFactor, Visit, Visitor,
 };
 
+
 use sqlparser::dialect::PostgreSqlDialect;
 use sqlparser::parser::Parser;
 use std::collections::HashSet;
@@ -935,6 +936,7 @@ impl SecurityEngine {
             &self.policy.denied_relations,
             self.policy.require_single_statement,
 
+
         )
         .map_err(SafeselectError::QueryRejected)
     }
@@ -963,6 +965,7 @@ impl SecurityEngine {
             self.policy.require_single_statement,
         )
         .map_err(SafeselectError::QueryRejected)
+
 
     }
 
@@ -1123,6 +1126,7 @@ fn take_dollar_delimiter(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -
 }
 
 
+
 struct RelationPolicyVisitor<'a> {
     allowed_schemas: &'a [String],
     denied_relations: &'a [String],
@@ -1139,6 +1143,7 @@ impl Visitor for RelationPolicyVisitor<'_> {
                 self.violation = Some(message);
             }
         }
+
 
         let names = query
             .with
@@ -1185,6 +1190,7 @@ impl Visitor for RelationPolicyVisitor<'_> {
             _ => Ok(()),
         };
         if let Err(message) = result {
+
 
             self.violation = Some(message);
         }
@@ -1271,6 +1277,7 @@ impl RelationPolicyVisitor<'_> {
     }
 
 
+
     fn validate_relation(&self, name: &ObjectName) -> std::result::Result<(), String> {
         let parts = relation_parts(name)?;
         if parts.len() == 1 && self.is_cte(&parts[0]) {
@@ -1343,6 +1350,7 @@ impl RelationPolicyVisitor<'_> {
     }
 
 
+
     fn validate_allowed_relation(&self, parts: &[String]) -> std::result::Result<(), String> {
         if parts.len() != 2 {
             return Err(format!(
@@ -1354,6 +1362,7 @@ impl RelationPolicyVisitor<'_> {
             (parts[0].to_ascii_lowercase() == parts[0] && schema.eq_ignore_ascii_case(&parts[0]))
                 || schema == &parts[0]
         }) {
+
 
             Ok(())
         } else {
@@ -1390,6 +1399,7 @@ fn table_relation_parts(table: &Table) -> Vec<String> {
 }
 
 
+
 fn validate_relation_policy(
     sql: &str,
     allowed_schemas: &[String],
@@ -1400,12 +1410,14 @@ fn validate_relation_policy(
         .map_err(|error| format!("SQL policy parsing failed: {error}"))?;
     if require_single_statement && statements.len() != 1 {
 
+
         return Err("SQL policy requires exactly one parsed statement".into());
     }
     let mut shadowing = CteVisibilityVisitor {
         scopes: Vec::new(),
         allowed_schemas,
         denied_relations,
+
 
         violation: None,
     };
@@ -1431,6 +1443,7 @@ struct CteVisibilityVisitor<'a> {
 }
 
 impl Visitor for CteVisibilityVisitor<'_> {
+
 
     type Break = ();
 
@@ -1471,6 +1484,7 @@ impl Visitor for CteVisibilityVisitor<'_> {
                     .filter(|alias| {
                         !inherited.contains(*alias) && self.relation_violates_policy(alias)
                     })
+
 
                     .cloned()
                     .collect();
@@ -1535,6 +1549,7 @@ impl CteVisibilityVisitor<'_> {
                 .any(|denied| !denied.contains('.') && denied.eq_ignore_ascii_case(relation))
     }
 }
+
 
 
 struct QueryScopeFrame {
@@ -2482,6 +2497,7 @@ mod tests {
             .validate("SELECT CAST('x' AS private.leaky_type) FROM public.users")
             .is_err());
 
+
     }
 
     #[test]
@@ -2556,6 +2572,7 @@ mod tests {
     }
 
     #[test]
+
 
     fn schema_allowlist_rejects_forward_cte_references() {
         let policy = SecurityPolicy {
@@ -2706,6 +2723,7 @@ mod tests {
     }
 
     #[test]
+
 
     fn validates_all_policy_constraints_on_a_valid_query() {
         let policy = SecurityPolicy {

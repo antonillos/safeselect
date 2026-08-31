@@ -347,6 +347,7 @@ public class Main {
         }
     }
 
+
     private static void verifyReadOnlyTransaction() throws SQLException {
         try (Statement statement = connection.createStatement();
              ResultSet result = statement.executeQuery("SHOW transaction_read_only")) {
@@ -535,6 +536,7 @@ public class Main {
         requirePostgresqlJdbc();
         Connection candidate = DriverManager.getConnection(databaseUrl, user, password);
         configureJdbcCandidate(candidate);
+
 
         sendResponse(writer, id, Map.of("status", "connected"), null);
     }

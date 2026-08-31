@@ -3,6 +3,7 @@ use crate::error::{Result, SafeselectError};
 use crate::sidecar::{ResultLimits, SidecarProcess};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use std::net::IpAddr;
 use std::path::Path;
 
 #[derive(Debug, Serialize)]
@@ -137,8 +138,8 @@ fn role_findings(boolean: &impl Fn(usize) -> bool) -> Vec<Finding> {
 
 fn control_findings(resolved: &ResolvedConfig, boolean: &impl Fn(usize) -> bool) -> Vec<Finding> {
     let mut findings = Vec::new();
-    let remote = !resolved.environment.database.url.contains("localhost")
-        && !resolved.environment.database.url.contains("127.0.0.1");
+    let remote = !jdbc_hosts(&resolved.environment.database.url)
+        .is_some_and(|hosts| !hosts.is_empty() && hosts.iter().all(|host| is_loopback_host(host)));
     if remote && !boolean(5) {
         findings.push(Finding {
             code: "POSTURE_TLS_REQUIRED",
@@ -164,6 +165,32 @@ fn control_findings(resolved: &ResolvedConfig, boolean: &impl Fn(usize) -> bool)
         });
     }
     findings
+}
+
+fn jdbc_hosts(url: &str) -> Option<Vec<&str>> {
+    let (_, remainder) = url.split_once("://")?;
+    let authority = remainder.split(['/', '?', '#']).next()?;
+    let authority = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, value)| value);
+    let hosts = authority.split(',').filter_map(endpoint_host).collect();
+    Some(hosts)
+}
+
+fn endpoint_host(endpoint: &str) -> Option<&str> {
+    let endpoint = endpoint.trim();
+    if let Some(bracketed) = endpoint.strip_prefix('[') {
+        return bracketed.split_once(']').map(|(host, _)| host);
+    }
+    let host = endpoint.rsplit_once(':').map_or(endpoint, |(host, _)| host);
+    (!host.is_empty()).then_some(host)
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
 }
 
 fn report_status(findings: &[Finding], acknowledged: bool) -> &'static str {
@@ -245,6 +272,26 @@ mod tests {
             password: String::new(),
             repo_root: Path::new(".").into(),
         }
+    }
+
+    #[test]
+    fn jdbc_locality_uses_the_parsed_authority_host() {
+        assert!(super::jdbc_hosts("jdbc:postgresql://localhost:5432/app")
+            .is_some_and(|hosts| hosts.iter().all(|host| super::is_loopback_host(host))));
+        assert!(super::jdbc_hosts("jdbc:postgresql://[::1]:5432/app")
+            .is_some_and(|hosts| hosts.iter().all(|host| super::is_loopback_host(host))));
+        assert!(
+            !super::jdbc_hosts("jdbc:postgresql://[::1]:5432,db.example:5432/app")
+                .is_some_and(|hosts| hosts.iter().all(|host| super::is_loopback_host(host)))
+        );
+        assert!(
+            !super::jdbc_hosts("jdbc:postgresql://db-localhost.example/app")
+                .is_some_and(|hosts| hosts.iter().all(|host| super::is_loopback_host(host)))
+        );
+        assert!(
+            !super::jdbc_hosts("jdbc:postgresql://db.example/app?note=127.0.0.1")
+                .is_some_and(|hosts| hosts.iter().all(|host| super::is_loopback_host(host)))
+        );
     }
 
     #[test]
