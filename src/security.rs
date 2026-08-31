@@ -683,7 +683,23 @@ impl SecurityEngine {
         let mut chars = sql.chars().peekable();
         let mut in_single = false;
         let mut in_double = false;
+        let mut dollar_delimiter: Option<String> = None;
         while let Some(ch) = chars.next() {
+            if let Some(delimiter) = &dollar_delimiter {
+                result.push(ch);
+                if result.ends_with(delimiter) {
+                    dollar_delimiter = None;
+                }
+                continue;
+            }
+            if ch == '$' {
+                if let Some(delimiter) = take_dollar_delimiter(&mut chars) {
+                    result.push('$');
+                    result.push_str(&delimiter[1..]);
+                    dollar_delimiter = Some(delimiter);
+                    continue;
+                }
+            }
             if ch == '\'' && !in_double {
                 in_single = !in_single;
                 result.push(ch);
@@ -1015,6 +1031,26 @@ impl SecurityEngine {
     }
 }
 
+fn take_dollar_delimiter(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Option<String> {
+    let mut lookahead = chars.clone();
+    let mut tag = String::from("$");
+    while let Some(ch) = lookahead.next() {
+        if ch == '$' {
+            tag.push('$');
+            for _ in 0..tag.len() - 1 {
+                chars.next();
+            }
+            chars.next();
+            return Some(tag);
+        }
+        if !(ch.is_ascii_alphanumeric() || ch == '_') || tag.len() > 64 {
+            return None;
+        }
+        tag.push(ch);
+    }
+    None
+}
+
 struct RelationPolicyVisitor<'a> {
     allowed_schemas: &'a [String],
     denied_relations: &'a [String],
@@ -1133,7 +1169,7 @@ impl RelationPolicyVisitor<'_> {
                 self.allowed_schemas.join(", ")
             ));
         }
-        Ok(())
+        self.validate_denied_relation(parts)
     }
 
     fn validate_scalar_function(&self, name: &ObjectName) -> std::result::Result<(), String> {
@@ -2479,6 +2515,23 @@ mod tests {
                 Vec::new(),
             ))
             .is_ok());
+    }
+
+    #[test]
+    fn preserves_dollar_quoted_literals_and_operator_denylists() {
+        let engine = SecurityEngine::new(
+            SecurityPolicy {
+                allowed_schemas: vec!["public".into()],
+                denied_relations: vec!["public.custom".into()],
+                require_single_statement: false,
+                ..SecurityPolicy::default()
+            },
+            LimitsConfig::default(),
+        );
+        assert!(engine.check_read_only("SELECT $$--$$; COMMIT").is_err());
+        assert!(engine
+            .validate("SELECT 1 OPERATOR(public.custom) 1")
+            .is_err());
     }
 
     #[test]
