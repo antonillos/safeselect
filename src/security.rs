@@ -705,6 +705,13 @@ impl SecurityEngine {
                 result.push(ch);
                 continue;
             }
+            if ch == '\\' && in_single {
+                result.push(ch);
+                if let Some(escaped) = chars.next() {
+                    result.push(escaped);
+                }
+                continue;
+            }
             if ch == '"' && !in_single {
                 in_double = !in_double;
                 result.push(ch);
@@ -1249,11 +1256,10 @@ impl RelationPolicyVisitor<'_> {
                 self.allowed_schemas.join(", ")
             ));
         }
-        if self
-            .allowed_schemas
-            .iter()
-            .any(|schema| schema.eq_ignore_ascii_case(&parts[0]))
-        {
+        if self.allowed_schemas.iter().any(|schema| {
+            (parts[0].to_ascii_lowercase() == parts[0] && schema.eq_ignore_ascii_case(&parts[0]))
+                || schema == &parts[0]
+        }) {
             Ok(())
         } else {
             Err(format!(
@@ -2532,6 +2538,10 @@ mod tests {
         assert!(engine
             .validate("SELECT 1 OPERATOR(public.custom) 1")
             .is_err());
+        assert!(engine.validate("SELECT * FROM \"PUBLIC\".secrets").is_err());
+        assert!(
+            SecurityEngine::strip_sql_comments(r#"SELECT E'abc\'--'; COMMIT"#).contains("COMMIT")
+        );
     }
 
     #[test]
