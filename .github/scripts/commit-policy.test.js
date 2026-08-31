@@ -17,6 +17,12 @@ const signed = (n = 1, message = "docs: update guide", signatureType = "SSH") =>
   parents: [{ sha: sha(n + 1000) }],
   verification: { verified: true, reason: "valid", signature: `-----BEGIN ${signatureType} SIGNATURE-----\nsynthetic` },
 });
+const repositoryCommit = (commit) => ({
+  sha: commit.sha,
+  parents: commit.parents,
+  committer: commit.committer,
+  commit: { message: commit.message, verification: commit.verification },
+});
 
 async function check(commits = [signed()], options = {}) {
   const expected = { number: 193, head: { sha: commits.at(-1)?.sha || sha(1) },
@@ -32,10 +38,10 @@ async function check(commits = [signed()], options = {}) {
         get: async () => ({ data: ++reads === 1 ? { ...expected, ...options.before } :
           { ...expected, ...options.after } }),
       },
-      git: { getCommit: async ({ commit_sha }) => {
-        requests.push(commit_sha);
+      repos: { getCommit: async ({ ref }) => {
+        requests.push(ref);
         if (options.apiError) throw new Error("PRIVATE_API_PAYLOAD");
-        return { data: options.object || commits.find((commit) => commit.sha === commit_sha) };
+        return { data: repositoryCommit(options.object || commits.find((commit) => commit.sha === ref)) };
       } },
     },
     paginate: async (endpoint, params) => {
@@ -88,7 +94,7 @@ test("exempts only GitHub-generated merge commits from signature validation", as
   merge.verification = undefined;
   assert.equal((await check([merge])).failed, true);
 
-  const githubMerge = signed(1, "Merge pull request #42 from example/feature");
+  const githubMerge = signed(1, "Merge pull request #42 from example/feature\n\nfeat: merge feature");
   githubMerge.parents = [{ sha: sha(2) }, { sha: sha(3) }];
   githubMerge.committer = { login: "web-flow", type: "User" };
   githubMerge.verification = undefined;
