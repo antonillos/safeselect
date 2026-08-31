@@ -1043,11 +1043,7 @@ fn consume_quoted_char(
         result.push(ch);
         return true;
     }
-    if ch == '\\' && *in_single {
-        result.push(ch);
-        if let Some(escaped) = chars.next() {
-            result.push(escaped);
-        }
+    if consume_escaped_char(chars, ch, result, *in_single) {
         return true;
     }
     if ch == '"' && !*in_single {
@@ -1060,6 +1056,22 @@ fn consume_quoted_char(
         return true;
     }
     false
+}
+
+fn consume_escaped_char(
+    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
+    ch: char,
+    result: &mut String,
+    in_single: bool,
+) -> bool {
+    if ch != '\\' || !in_single {
+        return false;
+    }
+    result.push(ch);
+    if let Some(escaped) = chars.next() {
+        result.push(escaped);
+    }
+    true
 }
 
 fn take_dollar_delimiter(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Option<String> {
@@ -2566,6 +2578,10 @@ mod tests {
         assert!(
             SecurityEngine::strip_sql_comments(r#"SELECT E'abc\'--'; COMMIT"#).contains("COMMIT")
         );
+        assert!(
+            SecurityEngine::strip_sql_comments("SELECT $tag$/*$tag$; COMMIT").contains("COMMIT")
+        );
+        assert!(SecurityEngine::strip_sql_comments("SELECT $bad; COMMIT").contains("COMMIT"));
     }
 
     #[test]
