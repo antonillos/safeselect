@@ -159,7 +159,15 @@ class ReleaseTests(unittest.TestCase):
     def test_refuses_untagged_draft_with_different_target(self):
         self.host.exists = True
         self.host.target = "b" * 40
-        with self.assertRaisesRegex(ValueError, "untagged draft with a different target"):
+        with self.assertRaisesRegex(ValueError, "draft with a different target"):
+            release.publish(self.args)
+        self.assertEqual(self.host.files, {})
+
+    def test_refuses_tagged_draft_with_different_target(self):
+        self.host.exists = True
+        self.host.tag = SHA
+        self.host.target = "b" * 40
+        with self.assertRaisesRegex(ValueError, "draft with a different target"):
             release.publish(self.args)
         self.assertEqual(self.host.files, {})
 
@@ -272,8 +280,16 @@ class ApiTests(unittest.TestCase):
             self.assertEqual(release.release_info("owner/repo", VERSION), draft)
         self.assertEqual(api.call_args_list, [
             unittest.mock.call(f"repos/owner/repo/releases/tags/{VERSION}"),
-            unittest.mock.call("repos/owner/repo/releases?per_page=100"),
+            unittest.mock.call("repos/owner/repo/releases?per_page=100&page=1"),
         ])
+
+    def test_draft_release_is_found_on_later_page(self):
+        first_page = [{"tag_name": f"v0.0.{number}"} for number in range(100)]
+        draft = {"id": 1, "tag_name": VERSION, "draft": True}
+        with patch.object(release, "api", side_effect=[None, first_page, [draft]]) as api:
+            self.assertEqual(release.release_info("owner/repo", VERSION), draft)
+        self.assertEqual(api.call_args_list[-1],
+                         unittest.mock.call("repos/owner/repo/releases?per_page=100&page=2"))
 
     def test_absent_release_is_not_found_in_release_list(self):
         with patch.object(release, "api", side_effect=[None, []]):
