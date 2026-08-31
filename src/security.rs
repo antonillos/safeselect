@@ -2453,6 +2453,16 @@ mod tests {
                 None,
             )))
             .is_err());
+        assert!(visitor.validate_data_type(&DataType::Boolean).is_ok());
+        assert!(visitor
+            .validate_data_type(&DataType::Custom(
+                ObjectName(vec![
+                    ObjectNamePart::Identifier(sqlparser::ast::Ident::new("public")),
+                    ObjectNamePart::Identifier(sqlparser::ast::Ident::new("safe")),
+                ]),
+                Vec::new(),
+            ))
+            .is_ok());
     }
 
     #[test]
