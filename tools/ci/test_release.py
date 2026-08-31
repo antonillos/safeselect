@@ -34,13 +34,15 @@ class Hosting:
         self.draft = True
         self.prerelease = False
         self.tag = ""
+        self.target = SHA
         self.calls = []
         self.fail_after = None
 
     def info(self, *_):
         if not self.exists:
             return None
-        return {"draft": self.draft, "prerelease": self.prerelease, "assets": [
+        return {"draft": self.draft, "prerelease": self.prerelease,
+                "target_commitish": self.target, "assets": [
             {"name": name, "state": "uploaded", "digest": "sha256:" + hashlib.sha256(data).hexdigest()}
             for name, data in self.files.items()]}
 
@@ -55,6 +57,7 @@ class Hosting:
             assert "--draft" in args
             self.exists = True
             self.prerelease = "--prerelease" in args
+            self.target = args[args.index("--target") + 1]
         elif operation == "download":
             dest = Path(args[args.index("--dir") + 1])
             for index, arg in enumerate(args):
@@ -152,6 +155,13 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Refusing to move"):
             release.publish(self.args)
         self.assertFalse(self.host.exists)
+
+    def test_refuses_untagged_draft_with_different_target(self):
+        self.host.exists = True
+        self.host.target = "b" * 40
+        with self.assertRaisesRegex(ValueError, "untagged draft with a different target"):
+            release.publish(self.args)
+        self.assertEqual(self.host.files, {})
 
     def test_annotated_tag_compares_peeled_commit(self):
         with patch.object(release, "command", return_value=f'{"b"*40}\trefs/tags/{VERSION}\n{SHA}\trefs/tags/{VERSION}^{{}}'):

@@ -93,6 +93,8 @@ def verify_tag(repo, version, sha, source):
     info = release_info(repo, version)
     if info and not info["draft"] and not tag_sha:
         raise ValueError("A public release must have an existing tag")
+    if info and info["draft"] and not tag_sha and info.get("target_commitish") != sha:
+        raise ValueError("Refusing to reuse an untagged draft with a different target")
     return info
 
 
