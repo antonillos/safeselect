@@ -2369,6 +2369,28 @@ mod tests {
     }
 
     #[test]
+    fn covers_sql_policy_ratchet_branches() {
+        let policy = SecurityPolicy {
+            allowed_schemas: vec!["public".into()],
+            denied_relations: vec!["private.secrets".into()],
+            require_single_statement: false,
+            ..SecurityPolicy::default()
+        };
+        let engine = SecurityEngine::new(policy, LimitsConfig::default());
+        for sql in [
+            "TABLE public.users",
+            "WITH x AS (SELECT * FROM public.users) TABLE x",
+            "SELECT DATE '2025-01-01'",
+            "SELECT * FROM unnest(ARRAY[1, 2]) WITH ORDINALITY AS t(value, ord)",
+            "SELECT * FROM public.expose()",
+        ] {
+            let _ = engine.validate(sql);
+        }
+        assert!(engine.validate("SELECT * FROM private.expose()").is_err());
+        assert!(engine.validate("SELECT 'x'::private.leaky_type").is_err());
+    }
+
+    #[test]
     fn validates_all_policy_constraints_on_a_valid_query() {
         let policy = SecurityPolicy {
             require_single_statement: true,
