@@ -81,12 +81,24 @@ test("accepts recognized merge headers only for multi-parent commits", async () 
   assert.equal((await check([signed(1, "Merge branch 'feature' into develop")])).failed, true);
 });
 
-test("requires a verified signature for merge commits regardless of committer email", async () => {
+test("exempts only GitHub-generated merge commits from signature validation", async () => {
   const merge = signed(1, "Merge branch 'feature' into develop");
   merge.parents = [{ sha: sha(2) }, { sha: sha(3) }];
-  merge.committer = { email: "github-actions@github.com" };
+  merge.committer = { login: "web-flow", type: "User" };
   merge.verification = undefined;
   assert.equal((await check([merge])).failed, true);
+
+  const githubMerge = signed(1, "Merge pull request #42 from example/feature");
+  githubMerge.parents = [{ sha: sha(2) }, { sha: sha(3) }];
+  githubMerge.committer = { login: "web-flow", type: "User" };
+  githubMerge.verification = undefined;
+  assert.equal((await check([githubMerge])).failed, false);
+
+  const forged = signed(1, "Merge pull request #42 from example/feature");
+  forged.parents = [{ sha: sha(2) }, { sha: sha(3) }];
+  forged.committer = { login: "attacker", type: "User", email: "noreply@github.com" };
+  forged.verification = undefined;
+  assert.equal((await check([forged])).failed, true);
 });
 
 test("requires verified PGP or SSH signatures, not Signed-off-by or signature presence", async () => {

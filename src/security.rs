@@ -9,11 +9,11 @@ use sqlparser::ast::{
     ArrayElemTypeDef, BinaryOperator, DataType, Expr, ObjectName, ObjectNamePart, Query, SetExpr,
     Table, TableFactor, Visit, Visitor,
 };
-
-
 use sqlparser::dialect::PostgreSqlDialect;
+use sqlparser::keywords::Keyword;
 use sqlparser::parser::Parser;
-use std::collections::HashSet;
+use sqlparser::tokenizer::{Token, Tokenizer, Whitespace};
+use std::collections::{HashSet, VecDeque};
 use std::ops::ControlFlow;
 
 const MAX_SQL_BYTES: usize = 102_400;
@@ -1130,6 +1130,7 @@ struct RelationPolicyVisitor<'a> {
     allowed_schemas: &'a [String],
     denied_relations: &'a [String],
     cte_scopes: Vec<HashSet<String>>,
+    table_command_relations: VecDeque<Vec<String>>,
     violation: Option<String>,
 }
 
@@ -1138,7 +1139,11 @@ impl Visitor for RelationPolicyVisitor<'_> {
 
     fn pre_visit_query(&mut self, query: &Query) -> ControlFlow<Self::Break> {
         if let SetExpr::Table(table) = query.body.as_ref() {
-            if let Err(message) = self.validate_table_command(table) {
+            let relation = self
+                .table_command_relations
+                .pop_front()
+                .unwrap_or_else(|| table_relation_parts(table));
+            if let Err(message) = self.validate_table_command(&relation) {
                 self.violation = Some(message);
             }
         }
@@ -1213,8 +1218,7 @@ fn validate_table_factor(
 }
 
 impl RelationPolicyVisitor<'_> {
-    fn validate_table_command(&self, table: &Table) -> std::result::Result<(), String> {
-        let parts = table_relation_parts(table);
+    fn validate_table_command(&self, parts: &[String]) -> std::result::Result<(), String> {
         if parts.is_empty() {
             return Err("TABLE command is missing a relation name".into());
         }
@@ -1222,9 +1226,9 @@ impl RelationPolicyVisitor<'_> {
             return Ok(());
         }
         if !self.allowed_schemas.is_empty() {
-            self.validate_allowed_relation(&parts)?;
+            self.validate_allowed_relation(parts)?;
         }
-        self.validate_denied_relation(&parts)
+        self.validate_denied_relation(parts)
     }
 
     fn validate_data_type(&self, data_type: &DataType) -> std::result::Result<(), String> {
@@ -1397,6 +1401,72 @@ fn table_relation_parts(table: &Table) -> Vec<String> {
         .collect()
 }
 
+fn table_command_relation_parts(sql: &str) -> std::result::Result<VecDeque<Vec<String>>, String> {
+    let tokens = Tokenizer::new(&PostgreSqlDialect {}, sql)
+        .tokenize()
+        .map_err(|error| format!("SQL policy tokenizing failed: {error}"))?;
+    let significant: Vec<&Token> = tokens
+        .iter()
+        .filter(|token| {
+            !matches!(
+                token,
+                Token::Whitespace(
+                    Whitespace::Space
+                        | Whitespace::Newline
+                        | Whitespace::Tab
+                        | Whitespace::SingleLineComment { .. }
+                        | Whitespace::MultiLineComment(_)
+                )
+            )
+        })
+        .collect();
+    let mut relations = VecDeque::new();
+    for (index, token) in significant.iter().enumerate() {
+        let Token::Word(word) = token else { continue };
+        if word.keyword != Keyword::TABLE
+            || !is_table_command_position(significant.get(index.wrapping_sub(1)).copied())
+        {
+            continue;
+        }
+        let Some(Token::Word(first)) = significant.get(index + 1).copied() else {
+            continue;
+        };
+        if first.keyword == Keyword::ONLY {
+            continue;
+        }
+        let parts = if matches!(significant.get(index + 2), Some(Token::Period)) {
+            let Some(Token::Word(second)) = significant.get(index + 3).copied() else {
+                continue;
+            };
+            vec![canonical_token_word(first), canonical_token_word(second)]
+        } else {
+            vec![canonical_token_word(first)]
+        };
+        relations.push_back(parts);
+    }
+    Ok(relations)
+}
+
+fn is_table_command_position(previous: Option<&Token>) -> bool {
+    match previous {
+        None
+        | Some(Token::LParen | Token::RParen | Token::Comma | Token::SemiColon) => true,
+        Some(Token::Word(word)) => matches!(
+            word.keyword,
+            Keyword::UNION | Keyword::INTERSECT | Keyword::EXCEPT
+        ),
+        _ => false,
+    }
+}
+
+fn canonical_token_word(word: &sqlparser::tokenizer::Word) -> String {
+    if word.quote_style.is_some() {
+        word.value.clone()
+    } else {
+        word.value.to_ascii_lowercase()
+    }
+}
+
 
 
 fn validate_relation_policy(
@@ -1428,6 +1498,7 @@ fn validate_relation_policy(
         allowed_schemas,
         denied_relations,
         cte_scopes: Vec::new(),
+        table_command_relations: table_command_relation_parts(sql)?,
         violation: None,
     };
     let _ = statements.visit(&mut visitor);
@@ -2531,6 +2602,12 @@ mod tests {
             .validate("WITH visible AS (SELECT 1) TABLE public.users")
             .is_ok());
         assert!(engine
+            .validate("WITH visible AS (SELECT 1) TABLE PUBLIC.users")
+            .is_ok());
+        assert!(engine
+            .validate("WITH visible AS (SELECT 1) TABLE Public.users")
+            .is_ok());
+        assert!(engine
             .validate("WITH visible AS (SELECT 1) TABLE \"PUBLIC\".users")
             .is_err());
         assert!(engine
@@ -2538,6 +2615,22 @@ mod tests {
             .is_err());
 
 
+    }
+
+    #[test]
+    fn preserves_table_command_identifier_quoting() {
+        assert_eq!(
+            table_command_relation_parts(
+                "WITH a AS (TABLE PUBLIC.users), b AS (TABLE \"PUBLIC\".users) SELECT * FROM a"
+            )
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>(),
+            vec![
+                vec!["public".to_string(), "users".to_string()],
+                vec!["PUBLIC".to_string(), "users".to_string()]
+            ]
+        );
     }
 
     #[test]
@@ -2694,6 +2787,7 @@ mod tests {
             allowed_schemas: &allowed,
             denied_relations: &denied,
             cte_scopes: Vec::new(),
+            table_command_relations: VecDeque::new(),
             violation: None,
         };
         let unnest = ObjectName(vec![ObjectNamePart::Identifier(
