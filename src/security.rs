@@ -786,7 +786,9 @@ impl SecurityEngine {
                 )
             })?;
 
-            if !body.trim_start().to_uppercase().starts_with("SELECT") {
+            if !body.trim_start().to_uppercase().starts_with("SELECT")
+                && !body.trim_start().to_uppercase().starts_with("TABLE")
+            {
                 return Err(SafeselectError::QueryRejected(
                     "Read-only mode: WITH queries must end in SELECT".into(),
                 ));
@@ -1053,6 +1055,7 @@ impl Visitor for RelationPolicyVisitor<'_> {
                 ..
             } => self.validate_custom_operator(parts),
             Expr::Cast { data_type, .. } => self.validate_data_type(data_type),
+            Expr::TypedString(typed) => self.validate_data_type(&typed.data_type),
             _ => Ok(()),
         };
         if let Err(message) = result {
@@ -1140,9 +1143,31 @@ impl RelationPolicyVisitor<'_> {
 
     fn validate_table_function(&self, expr: &Expr) -> std::result::Result<(), String> {
         match expr {
-            Expr::Function(function) => self.validate_relation(&function.name),
+            Expr::Function(function) => self.validate_callable_name(&function.name),
             _ => Err("SQL policy cannot validate this table-function expression".into()),
         }
+    }
+
+    fn validate_callable_name(&self, name: &ObjectName) -> std::result::Result<(), String> {
+        let parts = relation_parts(name)?;
+        if parts.len() == 1 {
+            if !self.allowed_schemas.is_empty()
+                && !matches!(parts[0].as_str(), "unnest" | "generate_series")
+            {
+                return Err(format!(
+                    "Unqualified function '{}' is not allowed with a schema policy",
+                    parts[0]
+                ));
+            }
+            return Ok(());
+        }
+        self.validate_allowed_relation(&parts).or_else(|error| {
+            if self.allowed_schemas.is_empty() {
+                self.validate_denied_relation(&parts)
+            } else {
+                Err(error)
+            }
+        })
     }
 
     fn validate_allowed_relation(&self, parts: &[String]) -> std::result::Result<(), String> {
