@@ -68,17 +68,11 @@ jobs:
                 const isMergeCommit = Array.isArray(commit.parents) && commit.parents.length > 1;
                 const formatOK = conventional(commit.message, isMergeCommit);
                 const verification = commit.verification;
-                const githubGeneratedMerge = isMergeCommit &&
-                  formatOK &&
-                  typeof commit.committer?.email === "string" &&
-                  commit.committer.email.toLowerCase().endsWith("@github.com");
                 const signature = verification?.signature;
-                const signatureOK = githubGeneratedMerge
-                  ? true
-                  : verification?.verified === true &&
-                    verification.reason === "valid" &&
-                    (signature?.startsWith("-----BEGIN SSH SIGNATURE-----") === true ||
-                      signature?.startsWith("-----BEGIN PGP SIGNATURE-----") === true);
+                const signatureOK = verification?.verified === true &&
+                  verification.reason === "valid" &&
+                  (signature?.startsWith("-----BEGIN SSH SIGNATURE-----") === true ||
+                    signature?.startsWith("-----BEGIN PGP SIGNATURE-----") === true);
                 // Never echo messages, identities, signatures, payloads or API errors.
                 if (!formatOK) core.error(`${sha.slice(0, 12)}: Conventional Commits format required.`);
                 if (!signatureOK) core.error(`${sha.slice(0, 12)}: verified PGP or SSH signature required.`);

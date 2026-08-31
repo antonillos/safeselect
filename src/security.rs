@@ -1114,7 +1114,6 @@ fn take_dollar_delimiter(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -
             for _ in 0..tag.len() - 1 {
                 chars.next();
             }
-            chars.next();
             return Some(tag);
         }
         if !(ch.is_ascii_alphanumeric() || ch == '_') || tag.len() > 64 {
@@ -1394,7 +1393,7 @@ fn table_relation_parts(table: &Table) -> Vec<String> {
     [table.schema_name.as_ref(), table.table_name.as_ref()]
         .into_iter()
         .flatten()
-        .map(|part| part.to_ascii_lowercase())
+        .cloned()
         .collect()
 }
 
@@ -1791,6 +1790,14 @@ fn sanitize_for_keyword_scan(sql: &str) -> String {
             continue;
         }
 
+        if c == '$' {
+            if let Some(next) = skip_dollar_quoted_literal(&chars, i) {
+                out.push(' ');
+                i = next;
+                continue;
+            }
+        }
+
         if c == '\'' {
             in_single = true;
             out.push(' ');
@@ -1815,6 +1822,33 @@ fn sanitize_for_keyword_scan(sql: &str) -> String {
     }
 
     out
+}
+
+fn skip_dollar_quoted_literal(chars: &[char], start: usize) -> Option<usize> {
+    let delimiter_end = dollar_delimiter_end(chars, start)?;
+    let delimiter = &chars[start..delimiter_end];
+    let mut end = delimiter_end;
+    while end + delimiter.len() <= chars.len() {
+        if &chars[end..end + delimiter.len()] == delimiter {
+            return Some(end + delimiter.len());
+        }
+        end += 1;
+    }
+    None
+}
+
+fn dollar_delimiter_end(chars: &[char], start: usize) -> Option<usize> {
+    if chars.get(start) != Some(&'$') {
+        return None;
+    }
+    let mut end = start + 1;
+    while end < chars.len()
+        && (chars[end].is_ascii_alphanumeric() || chars[end] == '_')
+        && end - start <= 64
+    {
+        end += 1;
+    }
+    (chars.get(end) == Some(&'$')).then_some(end + 1)
 }
 
 fn contains_keyword(sql: &str, keyword: &str) -> bool {
@@ -2494,6 +2528,12 @@ mod tests {
             .validate("WITH visible AS (TABLE public.users) SELECT * FROM visible")
             .is_ok());
         assert!(engine
+            .validate("WITH visible AS (SELECT 1) TABLE public.users")
+            .is_ok());
+        assert!(engine
+            .validate("WITH visible AS (SELECT 1) TABLE \"PUBLIC\".users")
+            .is_err());
+        assert!(engine
             .validate("SELECT CAST('x' AS private.leaky_type) FROM public.users")
             .is_err());
 
@@ -2705,6 +2745,14 @@ mod tests {
             .validate("SELECT 1 OPERATOR(public.custom) 1")
             .is_err());
         assert!(engine.validate("SELECT * FROM \"PUBLIC\".secrets").is_err());
+        assert_eq!(
+            SecurityEngine::strip_sql_comments("SELECT $$XDELETE$$"),
+            "SELECT $$XDELETE$$"
+        );
+        assert_eq!(
+            SecurityEngine::strip_sql_comments("SELECT $tag$XDELETE$tag$"),
+            "SELECT $tag$XDELETE$tag$"
+        );
         assert!(
             SecurityEngine::strip_sql_comments(r#"SELECT E'abc\'--'; COMMIT"#).contains("COMMIT")
         );
@@ -2720,6 +2768,21 @@ mod tests {
             SecurityEngine::strip_sql_comments("SELECT \"identifier\""),
             "SELECT \"identifier\""
         );
+    }
+
+    #[test]
+    fn scans_dollar_quote_delimiters_without_consuming_content() {
+        let tagged: Vec<char> = "$tag$XDELETE$tag$".chars().collect();
+        let untagged: Vec<char> = "$$XDELETE$$".chars().collect();
+        let invalid: Vec<char> = "$bad-tag$X$bad-tag$".chars().collect();
+
+        assert_eq!(dollar_delimiter_end(&tagged, 0), Some(5));
+        assert_eq!(dollar_delimiter_end(&untagged, 0), Some(2));
+        assert_eq!(dollar_delimiter_end(&tagged, 1), None);
+        assert_eq!(dollar_delimiter_end(&invalid, 0), None);
+        assert_eq!(skip_dollar_quoted_literal(&tagged, 0), Some(tagged.len()));
+        assert_eq!(skip_dollar_quoted_literal(&untagged, 0), Some(untagged.len()));
+        assert_eq!(skip_dollar_quoted_literal(&tagged[..10], 0), None);
     }
 
     #[test]

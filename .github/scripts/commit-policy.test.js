@@ -81,6 +81,14 @@ test("accepts recognized merge headers only for multi-parent commits", async () 
   assert.equal((await check([signed(1, "Merge branch 'feature' into develop")])).failed, true);
 });
 
+test("requires a verified signature for merge commits regardless of committer email", async () => {
+  const merge = signed(1, "Merge branch 'feature' into develop");
+  merge.parents = [{ sha: sha(2) }, { sha: sha(3) }];
+  merge.committer = { email: "github-actions@github.com" };
+  merge.verification = undefined;
+  assert.equal((await check([merge])).failed, true);
+});
+
 test("requires verified PGP or SSH signatures, not Signed-off-by or signature presence", async () => {
   for (const verification of [undefined, null, {},
     { verified: false, reason: "unsigned" },
