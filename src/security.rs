@@ -786,13 +786,7 @@ impl SecurityEngine {
                 )
             })?;
 
-            if !body.trim_start().to_uppercase().starts_with("SELECT")
-                && !body.trim_start().to_uppercase().starts_with("TABLE")
-            {
-                return Err(SafeselectError::QueryRejected(
-                    "Read-only mode: WITH queries must end in SELECT".into(),
-                ));
-            }
+            self.validate_with_query_body(body)?;
 
             self.check_forbidden_tokens(trimmed, true)?;
             return Ok(());
@@ -801,6 +795,16 @@ impl SecurityEngine {
         Err(SafeselectError::QueryRejected(
             "Read-only mode: unrecognized statement type".into(),
         ))
+    }
+
+    fn validate_with_query_body(&self, body: &str) -> Result<()> {
+        let upper = body.trim_start().to_uppercase();
+        if !upper.starts_with("SELECT") && !upper.starts_with("TABLE") {
+            return Err(SafeselectError::QueryRejected(
+                "Read-only mode: WITH queries must end in SELECT or TABLE".into(),
+            ));
+        }
+        Ok(())
     }
 
     fn check_forbidden_tokens(&self, sql: &str, allow_with_keyword: bool) -> Result<()> {
@@ -1067,13 +1071,7 @@ impl Visitor for RelationPolicyVisitor<'_> {
 
 impl RelationPolicyVisitor<'_> {
     fn validate_table_command(&self, table: &Table) -> std::result::Result<(), String> {
-        let mut parts = Vec::new();
-        if let Some(schema) = &table.schema_name {
-            parts.push(schema.to_ascii_lowercase());
-        }
-        if let Some(name) = &table.table_name {
-            parts.push(name.to_ascii_lowercase());
-        }
+        let parts = table_relation_parts(table);
         if parts.is_empty() {
             return Err("TABLE command is missing a relation name".into());
         }
@@ -1206,6 +1204,14 @@ impl RelationPolicyVisitor<'_> {
         }
         Ok(())
     }
+}
+
+fn table_relation_parts(table: &Table) -> Vec<String> {
+    [table.schema_name.as_ref(), table.table_name.as_ref()]
+        .into_iter()
+        .flatten()
+        .map(|part| part.to_ascii_lowercase())
+        .collect()
 }
 
 fn validate_relation_policy(
