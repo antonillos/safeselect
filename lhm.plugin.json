@@ -3,7 +3,7 @@
   "name": "SafeSelect",
   "icon": "https://antonillos.github.io/safeselect/icon-512.png",
   "description": "Read-only database MCP for PostgreSQL and MongoDB. Secure, local, fail-closed access for coding agents with project-scoped policies.",
-  "version": "0.7.6",
+  "version": "0.7.7",
   "homepage": "https://antonillos.github.io/safeselect/",
   "tools": [
     {
