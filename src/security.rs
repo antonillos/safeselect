@@ -1507,13 +1507,21 @@ fn validate_relation_policy(
         cte_scopes: Vec::new(),
         violation: None,
     };
+    validate_table_command_schemas(sql, allowed_schemas)?;
+    let _ = statements.visit(&mut visitor);
+    visitor.violation.map_or(Ok(()), Err)
+}
+
+fn validate_table_command_schemas(
+    sql: &str,
+    allowed_schemas: &[String],
+) -> std::result::Result<(), String> {
     for parts in table_command_relation_parts(sql)? {
         if parts.len() == 2 && !allowed_schemas.is_empty() {
             validate_allowed_relation_parts(&parts, allowed_schemas)?;
         }
     }
-    let _ = statements.visit(&mut visitor);
-    visitor.violation.map_or(Ok(()), Err)
+    Ok(())
 }
 
 struct CteVisibilityVisitor<'a> {
