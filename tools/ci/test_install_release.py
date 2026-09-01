@@ -28,7 +28,7 @@ class ReleaseInstallerTests(unittest.TestCase):
 if [ "$1" = "-s" ]; then echo "${FAKE_OS:-Darwin}"; else echo "${FAKE_ARCH:-arm64}"; fi
 ''')
         self.executable(self.fake_bin / "ldd", '''#!/bin/sh
-echo "musl libc (synthetic)"
+echo "${LDD_OUTPUT:-musl libc (synthetic)}"
 ''')
         self.executable(self.fake_bin / "curl", '''#!/bin/sh
 printf '%s\n' "$*" >> "$CURL_LOG"
@@ -105,6 +105,12 @@ chmod +x safeselect
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("musl", result.stderr)
         self.assertFalse((self.root / "curl.log").exists())
+
+    def test_glibc_linux_is_accepted_when_musl_tools_are_installed(self):
+        result = self.run_installer(FAKE_OS="Linux", FAKE_ARCH="x86_64",
+                                    LDD_OUTPUT="ldd (GNU libc) 2.39")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.prefix / "bin/safeselect").is_file())
 
 
 if __name__ == "__main__":

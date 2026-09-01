@@ -13,16 +13,25 @@ detect_os_arch() {
         darwin) TARGET="apple-darwin" ;;
         linux)
             # Release artifacts target glibc; fail before downloading on musl hosts.
-            if command -v ldd >/dev/null 2>&1 && ldd --version 2>&1 | grep -qi musl; then
-                echo "Unsupported Linux libc: musl (prebuilt binaries require glibc)" >&2
-                exit 1
+            libc="unknown"
+            if command -v ldd >/dev/null 2>&1; then
+                ldd_version="$(ldd --version 2>&1 || true)"
+                case "${ldd_version}" in
+                    *musl*)
+                        echo "Unsupported Linux libc: musl (prebuilt binaries require glibc)" >&2
+                        exit 1
+                        ;;
+                    *GLIBC*|*glibc*|*"GNU libc"*) libc="glibc" ;;
+                esac
             fi
-            for loader in /lib/ld-musl-* /usr/lib/ld-musl-*; do
-                if [ -e "${loader}" ]; then
-                    echo "Unsupported Linux libc: musl (prebuilt binaries require glibc)" >&2
-                    exit 1
-                fi
-            done
+            if [ "${libc}" = unknown ]; then
+                for loader in /lib/ld-musl-* /usr/lib/ld-musl-*; do
+                    if [ -e "${loader}" ]; then
+                        echo "Unsupported Linux libc: musl (prebuilt binaries require glibc)" >&2
+                        exit 1
+                    fi
+                done
+            fi
             TARGET="unknown-linux-gnu"
             ;;
         *)      echo "Unsupported OS: ${OS}"; exit 1 ;;
