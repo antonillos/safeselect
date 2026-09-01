@@ -19,8 +19,9 @@ safeselect driver download --vendor postgresql
 
 ## Package managers
 
-Homebrew and asdf are the recommended easy-installation methods. Choose the
-method for your platform, then continue with the common setup below.
+The prebuilt installer, Homebrew, and asdf provide the recommended
+easy-installation methods. Choose one for your platform, then continue with the
+common setup below.
 
 ### Homebrew (macOS)
 
@@ -62,7 +63,12 @@ select a different destination. Requirements: Rust 1.85+, Java 17+, and
 installation with `./install.sh --install-makevn`. Add `~/.local/bin` to your
 `PATH` before invoking `safeselect` without its full path.
 
-## Quick install script
+## Prebuilt binary installer
+
+For a platform-specific prebuilt binary, see the
+[latest GitHub release](https://github.com/antonillos/safeselect/releases/latest)
+or run the verified installer. It checks the release archive's SHA-256 digest
+before installing to `~/.local/bin` (override with `PREFIX`):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/antonillos/safeselect/main/packaging/install/install-release.sh | sh

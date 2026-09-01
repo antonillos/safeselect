@@ -116,7 +116,21 @@ agent and backend clips remain in the [complete demo gallery](demo/README.md).
 
 ## Quick Start
 
-Install SafeSelect with one of the following package managers:
+Install SafeSelect with one of the following methods:
+
+### Prebuilt binaries (macOS & Linux)
+
+Download a platform-specific, prebuilt binary from the
+[latest GitHub release](https://github.com/antonillos/safeselect/releases/latest).
+The verified installer selects the matching macOS or Linux architecture,
+checks the published SHA-256 digest, and installs to `~/.local/bin`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/antonillos/safeselect/main/packaging/install/install-release.sh | sh
+```
+
+Set `PREFIX` to choose another installation directory. SafeSelect still needs
+a Java 17+ runtime at execution time.
 
 ### Homebrew (macOS)
 
