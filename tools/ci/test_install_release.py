@@ -15,6 +15,8 @@ class ReleaseInstallerTests(unittest.TestCase):
         self.fake_bin = self.root / "bin"
         self.fake_bin.mkdir()
         self.prefix = self.root / "prefix"
+        self.temp_root = self.root / "tmp"
+        self.temp_root.mkdir()
         self.archive = b"synthetic release archive"
         self.archive_sha = hashlib.sha256(self.archive).hexdigest()
         self.script = self.root / "install-release.sh"
@@ -23,7 +25,10 @@ class ReleaseInstallerTests(unittest.TestCase):
         self.script.chmod(0o755)
 
         self.executable(self.fake_bin / "uname", '''#!/bin/sh
-if [ "$1" = "-s" ]; then echo Darwin; else echo arm64; fi
+if [ "$1" = "-s" ]; then echo "${FAKE_OS:-Darwin}"; else echo "${FAKE_ARCH:-arm64}"; fi
+''')
+        self.executable(self.fake_bin / "ldd", '''#!/bin/sh
+echo "musl libc (synthetic)"
 ''')
         self.executable(self.fake_bin / "curl", '''#!/bin/sh
 printf '%s\n' "$*" >> "$CURL_LOG"
@@ -55,6 +60,7 @@ chmod +x safeselect
             "PATH": str(self.fake_bin) + os.pathsep + os.environ["PATH"],
             "PREFIX": str(self.prefix),
             "HOME": str(self.root),
+            "TMPDIR": str(self.temp_root),
             "CURL_LOG": str(self.root / "curl.log"),
             "ARCHIVE_CONTENT": self.archive.decode(),
             "ARCHIVE_SHA": self.archive_sha,
@@ -86,12 +92,19 @@ chmod +x safeselect
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("SHA-256 checksum mismatch", result.stderr)
         self.assertFalse((self.prefix / "bin/safeselect").exists())
+        self.assertEqual(list(self.temp_root.iterdir()), [])
 
     def test_explicit_version_accepts_optional_v_prefix(self):
         result = self.run_installer(SAFESELECT_VERSION="v1.2.3")
         self.assertEqual(result.returncode, 0, result.stderr)
         requests = (self.root / "curl.log").read_text()
         self.assertNotIn("/vv1.2.3/", requests)
+
+    def test_musl_linux_fails_before_downloading_glibc_binary(self):
+        result = self.run_installer(FAKE_OS="Linux", FAKE_ARCH="x86_64")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("musl", result.stderr)
+        self.assertFalse((self.root / "curl.log").exists())
 
 
 if __name__ == "__main__":

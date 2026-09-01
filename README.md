@@ -118,11 +118,11 @@ agent and backend clips remain in the [complete demo gallery](demo/README.md).
 
 Install SafeSelect with one of the following methods:
 
-### Prebuilt binaries (macOS & Linux)
+### Prebuilt binaries (macOS & glibc Linux)
 
-Download a platform-specific, prebuilt binary from the
-[latest GitHub release](https://github.com/antonillos/safeselect/releases/latest).
-The verified installer selects the matching macOS or Linux architecture,
+Download a platform-specific, prebuilt binary for macOS or glibc-based Linux
+from the [latest GitHub release](https://github.com/antonillos/safeselect/releases/latest).
+The verified installer selects the matching macOS or glibc Linux architecture,
 checks the published SHA-256 digest, and installs to `~/.local/bin`:
 
 ```bash

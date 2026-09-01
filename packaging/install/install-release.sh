@@ -11,7 +11,20 @@ detect_os_arch() {
     ARCH="$(uname -m)"
     case "${OS}" in
         darwin) TARGET="apple-darwin" ;;
-        linux)  TARGET="unknown-linux-gnu" ;;
+        linux)
+            # Release artifacts target glibc; fail before downloading on musl hosts.
+            if command -v ldd >/dev/null 2>&1 && ldd --version 2>&1 | grep -qi musl; then
+                echo "Unsupported Linux libc: musl (prebuilt binaries require glibc)" >&2
+                exit 1
+            fi
+            for loader in /lib/ld-musl-* /usr/lib/ld-musl-*; do
+                if [ -e "${loader}" ]; then
+                    echo "Unsupported Linux libc: musl (prebuilt binaries require glibc)" >&2
+                    exit 1
+                fi
+            done
+            TARGET="unknown-linux-gnu"
+            ;;
         *)      echo "Unsupported OS: ${OS}"; exit 1 ;;
     esac
     case "${ARCH}" in
@@ -56,6 +69,8 @@ verify_checksum() {
 download_and_install() {
     URL="https://github.com/${REPO}/releases/download/v${VERSION}/safeselect-v${VERSION}-${TARGET}.tar.gz"
     TMPDIR=$(mktemp -d)
+    cleanup() { rm -rf "${TMPDIR}"; }
+    trap cleanup EXIT HUP INT TERM
     cd "${TMPDIR}"
 
     echo "Downloading SafeSelect v${VERSION} for ${TARGET}..."
@@ -70,13 +85,13 @@ download_and_install() {
     echo "Installing to ${PREFIX}/bin..."
     mkdir -p "${PREFIX}/bin"
     installed_binary="${PREFIX}/bin/.safeselect.tmp.$$"
-    trap 'rm -f "${installed_binary}"' EXIT HUP INT TERM
+    trap 'rm -f "${installed_binary}"; cleanup' EXIT HUP INT TERM
     cp safeselect "${installed_binary}"
     chmod +x "${installed_binary}"
     mv -f "${installed_binary}" "${PREFIX}/bin/safeselect"
     trap - EXIT HUP INT TERM
 
-    rm -rf "${TMPDIR}"
+    cleanup
 
     echo "Installed at ${PREFIX}/bin/safeselect"
     echo "Make sure ${PREFIX}/bin is in your PATH"

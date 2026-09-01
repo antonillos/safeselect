@@ -65,7 +65,7 @@ installation with `./install.sh --install-makevn`. Add `~/.local/bin` to your
 
 ## Prebuilt binary installer
 
-For a platform-specific prebuilt binary, see the
+For a platform-specific prebuilt binary on macOS or glibc-based Linux, see the
 [latest GitHub release](https://github.com/antonillos/safeselect/releases/latest)
 or run the verified installer. It checks the release archive's SHA-256 digest
 before installing to `~/.local/bin` (override with `PREFIX`):
