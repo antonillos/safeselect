@@ -34,13 +34,15 @@ class Hosting:
         self.draft = True
         self.prerelease = False
         self.tag = ""
+        self.target = SHA
         self.calls = []
         self.fail_after = None
 
     def info(self, *_):
         if not self.exists:
             return None
-        return {"draft": self.draft, "prerelease": self.prerelease, "assets": [
+        return {"draft": self.draft, "prerelease": self.prerelease,
+                "target_commitish": self.target, "assets": [
             {"name": name, "state": "uploaded", "digest": "sha256:" + hashlib.sha256(data).hexdigest()}
             for name, data in self.files.items()]}
 
@@ -55,6 +57,7 @@ class Hosting:
             assert "--draft" in args
             self.exists = True
             self.prerelease = "--prerelease" in args
+            self.target = args[args.index("--target") + 1]
         elif operation == "download":
             dest = Path(args[args.index("--dir") + 1])
             for index, arg in enumerate(args):
@@ -152,6 +155,21 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Refusing to move"):
             release.publish(self.args)
         self.assertFalse(self.host.exists)
+
+    def test_refuses_untagged_draft_with_different_target(self):
+        self.host.exists = True
+        self.host.target = "b" * 40
+        with self.assertRaisesRegex(ValueError, "draft with a different target"):
+            release.publish(self.args)
+        self.assertEqual(self.host.files, {})
+
+    def test_refuses_tagged_draft_with_different_target(self):
+        self.host.exists = True
+        self.host.tag = SHA
+        self.host.target = "b" * 40
+        with self.assertRaisesRegex(ValueError, "draft with a different target"):
+            release.publish(self.args)
+        self.assertEqual(self.host.files, {})
 
     def test_annotated_tag_compares_peeled_commit(self):
         with patch.object(release, "command", return_value=f'{"b"*40}\trefs/tags/{VERSION}\n{SHA}\trefs/tags/{VERSION}^{{}}'):
@@ -255,6 +273,27 @@ class ApiTests(unittest.TestCase):
         response = subprocess.CompletedProcess([], 0, '{"id": 1}', "")
         with patch("release.subprocess.run", return_value=response):
             self.assertEqual(release.release_info("owner/repo", VERSION), {"id": 1})
+
+    def test_draft_release_is_found_from_release_list(self):
+        draft = {"id": 1, "tag_name": VERSION, "draft": True}
+        with patch.object(release, "api", side_effect=[None, [draft]]) as api:
+            self.assertEqual(release.release_info("owner/repo", VERSION), draft)
+        self.assertEqual(api.call_args_list, [
+            unittest.mock.call(f"repos/owner/repo/releases/tags/{VERSION}"),
+            unittest.mock.call("repos/owner/repo/releases?per_page=100&page=1"),
+        ])
+
+    def test_draft_release_is_found_on_later_page(self):
+        first_page = [{"tag_name": f"v0.0.{number}"} for number in range(100)]
+        draft = {"id": 1, "tag_name": VERSION, "draft": True}
+        with patch.object(release, "api", side_effect=[None, first_page, [draft]]) as api:
+            self.assertEqual(release.release_info("owner/repo", VERSION), draft)
+        self.assertEqual(api.call_args_list[-1],
+                         unittest.mock.call("repos/owner/repo/releases?per_page=100&page=2"))
+
+    def test_absent_release_is_not_found_in_release_list(self):
+        with patch.object(release, "api", side_effect=[None, []]):
+            self.assertIsNone(release.release_info("owner/repo", VERSION))
 
     def test_checked_command_executes_without_shell(self):
         self.assertEqual(release.command(sys.executable, "-c", "print('ok')"), "ok")
