@@ -17,4 +17,4 @@ codex --model "${CODEX_MODEL}" \
   -c model_reasoning_effort=low \
   -c model_reasoning_summary=detailed \
   exec --skip-git-repo-check \
-  --sandbox read-only -c approval_policy=on-request --color always "${PROMPT}"
+  --approve-for-me --color always "${PROMPT}"

@@ -187,7 +187,8 @@ the `demo` role to `SELECT`-only after seeding, so a direct database connection
 cannot modify the fixture even if a local credential is retrieved.
 Its bootstrap-admin password is generated only in the preparation process,
 never written to `demo.env` or the Compose override, and the Codex session runs
-in a read-only sandbox without automatic workspace-write approvals.
+  with Codex's normal approved-for-me execution path, matching a real operator
+  who explicitly authorizes the controlled database action.
 
 When using a custom runtime directory, keep it under the disposable prefix
 `/private/tmp/safeselect-dbeaver-*` and pass the same value while rendering:

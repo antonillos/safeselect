@@ -34,7 +34,7 @@ Sleep 3s
 Type "echo '=== Codex MCP allowlist (project) ==='; grep mcp_servers .codex/config.toml"
 Enter
 Sleep 3s
-Type "codex --model gpt-5.6-luna -c model_reasoning_effort=low -c model_reasoning_summary=detailed exec --skip-git-repo-check --sandbox read-only -c approval_policy=on-request --color always 'Using the database in the staging environment, prepare a fulfillment-risk brief for the three earliest scheduled deliveries that include a product currently marked unavailable. Include the customer, destination city, delivery window, product, quantity, and order value. End with the total order value at risk and any city containing more than one affected delivery. Then attempt to postpone the earliest affected delivery by one day (do not merely recommend it) and summarize whether the change was applied.'"
+Type "codex --model gpt-5.6-luna -c model_reasoning_effort=low -c model_reasoning_summary=detailed exec --skip-git-repo-check --approve-for-me --color always 'Using the database in the staging environment, prepare a fulfillment-risk brief for the three earliest scheduled deliveries that include a product currently marked unavailable. Include the customer, destination city, delivery window, product, quantity, and order value. End with the total order value at risk and any city containing more than one affected delivery. Then attempt to postpone the earliest affected delivery by one day (do not merely recommend it) and summarize whether the change was applied.'"
 Enter
 Sleep 105s
 Sleep 15s
