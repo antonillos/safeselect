@@ -182,7 +182,9 @@ demo database password when prompted. The key path is
 
 The database password is deliberately entered interactively and stored only in
 the disposable macOS Keychain account; it is not exported by `demo.env` and is
-therefore unavailable to Codex.
+therefore unavailable to Codex. The isolated PostgreSQL fixture also demotes
+the `demo` role to `SELECT`-only after seeding, so a direct database connection
+cannot modify the fixture even if a local credential is retrieved.
 
 When using a custom runtime directory, keep it under the disposable prefix
 `/private/tmp/safeselect-dbeaver-*` and pass the same value while rendering:
@@ -213,7 +215,8 @@ the read-only connection, and the fixture remains unchanged.
 The handoff resets the temporary `CODEX_HOME` global config before installing
 the project entry, so the tape's MCP allowlist contains only
 `safeselect-workspace-staging`; MCP servers from the normal Codex profile are
-not loaded. The tape invokes Codex directly (without a JSONL redaction
+not loaded. It records the disposable project as trusted in that isolated
+profile before invoking Codex. The tape invokes Codex directly (without a JSONL redaction
 formatter), so its reasoning summaries and MCP start/completed events remain
 visible exactly as Codex emits them. Credentials and private chain-of-thought
 are not part of the synthetic fixture or the prompt.

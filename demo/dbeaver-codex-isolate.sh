@@ -16,8 +16,10 @@ mkdir -p "${AUDIT_DIR}"
 # connectors configured in the user's normal Codex profile cannot leak into
 # this recording; the project-scoped SafeSelect entry is installed afterward.
 mkdir -p "${CODEX_HOME}"
-cat > "${CODEX_HOME}/config.toml" <<'EOF'
+cat > "${CODEX_HOME}/config.toml" <<EOF
 # Deliberately no global MCP servers: the demo allowlist is project-scoped.
+[projects."${SAFESELECT_DBEAVER_PROJECT}"]
+trust_level = "trusted"
 EOF
 python3 - "${PROJECT_FILE}" "${AUDIT_DIR}" <<'PY'
 from pathlib import Path
@@ -34,3 +36,4 @@ elif f'directory = "{audit}"' not in text:
 project.write_text(text)
 PY
 printf 'Isolated audit directory: %s\n' "${AUDIT_DIR}"
+printf 'Trusted Codex project: %s\n' "${SAFESELECT_DBEAVER_PROJECT}"

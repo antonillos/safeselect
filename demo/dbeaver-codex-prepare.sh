@@ -87,6 +87,18 @@ python3 "${ROOT_DIR}/fixtures/dbeaver/build_fixture.py" \
   --output "${RUN_ROOT}/dbeaver-demo-repeat.dbp"
 cmp "${RUN_ROOT}/dbeaver-demo.dbp" "${RUN_ROOT}/dbeaver-demo-repeat.dbp"
 rm "${RUN_ROOT}/dbeaver-demo-repeat.dbp"
+cat > "${HOST_RUNTIME_ROOT}/postgres-readonly.sql" <<'SQL'
+
+-- The DBeaver→Codex fixture keeps the documented demo/demo-password login as
+-- a separate role. Even if an agent obtains the macOS Keychain item,
+-- PostgreSQL itself rejects writes outside SafeSelect.
+CREATE ROLE demo LOGIN PASSWORD 'demo-password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT;
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+GRANT USAGE ON SCHEMA public TO demo;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO demo;
+ALTER DEFAULT PRIVILEGES FOR ROLE safeselect_dbeaver_admin IN SCHEMA public
+  GRANT SELECT ON TABLES TO demo;
+SQL
 cp "${ROOT_DIR}/dbeaver-codex-run.sh" "${RUN_ROOT}/dbeaver-codex-run.sh"
 chmod 700 "${RUN_ROOT}/dbeaver-codex-run.sh"
 cp "${ROOT_DIR}/dbeaver-codex-isolate.sh" "${RUN_ROOT}/dbeaver-codex-isolate.sh"
@@ -98,6 +110,12 @@ chmod 755 "${RUN_ROOT}/dbeaver-codex-intro.sh"
 
 cat > "${RUN_ROOT}/compose.override.yml" <<EOF
 services:
+  postgres:
+    environment:
+      POSTGRES_USER: safeselect_dbeaver_admin
+      POSTGRES_PASSWORD: safeselect-dbeaver-admin
+    volumes:
+      - ${HOST_RUNTIME_ROOT}/postgres-readonly.sql:/docker-entrypoint-initdb.d/02-dbeaver-readonly.sql:ro
   ssh-bastion:
     volumes:
       - ${HOST_SSH_DIR}/authorized_keys:/home/demo/.ssh/authorized_keys:ro
@@ -109,6 +127,12 @@ if ! docker info >/dev/null 2>&1; then
   fi
 fi
 docker info >/dev/null
+
+STANDARD_COMPOSE=(docker compose -p safeselect-demo -f "${ROOT_DIR}/docker-compose.yml")
+if [[ -n "$("${STANDARD_COMPOSE[@]}" ps -q 2>/dev/null)" ]]; then
+  printf '%s\n' 'Stopping the standard demo fixture to release its documented ports (volumes are preserved).'
+  "${STANDARD_COMPOSE[@]}" down --remove-orphans >/dev/null
+fi
 
 COMPOSE=(docker compose -p safeselect-dbeaver-codex \
   -f "${ROOT_DIR}/docker-compose.yml" -f "${RUN_ROOT}/compose.override.yml")
