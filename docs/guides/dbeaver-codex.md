@@ -1,6 +1,6 @@
 # From DBeaver to Codex: read-only PostgreSQL context
 
-> Reviewed: 2026-08-28 · SafeSelect v0.7.6 · macOS walkthrough.
+> Reviewed: 2026-09-01 · SafeSelect v0.7.7 · macOS walkthrough.
 
 Use an existing DBeaver connection to give Codex schema discovery and bounded
 PostgreSQL reads through SafeSelect MCP. You configure the connection locally;
@@ -114,3 +114,34 @@ turn your first production connection into a destructive test environment.
 
 Continue with [the security boundaries](../security-proof.md) or
 [compare database MCP approaches](../compare.md).
+
+## A business use case in `staging`
+
+The isolated recording uses the same SSH shape as a real DBeaver export: the
+local endpoint is forwarded through a bastion to the disposable PostgreSQL
+service. The database account uses a password; the bastion uses a separate
+private key file. Neither credential is pasted into Codex.
+
+After the import and `check` succeed, ask Codex only for a business outcome.
+The companion recording starts after the import step so the export walkthrough
+is not duplicated; it opens by inspecting the deterministic DBeaver `.dbp`
+export and showing a sanitized connection handoff panel:
+
+> Using the database in the staging environment, prepare a fulfillment-risk
+> brief for the three earliest scheduled deliveries that include a product
+> currently marked unavailable. Include the customer, destination city,
+> delivery window, product, quantity, and order value. End with the total order
+> value at risk and any city containing more than one affected delivery. Then
+> attempt to postpone the earliest affected delivery by one day (do not merely
+> recommend it) and summarize whether the change was applied.
+
+Codex discovers the database structure itself. The report is read-only data
+work; the novel part is the operational signal that combines revenue exposure
+with geographic clustering before testing a schedule change. Codex attempts
+the postponement through the supported path, but no update function is exposed,
+so no mutation is applied and the original delivery window remains unchanged.
+This is a demo fixture, not a recommendation to test writes against production.
+The recording colorizes the reasoning summaries and tool/MCP progress emitted
+by Codex; private hidden chain-of-thought is not exposed.
+
+![Codex prepares a fulfillment-risk brief through the DBeaver SSH connection](../recordings/safeselect-dbeaver-codex.gif)
