@@ -121,6 +121,8 @@ The isolated recording uses the same SSH shape as a real DBeaver export: the
 local endpoint is forwarded through a bastion to the disposable PostgreSQL
 service. The database account uses a password; the bastion uses a separate
 private key file. Neither credential is pasted into Codex.
+The companion script is currently macOS-only because the import stores the
+database password in macOS Keychain.
 
 After the import and `check` succeed, ask Codex only for a business outcome.
 The companion recording starts after the import step so the export walkthrough

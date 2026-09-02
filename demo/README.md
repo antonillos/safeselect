@@ -157,7 +157,8 @@ bastion. PostgreSQL authentication uses the local demo username/password;
 the bastion uses the generated key file. Codex receives only a fulfillment
 question, not instructions about SafeSelect or database tools. The clip opens
 with a sanitized DBeaver export inspection panel; the full interactive import remains in
-the existing import tape so it is not duplicated here.
+the existing import tape so it is not duplicated here. The flow currently
+targets macOS because the imported database password is stored in Keychain.
 
 Prepare the isolated runtime, run the existing DBeaver import recording once,
 then source its environment and run the Codex handoff tape:
@@ -183,7 +184,8 @@ cd "$SAFESELECT_DBEAVER_PROJECT"
 
 Preparation intentionally creates a fresh `CODEX_HOME`; therefore the isolated
 login is the one manual step that may open a browser. It does not reuse your
-personal Codex credentials.
+personal Codex credentials. It also prepends the downloaded SafeSelect binary
+directory to `PATH`, so the project-scoped MCP command resolves on a clean host.
 
 If a previous run left a stale `SAFESELECT_BIN` export, preparation ignores it
 when the file no longer exists and falls back to the verified public release.

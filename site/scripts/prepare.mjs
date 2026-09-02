@@ -78,10 +78,10 @@ await copyFile(
   resolve(root, "docs/recordings/onboarding-full-local.gif"),
   resolve(site, "public/onboarding.gif"),
 );
-await copyFile(
-  resolve(root, "docs/recordings/safeselect-dbeaver-codex.gif"),
-  resolve(site, "public/dbeaver-codex.gif"),
-);
+const dbeaverRecording = resolve(root, "docs/recordings/safeselect-dbeaver-codex.gif");
+if (existsSync(dbeaverRecording)) {
+  await copyFile(dbeaverRecording, resolve(site, "public/dbeaver-codex.gif"));
+}
 console.log(
   `Prepared ${definitions.length} reviewed documents and the onboarding recording.`,
 );

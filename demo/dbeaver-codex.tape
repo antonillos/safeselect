@@ -3,7 +3,6 @@
 Output "docs/recordings/safeselect-dbeaver-codex.gif"
 
 Require codex
-Require safeselect
 Set Shell "bash"
 Set FontSize 19
 Set Width 1280
@@ -13,7 +12,7 @@ Set Theme "Dracula"
 Set TypingSpeed 18ms
 Set WindowBar "Colorful"
 
-Type "source /private/tmp/safeselect-dbeaver-codex/demo.env && cd /private/tmp/safeselect-dbeaver-codex/workspace && clear"
+Type "source /private/tmp/safeselect-dbeaver-codex/demo.env && cd /private/tmp/safeselect-dbeaver-codex/safeselect-dbeaver-demo && clear"
 Enter
 Sleep 1s
 Type "cp $SAFESELECT_DBEAVER_SOURCE/dbeaver-codex-{intro,isolate,format.py,run.sh} $SAFESELECT_DBEAVER_ROOT/ 2>/dev/null || true"

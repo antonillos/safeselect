@@ -8,8 +8,13 @@ HOST_SSH_DIR="${HOST_RUNTIME_ROOT}/ssh"
 RELEASE_VERSION="0.7.7"
 RELEASE_BASE="https://github.com/antonillos/safeselect/releases/download/v${RELEASE_VERSION}"
 
+case "$(uname -s)" in
+  Darwin) ;;
+  *) echo "This DBeaver SSH demo currently supports macOS only (Keychain credentials required)." >&2; exit 1 ;;
+esac
+
 rm -rf "${RUN_ROOT}"
-mkdir -p "${RUN_ROOT}"/bin "${RUN_ROOT}"/codex-home "${RUN_ROOT}"/workspace \
+mkdir -p "${RUN_ROOT}"/bin "${RUN_ROOT}"/codex-home "${RUN_ROOT}"/safeselect-dbeaver-demo \
   "${RUN_ROOT}"/runtime "${RUN_ROOT}"/ssh
 rm -rf "${HOST_RUNTIME_ROOT}"
 mkdir -p "${HOST_SSH_DIR}"
@@ -27,8 +32,6 @@ if [[ -z "${SAFESELECT_BIN_PATH:-}" ]]; then
   case "$(uname -s):$(uname -m)" in
     Darwin:arm64) PLATFORM="aarch64-apple-darwin" ;;
     Darwin:x86_64) PLATFORM="x86_64-apple-darwin" ;;
-    Linux:aarch64|Linux:arm64) PLATFORM="aarch64-unknown-linux-gnu" ;;
-    Linux:x86_64) PLATFORM="x86_64-unknown-linux-gnu" ;;
     *) echo "Unsupported platform: $(uname -s):$(uname -m)" >&2; exit 1 ;;
   esac
   ARCHIVE="safeselect-v${RELEASE_VERSION}-${PLATFORM}.tar.gz"
@@ -40,6 +43,8 @@ if [[ -z "${SAFESELECT_BIN_PATH:-}" ]]; then
   tar -xzf "${RUN_ROOT}/${ARCHIVE}" -C "${RUN_ROOT}/bin"
   SAFESELECT_BIN_PATH="$(find "${RUN_ROOT}/bin" -type f -name safeselect -perm -111 -print -quit)"
 fi
+
+SAFESELECT_BIN_DIR="$(dirname "${SAFESELECT_BIN_PATH}")"
 
 if [[ -z "${SAFESELECT_BIN_PATH}" || ! -x "${SAFESELECT_BIN_PATH}" ]]; then
   echo "SafeSelect binary was not found" >&2
@@ -101,7 +106,8 @@ export SAFESELECT_DBEAVER_ROOT='${RUN_ROOT}'
 export SAFESELECT_DBEAVER_SOURCE='${ROOT_DIR}'
 export CODEX_HOME='${RUN_ROOT}/codex-home'
 export SAFESELECT_DBEAVER_COMPOSE='${RUN_ROOT}/compose.override.yml'
-export SAFESELECT_DBEAVER_PROJECT='${RUN_ROOT}/workspace'
+export SAFESELECT_DBEAVER_PROJECT='${RUN_ROOT}/safeselect-dbeaver-demo'
+export PATH='${SAFESELECT_BIN_DIR}':"\$PATH"
 EOF
 
 printf '%s\n' "Prepared isolated DBeaver → Codex demo at ${RUN_ROOT}"
