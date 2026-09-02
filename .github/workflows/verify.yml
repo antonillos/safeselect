@@ -415,12 +415,12 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Download static website
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: website-pages
           path: target/pages/
       - name: Add current CRAP badge without replacing website
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: pages-badge
           path: target/pages/
