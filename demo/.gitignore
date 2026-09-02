@@ -1,4 +1,5 @@
 .runtime/
+.demo-dbeaver-runtime/
 .demo-audit/
 .codex/
 .opencode/

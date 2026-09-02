@@ -36,6 +36,9 @@ const definitions = [
 const routes = new Map(
   definitions.map((doc) => [resolve(root, doc.file), doc.route]),
 );
+const assetRoutes = new Map([
+  [resolve(root, "docs/recordings/safeselect-dbeaver-codex.gif"), "/dbeaver-codex.gif"],
+]);
 const documents = {};
 for (const doc of definitions) {
   const markdown = await readFile(resolve(root, doc.file), "utf8");
@@ -53,6 +56,8 @@ for (const doc of definitions) {
     const suffix = fragment ? `#${fragment}` : "";
     token.href = routes.has(target)
       ? `@@BASE@@${routes.get(target)}${suffix}`
+      : assetRoutes.has(target)
+        ? `@@BASE@@${assetRoutes.get(target)}${suffix}`
       : `https://github.com/antonillos/safeselect/blob/develop/${relative(root, target)}${suffix}`;
   });
   const html = marked
@@ -73,6 +78,10 @@ await copyFile(
   resolve(root, "docs/recordings/onboarding-full-local.gif"),
   resolve(site, "public/onboarding.gif"),
 );
+const dbeaverRecording = resolve(root, "docs/recordings/safeselect-dbeaver-codex.gif");
+if (existsSync(dbeaverRecording)) {
+  await copyFile(dbeaverRecording, resolve(site, "public/dbeaver-codex.gif"));
+}
 console.log(
   `Prepared ${definitions.length} reviewed documents and the onboarding recording.`,
 );
