@@ -29,6 +29,9 @@ case "${RUN_ROOT}" in
     exit 1
     ;;
 esac
+case "${RUN_ROOT}" in
+  *"'"*) echo "SAFESELECT_DBEAVER_ROOT must not contain apostrophes" >&2; exit 1 ;;
+esac
 
 rm -rf "${RUN_ROOT}"
 mkdir -p "${RUN_ROOT}"/bin "${RUN_ROOT}"/codex-home "${RUN_ROOT}"/safeselect-dbeaver-demo \
@@ -140,7 +143,6 @@ COMPOSE=(docker compose -p safeselect-dbeaver-codex \
   -f "${ROOT_DIR}/docker-compose.yml" -f "${RUN_ROOT}/compose.override.yml")
 "${COMPOSE[@]}" down -v --remove-orphans >/dev/null 2>&1 || true
 "${COMPOSE[@]}" up -d --wait
-
 cat > "${RUN_ROOT}/demo.env" <<EOF
 export SAFESELECT_BIN='${SAFESELECT_BIN_PATH}'
 export SAFESELECT_CONFIG_DIR='${RUN_ROOT}/runtime'
