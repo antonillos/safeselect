@@ -69,7 +69,7 @@ if [[ -z "${SAFESELECT_BIN_PATH}" || ! -x "${SAFESELECT_BIN_PATH}" ]]; then
   echo "SafeSelect binary was not found" >&2
   exit 1
 fi
-VERSION_OUTPUT="$(${SAFESELECT_BIN_PATH} --version)"
+VERSION_OUTPUT="$("${SAFESELECT_BIN_PATH}" --version)"
 case "${VERSION_OUTPUT}" in
   "safeselect v${RELEASE_VERSION}"*|"safeselect ${RELEASE_VERSION}"*) ;;
   *) echo "Expected SafeSelect ${RELEASE_VERSION}, got: ${VERSION_OUTPUT}" >&2; exit 1 ;;

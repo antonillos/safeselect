@@ -13,7 +13,7 @@ Set Theme "Dracula"
 Set TypingSpeed 18ms
 Set WindowBar "Colorful"
 
-Type "source $SAFESELECT_DBEAVER_ROOT/demo.env && cd $SAFESELECT_DBEAVER_PROJECT && clear"
+Type `source "$SAFESELECT_DBEAVER_ROOT/demo.env" && cd "$SAFESELECT_DBEAVER_PROJECT" && clear`
 Enter
 Sleep 1s
 Type "cp $SAFESELECT_DBEAVER_SOURCE/dbeaver-codex-{intro,isolate,format.py,run.sh} $SAFESELECT_DBEAVER_ROOT/ 2>/dev/null || true"
