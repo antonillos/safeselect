@@ -62,6 +62,8 @@ if [[ -z "${SAFESELECT_BIN_PATH:-}" ]]; then
 fi
 
 SAFESELECT_BIN_DIR="$(dirname "${SAFESELECT_BIN_PATH}")"
+SAFESELECT_DBEAVER_ADMIN_PASSWORD="$(openssl rand -hex 32)"
+export SAFESELECT_DBEAVER_ADMIN_PASSWORD
 
 if [[ -z "${SAFESELECT_BIN_PATH}" || ! -x "${SAFESELECT_BIN_PATH}" ]]; then
   echo "SafeSelect binary was not found" >&2
@@ -113,7 +115,7 @@ services:
   postgres:
     environment:
       POSTGRES_USER: safeselect_dbeaver_admin
-      POSTGRES_PASSWORD: safeselect-dbeaver-admin
+      POSTGRES_PASSWORD: \${SAFESELECT_DBEAVER_ADMIN_PASSWORD:?missing generated admin password}
     volumes:
       - ${HOST_RUNTIME_ROOT}/postgres-readonly.sql:/docker-entrypoint-initdb.d/02-dbeaver-readonly.sql:ro
   ssh-bastion:
@@ -146,7 +148,6 @@ unset SAFESELECT_DEMO_PASSWORD
 export SAFESELECT_DBEAVER_ROOT='${RUN_ROOT}'
 export SAFESELECT_DBEAVER_SOURCE='${ROOT_DIR}'
 export CODEX_HOME='${RUN_ROOT}/codex-home'
-export SAFESELECT_DBEAVER_COMPOSE='${RUN_ROOT}/compose.override.yml'
 export SAFESELECT_DBEAVER_PROJECT='${RUN_ROOT}/safeselect-dbeaver-demo'
 export PATH='${SAFESELECT_BIN_DIR}':"\$PATH"
 EOF

@@ -185,6 +185,9 @@ the disposable macOS Keychain account; it is not exported by `demo.env` and is
 therefore unavailable to Codex. The isolated PostgreSQL fixture also demotes
 the `demo` role to `SELECT`-only after seeding, so a direct database connection
 cannot modify the fixture even if a local credential is retrieved.
+Its bootstrap-admin password is generated only in the preparation process,
+never written to `demo.env` or the Compose override, and the Codex session runs
+in a read-only sandbox without automatic workspace-write approvals.
 
 When using a custom runtime directory, keep it under the disposable prefix
 `/private/tmp/safeselect-dbeaver-*` and pass the same value while rendering:
