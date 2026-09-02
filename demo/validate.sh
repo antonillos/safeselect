@@ -7,7 +7,7 @@ REPO_ROOT="$(CDPATH= cd -- "${ROOT_DIR}/.." && pwd)"
 bash -n "${ROOT_DIR}"/*.sh
 CODEX_INTEGRATION_ROOT="${TMPDIR:-/tmp}/safeselect-codex-agent" \
   bash -n "${ROOT_DIR}/codex-setup.sh"
-for tape in "${ROOT_DIR}"/safeselect-*.tape; do
+for tape in "${ROOT_DIR}"/*.tape; do
   vhs validate "${tape}"
 done
 

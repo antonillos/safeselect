@@ -1,5 +1,6 @@
-# Run demo/dbeaver-codex-prepare.sh and the existing DBeaver import tape first.
+# Run demo/dbeaver-codex-prepare.sh and the interactive DBeaver import first.
 # This tape intentionally starts after import: it demonstrates the Codex handoff.
+# Invoke VHS with SAFESELECT_DBEAVER_ROOT set to the runtime prepared for this run.
 Output "docs/recordings/safeselect-dbeaver-codex.gif"
 
 Require codex
@@ -12,7 +13,7 @@ Set Theme "Dracula"
 Set TypingSpeed 18ms
 Set WindowBar "Colorful"
 
-Type "source /private/tmp/safeselect-dbeaver-codex/demo.env && cd /private/tmp/safeselect-dbeaver-codex/safeselect-dbeaver-demo && clear"
+Type "source $SAFESELECT_DBEAVER_ROOT/demo.env && cd $SAFESELECT_DBEAVER_PROJECT && clear"
 Enter
 Sleep 1s
 Type "cp $SAFESELECT_DBEAVER_SOURCE/dbeaver-codex-{intro,isolate,format.py,run.sh} $SAFESELECT_DBEAVER_ROOT/ 2>/dev/null || true"

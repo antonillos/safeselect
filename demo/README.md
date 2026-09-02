@@ -156,31 +156,44 @@ This recording uses the public DBeaver-shaped fixture and the disposable SSH
 bastion. PostgreSQL authentication uses the local demo username/password;
 the bastion uses the generated key file. Codex receives only a fulfillment
 question, not instructions about SafeSelect or database tools. The clip opens
-with a sanitized DBeaver export inspection panel; the full interactive import remains in
-the existing import tape so it is not duplicated here. The flow currently
-targets macOS because the imported database password is stored in Keychain.
+with a sanitized DBeaver export inspection panel; the full interactive import
+is a prerequisite and is not duplicated here. The flow currently targets macOS
+because the imported database password is stored in Keychain.
 
-Prepare the isolated runtime, run the existing DBeaver import recording once,
-then source its environment and run the Codex handoff tape:
+Prepare the isolated runtime, perform the interactive import below, then run
+the Codex handoff tape. This clip intentionally starts after import so it does
+not duplicate the interactive import itself:
 
 ```bash
 ./demo/dbeaver-codex-prepare.sh
-# run the existing interactive DBeaver import tape here
-source /private/tmp/safeselect-dbeaver-codex/demo.env
-CODEX_HOME="$CODEX_HOME" codex login   # only if this fresh runtime is not logged in
-CODEX_HOME="$CODEX_HOME" codex login status
-vhs demo/dbeaver-codex.tape
-```
-
-For a manual import instead of the existing tape, run it after preparation
-(the prompts ask for `staging`, bastion `127.0.0.1:55222`, target
-`postgres:5432`, the generated key file, and the demo database password):
-
-```bash
 source /private/tmp/safeselect-dbeaver-codex/demo.env
 cd "$SAFESELECT_DBEAVER_PROJECT"
 "$SAFESELECT_BIN" import-dbeaver "$SAFESELECT_DBEAVER_ROOT/dbeaver-demo.dbp"
+CODEX_HOME="$CODEX_HOME" codex login   # only if this fresh runtime is not logged in
+CODEX_HOME="$CODEX_HOME" codex login status
+cd -
+SAFESELECT_DBEAVER_ROOT=/private/tmp/safeselect-dbeaver-codex vhs demo/dbeaver-codex.tape
 ```
+
+During import, select the demo connection and use `staging`, bastion
+`127.0.0.1:55222`, target `postgres:5432`, the generated key file, and the
+demo database password when prompted. The key path is
+`$SAFESELECT_DBEAVER_ROOT/ssh/demo_ed25519`.
+
+The database password is deliberately entered interactively and stored only in
+the disposable macOS Keychain account; it is not exported by `demo.env` and is
+therefore unavailable to Codex.
+
+When using a custom runtime directory, keep it under the disposable prefix
+`/private/tmp/safeselect-dbeaver-*` and pass the same value while rendering:
+
+```bash
+SAFESELECT_DBEAVER_ROOT=/private/tmp/safeselect-dbeaver-local ./demo/dbeaver-codex-prepare.sh
+SAFESELECT_DBEAVER_ROOT=/private/tmp/safeselect-dbeaver-local vhs demo/dbeaver-codex.tape
+```
+
+The tape reads that override before sourcing `demo.env`, so it uses the matching
+project and configuration.
 
 Preparation intentionally creates a fresh `CODEX_HOME`; therefore the isolated
 login is the one manual step that may open a browser. It does not reuse your

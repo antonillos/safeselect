@@ -13,6 +13,23 @@ case "$(uname -s)" in
   *) echo "This DBeaver SSH demo currently supports macOS only (Keychain credentials required)." >&2; exit 1 ;;
 esac
 
+# This script resets the entire runtime. Keep overrides confined to an
+# explicitly disposable /private/tmp directory before deleting anything.
+RUN_ROOT="$(python3 - "${RUN_ROOT}" <<'PY'
+from pathlib import Path
+import sys
+
+print(Path(sys.argv[1]).resolve(strict=False))
+PY
+)"
+case "${RUN_ROOT}" in
+  /private/tmp/safeselect-dbeaver-?*) ;;
+  *)
+    echo "SAFESELECT_DBEAVER_ROOT must be a disposable /private/tmp/safeselect-dbeaver-* directory: ${RUN_ROOT}" >&2
+    exit 1
+    ;;
+esac
+
 rm -rf "${RUN_ROOT}"
 mkdir -p "${RUN_ROOT}"/bin "${RUN_ROOT}"/codex-home "${RUN_ROOT}"/safeselect-dbeaver-demo \
   "${RUN_ROOT}"/runtime "${RUN_ROOT}"/ssh
@@ -101,7 +118,7 @@ COMPOSE=(docker compose -p safeselect-dbeaver-codex \
 cat > "${RUN_ROOT}/demo.env" <<EOF
 export SAFESELECT_BIN='${SAFESELECT_BIN_PATH}'
 export SAFESELECT_CONFIG_DIR='${RUN_ROOT}/runtime'
-export SAFESELECT_DEMO_PASSWORD='demo-password'
+unset SAFESELECT_DEMO_PASSWORD
 export SAFESELECT_DBEAVER_ROOT='${RUN_ROOT}'
 export SAFESELECT_DBEAVER_SOURCE='${ROOT_DIR}'
 export CODEX_HOME='${RUN_ROOT}/codex-home'
@@ -111,5 +128,5 @@ export PATH='${SAFESELECT_BIN_DIR}':"\$PATH"
 EOF
 
 printf '%s\n' "Prepared isolated DBeaver → Codex demo at ${RUN_ROOT}"
-printf '%s\n' "Next: run the existing interactive DBeaver import tape with ${RUN_ROOT}/demo.env."
+printf '%s\n' "Next: run the interactive DBeaver import with ${RUN_ROOT}/demo.env."
 printf '%s\n' "After import, source ${RUN_ROOT}/demo.env; if needed, run CODEX_HOME=\"\$CODEX_HOME\" codex login, then run demo/dbeaver-codex.tape."
