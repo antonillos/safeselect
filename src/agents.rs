@@ -5,6 +5,19 @@ use toml_edit::{value, Array, DocumentMut, Item, Table};
 
 type ClientDetector = fn() -> Option<PathBuf>;
 
+fn print_agent_success(message: &str) {
+    use std::io::IsTerminal;
+
+    let color = std::io::stdout().is_terminal()
+        && std::env::var_os("NO_COLOR").is_none_or(|value| value.is_empty())
+        && std::env::var("TERM").is_ok_and(|term| term != "dumb");
+    if color {
+        println!("\x1b[32m✓\x1b[0m {message}");
+    } else {
+        println!("✓ {message}");
+    }
+}
+
 pub fn detect_clients() -> Result<Vec<ClientConfig>> {
     let mut clients = vec![];
 
@@ -277,7 +290,9 @@ fn install_file_entry(
     )?;
 
     if new_content == content {
-        println!("Entry '{entry_name}' is already up to date for {client}");
+        print_agent_success(&format!(
+            "Entry '{entry_name}' is already up to date for {client}"
+        ));
         println!("Next: {}", install_next_step(client, local));
         return Ok(());
     }
@@ -287,7 +302,7 @@ fn install_file_entry(
 
     write_config_and_verify(&config_path, &content, &new_content, config_existed)?;
 
-    println!("Entry '{entry_name}' installed for {client}");
+    print_agent_success(&format!("Entry '{entry_name}' installed for {client}"));
     println!("Next: {}", install_next_step(client, local));
     Ok(())
 }
@@ -780,11 +795,13 @@ fn resolve_upgrade_environment(
 
 fn print_upgrade_result(client: &str, resolved_entry_name: &str, target_entry_name: &str) {
     if target_entry_name == resolved_entry_name {
-        println!("Entry '{resolved_entry_name}' upgraded for {client}");
+        print_agent_success(&format!(
+            "Entry '{resolved_entry_name}' upgraded for {client}"
+        ));
     } else {
-        println!(
+        print_agent_success(&format!(
             "Entry '{resolved_entry_name}' upgraded and renamed to '{target_entry_name}' for {client}"
-        );
+        ));
     }
 }
 
@@ -837,7 +854,7 @@ fn uninstall_file_entry(client: &str, entry_name: &str, repo_root: Option<&Path>
     let new_content = remove_client_entry(client, &content, entry_name)?;
     write_config_and_verify(&config_path, &content, &new_content, true)?;
 
-    println!("Entry '{entry_name}' uninstalled from {client}");
+    print_agent_success(&format!("Entry '{entry_name}' uninstalled from {client}"));
     Ok(())
 }
 
@@ -909,7 +926,9 @@ fn install_claude_entry_with_program(
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
-    println!("Entry '{entry_name}' installed for claude-code ({scope} scope)");
+    print_agent_success(&format!(
+        "Entry '{entry_name}' installed for claude-code ({scope} scope)"
+    ));
     println!("Next: {}", install_next_step("claude-code", local));
     Ok(())
 }
@@ -940,7 +959,9 @@ fn run_claude_remove_with_program(
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
-    println!("Entry '{entry_name}' uninstalled from claude-code");
+    print_agent_success(&format!(
+        "Entry '{entry_name}' uninstalled from claude-code"
+    ));
     println!("Next: run `safeselect agent status` to verify removal, then stop.");
     Ok(())
 }

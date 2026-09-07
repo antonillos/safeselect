@@ -102,10 +102,6 @@ fn run(cli: Cli) -> Result<()> {
         } => {
             let dir = resolve_project_dir(&loader, project)?;
             let environments = selected_environment_names(&dir, environment.as_deref())?;
-            if environments.is_empty() {
-                print_no_environments(&dir);
-                return Ok(());
-            }
             cmd_posture(
                 &loader,
                 &dir,
@@ -353,7 +349,7 @@ fn cmd_config_validate(
         Some(dir) => validate_explicit_project(loader, &dir, environment.as_deref()),
         None => {
             let cwd = std::env::current_dir()?;
-            validate_current_project(loader, &cwd)
+            validate_current_project(loader, &cwd, environment.as_deref())
         }
     }
 }
@@ -397,7 +393,11 @@ fn validate_all_environment_configs(loader: &ConfigLoader, dir: &Path) -> Result
     Ok(())
 }
 
-fn validate_current_project(loader: &ConfigLoader, cwd: &Path) -> Result<()> {
+fn validate_current_project(
+    loader: &ConfigLoader,
+    cwd: &Path,
+    environment: Option<&str>,
+) -> Result<()> {
     let Some(dir) = loader.find_local_project(cwd) else {
         println!("No .safeselect/ directory found. Create one with:");
         println!("  safeselect import-dbeaver <export.zip>");
@@ -410,7 +410,7 @@ fn validate_current_project(loader: &ConfigLoader, cwd: &Path) -> Result<()> {
         dir.display(),
         project_display_name(&dir)
     );
-    validate_explicit_project(loader, &dir, None)
+    validate_explicit_project(loader, &dir, environment)
 }
 
 fn delete_environment_config(
@@ -4812,8 +4812,9 @@ enabled = true
         let loader = ConfigLoader::new();
         assert!(validate_explicit_project(&loader, &repo_root, None).is_ok());
         assert!(validate_explicit_project(&loader, &repo_root, Some("local")).is_ok());
-        assert!(validate_current_project(&loader, &repo_root).is_ok());
-        assert!(validate_current_project(&loader, &repo_root.join("missing")).is_ok());
+        assert!(validate_current_project(&loader, &repo_root, None).is_ok());
+        assert!(validate_current_project(&loader, &repo_root, Some("local")).is_ok());
+        assert!(validate_current_project(&loader, &repo_root.join("missing"), None).is_ok());
         assert!(validate_explicit_project(&loader, &repo_root.join("missing"), None).is_err());
 
         std::fs::write(env_dir.join("broken.toml"), "[database\n").unwrap();

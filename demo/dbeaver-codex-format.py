@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render safe, colorized Codex JSONL events without exposing raw payloads."""
+"""Render colorized, structured Codex JSONL events for the public demo."""
 from __future__ import annotations
 
 import json
@@ -19,7 +19,16 @@ PRIVATE_KEY = re.compile(
     re.DOTALL,
 )
 SECRET_ASSIGNMENT = re.compile(
-    r"(?i)\b(password|passwd|secret|token|api[_-]?key|authorization)\b\s*[:=]\s*[^\s,;]+"
+    r"""
+    (?P<key>"?(?:password|passwd|secret|token|api[_-]?key|authorization)"?)
+    \s*[:=]\s*
+    (?:
+        "(?:\\.|[^"\\])*"
+        |'(?:\\.|[^'\\])*'
+        |[^\s,;]+(?:\s+[^\s,;]+)*
+    )
+    """,
+    re.IGNORECASE | re.VERBOSE,
 )
 PERSONAL_PATH = re.compile(r"/Users/[^\s\"']+")
 SHOW_ALL = os.environ.get("SAFESELECT_SHOW_ALL") == "1"
@@ -61,7 +70,7 @@ def emit(color: str, label: str, message: str) -> None:
     message = ANSI.sub("", message).replace("\n", " ").strip()
     message = PRIVATE_KEY.sub("[private-key-redacted]", message)
     message = SECRET_ASSIGNMENT.sub(
-        lambda match: f"{match.group(1)}=[redacted]", message
+        lambda match: f"{match.group('key')}=[redacted]", message
     )
     message = message.replace("demo-password", "[db-password-redacted]")
     message = PERSONAL_PATH.sub("[personal-path]", message)
@@ -84,7 +93,10 @@ def render(line: str) -> None:
     item_kind = item.get("type", "") if isinstance(item, dict) else ""
     if kind == "item.completed" and item_kind == "reasoning":
         summary = text_from(item.get("summary"))
-        emit(CYAN, "thinking ›", summary or "summary redacted by Codex")
+        # Codex does not always emit a public reasoning summary. Do not
+        # manufacture a "redacted" line when there is no text to display.
+        if summary:
+            emit(CYAN, "thinking ›", summary)
     elif kind == "item.completed" and item_kind in {"agent_message", "message"}:
         emit(GREEN, "codex ›", text_from(item))
     elif "mcp" in kind.lower() or "mcp" in item_kind.lower():
