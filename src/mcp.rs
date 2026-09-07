@@ -25,6 +25,60 @@ const SUPPORTED_MCP_PROTOCOL_VERSIONS: [&str; 3] =
     [LATEST_MCP_PROTOCOL_VERSION, "2025-03-26", "2024-11-05"];
 const READ_ONLY_DEBUG_RESOURCE: &str = "# Read-only database debugging\n\nUse SafeSelect for database context, not database control.\n\n1. Call `database_info`.\n2. Discover tables or collections before querying unfamiliar data.\n3. Use bounded reads and preserve existing filters.\n4. Follow one `next_suggestion` at a time.\n5. Stop and report an error rather than retrying unchanged or bypassing the policy.\n\nSafeSelect constrains its own MCP tool surface only. It does not replace least-privilege database users or restrict credentials exposed through another channel.";
 
+fn config_environment_names(repo_root: &Path) -> Result<Vec<String>> {
+    let env_dir = repo_root.join(".safeselect/environments");
+    let entries = std::fs::read_dir(&env_dir).map_err(|e| {
+        SafeselectError::Config(format!(
+            "cannot read environments in {}: {e}",
+            env_dir.display()
+        ))
+    })?;
+    let mut environments = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|e| {
+            SafeselectError::Config(format!(
+                "cannot read an environment in {}: {e}",
+                env_dir.display()
+            ))
+        })?;
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("toml") {
+            continue;
+        }
+        if let Some(name) = path.file_stem().and_then(|stem| stem.to_str()) {
+            environments.push(name.to_owned());
+        }
+    }
+    environments.sort();
+    if environments.is_empty() {
+        return Err(SafeselectError::Config(format!(
+            "no environments found in {}",
+            env_dir.display()
+        )));
+    }
+    Ok(environments)
+}
+
+fn config_validation_text(
+    loader: &ConfigLoader,
+    repo_root: &Path,
+    project_name: &str,
+    environment: Option<&str>,
+) -> Result<String> {
+    let environments = match environment {
+        Some(environment) => vec![environment.to_owned()],
+        None => config_environment_names(repo_root)?,
+    };
+    environments
+        .into_iter()
+        .map(|environment| {
+            loader.resolve_local(repo_root, &environment)?;
+            Ok(format!("Config valid: {project_name}/{environment}"))
+        })
+        .collect::<Result<Vec<_>>>()
+        .map(|validated| validated.join("\n"))
+}
+
 fn negotiated_protocol_version(requested: Option<&str>) -> &'static str {
     requested
         .and_then(|version| {
@@ -1091,13 +1145,15 @@ impl McpServer {
             },
             ToolDefinition {
                 name: "config_validate".into(),
-                description: self.tool_description("validate the .safeselect configuration"),
+                description: self.tool_description(
+                    "validate the .safeselect configuration and every environment by default",
+                ),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
                         "environment": {
                             "type": "string",
-                            "description": "Environment name to validate (optional — validates project structure if omitted)"
+                            "description": "Environment name to validate (optional — validates every configured environment if omitted)"
                         }
                     }
                 }),
@@ -3213,25 +3269,12 @@ impl McpServer {
         let environment = args.get("environment").and_then(|v| v.as_str());
         let loader = ConfigLoader::new();
 
-        let text = if let Some(env) = environment {
-            match loader.resolve_local(&self.repo_root, env) {
-                Ok(_) => format!("Config valid: {}/{}", self.project_name, env),
+        let text =
+            match config_validation_text(&loader, &self.repo_root, &self.project_name, environment)
+            {
+                Ok(text) => text,
                 Err(e) => return self.send_error(id, -32000, format!("Validation failed: {e}")),
-            }
-        } else {
-            let safeselect_dir = self.repo_root.join(".safeselect");
-            let has_project = safeselect_dir.join("project.toml").exists();
-            let has_envs = safeselect_dir.join("environments").is_dir();
-            if has_project || has_envs {
-                format!("Config valid: {}", self.project_name)
-            } else {
-                return self.send_error(
-                    id,
-                    -32000,
-                    format!("Incomplete .safeselect/ in {}", self.repo_root.display()),
-                );
-            }
-        };
+            };
 
         let resp = trusted_tool_response(id, "ok", text, "Configuration is valid. Continue with check for the active environment, or stop if validation was the user’s only request.");
         self.write_response(&resp)
@@ -5479,9 +5522,11 @@ fn document_read_preference_status(uri: &str) -> Vec<String> {
     ]
 }
 
+type SqlErrorRule = (fn(&str) -> bool, &'static str);
+
 fn sql_query_error_message(message: &str) -> String {
     let lower = message.to_lowercase();
-    let rules: &[(fn(&str) -> bool, &str)] = &[
+    let rules: &[SqlErrorRule] = &[
         (|text| contains_all(text, &["column", "does not exist"]), " Next suggestion: call describe_table for each referenced target relation, then retry using only the returned column names and types."),
         (|text| contains_all(text, &["relation", "does not exist"]), " Next suggestion: call list_tables, then describe_table for an existing relation."),
         (|text| contains_any(text, &["statement timeout exceeded", "canceling statement due to statement timeout"]), " Next suggestion: do not retry unchanged or with a broader query. Preserve or narrow every selective predicate, especially time bounds; never remove one during recovery. Avoid leading-wildcard LIKE or ILIKE on large relations. Use a bounded discovery query to find exact values, then use equality or IN. For row retrieval, add or reduce LIMIT. LIMIT does not by itself bound work for DISTINCT, GROUP BY, COUNT, or ORDER BY, so narrow their input in WHERE. Then call the explain tool with analyze=false to inspect scan and index usage without executing the query; do not put EXPLAIN in select. Do not increase the timeout automatically."),
@@ -5975,6 +6020,48 @@ mod tests {
             .handle_agent_uninstall(Some(serde_json::json!(11)), &args)
             .unwrap();
         std::fs::remove_dir_all(repo_root).unwrap();
+    }
+
+    #[test]
+    fn config_validate_defaults_to_all_environments() {
+        let repo_root = std::env::temp_dir().join(format!(
+            "safeselect-mcp-config-validate-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let environments = repo_root.join(".safeselect/environments");
+        std::fs::create_dir_all(&environments).unwrap();
+        for name in ["development", "staging"] {
+            std::fs::write(
+                environments.join(format!("{name}.toml")),
+                "version = 1\n[database]\nkind = \"document\"\nurl = \"mongodb://localhost\"\n",
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            config_environment_names(&repo_root).unwrap(),
+            vec!["development", "staging"]
+        );
+
+        let mut server = test_server(&repo_root);
+        server
+            .handle_config_validate(Some(serde_json::json!(1)), &serde_json::json!({}))
+            .unwrap();
+        server
+            .handle_config_validate(
+                Some(serde_json::json!(2)),
+                &serde_json::json!({"environment": "staging"}),
+            )
+            .unwrap();
+
+        std::fs::remove_dir_all(repo_root).unwrap();
+
+        let empty_root = std::env::temp_dir().join(format!(
+            "safeselect-mcp-empty-config-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(empty_root.join(".safeselect/environments")).unwrap();
+        assert!(config_environment_names(&empty_root).is_err());
+        std::fs::remove_dir_all(empty_root).unwrap();
     }
 
     #[test]

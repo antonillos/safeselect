@@ -60,6 +60,7 @@ cp "$ARCHIVE" "$2"
         self.assertTrue((path / "makevn").is_file())
         args = (self.root / "curl-args").read_text().splitlines()
         self.assertIn("--retry", args)
+        self.assertIn("--retry-all-errors", args)
         self.assertIn("--retry-max-time", args)
         self.assertIn("--max-time", args)
         self.assertNotIn("latest", " ".join(args))

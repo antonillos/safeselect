@@ -78,6 +78,7 @@ for (const asset of ["icon.svg", "icon-dark.svg", "icon-512.png", "favicon-32.pn
   await copyFile(`public/${asset}`, `out/${asset}`);
 }
 await copyFile("public/onboarding.gif", "out/onboarding.gif");
+await copyFile("public/dbeaver-codex.gif", "out/dbeaver-codex.gif");
 // Keep Google's supplied ownership proof byte-for-byte on every Pages deploy.
 await copyFile(
   "public/googled7be89f4207cbfe7.html",

@@ -1,0 +1,27 @@
+{
+  "connections": {
+    "safeselect-demo-staging": {
+      "name": "PostgreSQL Demo (staging)",
+      "driver": "postgres-jdbc",
+      "username": "demo",
+      "configuration": {
+        "host": "localhost",
+        "port": "5432",
+        "database": "postgres",
+        "url": "jdbc:postgresql://localhost:15432/safeselect_demo",
+        "handlers": {
+          "ssh_tunnel": {
+            "enabled": true,
+            "properties": {
+              "host": "127.0.0.1",
+              "port": 55222,
+              "userName": "demo",
+              "authType": "PUBLIC_KEY",
+              "shareTunnels": false
+            }
+          }
+        }
+      }
+    }
+  }
+}

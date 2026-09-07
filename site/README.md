@@ -65,7 +65,8 @@ visitor-supplied Markdown. Other repository documentation links point to GitHub.
 
 When preparing an isolated Sites source repository, include the exact reviewed
 Markdown under `source-docs/docs/` (retaining its subdirectories) and the
-onboarding GIF at `source-docs/docs/recordings/onboarding-full-local.gif`.
+recordings at `source-docs/docs/recordings/onboarding-full-local.gif` and
+`source-docs/docs/recordings/safeselect-dbeaver-codex.gif`.
 The preparation script uses this fallback only when the parent repository docs
 are unavailable. Keep `.openai/hosting.json` with the same project ID and do not
 push the unrelated Rust repository to the Sites source remote.
