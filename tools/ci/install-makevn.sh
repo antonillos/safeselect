@@ -20,8 +20,8 @@ work_dir="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/makevn.XXXXXX")"
 trap 'rm -rf "$work_dir"' EXIT
 archive="makevn-${version}-${target}.tar.gz"
 curl --fail --silent --show-error --location \
-  --retry 4 --retry-delay 2 --retry-max-time 120 \
-  --connect-timeout 15 --max-time 120 \
+  --retry 8 --retry-delay 5 --retry-max-time 300 --retry-all-errors \
+  --connect-timeout 15 --max-time 300 \
   "https://github.com/antonillos/makevn/releases/download/${version}/${archive}" \
   --output "$work_dir/$archive"
 # The reviewed digest lives in git; never trust a checksum fetched alongside a corrupted archive.

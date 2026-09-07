@@ -33,15 +33,22 @@ fn config_environment_names(repo_root: &Path) -> Result<Vec<String>> {
             env_dir.display()
         ))
     })?;
-    let mut environments: Vec<_> = entries
-        .flatten()
-        .filter_map(|entry| {
-            let path = entry.path();
-            (path.extension().and_then(|ext| ext.to_str()) == Some("toml"))
-                .then(|| path.file_stem()?.to_str().map(str::to_owned))
-                .flatten()
-        })
-        .collect();
+    let mut environments = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|e| {
+            SafeselectError::Config(format!(
+                "cannot read an environment in {}: {e}",
+                env_dir.display()
+            ))
+        })?;
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("toml") {
+            continue;
+        }
+        if let Some(name) = path.file_stem().and_then(|stem| stem.to_str()) {
+            environments.push(name.to_owned());
+        }
+    }
     environments.sort();
     if environments.is_empty() {
         return Err(SafeselectError::Config(format!(
@@ -1138,13 +1145,15 @@ impl McpServer {
             },
             ToolDefinition {
                 name: "config_validate".into(),
-                description: self.tool_description("validate the .safeselect configuration"),
+                description: self.tool_description(
+                    "validate the .safeselect configuration and every environment by default",
+                ),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
                         "environment": {
                             "type": "string",
-                            "description": "Environment name to validate (optional — validates project structure if omitted)"
+                            "description": "Environment name to validate (optional — validates every configured environment if omitted)"
                         }
                     }
                 }),
