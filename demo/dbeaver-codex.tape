@@ -34,8 +34,8 @@ Sleep 3s
 Type "echo '=== Codex MCP allowlist (project) ==='; grep mcp_servers .codex/config.toml"
 Enter
 Sleep 3s
-# Keep the recording faithful to the native Codex terminal stream: reasoning
-# summaries, MCP lifecycle events, messages, and tool output remain visible.
-Type "../dbeaver-codex-run.sh"
+# Keep the versioned public GIF safe while retaining a local raw inspection
+# mode. Set SAFESELECT_DEMO_RAW_CODEX_OUTPUT=1 to bypass the formatter locally.
+Type `if [[ "${SAFESELECT_DEMO_RAW_CODEX_OUTPUT:-0}" == "1" ]]; then ../dbeaver-codex-run.sh; else SAFESELECT_CODEX_JSON=1 ../dbeaver-codex-run.sh 2>&1 | ../dbeaver-codex-format.py; fi`
 Enter
 Sleep 105s
