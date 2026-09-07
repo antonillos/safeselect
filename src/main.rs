@@ -84,14 +84,14 @@ fn run(cli: Cli) -> Result<()> {
             verbose,
         } => {
             let dir = resolve_project_dir(&loader, project)?;
-            run_checks(&dir, environment.as_deref(), verbose)
+            run_checks(&dir, environment.as_deref(), verbose, true)
         }
         Command::Doctor {
             project,
             environment,
         } => {
             let dir = resolve_project_dir(&loader, project)?;
-            run_checks(&dir, environment.as_deref(), false)
+            run_checks(&dir, environment.as_deref(), false, false)
         }
         Command::Posture {
             project,
@@ -2003,7 +2003,7 @@ fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
     // Step 5: shared helpers (driver, passwords, verify)
     setup_driver_if_missing()?;
     setup_passwords_for_missing(&cwd, &env_names)?;
-    run_checks_for_environments(&cwd, &env_names, false)?;
+    run_checks_for_environments(&cwd, &env_names, false, true)?;
     Ok(())
 }
 
@@ -2111,7 +2111,7 @@ fn cmd_import_compose(path: Option<PathBuf>, non_interactive: bool) -> Result<()
     let env_names = guidance.imported_env_names;
     setup_driver_if_missing()?;
     setup_passwords_for_missing(dest_dir, &env_names)?;
-    run_checks_for_environments(dest_dir, &env_names, false)?;
+    run_checks_for_environments(dest_dir, &env_names, false, true)?;
 
     Ok(())
 }
@@ -2140,7 +2140,7 @@ fn import_selected_connections(connections: &[compose::ComposeConnection]) -> Re
     let env_names = guidance.imported_env_names;
     setup_driver_if_missing()?;
     setup_passwords_for_missing(&cwd, &env_names)?;
-    run_checks_for_environments(&cwd, &env_names, false)?;
+    run_checks_for_environments(&cwd, &env_names, false, true)?;
 
     Ok(())
 }
@@ -2329,7 +2329,7 @@ fn cmd_import_compass(path: Option<PathBuf>, non_interactive: bool) -> Result<()
     if non_interactive {
         println!("Next: safeselect check --environment <name>");
     } else {
-        run_checks_for_environments(&cwd, &imported, false)?;
+        run_checks_for_environments(&cwd, &imported, false, true)?;
     }
     Ok(())
 }
@@ -3306,15 +3306,21 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
 }
 
 /// Run `safeselect check` for each environment and report results.
-fn run_checks(repo_root: &std::path::Path, environment: Option<&str>, verbose: bool) -> Result<()> {
+fn run_checks(
+    repo_root: &std::path::Path,
+    environment: Option<&str>,
+    verbose: bool,
+    show_progress: bool,
+) -> Result<()> {
     let env_names = selected_environment_names(repo_root, environment)?;
-    run_checks_for_environments(repo_root, &env_names, verbose)
+    run_checks_for_environments(repo_root, &env_names, verbose, show_progress)
 }
 
 fn run_checks_for_environments(
     repo_root: &std::path::Path,
     env_names: &[String],
     verbose: bool,
+    show_progress: bool,
 ) -> Result<()> {
     if env_names.is_empty() {
         print_no_environments(repo_root);
@@ -3329,7 +3335,7 @@ fn run_checks_for_environments(
         }
         println!("  • {env_name}");
         let loader = config::ConfigLoader::new();
-        match cmd_check(&loader, repo_root, env_name, verbose) {
+        match cmd_check(&loader, repo_root, env_name, verbose, show_progress) {
             Ok(()) => print_terminal_line("OK"),
             Err(e) => {
                 print_terminal_line("FAILED");
@@ -3607,9 +3613,12 @@ fn cmd_check(
     repo_root: &std::path::Path,
     environment: &str,
     verbose: bool,
+    show_progress: bool,
 ) -> Result<()> {
     let name = project_display_name(repo_root);
-    println!("Checking configuration for {name}/{environment}...");
+    if show_progress {
+        println!("Checking configuration for {name}/{environment}...");
+    }
 
     let resolved = loader.resolve_local(repo_root, environment)?;
 
@@ -3697,11 +3706,13 @@ fn cmd_check(
                     (true, None)
                 } else {
                     let tunnel_attempt_started = std::time::Instant::now();
-                    diagnostics::print(
-                        DiagnosticStatus::Info,
-                        DiagnosticCode::SshTunnelAttempt,
-                        "Establishing SSH tunnel...",
-                    );
+                    if show_progress {
+                        diagnostics::print(
+                            DiagnosticStatus::Info,
+                            DiagnosticCode::SshTunnelAttempt,
+                            "Establishing SSH tunnel...",
+                        );
+                    }
                     let _ = setup_ssh_tunnels(repo_root, &[environment.to_string()]);
                     let reachable = check_postgres_endpoint(&host, port);
                     (reachable, Some(tunnel_attempt_started.elapsed()))
@@ -3747,11 +3758,13 @@ fn cmd_check(
                 let document_reachable = if document_reachable {
                     true
                 } else {
-                    diagnostics::print(
-                        DiagnosticStatus::Info,
-                        DiagnosticCode::SshTunnelAttempt,
-                        "Establishing SSH tunnel...",
-                    );
+                    if show_progress {
+                        diagnostics::print(
+                            DiagnosticStatus::Info,
+                            DiagnosticCode::SshTunnelAttempt,
+                            "Establishing SSH tunnel...",
+                        );
+                    }
                     let _ = setup_ssh_tunnels(repo_root, &[environment.to_string()]);
                     check_tcp_endpoint(&host, port, std::time::Duration::from_secs(3))
                 };
@@ -3773,17 +3786,19 @@ fn cmd_check(
         }
     }
 
-    diagnostics::print(
-        DiagnosticStatus::Info,
-        DiagnosticCode::SidecarStartAttempt,
-        "Attempting sidecar connection...",
-    );
-    println!(
-        "    url={} user={} db={}",
-        resolved.environment.database.url,
-        resolved.environment.database.username,
-        display_database_target(&resolved.environment.database.url)
-    );
+    if show_progress {
+        diagnostics::print(
+            DiagnosticStatus::Info,
+            DiagnosticCode::SidecarStartAttempt,
+            "Attempting sidecar connection...",
+        );
+        println!(
+            "    url={} user={} db={}",
+            resolved.environment.database.url,
+            resolved.environment.database.username,
+            display_database_target(&resolved.environment.database.url)
+        );
+    }
 
     let limits = ResultLimits {
         max_rows: resolved.project.limits.max_rows,

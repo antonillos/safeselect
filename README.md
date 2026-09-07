@@ -276,7 +276,7 @@ When no `.safeselect/` directory exists, `safeselect serve --environment <env>` 
 |---|---|
 | `safeselect serve --environment <env>` | Start the MCP server |
 | `safeselect check --environment <env>` | Verify config, secrets, tunnels, sidecar, and backend connectivity |
-| `safeselect doctor [--environment <env>]` | Print deeper diagnostics with stable codes for every environment by default |
+| `safeselect doctor [--environment <env>]` | Print concise findings with stable codes for every environment by default |
 | `safeselect posture [--environment <env>]` | Inspect PostgreSQL posture for every environment by default |
 | `safeselect import-dbeaver <zip>` | Import DBeaver connections |
 | `safeselect import-compose [--path <path>]` | Import from docker-compose |

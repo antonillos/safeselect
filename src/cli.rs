@@ -79,7 +79,7 @@ pub enum Command {
         #[arg(long, default_value_t = false)]
         verbose: bool,
     },
-    /// Diagnose configuration, SSH, sidecar, JDBC, and SELECT 1 connectivity
+    /// Diagnose configuration, SSH, sidecar, JDBC, and SELECT 1 connectivity (show findings only)
     Doctor {
         /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
         #[arg(long)]
