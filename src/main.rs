@@ -4071,6 +4071,11 @@ fn cmd_posture(
         acknowledge,
         skip_unsupported,
     )?;
+    if reports.is_empty() {
+        return Err(SafeselectError::Config(
+            "no PostgreSQL environments available for posture inspection".into(),
+        ));
+    }
     print_posture_reports(format, &reports)?;
     enforce_posture_strict(strict, &reports)
 }
@@ -4096,10 +4101,11 @@ fn collect_posture_reports<'a>(
     environments
         .iter()
         .map(|environment| {
-            let resolved = loader.resolve_local(repo_root, environment)?;
-            if skip_unsupported && !supports_posture(&resolved) {
+            let environment_config = load_environment_config(repo_root, environment)?;
+            if skip_unsupported && !supports_posture(&environment_config) {
                 return Ok(None);
             }
+            let resolved = loader.resolve_local(repo_root, environment)?;
             let report = posture::inspect(&resolved, loader.config_dir())?;
             if acknowledge && report.status == "warning" {
                 posture::acknowledge(loader.config_dir(), &report.fingerprint)?;
@@ -4110,15 +4116,10 @@ fn collect_posture_reports<'a>(
         .map(|reports| reports.into_iter().flatten().collect())
 }
 
-fn supports_posture(resolved: &config::ResolvedConfig) -> bool {
-    resolved.environment.database.kind == crate::backend::BackendKind::Jdbc
+fn supports_posture(environment: &config::EnvironmentConfig) -> bool {
+    environment.database.kind == crate::backend::BackendKind::Jdbc
         && matches!(
-            resolved
-                .environment
-                .database
-                .vendor()
-                .to_ascii_lowercase()
-                .as_str(),
+            environment.database.vendor().to_ascii_lowercase().as_str(),
             "postgresql" | "postgres"
         )
 }
@@ -4509,7 +4510,7 @@ mod tests {
             false,
             true,
         )
-        .is_ok());
+        .is_err());
         assert!(cmd_posture(
             &loader,
             Path::new("."),
@@ -4519,7 +4520,7 @@ mod tests {
             false,
             true,
         )
-        .is_ok());
+        .is_err());
     }
     use super::*;
 
