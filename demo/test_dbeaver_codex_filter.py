@@ -37,6 +37,17 @@ class FilterTests(unittest.TestCase):
             "model: gpt-5.6-luna\nUser\nPlease inspect the staging database.\n",
         )
 
+    def test_suppresses_multiline_private_keys(self) -> None:
+        output = self.filter(
+            "before\n"
+            "-----BEGIN OPENSSH PRIVATE KEY-----\n"
+            "base64-secret-material\n"
+            "-----END OPENSSH PRIVATE KEY-----\n"
+            "after\n"
+        )
+        self.assertEqual(output, "before\n[private-key-redacted]\nafter\n")
+        self.assertNotIn("base64-secret-material", output)
+
     def test_keeps_native_mcp_and_reasoning_lines(self) -> None:
         output = self.filter(
             "**Identifying database tools**\n"
