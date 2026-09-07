@@ -358,22 +358,35 @@ fn validate_explicit_project(
     if !dir.join(".safeselect").is_dir() {
         return Err(SafeselectError::LocalProjectNotFound(dir.to_path_buf()));
     }
-    if let Some(env) = environment {
-        let _ = loader.resolve_local(dir, env)?;
-        println!("Config valid: {}/{}", project_display_name(dir), env);
-        return Ok(());
+    match environment {
+        Some(env) => validate_environment_config(loader, dir, env),
+        None => validate_all_environment_configs(loader, dir),
+    }
+}
+
+fn validate_environment_config(loader: &ConfigLoader, dir: &Path, environment: &str) -> Result<()> {
+    let _ = loader.resolve_local(dir, environment)?;
+    print_terminal_line(&format!(
+        "✓ Config valid: {}/{}",
+        project_display_name(dir),
+        environment
+    ));
+    Ok(())
+}
+
+fn validate_all_environment_configs(loader: &ConfigLoader, dir: &Path) -> Result<()> {
+    let environments = list_environment_names(dir)?;
+    if environments.is_empty() {
+        return Err(SafeselectError::Config(format!(
+            "no environments found in {}",
+            dir.join(".safeselect/environments").display()
+        )));
     }
 
-    let safeselect_dir = dir.join(".safeselect");
-    if safeselect_dir.join("project.toml").exists() || safeselect_dir.join("environments").is_dir()
-    {
-        println!("Config valid: {}", project_display_name(dir));
-        return Ok(());
+    for env in environments {
+        validate_environment_config(loader, dir, &env)?;
     }
-    Err(SafeselectError::Config(format!(
-        "incomplete .safeselect/ in {}",
-        dir.display()
-    )))
+    Ok(())
 }
 
 fn validate_current_project(loader: &ConfigLoader, cwd: &Path) -> Result<()> {
@@ -389,28 +402,7 @@ fn validate_current_project(loader: &ConfigLoader, cwd: &Path) -> Result<()> {
         dir.display(),
         project_display_name(&dir)
     );
-    println!("Use --environment <name> to validate a specific environment.");
-    let envs_dir = dir.join(".safeselect").join("environments");
-    if !envs_dir.is_dir() {
-        return Ok(());
-    }
-
-    let mut entries: Vec<_> = std::fs::read_dir(envs_dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter(|e| e.path().extension().is_some_and(|ext| ext == "toml"))
-        .filter_map(|e| {
-            e.path()
-                .file_stem()
-                .and_then(|s| s.to_str().map(String::from))
-        })
-        .collect();
-    entries.sort();
-    if !entries.is_empty() {
-        println!("  Environments: {}", entries.join(", "));
-    }
-    Ok(())
+    validate_explicit_project(loader, &dir, None)
 }
 
 fn delete_environment_config(
@@ -4751,6 +4743,9 @@ enabled = true
         assert!(validate_current_project(&loader, &repo_root).is_ok());
         assert!(validate_current_project(&loader, &repo_root.join("missing")).is_ok());
         assert!(validate_explicit_project(&loader, &repo_root.join("missing"), None).is_err());
+
+        std::fs::write(env_dir.join("broken.toml"), "[database\n").unwrap();
+        assert!(validate_explicit_project(&loader, &repo_root, None).is_err());
 
         let _ = std::fs::remove_dir_all(repo_root);
     }

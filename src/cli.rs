@@ -73,6 +73,7 @@ pub enum Command {
         /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
         #[arg(long)]
         project: Option<PathBuf>,
+        /// Environment to validate (all environments by default)
         #[arg(long)]
         environment: Option<String>,
         #[arg(long, default_value_t = false)]
