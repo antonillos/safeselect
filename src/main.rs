@@ -4082,7 +4082,7 @@ fn cmd_posture(
             "no PostgreSQL environments available for posture inspection".into(),
         ));
     }
-    print_posture_reports(format, &reports)?;
+    print_posture_reports(format, &reports, skip_unsupported)?;
     enforce_posture_strict(strict, &reports)
 }
 
@@ -4130,16 +4130,20 @@ fn supports_posture(environment: &config::EnvironmentConfig) -> bool {
         )
 }
 
-fn print_posture_reports(format: &str, reports: &[EnvironmentPostureReport<'_>]) -> Result<()> {
+fn print_posture_reports(
+    format: &str,
+    reports: &[EnvironmentPostureReport<'_>],
+    aggregate: bool,
+) -> Result<()> {
     match format {
-        "json" => print_posture_json(reports),
+        "json" => print_posture_json(reports, aggregate),
         "text" => print_posture_text(reports),
         _ => unreachable!("format validated before rendering"),
     }
 }
 
-fn print_posture_json(reports: &[EnvironmentPostureReport<'_>]) -> Result<()> {
-    let payload = if reports.len() == 1 {
+fn print_posture_json(reports: &[EnvironmentPostureReport<'_>], aggregate: bool) -> Result<()> {
+    let payload = if !aggregate && reports.len() == 1 {
         serde_json::to_string_pretty(&reports[0].1)
     } else {
         serde_json::to_string_pretty(
@@ -4512,10 +4516,10 @@ mod tests {
         assert!(validate_posture_format("text").is_ok());
         assert!(validate_posture_format("json").is_ok());
         assert!(validate_posture_format("yaml").is_err());
-        assert!(print_posture_reports("text", &single).is_ok());
-        assert!(print_posture_reports("json", &single).is_ok());
-        assert!(print_posture_reports("text", &multiple).is_ok());
-        assert!(print_posture_reports("json", &multiple).is_ok());
+        assert!(print_posture_reports("text", &single, false).is_ok());
+        assert!(print_posture_reports("json", &single, false).is_ok());
+        assert!(print_posture_reports("text", &multiple, true).is_ok());
+        assert!(print_posture_reports("json", &multiple, true).is_ok());
         assert!(enforce_posture_strict(false, &single).is_ok());
 
         let loader = ConfigLoader::new();

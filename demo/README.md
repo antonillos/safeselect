@@ -179,8 +179,9 @@ cp docs/recordings/safeselect-dbeaver-codex.gif site/public/dbeaver-codex.gif
 The recording preserves Codex's native terminal stream, including the user
 prompt, reasoning summaries, MCP lifecycle activity, messages, and tool output.
 A surgical filter masks only the values of `workdir`, `approval`, and `session id`
-with `****`; credential and private-key safeguards remain active. The fixture and
-credentials used for this demo are synthetic.
+with `****`; credential and private-key safeguards remain active. The runner
+uses Codex's concise public reasoning summaries. The fixture and credentials
+used for this demo are synthetic.
 
 During import, select the demo connection and use `staging`, bastion
 `127.0.0.1:55222`, target `postgres:5432`, the generated key file, and the
