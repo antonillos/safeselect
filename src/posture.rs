@@ -59,11 +59,11 @@ fn run_posture_query(
     let query = "SELECT current_user, current_database(), (SELECT rolsuper FROM pg_roles WHERE rolname=current_user), (SELECT rolbypassrls FROM pg_roles WHERE rolname=current_user), EXISTS (SELECT 1 FROM pg_class c WHERE c.relkind IN ('r','p') AND has_table_privilege(c.oid, 'INSERT,UPDATE,DELETE,TRUNCATE')), COALESCE((SELECT ssl FROM pg_stat_ssl WHERE pid=pg_backend_pid()), false)";
     let result = sidecar.execute(query)?;
     sidecar.shutdown()?;
-    Ok(result
+    result
         .rows
         .first()
         .cloned()
-        .ok_or_else(|| SafeselectError::Sidecar("Posture query returned no row".into()))?)
+        .ok_or_else(|| SafeselectError::Sidecar("Posture query returned no row".into()))
 }
 
 fn posture_target(resolved: &ResolvedConfig) -> Result<&crate::config::DriverConfig> {

@@ -77,7 +77,13 @@ fn client_status_lines(client: &str, repo_root: Option<&Path>) -> Result<Vec<Str
     }
     let mut lines = Vec::new();
     for (scope, path) in configs {
-        lines.extend(config_status_lines(client, scope, &path)?);
+        match config_status_lines(client, scope, &path) {
+            Ok(config_lines) => lines.extend(config_lines),
+            Err(error) => lines.push(format!(
+                "  ⚠ {client} config could not be inspected [scope={scope}, config={}]: {error}",
+                path.display()
+            )),
+        }
     }
     if lines.is_empty() {
         lines.push(format!(
@@ -344,9 +350,11 @@ fn warn_scope_collision(
 }
 
 fn opposite_scope_config(client: &str, repo_root: Option<&Path>, local: bool) -> Option<PathBuf> {
-    local
-        .then(|| get_client_config(client).ok())
-        .unwrap_or_else(|| repo_root.and_then(|root| detect_local_client_config(client, root)))
+    if local {
+        get_client_config(client).ok()
+    } else {
+        repo_root.and_then(|root| detect_local_client_config(client, root))
+    }
 }
 
 fn scope_has_entry(client: &str, config_path: &Path, entry_name: &str) -> Result<bool> {
@@ -491,6 +499,7 @@ fn build_client_entries(
     Ok((entry, copilot_entry, opencode_entry))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn update_client_entry(
     client: &str,
     content: &str,
@@ -1519,13 +1528,16 @@ fn candidate_entry_names(
             let cwd_matches = client == "opencode"
                 && repo_root.is_some_and(|root| {
                     opencode_entry_matches_project(content, name, root)
-                        && environment.map_or(true, |expected| {
-                            detect_entry_environment(client, content, name)
-                                .ok()
-                                .flatten()
-                                .as_deref()
-                                == Some(expected)
-                        })
+                        && match environment {
+                            None => true,
+                            Some(expected) => {
+                                detect_entry_environment(client, content, name)
+                                    .ok()
+                                    .flatten()
+                                    .as_deref()
+                                    == Some(expected)
+                            }
+                        }
                 });
             name_matches || cwd_matches
         })
@@ -2283,6 +2295,34 @@ mcp_servers = { safe = { command = "safeselect", args = ["serve", "--environment
             .unwrap_err()
             .to_string()
             .contains("symlink"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn status_warns_for_symlinked_configs_and_continues() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!(
+            "safeselect-status-symlink-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(root.join(".opencode")).unwrap();
+        std::fs::write(
+            root.join(".opencode").join("opencode.json"),
+            r#"{"mcp":{"safe":{"command":"safeselect"}}}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join(".vscode")).unwrap();
+        let target = root.join("copilot-mcp.json");
+        std::fs::write(&target, "{}").unwrap();
+        symlink(&target, root.join(".vscode").join("mcp.json")).unwrap();
+
+        let status = status_lines(Some(&root)).unwrap().join("\n");
+        assert!(status.contains("✓ opencode: safe"));
+        assert!(status.contains("⚠ copilot config could not be inspected"));
+        assert!(status.contains("Config file is a symlink"));
+
         let _ = std::fs::remove_dir_all(root);
     }
 

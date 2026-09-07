@@ -5479,9 +5479,11 @@ fn document_read_preference_status(uri: &str) -> Vec<String> {
     ]
 }
 
+type SqlErrorRule = (fn(&str) -> bool, &'static str);
+
 fn sql_query_error_message(message: &str) -> String {
     let lower = message.to_lowercase();
-    let rules: &[(fn(&str) -> bool, &str)] = &[
+    let rules: &[SqlErrorRule] = &[
         (|text| contains_all(text, &["column", "does not exist"]), " Next suggestion: call describe_table for each referenced target relation, then retry using only the returned column names and types."),
         (|text| contains_all(text, &["relation", "does not exist"]), " Next suggestion: call list_tables, then describe_table for an existing relation."),
         (|text| contains_any(text, &["statement timeout exceeded", "canceling statement due to statement timeout"]), " Next suggestion: do not retry unchanged or with a broader query. Preserve or narrow every selective predicate, especially time bounds; never remove one during recovery. Avoid leading-wildcard LIKE or ILIKE on large relations. Use a bounded discovery query to find exact values, then use equality or IN. For row retrieval, add or reduce LIMIT. LIMIT does not by itself bound work for DISTINCT, GROUP BY, COUNT, or ORDER BY, so narrow their input in WHERE. Then call the explain tool with analyze=false to inspect scan and index usage without executing the query; do not put EXPLAIN in select. Do not increase the timeout automatically."),

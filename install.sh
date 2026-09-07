@@ -10,6 +10,12 @@ MODE="release"
 RUST_FLAGS="--release"
 INSTALL_MAKEVN=false
 
+if [[ -t 1 && -z "${NO_COLOR:-}" && "${TERM:-}" != "dumb" ]]; then
+  SUCCESS_MARKER=$'\033[32m✓\033[0m'
+else
+  SUCCESS_MARKER='✓'
+fi
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --debug)
@@ -107,6 +113,6 @@ chmod +x "${installed_binary}"
 mv -f "${installed_binary}" "${BIN_DIR}/safeselect"
 trap - EXIT
 
-printf '\n✓ safeselect installed at %s/safeselect (%s)\n' "${BIN_DIR}" "${MODE}"
+printf '\n%s safeselect installed at %s/safeselect (%s)\n' "${SUCCESS_MARKER}" "${BIN_DIR}" "${MODE}"
 printf '  Make sure %s is in your PATH\n' "${BIN_DIR}"
 printf '  Run: safeselect --help\n'

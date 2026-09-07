@@ -83,15 +83,18 @@ pub enum Command {
         /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
         #[arg(long)]
         project: Option<PathBuf>,
+        /// Environment to inspect (all environments by default)
         #[arg(long)]
-        environment: String,
+        environment: Option<String>,
     },
     /// Inspect the effective PostgreSQL security posture
     Posture {
+        /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
         #[arg(long)]
         project: Option<PathBuf>,
+        /// Environment to inspect (all environments by default)
         #[arg(long)]
-        environment: String,
+        environment: Option<String>,
         #[arg(long, default_value = "text")]
         format: String,
         #[arg(long, default_value_t = false)]
@@ -291,4 +294,31 @@ pub enum AgentAction {
     },
     /// Show installation status
     Status,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Cli, Command};
+    use clap::Parser;
+
+    #[test]
+    fn doctor_and_posture_default_to_all_environments() {
+        let Cli { command } = Cli::try_parse_from(["safeselect", "doctor"]).unwrap();
+        assert!(matches!(
+            command,
+            Command::Doctor {
+                environment: None,
+                ..
+            }
+        ));
+
+        let Cli { command } = Cli::try_parse_from(["safeselect", "posture"]).unwrap();
+        assert!(matches!(
+            command,
+            Command::Posture {
+                environment: None,
+                ..
+            }
+        ));
+    }
 }
