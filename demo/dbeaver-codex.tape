@@ -16,7 +16,7 @@ Set WindowBar "Colorful"
 Type `source "$SAFESELECT_DBEAVER_ROOT/demo.env" && cd "$SAFESELECT_DBEAVER_PROJECT" && clear`
 Enter
 Sleep 1s
-Type "cp $SAFESELECT_DBEAVER_SOURCE/dbeaver-codex-{intro,isolate,format.py,run.sh} $SAFESELECT_DBEAVER_ROOT/ 2>/dev/null || true"
+Type "cp $SAFESELECT_DBEAVER_SOURCE/dbeaver-codex-{intro,isolate,format.py,filter.py,run.sh} $SAFESELECT_DBEAVER_ROOT/ 2>/dev/null || true"
 Enter
 Sleep 1s
 Type "../dbeaver-codex-intro.sh"
@@ -34,8 +34,7 @@ Sleep 3s
 Type "echo '=== Codex MCP allowlist (project) ==='; grep mcp_servers .codex/config.toml"
 Enter
 Sleep 3s
-# Keep the versioned public GIF safe while retaining a local raw inspection
-# mode. Set SAFESELECT_DEMO_RAW_CODEX_OUTPUT=1 to bypass the formatter locally.
-Type `if [[ "${SAFESELECT_DEMO_RAW_CODEX_OUTPUT:-0}" == "1" ]]; then ../dbeaver-codex-run.sh; else SAFESELECT_CODEX_JSON=1 ../dbeaver-codex-run.sh 2>&1 | ../dbeaver-codex-format.py; fi`
+# Preserve Codex's native stream and prompt; remove only session metadata.
+Type "../dbeaver-codex-run.sh 2>&1 | ../dbeaver-codex-filter.py"
 Enter
 Sleep 105s

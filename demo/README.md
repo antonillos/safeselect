@@ -176,13 +176,11 @@ SAFESELECT_DBEAVER_ROOT=/private/tmp/safeselect-dbeaver-codex vhs demo/dbeaver-c
 cp docs/recordings/safeselect-dbeaver-codex.gif site/public/dbeaver-codex.gif
 ```
 
-The versioned recording uses structured Codex events through
-`dbeaver-codex-format.py`, preserving reasoning summaries, MCP lifecycle
-activity, messages, and tool output while removing runtime metadata and any
-unexpected credentials. The fixture and credentials used for this demo are
-synthetic. To inspect the complete native stream locally, set
-`SAFESELECT_DEMO_RAW_CODEX_OUTPUT=1` when launching VHS; do not publish that
-raw output.
+The recording preserves Codex's native terminal stream, including the user
+prompt, reasoning summaries, MCP lifecycle activity, messages, and tool output.
+A surgical filter masks only the values of `workdir`, `approval`, and `session id`
+with `****`; credential and private-key safeguards remain active. The fixture and
+credentials used for this demo are synthetic.
 
 During import, select the demo connection and use `staging`, bastion
 `127.0.0.1:55222`, target `postgres:5432`, the generated key file, and the
