@@ -74,15 +74,9 @@ def render(line: str) -> None:
     try:
         event = json.loads(clean)
     except json.JSONDecodeError:
-        if (
-            not SHOW_ALL
-            and (
-                "guardian::review_session" in clean
-                or "trunk rollout snapshot" in clean
-            )
-        ):
-            return
-        if clean:
+        # The public recording accepts only structured Codex events. Plain
+        # stderr can include session metadata, request IDs, or local paths.
+        if SHOW_ALL and clean:
             emit(DIM, "codex", clean)
         return
     kind = event.get("type", "")

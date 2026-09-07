@@ -17,8 +17,17 @@ if [[ "${SAFESELECT_CODEX_JSON:-0}" == "1" ]]; then
 fi
 
 cd "${SAFESELECT_DBEAVER_PROJECT}"
-codex --model "${CODEX_MODEL}" \
-  -c model_reasoning_effort=low \
-  -c model_reasoning_summary=detailed \
-  exec --skip-git-repo-check \
-  --approve-for-me "${CODEX_OUTPUT[@]}" "${PROMPT}"
+if [[ "${SAFESELECT_CODEX_JSON:-0}" == "1" ]]; then
+  codex --model "${CODEX_MODEL}" \
+    -c model_reasoning_effort=low \
+    -c model_reasoning_summary=detailed \
+    exec --skip-git-repo-check \
+    --approve-for-me "${CODEX_OUTPUT[@]}" "${PROMPT}" \
+    2>"${SAFESELECT_DBEAVER_ROOT}/codex.stderr"
+else
+  codex --model "${CODEX_MODEL}" \
+    -c model_reasoning_effort=low \
+    -c model_reasoning_summary=detailed \
+    exec --skip-git-repo-check \
+    --approve-for-me "${CODEX_OUTPUT[@]}" "${PROMPT}"
+fi
