@@ -3333,6 +3333,12 @@ fn run_checks_for_environments(
 ) -> Result<()> {
     if env_names.is_empty() {
         print_no_environments(repo_root);
+        if fail_on_error {
+            return Err(SafeselectError::Config(format!(
+                "no environments found in {}",
+                repo_root.join(".safeselect/environments").display()
+            )));
+        }
         return Ok(());
     }
     println!("── Verification ──────────────────────────────────");
@@ -4463,6 +4469,19 @@ mod tests {
         for line in ["  ⚠ copilot config could not be inspected", "  ✗ cursor"] {
             assert_eq!(super::terminal_line(line, true), line);
         }
+    }
+
+    #[test]
+    fn doctor_fails_when_no_environments_are_available() {
+        let root =
+            std::env::temp_dir().join(format!("safeselect-doctor-empty-{}", uuid::Uuid::new_v4()));
+        let env_dir = root.join(".safeselect/environments");
+        std::fs::create_dir_all(&env_dir).unwrap();
+
+        assert!(run_checks_for_environments(&root, &[], false, false, true).is_err());
+        assert!(run_checks_for_environments(&root, &[], false, false, false).is_ok());
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
