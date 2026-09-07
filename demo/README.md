@@ -173,6 +173,7 @@ CODEX_HOME="$CODEX_HOME" codex login   # only if this fresh runtime is not logge
 CODEX_HOME="$CODEX_HOME" codex login status
 cd -
 SAFESELECT_DBEAVER_ROOT=/private/tmp/safeselect-dbeaver-codex vhs demo/dbeaver-codex.tape
+cp docs/recordings/safeselect-dbeaver-codex.gif site/public/dbeaver-codex.gif
 ```
 
 During import, select the demo connection and use `staging`, bastion
