@@ -10,7 +10,7 @@ Set Width 1280
 Set Height 900
 Set Padding 24
 Set Theme "Dracula"
-Set TypingSpeed 18ms
+Set TypingSpeed 16ms
 Set WindowBar "Colorful"
 
 Type `source "$SAFESELECT_DBEAVER_ROOT/demo.env" && cd "$SAFESELECT_DBEAVER_PROJECT" && clear`
@@ -34,7 +34,8 @@ Sleep 3s
 Type "echo '=== Codex MCP allowlist (project) ==='; grep mcp_servers .codex/config.toml"
 Enter
 Sleep 3s
-Type "SAFESELECT_CODEX_JSON=1 ../dbeaver-codex-run.sh 2>&1 | ../dbeaver-codex-format.py"
+# Keep the recording faithful to the native Codex terminal stream: reasoning
+# summaries, MCP lifecycle events, messages, and tool output remain visible.
+Type "../dbeaver-codex-run.sh"
 Enter
 Sleep 105s
-Sleep 15s

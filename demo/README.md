@@ -176,6 +176,10 @@ SAFESELECT_DBEAVER_ROOT=/private/tmp/safeselect-dbeaver-codex vhs demo/dbeaver-c
 cp docs/recordings/safeselect-dbeaver-codex.gif site/public/dbeaver-codex.gif
 ```
 
+The recording intentionally uses Codex's native terminal stream so the
+reasoning summaries, MCP lifecycle events, messages, and tool output remain
+visible. The fixture and credentials used for this demo are synthetic.
+
 During import, select the demo connection and use `staging`, bastion
 `127.0.0.1:55222`, target `postgres:5432`, the generated key file, and the
 demo database password when prompted. The import prompt does not expand shell
