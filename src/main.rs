@@ -106,7 +106,15 @@ fn run(cli: Cli) -> Result<()> {
                 print_no_environments(&dir);
                 return Ok(());
             }
-            cmd_posture(&loader, &dir, &environments, &format, strict, acknowledge)
+            cmd_posture(
+                &loader,
+                &dir,
+                &environments,
+                &format,
+                strict,
+                acknowledge,
+                environment.is_none(),
+            )
         }
         Command::Query {
             project,
@@ -2003,7 +2011,7 @@ fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
     // Step 5: shared helpers (driver, passwords, verify)
     setup_driver_if_missing()?;
     setup_passwords_for_missing(&cwd, &env_names)?;
-    run_checks_for_environments(&cwd, &env_names, false, true)?;
+    run_checks_for_environments(&cwd, &env_names, false, true, false)?;
     Ok(())
 }
 
@@ -2111,7 +2119,7 @@ fn cmd_import_compose(path: Option<PathBuf>, non_interactive: bool) -> Result<()
     let env_names = guidance.imported_env_names;
     setup_driver_if_missing()?;
     setup_passwords_for_missing(dest_dir, &env_names)?;
-    run_checks_for_environments(dest_dir, &env_names, false, true)?;
+    run_checks_for_environments(dest_dir, &env_names, false, true, false)?;
 
     Ok(())
 }
@@ -2140,7 +2148,7 @@ fn import_selected_connections(connections: &[compose::ComposeConnection]) -> Re
     let env_names = guidance.imported_env_names;
     setup_driver_if_missing()?;
     setup_passwords_for_missing(&cwd, &env_names)?;
-    run_checks_for_environments(&cwd, &env_names, false, true)?;
+    run_checks_for_environments(&cwd, &env_names, false, true, false)?;
 
     Ok(())
 }
@@ -2329,7 +2337,7 @@ fn cmd_import_compass(path: Option<PathBuf>, non_interactive: bool) -> Result<()
     if non_interactive {
         println!("Next: safeselect check --environment <name>");
     } else {
-        run_checks_for_environments(&cwd, &imported, false, true)?;
+        run_checks_for_environments(&cwd, &imported, false, true, false)?;
     }
     Ok(())
 }
@@ -3313,7 +3321,7 @@ fn run_checks(
     show_progress: bool,
 ) -> Result<()> {
     let env_names = selected_environment_names(repo_root, environment)?;
-    run_checks_for_environments(repo_root, &env_names, verbose, show_progress)
+    run_checks_for_environments(repo_root, &env_names, verbose, show_progress, true)
 }
 
 fn run_checks_for_environments(
@@ -3321,6 +3329,7 @@ fn run_checks_for_environments(
     env_names: &[String],
     verbose: bool,
     show_progress: bool,
+    fail_on_error: bool,
 ) -> Result<()> {
     if env_names.is_empty() {
         print_no_environments(repo_root);
@@ -3329,6 +3338,7 @@ fn run_checks_for_environments(
     println!("── Verification ──────────────────────────────────");
     println!();
     let mut all_ok = true;
+    let mut failed_environments = Vec::new();
     for (index, env_name) in env_names.iter().enumerate() {
         if index > 0 {
             println!();
@@ -3341,12 +3351,20 @@ fn run_checks_for_environments(
                 print_terminal_line("FAILED");
                 print_terminal_line(&format!("    ERROR: {e}"));
                 all_ok = false;
+                failed_environments.push(env_name.clone());
             }
         }
     }
     if all_ok {
         println!();
         print_terminal_line("  ✓ All environments ready.");
+        return Ok(());
+    }
+    if fail_on_error {
+        return Err(SafeselectError::Other(format!(
+            "checks failed for environment(s): {}",
+            failed_environments.join(", ")
+        )));
     }
     Ok(())
 }
@@ -3520,7 +3538,10 @@ fn kill_process_on_port(port: u16) -> bool {
     if !output.status.success() {
         return false;
     }
-    let pids = String::from_utf8_lossy(&output.stdout);
+    kill_processes(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn kill_processes(pids: &str) -> bool {
     let mut killed = false;
     for line in pids.lines() {
         let pid = match line.trim().parse::<i32>() {
@@ -4040,9 +4061,16 @@ fn cmd_posture(
     format: &str,
     strict: bool,
     acknowledge: bool,
+    skip_unsupported: bool,
 ) -> Result<()> {
     validate_posture_format(format)?;
-    let reports = collect_posture_reports(loader, repo_root, environments, acknowledge)?;
+    let reports = collect_posture_reports(
+        loader,
+        repo_root,
+        environments,
+        acknowledge,
+        skip_unsupported,
+    )?;
     print_posture_reports(format, &reports)?;
     enforce_posture_strict(strict, &reports)
 }
@@ -4063,18 +4091,36 @@ fn collect_posture_reports<'a>(
     repo_root: &Path,
     environments: &'a [String],
     acknowledge: bool,
+    skip_unsupported: bool,
 ) -> Result<Vec<EnvironmentPostureReport<'a>>> {
     environments
         .iter()
         .map(|environment| {
             let resolved = loader.resolve_local(repo_root, environment)?;
+            if skip_unsupported && !supports_posture(&resolved) {
+                return Ok(None);
+            }
             let report = posture::inspect(&resolved, loader.config_dir())?;
             if acknowledge && report.status == "warning" {
                 posture::acknowledge(loader.config_dir(), &report.fingerprint)?;
             }
-            Ok((environment, report))
+            Ok(Some((environment, report)))
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()
+        .map(|reports| reports.into_iter().flatten().collect())
+}
+
+fn supports_posture(resolved: &config::ResolvedConfig) -> bool {
+    resolved.environment.database.kind == crate::backend::BackendKind::Jdbc
+        && matches!(
+            resolved
+                .environment
+                .database
+                .vendor()
+                .to_ascii_lowercase()
+                .as_str(),
+            "postgresql" | "postgres"
+        )
 }
 
 fn print_posture_reports(format: &str, reports: &[EnvironmentPostureReport<'_>]) -> Result<()> {
@@ -4454,8 +4500,26 @@ mod tests {
 
         let loader = ConfigLoader::new();
         let environments = Vec::new();
-        assert!(cmd_posture(&loader, Path::new("."), &environments, "text", false, false,).is_ok());
-        assert!(cmd_posture(&loader, Path::new("."), &environments, "json", false, false,).is_ok());
+        assert!(cmd_posture(
+            &loader,
+            Path::new("."),
+            &environments,
+            "text",
+            false,
+            false,
+            true,
+        )
+        .is_ok());
+        assert!(cmd_posture(
+            &loader,
+            Path::new("."),
+            &environments,
+            "json",
+            false,
+            false,
+            true,
+        )
+        .is_ok());
     }
     use super::*;
 
@@ -4486,15 +4550,7 @@ mod tests {
     fn covers_local_connectivity_failure_helpers() {
         let addr: std::net::SocketAddr = "127.0.0.1:1".parse().unwrap();
         assert!(!check_postgres(&addr));
-        let unused_port = (49_152..=65_535)
-            .find(|port| {
-                std::process::Command::new("lsof")
-                    .args(["-ti", &format!(":{port}")])
-                    .status()
-                    .is_ok_and(|status| !status.success())
-            })
-            .expect("an unused ephemeral port");
-        assert!(!kill_process_on_port(unused_port));
+        assert!(!kill_processes("not-a-pid"));
     }
 
     #[test]
