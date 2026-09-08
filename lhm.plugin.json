@@ -403,11 +403,11 @@
       }
     },
     {
-      "description": "validate the .safeselect configuration. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "validate the .safeselect configuration and every environment by default. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "properties": {
           "environment": {
-            "description": "Environment name to validate (optional — validates project structure if omitted)",
+            "description": "Environment name to validate (optional — validates every configured environment if omitted)",
             "type": "string"
           }
         },

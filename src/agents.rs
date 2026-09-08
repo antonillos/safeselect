@@ -5,6 +5,19 @@ use toml_edit::{value, Array, DocumentMut, Item, Table};
 
 type ClientDetector = fn() -> Option<PathBuf>;
 
+fn print_agent_success(message: &str) {
+    use std::io::IsTerminal;
+
+    let color = std::io::stdout().is_terminal()
+        && std::env::var_os("NO_COLOR").is_none_or(|value| value.is_empty())
+        && std::env::var("TERM").is_ok_and(|term| term != "dumb");
+    if color {
+        println!("\x1b[32m✓\x1b[0m {message}");
+    } else {
+        println!("✓ {message}");
+    }
+}
+
 pub fn detect_clients() -> Result<Vec<ClientConfig>> {
     let mut clients = vec![];
 
@@ -77,7 +90,13 @@ fn client_status_lines(client: &str, repo_root: Option<&Path>) -> Result<Vec<Str
     }
     let mut lines = Vec::new();
     for (scope, path) in configs {
-        lines.extend(config_status_lines(client, scope, &path)?);
+        match config_status_lines(client, scope, &path) {
+            Ok(config_lines) => lines.extend(config_lines),
+            Err(error) => lines.push(format!(
+                "  ⚠ {client} config could not be inspected [scope={scope}, config={}]: {error}",
+                path.display()
+            )),
+        }
     }
     if lines.is_empty() {
         lines.push(format!(
@@ -271,7 +290,9 @@ fn install_file_entry(
     )?;
 
     if new_content == content {
-        println!("Entry '{entry_name}' is already up to date for {client}");
+        print_agent_success(&format!(
+            "Entry '{entry_name}' is already up to date for {client}"
+        ));
         println!("Next: {}", install_next_step(client, local));
         return Ok(());
     }
@@ -281,7 +302,7 @@ fn install_file_entry(
 
     write_config_and_verify(&config_path, &content, &new_content, config_existed)?;
 
-    println!("Entry '{entry_name}' installed for {client}");
+    print_agent_success(&format!("Entry '{entry_name}' installed for {client}"));
     println!("Next: {}", install_next_step(client, local));
     Ok(())
 }
@@ -344,9 +365,11 @@ fn warn_scope_collision(
 }
 
 fn opposite_scope_config(client: &str, repo_root: Option<&Path>, local: bool) -> Option<PathBuf> {
-    local
-        .then(|| get_client_config(client).ok())
-        .unwrap_or_else(|| repo_root.and_then(|root| detect_local_client_config(client, root)))
+    if local {
+        get_client_config(client).ok()
+    } else {
+        repo_root.and_then(|root| detect_local_client_config(client, root))
+    }
 }
 
 fn scope_has_entry(client: &str, config_path: &Path, entry_name: &str) -> Result<bool> {
@@ -491,6 +514,7 @@ fn build_client_entries(
     Ok((entry, copilot_entry, opencode_entry))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn update_client_entry(
     client: &str,
     content: &str,
@@ -771,11 +795,13 @@ fn resolve_upgrade_environment(
 
 fn print_upgrade_result(client: &str, resolved_entry_name: &str, target_entry_name: &str) {
     if target_entry_name == resolved_entry_name {
-        println!("Entry '{resolved_entry_name}' upgraded for {client}");
+        print_agent_success(&format!(
+            "Entry '{resolved_entry_name}' upgraded for {client}"
+        ));
     } else {
-        println!(
+        print_agent_success(&format!(
             "Entry '{resolved_entry_name}' upgraded and renamed to '{target_entry_name}' for {client}"
-        );
+        ));
     }
 }
 
@@ -828,7 +854,7 @@ fn uninstall_file_entry(client: &str, entry_name: &str, repo_root: Option<&Path>
     let new_content = remove_client_entry(client, &content, entry_name)?;
     write_config_and_verify(&config_path, &content, &new_content, true)?;
 
-    println!("Entry '{entry_name}' uninstalled from {client}");
+    print_agent_success(&format!("Entry '{entry_name}' uninstalled from {client}"));
     Ok(())
 }
 
@@ -900,7 +926,9 @@ fn install_claude_entry_with_program(
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
-    println!("Entry '{entry_name}' installed for claude-code ({scope} scope)");
+    print_agent_success(&format!(
+        "Entry '{entry_name}' installed for claude-code ({scope} scope)"
+    ));
     println!("Next: {}", install_next_step("claude-code", local));
     Ok(())
 }
@@ -931,7 +959,9 @@ fn run_claude_remove_with_program(
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
-    println!("Entry '{entry_name}' uninstalled from claude-code");
+    print_agent_success(&format!(
+        "Entry '{entry_name}' uninstalled from claude-code"
+    ));
     println!("Next: run `safeselect agent status` to verify removal, then stop.");
     Ok(())
 }
@@ -1519,13 +1549,16 @@ fn candidate_entry_names(
             let cwd_matches = client == "opencode"
                 && repo_root.is_some_and(|root| {
                     opencode_entry_matches_project(content, name, root)
-                        && environment.map_or(true, |expected| {
-                            detect_entry_environment(client, content, name)
-                                .ok()
-                                .flatten()
-                                .as_deref()
-                                == Some(expected)
-                        })
+                        && match environment {
+                            None => true,
+                            Some(expected) => {
+                                detect_entry_environment(client, content, name)
+                                    .ok()
+                                    .flatten()
+                                    .as_deref()
+                                    == Some(expected)
+                            }
+                        }
                 });
             name_matches || cwd_matches
         })
@@ -2283,6 +2316,34 @@ mcp_servers = { safe = { command = "safeselect", args = ["serve", "--environment
             .unwrap_err()
             .to_string()
             .contains("symlink"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn status_warns_for_symlinked_configs_and_continues() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!(
+            "safeselect-status-symlink-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(root.join(".opencode")).unwrap();
+        std::fs::write(
+            root.join(".opencode").join("opencode.json"),
+            r#"{"mcp":{"safe":{"command":"safeselect"}}}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join(".vscode")).unwrap();
+        let target = root.join("copilot-mcp.json");
+        std::fs::write(&target, "{}").unwrap();
+        symlink(&target, root.join(".vscode").join("mcp.json")).unwrap();
+
+        let status = status_lines(Some(&root)).unwrap().join("\n");
+        assert!(status.contains("✓ opencode: safe"));
+        assert!(status.contains("⚠ copilot config could not be inspected"));
+        assert!(status.contains("Config file is a symlink"));
+
         let _ = std::fs::remove_dir_all(root);
     }
 

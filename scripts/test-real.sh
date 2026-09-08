@@ -125,8 +125,14 @@ if [[ "$mongodb_ready" -ne 1 ]]; then
     exit 1
 fi
 
-echo "✓ PostgreSQL connection verified"
-echo "✓ MongoDB service available in compose stack"
+if [[ -t 1 && -z "${NO_COLOR:-}" && "${TERM:-}" != "dumb" ]]; then
+    SUCCESS_MARKER=$'\033[32m✓\033[0m'
+else
+    SUCCESS_MARKER='✓'
+fi
+
+printf '%s PostgreSQL connection verified\n' "${SUCCESS_MARKER}"
+printf '%s MongoDB service available in compose stack\n' "${SUCCESS_MARKER}"
 echo ""
 
 run_cargo_suite() {

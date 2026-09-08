@@ -5,6 +5,12 @@ set -euo pipefail
 PREFIX="${PREFIX:-$HOME/.local}"
 BIN_DIR="${BIN_DIR:-${PREFIX}/bin}"
 
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != "dumb" ]; then
+  SUCCESS_MARKER=$'\033[32m✓\033[0m'
+else
+  SUCCESS_MARKER='✓'
+fi
+
 confirm() {
   printf '%s [y/N] ' "$1"
   read -r reply
@@ -59,28 +65,28 @@ fi
 
 # Remove binary
 rm -f "${BIN_DIR}/safeselect"
-printf '  ✓ Removed %s/safeselect\n' "${BIN_DIR}"
+printf '  %s Removed %s/safeselect\n' "${SUCCESS_MARKER}" "${BIN_DIR}"
 
 # Remove config
 if [ -n "${CONFIG_DIR}" ]; then
   rm -rf "${CONFIG_DIR}"
-  printf '  ✓ Removed %s\n' "${CONFIG_DIR}"
+  printf '  %s Removed %s\n' "${SUCCESS_MARKER}" "${CONFIG_DIR}"
 fi
 
 # Remove data
 rm -rf "${DATA_DIR}"
-printf '  ✓ Removed %s\n' "${DATA_DIR}"
+printf '  %s Removed %s\n' "${SUCCESS_MARKER}" "${DATA_DIR}"
 
 # Remove audit
 rm -rf "${AUDIT_DIR}"
-printf '  ✓ Removed %s\n' "${AUDIT_DIR}"
+printf '  %s Removed %s\n' "${SUCCESS_MARKER}" "${AUDIT_DIR}"
 
 # Remove any safeselect backups in agent configs
 for f in "${HOME}/Library/Application Support/opencode/opencode.json.safeselect.bak" \
          "${HOME}/.config/opencode/opencode.json.safeselect.bak" \
          "${HOME}/.cursor/config.json.safeselect.bak" \
          "${HOME}/.windsurf/config.json.safeselect.bak"; do
-  [ -f "$f" ] && rm -f "$f" && printf '  ✓ Removed backup %s\n' "$f"
+  [ -f "$f" ] && rm -f "$f" && printf '  %s Removed backup %s\n' "${SUCCESS_MARKER}" "$f"
 done
 
 echo
