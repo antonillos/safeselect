@@ -86,7 +86,23 @@ pub fn line(status: DiagnosticStatus, code: DiagnosticCode, message: impl AsRef<
 }
 
 pub fn print(status: DiagnosticStatus, code: DiagnosticCode, message: impl AsRef<str>) {
-    println!("{}", line(status, code, message));
+    use std::io::IsTerminal;
+
+    let line = line(status, code, message);
+    let color = std::io::stdout().is_terminal()
+        && std::env::var_os("NO_COLOR").is_none_or(|value| value.is_empty())
+        && std::env::var("TERM").is_ok_and(|term| term != "dumb");
+    if color {
+        let rendered = match status {
+            DiagnosticStatus::Ok => line.replace('✓', "\x1b[32m✓\x1b[0m"),
+            DiagnosticStatus::Warn => format!("\x1b[33m{line}\x1b[0m"),
+            DiagnosticStatus::Fail => format!("\x1b[31m{line}\x1b[0m"),
+            DiagnosticStatus::Info => line,
+        };
+        println!("{rendered}");
+    } else {
+        println!("{line}");
+    }
 }
 
 #[cfg(test)]

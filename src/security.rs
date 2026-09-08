@@ -935,8 +935,6 @@ impl SecurityEngine {
             &self.policy.allowed_schemas,
             &self.policy.denied_relations,
             self.policy.require_single_statement,
-
-
         )
         .map_err(SafeselectError::QueryRejected)
     }
@@ -965,8 +963,6 @@ impl SecurityEngine {
             self.policy.require_single_statement,
         )
         .map_err(SafeselectError::QueryRejected)
-
-
     }
 
     fn check_document_name(&self, kind: &str, name: &str) -> Result<()> {
@@ -1106,9 +1102,9 @@ fn consume_escaped_char(
 }
 
 fn take_dollar_delimiter(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Option<String> {
-    let mut lookahead = chars.clone();
+    let lookahead = chars.clone();
     let mut tag = String::from("$");
-    while let Some(ch) = lookahead.next() {
+    for ch in lookahead {
         if ch == '$' {
             tag.push('$');
             for _ in 0..tag.len() - 1 {
@@ -1123,8 +1119,6 @@ fn take_dollar_delimiter(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -
     }
     None
 }
-
-
 
 struct RelationPolicyVisitor<'a> {
     allowed_schemas: &'a [String],
@@ -1142,7 +1136,6 @@ impl Visitor for RelationPolicyVisitor<'_> {
                 self.violation = Some(message);
             }
         }
-
 
         let names = query
             .with
@@ -1189,8 +1182,6 @@ impl Visitor for RelationPolicyVisitor<'_> {
             _ => Ok(()),
         };
         if let Err(message) = result {
-
-
             self.violation = Some(message);
         }
         ControlFlow::Continue(())
@@ -1221,10 +1212,8 @@ impl RelationPolicyVisitor<'_> {
             return Ok(());
         }
         if !self.allowed_schemas.is_empty() {
-            let folded_parts: Vec<String> = parts
-                .iter()
-                .map(|part| part.to_ascii_lowercase())
-                .collect();
+            let folded_parts: Vec<String> =
+                parts.iter().map(|part| part.to_ascii_lowercase()).collect();
             self.validate_allowed_relation(&folded_parts)?;
         }
         self.validate_denied_relation(parts)
@@ -1277,8 +1266,6 @@ impl RelationPolicyVisitor<'_> {
         }
         self.validate_relation(name)
     }
-
-
 
     fn validate_relation(&self, name: &ObjectName) -> std::result::Result<(), String> {
         let parts = relation_parts(name)?;
@@ -1350,8 +1337,6 @@ impl RelationPolicyVisitor<'_> {
         }
         Ok(())
     }
-
-
 
     fn validate_allowed_relation(&self, parts: &[String]) -> std::result::Result<(), String> {
         validate_allowed_relation_parts(parts, self.allowed_schemas)
@@ -1458,8 +1443,7 @@ fn table_command_relation_parts(sql: &str) -> std::result::Result<Vec<Vec<String
 
 fn is_table_command_position(previous: Option<&Token>) -> bool {
     match previous {
-        None
-        | Some(Token::LParen | Token::RParen | Token::Comma | Token::SemiColon) => true,
+        None | Some(Token::LParen | Token::RParen | Token::Comma | Token::SemiColon) => true,
         Some(Token::Word(word)) => matches!(
             word.keyword,
             Keyword::UNION | Keyword::INTERSECT | Keyword::EXCEPT
@@ -1476,8 +1460,6 @@ fn canonical_token_word(word: &sqlparser::tokenizer::Word) -> String {
     }
 }
 
-
-
 fn validate_relation_policy(
     sql: &str,
     allowed_schemas: &[String],
@@ -1487,15 +1469,12 @@ fn validate_relation_policy(
     let statements = Parser::parse_sql(&PostgreSqlDialect {}, sql)
         .map_err(|error| format!("SQL policy parsing failed: {error}"))?;
     if require_single_statement && statements.len() != 1 {
-
-
         return Err("SQL policy requires exactly one parsed statement".into());
     }
     let mut shadowing = CteVisibilityVisitor {
         scopes: Vec::new(),
         allowed_schemas,
         denied_relations,
-
 
         violation: None,
     };
@@ -1537,8 +1516,6 @@ struct CteVisibilityVisitor<'a> {
 }
 
 impl Visitor for CteVisibilityVisitor<'_> {
-
-
     type Break = ();
 
     fn pre_visit_query(&mut self, query: &Query) -> ControlFlow<Self::Break> {
@@ -1578,8 +1555,6 @@ impl Visitor for CteVisibilityVisitor<'_> {
                     .filter(|alias| {
                         !inherited.contains(*alias) && self.relation_violates_policy(alias)
                     })
-
-
                     .cloned()
                     .collect();
                 let mut references = UnqualifiedRelationVisitor {
@@ -1643,8 +1618,6 @@ impl CteVisibilityVisitor<'_> {
                 .any(|denied| !denied.contains('.') && denied.eq_ignore_ascii_case(relation))
     }
 }
-
-
 
 struct QueryScopeFrame {
     body_scope: HashSet<String>,
@@ -2581,7 +2554,9 @@ mod tests {
             .is_err());
         assert!(engine.validate("SELECT * FROM private.expose()").is_err());
         assert!(engine
-            .validate("SELECT public.query_to_xml('SELECT * FROM private.secrets', true, false, '')")
+            .validate(
+                "SELECT public.query_to_xml('SELECT * FROM private.secrets', true, false, '')"
+            )
             .is_err());
         assert!(engine
             .validate("SELECT public.table_to_xml('private.secrets'::regclass, true, false, '')")
@@ -2640,8 +2615,6 @@ mod tests {
         assert!(engine
             .validate("SELECT CAST('x' AS private.leaky_type) FROM public.users")
             .is_err());
-
-
     }
 
     #[test]
@@ -2734,7 +2707,6 @@ mod tests {
     }
 
     #[test]
-
 
     fn schema_allowlist_rejects_forward_cte_references() {
         let policy = SecurityPolicy {
@@ -2903,12 +2875,14 @@ mod tests {
         assert_eq!(dollar_delimiter_end(&tagged, 1), None);
         assert_eq!(dollar_delimiter_end(&invalid, 0), None);
         assert_eq!(skip_dollar_quoted_literal(&tagged, 0), Some(tagged.len()));
-        assert_eq!(skip_dollar_quoted_literal(&untagged, 0), Some(untagged.len()));
+        assert_eq!(
+            skip_dollar_quoted_literal(&untagged, 0),
+            Some(untagged.len())
+        );
         assert_eq!(skip_dollar_quoted_literal(&tagged[..10], 0), None);
     }
 
     #[test]
-
 
     fn validates_all_policy_constraints_on_a_valid_query() {
         let policy = SecurityPolicy {
