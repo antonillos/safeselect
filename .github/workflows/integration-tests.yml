@@ -70,6 +70,7 @@ jobs:
         run: docker compose -f docker-compose.integration.yml up -d --wait
 
       - name: Cache cargo dependencies
+        if: ${{ !inputs.target_ref }}
         uses: actions/cache@v6
         with:
           path: |

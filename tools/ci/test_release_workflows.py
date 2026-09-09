@@ -60,6 +60,7 @@ class WorkflowTests(unittest.TestCase):
         integration = (ROOT / ".github/workflows/integration-tests.yml").read_text()
         self.assertIn("if: ${{ !inputs.target_ref }}", integration)
         self.assertIn("if: ${{ inputs.target_ref }}", integration)
+        self.assertIn("- name: Cache cargo dependencies\n        if: ${{ !inputs.target_ref }}", integration)
 
     def test_older_source_uses_current_tooling_and_source_sha(self):
         self.assertIn("path: release-source", self.release)
