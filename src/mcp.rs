@@ -5795,6 +5795,7 @@ mod tests {
     }
 
     fn test_server(repo_root: &Path) -> McpServer {
+        let password = uuid::Uuid::new_v4().to_string();
         let project = crate::config::ProjectConfig {
             audit: crate::config::AuditConfig {
                 enabled: true,
@@ -5827,7 +5828,7 @@ mod tests {
             "org.postgresql.Driver",
             "jdbc:postgresql://127.0.0.1:5432/app",
             "agent",
-            "password",
+            &password,
             repo_root,
             &repo_root.join(".safeselect"),
         )

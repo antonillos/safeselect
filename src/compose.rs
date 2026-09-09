@@ -688,7 +688,8 @@ mod tests {
 
     #[test]
     fn builds_keychain_command_with_account_and_password() {
-        let command = keychain_command("project/local", "secret");
+        let password = uuid::Uuid::new_v4().to_string();
+        let command = keychain_command("project/local", &password);
         let args = command
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())
@@ -704,7 +705,7 @@ mod tests {
                 "-s",
                 "safeselect",
                 "-w",
-                "secret",
+                password.as_str(),
                 "-U",
             ]
         );
