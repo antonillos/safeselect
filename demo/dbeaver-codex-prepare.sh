@@ -156,5 +156,4 @@ EOF
 
 printf '%s\n' "Prepared isolated DBeaver → Codex demo at ${RUN_ROOT}"
 printf '%s\n' "Next: run the interactive DBeaver import with ${RUN_ROOT}/demo.env."
-printf '%s\n' "SSH key for the import prompt: ${SSH_KEY}"
 printf '%s\n' "After import, source ${RUN_ROOT}/demo.env; if needed, run CODEX_HOME=\"\$CODEX_HOME\" codex login, then run demo/dbeaver-codex.tape."

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render colorized, structured Codex JSONL events for the public demo."""
+"""Render safe, colorized Codex JSONL events without exposing raw payloads."""
 from __future__ import annotations
 
 import json
@@ -83,9 +83,15 @@ def render(line: str) -> None:
     try:
         event = json.loads(clean)
     except json.JSONDecodeError:
-        # The public recording accepts only structured Codex events. Plain
-        # stderr can include session metadata, request IDs, or local paths.
-        if SHOW_ALL and clean:
+        if (
+            not SHOW_ALL
+            and (
+                "guardian::review_session" in clean
+                or "trunk rollout snapshot" in clean
+            )
+        ):
+            return
+        if clean:
             emit(DIM, "codex", clean)
         return
     kind = event.get("type", "")
@@ -93,8 +99,6 @@ def render(line: str) -> None:
     item_kind = item.get("type", "") if isinstance(item, dict) else ""
     if kind == "item.completed" and item_kind == "reasoning":
         summary = text_from(item.get("summary"))
-        # Codex does not always emit a public reasoning summary. Do not
-        # manufacture a "redacted" line when there is no text to display.
         if summary:
             emit(CYAN, "thinking ›", summary)
     elif kind == "item.completed" and item_kind in {"agent_message", "message"}:

@@ -173,27 +173,16 @@ CODEX_HOME="$CODEX_HOME" codex login   # only if this fresh runtime is not logge
 CODEX_HOME="$CODEX_HOME" codex login status
 cd -
 SAFESELECT_DBEAVER_ROOT=/private/tmp/safeselect-dbeaver-codex vhs demo/dbeaver-codex.tape
-cp docs/recordings/safeselect-dbeaver-codex.gif site/public/dbeaver-codex.gif
 ```
-
-The recording preserves Codex's native terminal stream, including the user
-prompt, reasoning summaries, MCP lifecycle activity, messages, and tool output.
-A surgical filter masks only the values of `workdir`, `approval`, and `session id`
-with `****`; credential and private-key safeguards remain active. The runner
-uses Codex's concise public reasoning summaries. The fixture and credentials
-used for this demo are synthetic.
 
 During import, select the demo connection and use `staging`, bastion
 `127.0.0.1:55222`, target `postgres:5432`, the generated key file, and the
-demo database password when prompted. The import prompt does not expand shell
-variables: paste the absolute key path printed by:
+demo database password when prompted. DBeaver does not expand shell variables,
+so paste the absolute key path printed by:
 
 ```bash
 printf '%s\n' "$SAFESELECT_DBEAVER_ROOT/ssh/demo_ed25519"
 ```
-
-For the default runtime, this is
-`/private/tmp/safeselect-dbeaver-codex/ssh/demo_ed25519`.
 
 The database password is deliberately entered interactively and stored only in
 the disposable macOS Keychain account; it is not exported by `demo.env` and is

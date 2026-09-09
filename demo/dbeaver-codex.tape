@@ -10,7 +10,7 @@ Set Width 1280
 Set Height 900
 Set Padding 24
 Set Theme "Dracula"
-Set TypingSpeed 16ms
+Set TypingSpeed 18ms
 Set WindowBar "Colorful"
 
 Type `source "$SAFESELECT_DBEAVER_ROOT/demo.env" && cd "$SAFESELECT_DBEAVER_PROJECT" && clear`
@@ -34,7 +34,8 @@ Sleep 3s
 Type "echo '=== Codex MCP allowlist (project) ==='; grep mcp_servers .codex/config.toml"
 Enter
 Sleep 3s
-# Preserve Codex's native stream and prompt; remove only session metadata.
+# Preserve the native demo stream, applying its redaction boundary before VHS records it.
 Type "../dbeaver-codex-run.sh 2>&1 | ../dbeaver-codex-filter.py"
 Enter
 Sleep 105s
+Sleep 15s
