@@ -2,6 +2,30 @@
 
 All notable changes to this project are documented in this file.
 
+## [v0.7.8] - 2026-09-09
+
+### Added
+
+- feat(demo): add DBeaver SSH Codex recording (#226)
+
+### Fixed
+
+- fix(release): find draft releases by tag (#217)
+- fix(distribution): expose verified binary installation (#219)
+- fix: improve diagnostics and default environment validation (#227)
+- fix(posture): handle SSH tunnels across environments (#231)
+- fix(demo): restore recording redaction boundaries
+
+### Dependencies
+
+- chore(deps): bump actions/upload-artifact from 4 to 7 (#221)
+- chore(deps): bump actions/setup-node from 6 to 7 (#222)
+- chore(deps): bump uuid from 1.25.0 to 1.26.0 (#223)
+- chore(deps): bump actions/setup-java from 5 to 6 (#224)
+- chore(deps): bump actions/download-artifact from 4 to 8 (#225)
+- chore(deps): bump toml from 1.1.4+spec-1.1.0 to 1.1.5+spec-1.1.0 (#229)
+- chore(deps): bump dirs from 6.0.0 to 7.0.0 (#230)
+
 ## [v0.7.7] - 2026-08-31
 
 ### Added

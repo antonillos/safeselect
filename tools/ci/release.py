@@ -46,12 +46,28 @@ def release_info(repo, version):
     page = 1
     while True:
         releases = api(f"repos/{repo}/releases?per_page=100&page={page}")
+        if not isinstance(releases, list):
+            raise RuntimeError("Cannot list releases; check repository access before retrying")
         draft = next((release for release in releases if release.get("tag_name") == version), None)
         if draft is not None:
             return draft
         if len(releases) < 100:
             return None
         page += 1
+
+
+def require_release(repo, version):
+    """Wait for a known release to become readable; never retry creation."""
+    for attempt in range(6):
+        info = release_info(repo, version)
+        if info is not None:
+            return info
+        if attempt < 5:
+            time.sleep(2 ** attempt)
+    raise RuntimeError(
+        f"Release {version} is not visible after bounded retries; check draft access and retry. "
+        "Existing drafts and assets have not been replaced."
+    )
 
 
 def payloads(version, targets=TARGETS):
@@ -90,14 +106,14 @@ def verify_assets(directory, version, targets=TARGETS):
         verify_pair(directory, name)
 
 
-def verify_tag(repo, version, sha, source):
+def verify_tag(repo, version, sha, source, *, required=False):
     refs = command("git", "ls-remote", "--tags", "origin",
                    f"refs/tags/{version}", f"refs/tags/{version}^{{}}", cwd=source)
     entries = dict(line.split()[::-1] for line in refs.splitlines())
     tag_sha = entries.get(f"refs/tags/{version}^{{}}", entries.get(f"refs/tags/{version}"))
     if tag_sha and tag_sha != sha:
         raise ValueError(f"Refusing to move {version}: tag is {tag_sha}, requested source is {sha}")
-    info = release_info(repo, version)
+    info = require_release(repo, version) if required else release_info(repo, version)
     if info and not info["draft"] and not tag_sha:
         raise ValueError("A public release must have an existing tag")
     if info and info["draft"] and info.get("target_commitish") != sha:
@@ -182,7 +198,7 @@ def publish(args):
         command("gh", "release", "create", args.version, "--repo", args.repo,
                 "--target", args.sha, "--title", args.version, "--notes-file", str(args.notes),
                 "--draft", *(["--prerelease"] if args.prerelease else []))
-        info = release_info(args.repo, args.version)
+        info = verify_tag(args.repo, args.version, args.sha, args.source, required=True)
     if info["prerelease"] != args.prerelease:
         raise ValueError("Refusing to change an existing release's prerelease status")
     if not info["draft"] and args.draft:
@@ -196,14 +212,14 @@ def publish(args):
             # Never --clobber: successful uploads survive failed-job and whole-workflow retries.
             command("gh", "release", "upload", args.version, "--repo", args.repo, *missing)
         verified = Path(work) / "verified"
-        download_existing(args.repo, args.version, release_info(args.repo, args.version), verified)
+        download_existing(args.repo, args.version, require_release(args.repo, args.version), verified)
         verify_assets(verified, args.version)
         for name in expected_files(args.version):
             if digest(verified / name) != digest(staged / name):
                 raise ValueError(f"Uploaded asset changed unexpectedly: {name}")
     if info["draft"] and not args.draft:
         # Detect an external tag change while artifacts were being uploaded.
-        verify_tag(args.repo, args.version, args.sha, args.source)
+        verify_tag(args.repo, args.version, args.sha, args.source, required=True)
         command("gh", "release", "edit", args.version, "--repo", args.repo, "--draft=false")
 
 
@@ -218,7 +234,7 @@ def check_public(args):
 
 def attach_file(repo, version, path):
     """Attach registry metadata once; retries must not overwrite public metadata."""
-    info = release_info(repo, version)
+    info = require_release(repo, version)
     if any(asset["name"] == path.name for asset in info["assets"]):
         with tempfile.TemporaryDirectory() as work:
             command("gh", "release", "download", version, "--repo", repo,
