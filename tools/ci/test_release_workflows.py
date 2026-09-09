@@ -64,7 +64,9 @@ class WorkflowTests(unittest.TestCase):
 
     def test_older_source_uses_current_tooling_and_source_sha(self):
         self.assertIn("path: release-source", self.release)
-        self.assertIn("ref: ${{ github.sha }}", self.release)
+        self.assertIn("steps.recovery.outputs.source-ref || github.sha", self.release)
+        self.assertIn("recovery-source --version", self.release)
+        self.assertIn("VERSION:-v$(sed", self.release)
         self.assertNotIn("inputs.target_ref", self.release)
         self.assertIn("outputs.target-ref", self.jobs["build"])
         for name in ("integration-tests", "prepare-release"):

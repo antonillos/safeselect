@@ -60,9 +60,10 @@ gh workflow run release.yml --ref main \
 ```
 
 Use the release's actual prerelease/draft settings when applicable. The current
-workflow always builds the selected workflow ref; it deliberately does not accept
-a second source ref. This prevents a manually supplied ref from executing code
-that could populate caches shared with trusted release runs.
+workflow recovers the source SHA frozen in an existing draft, or the immutable
+release tag for a public release. It deliberately does not accept a manually
+supplied source ref, preventing arbitrary code from executing in a release run
+or populating caches shared with trusted workflows.
 
 Recovery does **not** delete a release, move a tag, overwrite assets or stop merely
 because a release already exists. Complete platform assets are verified and
