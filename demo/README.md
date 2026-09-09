@@ -177,8 +177,12 @@ SAFESELECT_DBEAVER_ROOT=/private/tmp/safeselect-dbeaver-codex vhs demo/dbeaver-c
 
 During import, select the demo connection and use `staging`, bastion
 `127.0.0.1:55222`, target `postgres:5432`, the generated key file, and the
-demo database password when prompted. The key path is
-`$SAFESELECT_DBEAVER_ROOT/ssh/demo_ed25519`.
+demo database password when prompted. DBeaver does not expand shell variables,
+so paste the absolute key path printed by:
+
+```bash
+printf '%s\n' "$SAFESELECT_DBEAVER_ROOT/ssh/demo_ed25519"
+```
 
 The database password is deliberately entered interactively and stored only in
 the disposable macOS Keychain account; it is not exported by `demo.env` and is
