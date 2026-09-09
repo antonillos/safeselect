@@ -5,18 +5,41 @@ import { readFile, writeFile } from "node:fs/promises";
 
 const source = await readFile(new URL("../public/icon.svg", import.meta.url));
 const check = process.argv.includes("--check");
+
+async function equivalentPng(left, right) {
+  const [actual, expected] = await Promise.all([left, right].map(async bytes =>
+    sharp(bytes).ensureAlpha().raw().toBuffer({ resolveWithObject: true }),
+  ));
+  return actual.info.width === expected.info.width
+    && actual.info.height === expected.info.height
+    && actual.data.equals(expected.data);
+}
+
 async function save(name, bytes) {
   const output = new URL(`../public/${name}`, import.meta.url);
+  const png = name.endsWith(".png");
+  let current;
+  try {
+    current = await readFile(output);
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  let matches = current?.equals(bytes);
+  if (!matches && current && png) {
+    try {
+      matches = await equivalentPng(current, bytes);
+    } catch {
+      if (check) throw new Error(`${name} differs: run npm run icons:export`);
+      // Export mode repairs corrupt generated derivatives.
+      matches = false;
+    }
+  }
   if (check) {
-    if (!(await readFile(output)).equals(bytes)) {
+    if (!matches) {
       throw new Error(`${name} differs: run npm run icons:export`);
     }
   } else {
-    try {
-      if ((await readFile(output)).equals(bytes)) return;
-    } catch (error) {
-      if (error.code !== "ENOENT") throw error;
-    }
+    if (matches) return;
     await writeFile(output, bytes);
   }
   console.log(`${name}: ${bytes.length} bytes${check ? " (current)" : ""}`);
@@ -36,7 +59,7 @@ for (const [name, size] of [
 ]) {
   const png = await sharp(source, { density: 192 })
     .resize(size, size)
-    .png({ palette: true, colours: 64, compressionLevel: 9, effort: 10 })
+    .png({ palette: true, quality: 80, compressionLevel: 9, effort: 10 })
     .toBuffer();
   await save(name, png);
 }
