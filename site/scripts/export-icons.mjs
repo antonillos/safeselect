@@ -36,7 +36,7 @@ for (const [name, size] of [
 ]) {
   const png = await sharp(source, { density: 192 })
     .resize(size, size)
-    .png({ palette: true, colours: 64, compressionLevel: 9, effort: 10 })
+    .png({ palette: true, quality: 80, compressionLevel: 9, effort: 10 })
     .toBuffer();
   await save(name, png);
 }
