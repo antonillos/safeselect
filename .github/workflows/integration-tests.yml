@@ -39,13 +39,21 @@ jobs:
         with:
           toolchain: stable
 
-      - name: Install Java
+      - name: Install Java (trusted ref)
+        if: ${{ !inputs.target_ref }}
         uses: actions/setup-java@v6
         with:
           distribution: 'temurin'
           java-version: '17'
           cache: maven
           cache-dependency-path: '**/pom.xml'
+
+      - name: Install Java (selected ref)
+        if: ${{ inputs.target_ref }}
+        uses: actions/setup-java@v6
+        with:
+          distribution: 'temurin'
+          java-version: '17'
 
       - name: Checkout CI tooling
         uses: actions/checkout@v7
@@ -62,6 +70,7 @@ jobs:
         run: docker compose -f docker-compose.integration.yml up -d --wait
 
       - name: Cache cargo dependencies
+        if: ${{ !inputs.target_ref }}
         uses: actions/cache@v6
         with:
           path: |
