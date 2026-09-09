@@ -24,8 +24,16 @@ async function save(name, bytes) {
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
-  const matches = current && (current.equals(bytes)
-    || (png && await equivalentPng(current, bytes)));
+  let matches = current?.equals(bytes);
+  if (!matches && current && png) {
+    try {
+      matches = await equivalentPng(current, bytes);
+    } catch {
+      if (check) throw new Error(`${name} differs: run npm run icons:export`);
+      // Export mode repairs corrupt generated derivatives.
+      matches = false;
+    }
+  }
   if (check) {
     if (!matches) {
       throw new Error(`${name} differs: run npm run icons:export`);
