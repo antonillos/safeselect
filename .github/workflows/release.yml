@@ -12,10 +12,6 @@ on:
       version:
         description: Release tag (e.g. v0.1.0)
         required: true
-      target_ref:
-        description: Branch or commit to release
-        required: true
-        default: main
       prerelease:
         description: Mark as prerelease
         type: boolean
@@ -54,7 +50,9 @@ jobs:
       - name: Checkout release source
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.target_ref || github.sha }}
+          # A dispatcher selects the workflow ref in GitHub's UI. Never accept a
+          # second, user-controlled ref after the privileged job starts.
+          ref: ${{ github.sha }}
           path: release-source
       - name: Validate version and freeze source SHA
         id: parse
