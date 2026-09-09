@@ -939,13 +939,7 @@ fn terminal_line(line: &str, color: bool) -> String {
         if line == "OK" {
             return "\x1b[32mOK\x1b[0m".to_string();
         }
-        let trimmed = line.trim_start();
-        if trimmed.starts_with("FAILED")
-            || trimmed.starts_with("Sidecar error:")
-            || trimmed.starts_with("SSH error:")
-            || trimmed.starts_with("ERROR:")
-            || trimmed.starts_with("Reconnect failed")
-        {
+        if is_terminal_error_line(line) {
             return format!("\x1b[31m{line}\x1b[0m");
         }
         return line
@@ -955,12 +949,30 @@ fn terminal_line(line: &str, color: bool) -> String {
     line.to_string()
 }
 
+fn is_terminal_error_line(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    trimmed.starts_with("FAILED")
+        || trimmed.starts_with("UNSAFE")
+        || trimmed.starts_with("Sidecar error:")
+        || trimmed.starts_with("SSH error:")
+        || trimmed.starts_with("ERROR:")
+        || trimmed.starts_with("Reconnect failed")
+}
+
 fn print_terminal_line(line: &str) {
     use std::io::IsTerminal;
     let color = std::io::stdout().is_terminal()
         && std::env::var_os("NO_COLOR").is_none_or(|value| value.is_empty())
         && std::env::var("TERM").is_ok_and(|term| term != "dumb");
     println!("{}", terminal_line(line, color));
+}
+
+fn print_terminal_error_line(line: &str) {
+    use std::io::IsTerminal;
+    let color = std::io::stderr().is_terminal()
+        && std::env::var_os("NO_COLOR").is_none_or(|value| value.is_empty())
+        && std::env::var("TERM").is_ok_and(|term| term != "dumb");
+    eprintln!("{}", terminal_line(line, color));
 }
 
 fn cmd_agent(action: AgentAction) -> Result<()> {
@@ -3048,6 +3060,15 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
     use std::io::Write;
     use std::time::Duration;
 
+    // Tunnel setup can be a prerequisite for commands that reserve stdout for
+    // machine-readable output (such as `posture --format json`).
+    macro_rules! print {
+        ($($arg:tt)*) => { eprint!($($arg)*) };
+    }
+    macro_rules! println {
+        ($($arg:tt)*) => { eprintln!($($arg)*) };
+    }
+
     let mut failures = vec![];
 
     for env_name in env_names {
@@ -3090,13 +3111,13 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
 
         if backend_via_direct || backend_via_tunnel {
             print!("  ◉ Database reachable ({env_name})");
-            std::io::stdout().flush()?;
+            std::io::stderr().flush()?;
             continue;
         }
 
         if bastion_up {
             print!("  ◇ Bastion reachable but database not responding ({env_name})");
-            std::io::stdout().flush()?;
+            std::io::stderr().flush()?;
         }
 
         let use_password = ssh_uses_password(ssh);
@@ -3137,7 +3158,7 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
                 "  ⚠  Incomplete SSH config for '{env_name}': missing {}",
                 missing.join(", ")
             );
-            std::io::stdout().flush()?;
+            std::io::stderr().flush()?;
             failures.push(format!(
                 "{env_name}: incomplete SSH config, missing {}",
                 missing.join(", ")
@@ -3146,7 +3167,7 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
         }
 
         print!("  ● Establishing SSH tunnel ({env_name}) ... ");
-        std::io::stdout().flush()?;
+        std::io::stderr().flush()?;
 
         // Use the DBeaver-exported local endpoint when available; otherwise keep the
         // historical SafeSelect default to avoid changing existing behavior.
@@ -3225,7 +3246,7 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
             match spawn_ssh(extra) {
                 Ok(c) => c,
                 Err(e) => {
-                    print_terminal_line(&format!("FAILED: {e}"));
+                    print_terminal_error_line(&format!("FAILED: {e}"));
                     println!("  Command: {full_cmd}");
                     println!("  Check that ssh is installed and the identity file is accessible.");
                     let cmd = build_ssh_command(ssh, &cfg.database.url).unwrap_or_default();
@@ -3263,7 +3284,7 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
             std::thread::sleep(Duration::from_millis(250));
         }
         if backend_ok {
-            print_terminal_line("OK");
+            print_terminal_error_line("OK");
             // Detach child so it survives after we exit
             let _ = std::thread::spawn(move || {
                 let _ = child.wait_with_output();
@@ -3279,9 +3300,9 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
                     .join(" | ");
                 (!detail.is_empty()).then_some(detail)
             });
-            print_terminal_line("FAILED");
+            print_terminal_error_line("FAILED");
             if let Some(detail) = ssh_error {
-                print_terminal_line(&format!("  SSH error: {detail}"));
+                print_terminal_error_line(&format!("  SSH error: {detail}"));
             }
             println!(
                 "  Database not reachable through SSH tunnel (polled for up to {}s)",
@@ -4070,23 +4091,73 @@ fn cmd_posture(
     skip_unsupported: bool,
 ) -> Result<()> {
     validate_posture_format(format)?;
-    let reports = collect_posture_reports(
+    let collection = collect_posture_reports(
         loader,
         repo_root,
         environments,
         acknowledge,
         skip_unsupported,
     )?;
-    if reports.is_empty() {
+    render_posture_collection(format, &collection, skip_unsupported)?;
+    enforce_posture_strict(strict, &collection.reports)
+}
+
+fn render_posture_collection(
+    format: &str,
+    collection: &PostureCollection<'_>,
+    aggregate: bool,
+) -> Result<()> {
+    if collection.reports.is_empty() {
+        return render_empty_posture_collection(format, &collection.failures);
+    }
+    print_posture_reports(format, &collection.reports, aggregate)?;
+    render_posture_failures(format, &collection.failures)
+}
+
+fn render_posture_failures(format: &str, failures: &[(&String, String)]) -> Result<()> {
+    if failures.is_empty() {
+        if format == "text" {
+            println!();
+            print_terminal_line("  ✓ All environments inspected.");
+        }
+        return Ok(());
+    }
+    if format == "text" {
+        print_posture_failures_text(failures, true);
+    }
+    Err(posture_failures_error(failures))
+}
+
+fn render_empty_posture_collection(format: &str, failures: &[(&String, String)]) -> Result<()> {
+    if failures.is_empty() {
         return Err(SafeselectError::Config(
             "no PostgreSQL environments available for posture inspection".into(),
         ));
     }
-    print_posture_reports(format, &reports, skip_unsupported)?;
-    enforce_posture_strict(strict, &reports)
+    if format == "text" {
+        print_posture_header();
+        print_posture_failures_text(failures, false);
+    }
+    Err(posture_failures_error(failures))
 }
 
 type EnvironmentPostureReport<'a> = (&'a String, posture::Report);
+
+struct PostureCollection<'a> {
+    reports: Vec<EnvironmentPostureReport<'a>>,
+    failures: Vec<(&'a String, String)>,
+}
+
+fn posture_failures_error(failures: &[(&String, String)]) -> SafeselectError {
+    let environments = failures
+        .iter()
+        .map(|(environment, error)| format!("{environment}: {error}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    SafeselectError::Other(format!(
+        "posture inspection failed for environment(s): {environments}"
+    ))
+}
 
 fn validate_posture_format(format: &str) -> Result<()> {
     match format {
@@ -4103,23 +4174,229 @@ fn collect_posture_reports<'a>(
     environments: &'a [String],
     acknowledge: bool,
     skip_unsupported: bool,
-) -> Result<Vec<EnvironmentPostureReport<'a>>> {
-    environments
+) -> Result<PostureCollection<'a>> {
+    let mut tunnel_endpoints = Vec::new();
+    let mut reports = Vec::new();
+    let mut failures = Vec::new();
+
+    for environment in environments {
+        let outcome = inspect_posture_environment(
+            loader,
+            repo_root,
+            environment,
+            acknowledge,
+            skip_unsupported,
+            &mut tunnel_endpoints,
+        );
+        match outcome {
+            Ok(Some(report)) => reports.push(report),
+            Ok(None) => {}
+            Err(error) => failures.push((environment, error.to_string())),
+        }
+    }
+
+    Ok(PostureCollection { reports, failures })
+}
+
+fn inspect_posture_environment<'a>(
+    loader: &ConfigLoader,
+    repo_root: &Path,
+    environment: &'a String,
+    acknowledge: bool,
+    skip_unsupported: bool,
+    tunnel_endpoints: &mut Vec<((String, u16), &'a String)>,
+) -> Result<Option<EnvironmentPostureReport<'a>>> {
+    if posture_environment_is_unsupported(repo_root, environment, skip_unsupported)? {
+        return Ok(None);
+    }
+    let resolved = loader.resolve_local(repo_root, environment)?;
+    prepare_posture_tunnel(repo_root, environment, &resolved, tunnel_endpoints)?;
+    let report = posture::inspect(&resolved, loader.config_dir())?;
+    acknowledge_posture_report(loader, &report, acknowledge)?;
+    Ok(Some((environment, report)))
+}
+
+fn acknowledge_posture_report(
+    loader: &ConfigLoader,
+    report: &posture::Report,
+    acknowledge: bool,
+) -> Result<()> {
+    if acknowledge && report.status == "warning" {
+        posture::acknowledge(loader.config_dir(), &report.fingerprint)?;
+    }
+    Ok(())
+}
+
+fn posture_environment_is_unsupported(
+    repo_root: &Path,
+    environment: &str,
+    skip_unsupported: bool,
+) -> Result<bool> {
+    let environment_config = load_environment_config(repo_root, environment)?;
+    Ok(skip_unsupported && !supports_posture(&environment_config))
+}
+
+fn prepare_posture_tunnel<'a>(
+    repo_root: &Path,
+    environment: &'a String,
+    resolved: &config::ResolvedConfig,
+    tunnel_endpoints: &mut Vec<((String, u16), &'a String)>,
+) -> Result<()> {
+    let Some(endpoint) = posture_tunnel_endpoint(resolved) else {
+        return Ok(());
+    };
+    if let Some((other_endpoint, other)) = tunnel_endpoints
         .iter()
-        .map(|environment| {
-            let environment_config = load_environment_config(repo_root, environment)?;
-            if skip_unsupported && !supports_posture(&environment_config) {
-                return Ok(None);
-            }
-            let resolved = loader.resolve_local(repo_root, environment)?;
-            let report = posture::inspect(&resolved, loader.config_dir())?;
-            if acknowledge && report.status == "warning" {
-                posture::acknowledge(loader.config_dir(), &report.fingerprint)?;
-            }
-            Ok(Some((environment, report)))
+        .find(|(existing, _)| tunnel_endpoints_overlap(existing, &endpoint))
+    {
+        return Err(SafeselectError::Config(format!(
+            "posture cannot inspect '{environment}' and '{other}' because both use SSH local endpoint {}:{}",
+            other_endpoint.0, other_endpoint.1
+        )));
+    }
+    // Posture uses its own short-lived sidecar, so it cannot rely on a tunnel
+    // established by an earlier `check` or `reconnect` command.
+    setup_ssh_tunnels(repo_root, std::slice::from_ref(environment))?;
+    tunnel_endpoints.push((endpoint, environment));
+    Ok(())
+}
+
+fn posture_tunnel_endpoint(resolved: &config::ResolvedConfig) -> Option<(String, u16)> {
+    let ssh = resolved
+        .environment
+        .ssh
+        .as_ref()
+        .filter(|ssh| ssh.enabled)?;
+    let endpoint = (
+        canonical_tunnel_host(ssh.local_host.as_deref().unwrap_or("localhost")),
+        ssh.local_port.unwrap_or(15432),
+    );
+    let url_uses_tunnel_endpoint = postgres_jdbc_host_ports(&resolved.environment.database.url)
+        .into_iter()
+        .map(|(host, port)| (canonical_tunnel_host(&host), port))
+        .any(|url_endpoint| tunnel_endpoints_overlap(&url_endpoint, &endpoint));
+    if !url_uses_tunnel_endpoint && direct_postgres_reachable(&resolved.environment.database.url) {
+        // SSH is configured, but the database URL is directly reachable (for
+        // example through a VPN), so no local tunnel endpoint is consumed.
+        return None;
+    }
+    Some(endpoint)
+}
+
+fn direct_postgres_reachable(url: &str) -> bool {
+    postgres_jdbc_host_ports(url)
+        .into_iter()
+        .any(|(host, port)| check_postgres_endpoint(&host, port))
+}
+
+fn postgres_jdbc_host_ports(url: &str) -> Vec<(String, u16)> {
+    postgres_jdbc_authority(url)
+        .map(|authority| {
+            authority
+                .split(',')
+                .filter_map(|endpoint| parse_postgres_jdbc_authority(endpoint.trim()))
+                .collect()
         })
-        .collect::<Result<Vec<_>>>()
-        .map(|reports| reports.into_iter().flatten().collect())
+        .unwrap_or_default()
+}
+
+fn postgres_jdbc_authority(url: &str) -> Option<&str> {
+    url.strip_prefix("jdbc:postgresql://")?
+        .split(['/', '?', '#'])
+        .next()?
+        .rsplit('@')
+        .next()
+}
+
+fn parse_postgres_jdbc_authority(authority: &str) -> Option<(String, u16)> {
+    if let Some(bracketed_host) = authority.strip_prefix('[') {
+        return parse_postgres_ipv6_authority(bracketed_host);
+    }
+    match authority.split_once(':') {
+        Some((host, port)) => Some((host.into(), port.parse().ok()?)),
+        None if !authority.is_empty() => Some((authority.into(), 5432)),
+        None => None,
+    }
+}
+
+fn parse_postgres_ipv6_authority(authority: &str) -> Option<(String, u16)> {
+    let (host, remainder) = authority.split_once(']')?;
+    let port = match remainder {
+        "" => 5432,
+        _ => remainder.strip_prefix(':')?.parse().ok()?,
+    };
+    Some((host.into(), port))
+}
+
+fn tunnel_endpoints_overlap(first: &(String, u16), second: &(String, u16)) -> bool {
+    first.1 == second.1 && tunnel_hosts_overlap(&first.0, &second.0)
+}
+
+fn tunnel_hosts_overlap(first: &str, second: &str) -> bool {
+    if first == "wildcard" || second == "wildcard" || first == second {
+        return true;
+    }
+    let first_addresses = tunnel_host_addresses(first);
+    let second_addresses = tunnel_host_addresses(second);
+    first_addresses
+        .iter()
+        .any(|address| second_addresses.contains(address))
+}
+
+fn tunnel_host_addresses(host: &str) -> Vec<std::net::IpAddr> {
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
+
+    if host == "local" {
+        return vec![
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            IpAddr::V6(Ipv6Addr::LOCALHOST),
+        ];
+    }
+    let mut addresses: Vec<IpAddr> = (host, 0)
+        .to_socket_addrs()
+        .map(|addresses| addresses.map(|address| address.ip()).collect())
+        .unwrap_or_default();
+    addresses.sort_unstable();
+    addresses.dedup();
+    addresses
+}
+
+fn canonical_tunnel_host(host: &str) -> String {
+    let normalized = host.trim().to_ascii_lowercase();
+    if normalized == "localhost" {
+        "local".into()
+    } else if let Ok(address) = normalized.parse::<std::net::IpAddr>() {
+        if address.is_unspecified() {
+            "wildcard".into()
+        } else if address.is_loopback() {
+            "local".into()
+        } else {
+            address.to_string()
+        }
+    } else {
+        canonical_numeric_tunnel_host(&normalized)
+    }
+}
+
+fn canonical_numeric_tunnel_host(host: &str) -> String {
+    use std::net::ToSocketAddrs;
+
+    if !host
+        .chars()
+        .all(|character| character.is_ascii_digit() || character == '.')
+    {
+        return host.into();
+    }
+    match format!("{host}:0")
+        .to_socket_addrs()
+        .ok()
+        .and_then(|mut addresses| addresses.next())
+    {
+        Some(address) if address.ip().is_unspecified() => "wildcard".into(),
+        Some(address) if address.ip().is_loopback() => "local".into(),
+        Some(address) => address.ip().to_string(),
+        None => host.into(),
+    }
 }
 
 fn supports_posture(environment: &config::EnvironmentConfig) -> bool {
@@ -4137,7 +4414,7 @@ fn print_posture_reports(
 ) -> Result<()> {
     match format {
         "json" => print_posture_json(reports, aggregate),
-        "text" => print_posture_text(reports),
+        "text" => print_posture_text(reports, aggregate),
         _ => unreachable!("format validated before rendering"),
     }
 }
@@ -4165,21 +4442,48 @@ fn print_posture_json(reports: &[EnvironmentPostureReport<'_>], aggregate: bool)
     Ok(())
 }
 
-fn print_posture_text(reports: &[EnvironmentPostureReport<'_>]) -> Result<()> {
+fn print_posture_text(reports: &[EnvironmentPostureReport<'_>], _aggregate: bool) -> Result<()> {
+    print_posture_header();
     for (index, (environment, report)) in reports.iter().enumerate() {
-        if reports.len() > 1 {
-            if index > 0 {
-                println!();
-            }
-            println!("Environment: {environment}");
+        if index > 0 {
+            println!();
         }
+        println!("  • {environment}");
+        println!("Checking PostgreSQL posture for {environment}...");
         println!("PostgreSQL posture: {}", report.status);
         println!("Role: {}  Database: {}", report.role, report.database);
         for finding in &report.findings {
             println!("- [{}] {}", finding.severity, finding.message);
         }
+        print_terminal_line(posture_completion_marker(report.status));
     }
     Ok(())
+}
+
+fn posture_completion_marker(status: &str) -> &str {
+    match status {
+        "safe" | "accepted" => "OK",
+        "warning" => "WARNING",
+        "unsafe" => "UNSAFE",
+        _ => "INSPECTED",
+    }
+}
+
+fn print_posture_header() {
+    println!("── PostgreSQL posture ────────────────────────────");
+    println!();
+}
+
+fn print_posture_failures_text(failures: &[(&String, String)], has_reports: bool) {
+    for (index, (environment, error)) in failures.iter().enumerate() {
+        if has_reports || index > 0 {
+            println!();
+        }
+        println!("  • {environment}");
+        println!("Checking PostgreSQL posture for {environment}...");
+        print_terminal_line("FAILED");
+        print_terminal_line(&format!("    ERROR: {error}"));
+    }
 }
 
 fn enforce_posture_strict(strict: bool, reports: &[EnvironmentPostureReport<'_>]) -> Result<()> {
@@ -4545,6 +4849,195 @@ mod tests {
         )
         .is_err());
     }
+
+    #[test]
+    fn posture_failure_labels_each_environment() {
+        let first = "pre".to_string();
+        let second = "pro".to_string();
+        let error = posture_failures_error(&[
+            (&first, "connection refused".into()),
+            (&second, "SSH bastion unreachable".into()),
+        ]);
+        let message = error.to_string();
+
+        assert_eq!(
+            message,
+            "posture inspection failed for environment(s): pre: connection refused, pro: SSH bastion unreachable"
+        );
+    }
+
+    #[test]
+    fn posture_collection_continues_after_skipped_and_invalid_environments() {
+        let root = std::env::temp_dir().join(format!(
+            "safeselect-posture-collection-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let environments_dir = root.join(".safeselect/environments");
+        std::fs::create_dir_all(&environments_dir).unwrap();
+        std::fs::write(
+            environments_dir.join("mongo.toml"),
+            "version = 1\n[database]\nvendor = \"mongodb\"\nurl = \"mongodb://localhost/test\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            environments_dir.join("postgres.toml"),
+            "version = 1\n[database]\nvendor = \"postgresql\"\nurl = \"jdbc:postgresql://localhost/test\"\n",
+        )
+        .unwrap();
+        let environments = vec![
+            "mongo".to_string(),
+            "postgres".to_string(),
+            "missing".to_string(),
+        ];
+
+        let collection =
+            collect_posture_reports(&ConfigLoader::new(), &root, &environments, false, true)
+                .unwrap();
+
+        assert!(collection.reports.is_empty());
+        assert_eq!(collection.failures.len(), 2);
+        assert_eq!(collection.failures[0].0, "postgres");
+        assert_eq!(collection.failures[1].0, "missing");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn posture_failure_output_handles_each_environment() {
+        let environment = "pre".to_string();
+        print_terminal_error_line("OK");
+        print_posture_failures_text(&[(&environment, "connection refused".into())], false);
+        assert!(render_posture_failures("text", &[]).is_ok());
+        assert!(
+            render_posture_failures("json", &[(&environment, "connection refused".into())])
+                .is_err()
+        );
+        let report = posture::Report {
+            version: 1,
+            backend: "postgresql",
+            role: "reader".into(),
+            database: "app".into(),
+            status: "safe",
+            findings: vec![],
+            fingerprint: "test".into(),
+            acknowledged: false,
+        };
+        assert!(acknowledge_posture_report(&ConfigLoader::new(), &report, false).is_ok());
+        assert_eq!(canonical_tunnel_host("localhost"), "local");
+        assert_eq!(canonical_tunnel_host("127.0.0.1"), "local");
+        assert_eq!(canonical_tunnel_host("127.1"), "local");
+        assert_eq!(canonical_tunnel_host("0.0.0.0"), "wildcard");
+        assert_eq!(canonical_tunnel_host("::"), "wildcard");
+        assert_eq!(canonical_tunnel_host("db.internal"), "db.internal");
+        assert_eq!(canonical_tunnel_host("999.999"), "999.999");
+        assert!(!direct_postgres_reachable(
+            "jdbc:postgresql://127.0.0.1:1/test"
+        ));
+        assert!(!direct_postgres_reachable("not-a-jdbc-url"));
+        assert_eq!(
+            postgres_jdbc_host_ports("jdbc:postgresql://db.example/app"),
+            vec![("db.example".into(), 5432)]
+        );
+        assert_eq!(
+            postgres_jdbc_host_ports("jdbc:postgresql://[::1]:15432/app"),
+            vec![("::1".into(), 15432)]
+        );
+        assert_eq!(
+            postgres_jdbc_host_ports("jdbc:postgresql://[::1]/app"),
+            vec![("::1".into(), 5432)]
+        );
+        assert_eq!(
+            postgres_jdbc_host_ports("jdbc:postgresql://db.example:15432/app"),
+            vec![("db.example".into(), 15432)]
+        );
+        assert_eq!(
+            postgres_jdbc_host_ports("jdbc:postgresql://db1:5432,db2:5433/app"),
+            vec![("db1".into(), 5432), ("db2".into(), 5433)]
+        );
+        assert!(postgres_jdbc_host_ports("not-a-jdbc-url").is_empty());
+        assert!(tunnel_endpoints_overlap(
+            &("wildcard".into(), 15432),
+            &("192.0.2.1".into(), 15432)
+        ));
+        assert!(!tunnel_endpoints_overlap(
+            &("wildcard".into(), 15432),
+            &("192.0.2.1".into(), 15433)
+        ));
+        assert!(tunnel_endpoints_overlap(
+            &("localhost".into(), 15432),
+            &("local".into(), 15432)
+        ));
+        assert_eq!(posture_completion_marker("safe"), "OK");
+        assert_eq!(posture_completion_marker("warning"), "WARNING");
+        assert_eq!(posture_completion_marker("unsafe"), "UNSAFE");
+        assert_eq!(terminal_line("UNSAFE", true), "\x1b[31mUNSAFE\x1b[0m");
+        for line in [
+            "FAILED",
+            "UNSAFE",
+            "Sidecar error:",
+            "SSH error:",
+            "ERROR:",
+            "Reconnect failed",
+        ] {
+            assert!(is_terminal_error_line(line));
+        }
+        assert!(!is_terminal_error_line("OK"));
+        let environment = "pre".to_string();
+        let resolved = config::ResolvedConfig {
+            project: config::ProjectConfig::default(),
+            environment: config::EnvironmentConfig {
+                version: 1,
+                database: config::DatabaseConfig {
+                    kind: backend::BackendKind::Jdbc,
+                    vendor: Some("postgresql".into()),
+                    driver: Some("postgresql".into()),
+                    url: "jdbc:postgresql://localhost/test".into(),
+                    username: "reader".into(),
+                    secret: None,
+                },
+                tls: None,
+                ssh: None,
+                limits: Default::default(),
+            },
+            driver: None,
+            password: String::new(),
+            repo_root: Path::new(".").into(),
+        };
+        let mut endpoints = Vec::new();
+        assert!(prepare_posture_tunnel(
+            &PathBuf::from("."),
+            &environment,
+            &resolved,
+            &mut endpoints
+        )
+        .is_ok());
+        let mut candidate = resolved;
+        candidate.environment.database.url = "jdbc:postgresql://127.0.0.1:1/test".into();
+        candidate.environment.ssh = Some(config::SshConfig {
+            enabled: true,
+            bastion: None,
+            host: Some("localhost".into()),
+            port: Some(22),
+            username: Some("ssh".into()),
+            secret_account: None,
+            identity_file: None,
+            known_hosts: None,
+            local_host: Some("127.0.0.1".into()),
+            local_port: Some(15432),
+            forward_host: Some("db.internal".into()),
+            forward_port: Some(5432),
+            auth_type: None,
+        });
+        assert_eq!(
+            posture_tunnel_endpoint(&candidate),
+            Some(("local".into(), 15432))
+        );
+        candidate.environment.database.url = "jdbc:postgresql://localhost:15432/test".into();
+        assert_eq!(
+            posture_tunnel_endpoint(&candidate),
+            Some(("local".into(), 15432))
+        );
+    }
+
     use super::*;
 
     #[test]
