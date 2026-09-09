@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, stat, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 import sharp from "sharp";
@@ -30,6 +30,22 @@ test("PNG exports retain alpha and stay under the asset budget", async () => {
     assert.equal(metadata.hasAlpha, true);
     const pixel = await sharp(file).ensureAlpha().extract({ left: 0, top: 0, width: 1, height: 1 }).raw().toBuffer();
     assert.equal(pixel[3], 0);
+  }
+});
+
+test("export repairs a corrupt generated PNG", async () => {
+  const file = new URL("favicon-32.png", assets);
+  const original = await readFile(file);
+  try {
+    await writeFile(file, "truncated");
+    const run = spawnSync(process.execPath, [new URL("export-icons.mjs", import.meta.url).pathname], { encoding: "utf8" });
+    assert.equal(run.status, 0, run.stderr);
+    const metadata = await sharp(await readFile(file)).metadata();
+    assert.equal(metadata.width, 32);
+    assert.equal(metadata.height, 32);
+    assert.equal(metadata.hasAlpha, true);
+  } finally {
+    await writeFile(file, original);
   }
 });
 
