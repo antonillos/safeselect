@@ -5,18 +5,33 @@ import { readFile, writeFile } from "node:fs/promises";
 
 const source = await readFile(new URL("../public/icon.svg", import.meta.url));
 const check = process.argv.includes("--check");
+
+async function equivalentPng(left, right) {
+  const [actual, expected] = await Promise.all([left, right].map(async bytes =>
+    sharp(bytes).ensureAlpha().raw().toBuffer({ resolveWithObject: true }),
+  ));
+  return actual.info.width === expected.info.width
+    && actual.info.height === expected.info.height
+    && actual.data.equals(expected.data);
+}
+
 async function save(name, bytes) {
   const output = new URL(`../public/${name}`, import.meta.url);
+  const png = name.endsWith(".png");
+  let current;
+  try {
+    current = await readFile(output);
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  const matches = current && (current.equals(bytes)
+    || (png && await equivalentPng(current, bytes)));
   if (check) {
-    if (!(await readFile(output)).equals(bytes)) {
+    if (!matches) {
       throw new Error(`${name} differs: run npm run icons:export`);
     }
   } else {
-    try {
-      if ((await readFile(output)).equals(bytes)) return;
-    } catch (error) {
-      if (error.code !== "ENOENT") throw error;
-    }
+    if (matches) return;
     await writeFile(output, bytes);
   }
   console.log(`${name}: ${bytes.length} bytes${check ? " (current)" : ""}`);
