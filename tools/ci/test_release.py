@@ -102,6 +102,35 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(set(self.host.files), set(release.expected_files(VERSION)))
         self.assertEqual(self.host.calls[-1][2], "edit")
 
+    def test_new_draft_temporarily_absent_is_retried_without_duplicate_creation(self):
+        reads = 0
+
+        def delayed(*args):
+            nonlocal reads
+            reads += 1
+            return None if reads <= 3 else self.host.info()
+
+        with patch.object(release, "release_info", side_effect=delayed), patch.object(release.time, "sleep"):
+            release.publish(self.args)
+        self.assertFalse(self.host.draft)
+        self.assertEqual(sum(c[2] == "create" for c in self.host.calls), 1)
+
+    def test_invisible_created_draft_fails_closed_with_actionable_error(self):
+        with patch.object(release, "release_info", return_value=None), patch.object(release.time, "sleep"), self.assertRaisesRegex(RuntimeError, "not visible.*retry"):
+            release.publish(self.args)
+        self.assertTrue(self.host.draft)
+        self.assertEqual(self.host.files, {})
+        self.assertEqual(sum(c[2] == "create" for c in self.host.calls), 1)
+
+    def test_newly_visible_draft_with_wrong_target_is_rejected(self):
+        def wrong_target(*args):
+            self.host.target = "b" * 40
+            return self.host.info()
+
+        with patch.object(release, "release_info", side_effect=wrong_target), self.assertRaisesRegex(ValueError, "different target"):
+            release.publish(self.args)
+        self.assertEqual(self.host.files, {})
+
     def test_missing_platform_does_not_create_release(self):
         (self.local / release.payloads(VERSION)[-1]).unlink()
         with self.assertRaises(ValueError):
@@ -269,6 +298,25 @@ class ReleaseTests(unittest.TestCase):
 
 
 class ApiTests(unittest.TestCase):
+    def test_required_release_has_bounded_backoff(self):
+        with patch.object(release, "release_info", return_value=None) as read, patch.object(release.time, "sleep") as sleep:
+            with self.assertRaisesRegex(RuntimeError, "not visible"):
+                release.require_release("owner/repo", VERSION)
+        self.assertEqual(read.call_count, 6)
+        self.assertEqual([c.args[0] for c in sleep.call_args_list], [1, 2, 4, 8, 16])
+
+    def test_required_release_does_not_hide_permission_failure(self):
+        with patch.object(release, "release_info", side_effect=RuntimeError("Forbidden")) as read, patch.object(release.time, "sleep") as sleep:
+            with self.assertRaisesRegex(RuntimeError, "Forbidden"):
+                release.require_release("owner/repo", VERSION)
+        read.assert_called_once()
+        sleep.assert_not_called()
+
+    def test_unavailable_release_listing_fails_closed(self):
+        with patch.object(release, "api", side_effect=[None, None]):
+            with self.assertRaisesRegex(RuntimeError, "Cannot list releases"):
+                release.release_info("owner/repo", VERSION)
+
     def test_successful_json_read(self):
         response = subprocess.CompletedProcess([], 0, '{"id": 1}', "")
         with patch("release.subprocess.run", return_value=response):
