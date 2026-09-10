@@ -144,10 +144,7 @@ fn run(cli: Cli) -> Result<()> {
             } else {
                 let env_names = list_environment_names(&dir)?;
                 if env_names.is_empty() {
-                    println!(
-                        "No environments found in {}",
-                        dir.join(".safeselect").join("environments").display()
-                    );
+                    println!("No environments found in the selected project.");
                     return Ok(());
                 }
                 run_reconnects(&loader, &dir, &env_names)
@@ -185,6 +182,10 @@ fn redact_cli_error(error: &SafeselectError) -> String {
             "Local SafeSelect project not found. Use --project or run from a project directory."
                 .into()
         }
+        SafeselectError::Config(_)
+        | SafeselectError::Toml(_)
+        | SafeselectError::TomlSer(_)
+        | SafeselectError::Io(_) => "Configuration could not be loaded.".into(),
         error => error.to_string(),
     }
 }
@@ -266,11 +267,8 @@ fn selected_environment_names(repo_root: &Path, environment: Option<&str>) -> Re
     }
 }
 
-fn print_no_environments(repo_root: &Path) {
-    println!(
-        "No environments found in {}",
-        repo_root.join(".safeselect").join("environments").display()
-    );
+fn print_no_environments(_repo_root: &Path) {
+    println!("No environments found in the selected project.");
 }
 
 fn cmd_serve(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &str) -> Result<()> {
@@ -3945,7 +3943,8 @@ fn cmd_query(
             max_result_bytes: resolved.project.limits.max_result_bytes,
         },
         verbose,
-    )?;
+    )
+    .map_err(redact_connection_start_error)?;
 
     let result = match sidecar.execute(&sql) {
         Ok(result) => result,
@@ -4477,7 +4476,8 @@ fn cmd_connectivity_action(
             max_result_bytes: resolved.project.limits.max_result_bytes,
         },
         false,
-    )?;
+    )
+    .map_err(redact_connection_start_error)?;
 
     match action {
         "disconnect" => {
@@ -4534,7 +4534,8 @@ fn cmd_reconnect(
                 resolved.project.limits.statement_timeout_ms,
                 limits,
                 false,
-            )?
+            )
+            .map_err(redact_connection_start_error)?
         }
         crate::backend::BackendKind::Document => SidecarProcess::start_document_with_timeout(
             resolved.environment.database.vendor(),
@@ -4545,7 +4546,8 @@ fn cmd_reconnect(
             resolved.project.limits.statement_timeout_ms,
             limits,
             false,
-        )?,
+        )
+        .map_err(redact_connection_start_error)?,
     };
 
     sidecar.ping()?;
