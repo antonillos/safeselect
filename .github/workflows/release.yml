@@ -78,7 +78,7 @@ jobs:
           name: validated-source
           path: release-source.tar
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 14
 
   integration-tests:
     needs: validate-version

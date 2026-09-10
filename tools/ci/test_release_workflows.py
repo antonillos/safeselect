@@ -24,6 +24,11 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("release-source.tar", build)
         self.assertIn("permissions:\n  contents: read", self.release)
 
+    def test_validated_source_survives_the_release_retry_window(self):
+        validate = self.jobs["validate-version"]
+        self.assertIn("name: validated-source", validate)
+        self.assertIn("retention-days: 14", validate)
+
     def test_publish_requires_entire_matrix_and_downloads_artifacts(self):
         publish = self.jobs["publish-release"]
         self.assertIn("needs: [validate-version, integration-tests, build]", publish)
