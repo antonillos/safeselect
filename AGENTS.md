@@ -51,6 +51,12 @@ This section applies only to review-only requests, not implementation tasks.
   regenerate reports or dispatch/rerun CI. Pending, missing or stale evidence
   remains unverified. Never invent metrics or claim execution without evidence;
   preserve existing CI gates.
+- Before reporting an unsigned commit, resolve the actual PR head with
+  `gh pr view <number> --json headRefOid`, then inspect that exact OID with
+  `git show --show-signature` (or `git verify-commit`) and revision-matched
+  Commit Policy evidence. Do not infer a signature failure from an arbitrary,
+  stale, synthetic, or GitHub-generated test-merge checkout; a finding must
+  name the verified PR-head OID and the failed verification.
 - A passing commit check does not prove content is free of private information.
   Follow the [review guide](docs/code-review.md) for artifact handling and public
   reporting; consult linked details only when relevant to the task.

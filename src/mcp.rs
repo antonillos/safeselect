@@ -62,7 +62,6 @@ fn config_environment_names(repo_root: &Path) -> Result<Vec<String>> {
 fn config_validation_text(
     loader: &ConfigLoader,
     repo_root: &Path,
-    project_name: &str,
     environment: Option<&str>,
 ) -> Result<String> {
     let environments = match environment {
@@ -73,7 +72,7 @@ fn config_validation_text(
         .into_iter()
         .map(|environment| {
             loader.resolve_local(repo_root, &environment)?;
-            Ok(format!("Config valid: {project_name}/{environment}"))
+            Ok(format!("Config valid: {environment}"))
         })
         .collect::<Result<Vec<_>>>()
         .map(|validated| validated.join("\n"))
@@ -460,8 +459,8 @@ impl McpServer {
 
     fn tool_description(&self, action: &str) -> String {
         format!(
-            "SafeSelect database query MCP for project '{}' environment '{}': {action}. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
-            self.project_name, self.env_name
+            "SafeSelect database query MCP for environment '{}': {action}. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+            self.env_name
         )
     }
 
@@ -512,7 +511,7 @@ impl McpServer {
                     }
                 },
                 "serverInfo": {
-                    "name": format!("safeselect-{}-{}", self.project_name, self.env_name),
+                    "name": format!("safeselect-{}", self.env_name),
                     "version": env!("CARGO_PKG_VERSION")
                 }
             })),
@@ -2995,8 +2994,12 @@ impl McpServer {
     }
 
     fn handle_connect(&mut self, id: Option<serde_json::Value>) -> Result<()> {
-        if let Err(e) = self.ensure_ssh_ready_for_query().map(|_| ()) {
-            return self.send_error(id, -32000, format!("SSH tunnel is not ready: {e}"));
+        if let Err(error) = self.ensure_ssh_ready_for_query().map(|_| ()) {
+            tracing::warn!(
+                "Connection preparation failed: {}",
+                redact_connection_setup_error(&error)
+            );
+            return self.send_error(id, -32000, connection_setup_error_message());
         }
 
         match self.restart_sidecar() {
@@ -3010,12 +3013,13 @@ impl McpServer {
                 );
                 self.write_response(&resp)
             }
-            Err(e) => self.send_backend_error(
-                id,
-                "Reconnect failed.",
-                &e.to_string(),
-                "Stop and report the startup failure; inspect configuration and connectivity before any retry.",
-            ),
+            Err(error) => {
+                tracing::warn!(
+                    "Connection restart failed: {}",
+                    redact_connection_setup_error(&error)
+                );
+                self.send_error(id, -32000, connection_setup_error_message())
+            }
         }
     }
 
@@ -3269,12 +3273,10 @@ impl McpServer {
         let environment = args.get("environment").and_then(|v| v.as_str());
         let loader = ConfigLoader::new();
 
-        let text =
-            match config_validation_text(&loader, &self.repo_root, &self.project_name, environment)
-            {
-                Ok(text) => text,
-                Err(e) => return self.send_error(id, -32000, format!("Validation failed: {e}")),
-            };
+        let text = match config_validation_text(&loader, &self.repo_root, environment) {
+            Ok(text) => text,
+            Err(_) => return self.send_error(id, -32000, "Configuration validation failed."),
+        };
 
         let resp = trusted_tool_response(id, "ok", text, "Configuration is valid. Continue with check for the active environment, or stop if validation was the user’s only request.");
         self.write_response(&resp)
@@ -3293,24 +3295,11 @@ impl McpServer {
         let loader = ConfigLoader::new();
         let resolved = match loader.resolve_local(&self.repo_root, environment) {
             Ok(r) => r,
-            Err(e) => return self.send_error(id, -32000, format!("Config resolution failed: {e}")),
+            Err(_) => return self.send_error(id, -32000, "Configuration could not be resolved."),
         };
 
-        let mut lines = vec![
-            format!("Project: {}", self.project_name),
-            format!("Environment: {environment}"),
-            format!("Backend: {:?}", resolved.environment.database.kind),
-            format!("Vendor: {}", resolved.environment.database.vendor()),
-        ];
-        if let Some(driver) = resolved.driver.as_ref() {
-            lines.push(format!("Driver: {} ({})", driver.vendor, driver.class));
-            lines.push(format!("JDBC URL: {}", resolved.environment.database.url));
-        } else {
-            lines.push(format!("URL: {}", resolved.environment.database.url));
-        }
+        let mut lines = redacted_config_summary(&resolved, environment);
         lines.extend([
-            format!("Username: {}", resolved.environment.database.username),
-            "Password: [redacted]".into(),
             String::new(),
             "--- Security Policy ---".into(),
             "Read only: enforced (cannot be disabled)".into(),
@@ -3991,13 +3980,13 @@ impl McpServer {
         let loader = ConfigLoader::new();
         let resolved = match loader.resolve_local(&self.repo_root, &self.env_name) {
             Ok(r) => r,
-            Err(e) => return self.send_error(id, -32000, format!("Config resolution failed: {e}")),
+            Err(_) => return self.send_error(id, -32000, "Configuration could not be resolved."),
         };
 
         let mut lines = vec![
             format!(
-                "Checking configuration for {}/{}...",
-                self.project_name, self.env_name
+                "Checking configuration for environment {}...",
+                self.env_name
             ),
             diagnostics::line(
                 DiagnosticStatus::Ok,
@@ -4023,7 +4012,7 @@ impl McpServer {
             if ssh.enabled {
                 let bastion_host = ssh.host.as_deref().unwrap_or("unknown");
                 let bastion_port = ssh.port.unwrap_or(22);
-                lines.push(format!("  SSH bastion: {bastion_host}:{bastion_port}"));
+                lines.push("  SSH bastion: configured (details redacted)".into());
 
                 if crate::check_tcp_endpoint(
                     bastion_host,
@@ -4033,20 +4022,20 @@ impl McpServer {
                     lines.push(diagnostics::line(
                         DiagnosticStatus::Ok,
                         DiagnosticCode::SshBastionReachable,
-                        format!("SSH bastion reachable at {bastion_host}:{bastion_port}"),
+                        "SSH bastion reachable",
                     ));
                 } else {
                     lines.push(diagnostics::line(
                         DiagnosticStatus::Fail,
                         DiagnosticCode::SshBastionUnreachable,
-                        format!("SSH bastion unreachable at {bastion_host}:{bastion_port} (connect timed out after 3s)"),
+                        "SSH bastion unreachable (connect timed out after 3s)",
                     ));
                     if let Some(ref identity_file) = ssh.identity_file {
                         if !std::path::Path::new(identity_file).exists() {
                             lines.push(diagnostics::line(
                                 DiagnosticStatus::Fail,
                                 DiagnosticCode::SshIdentityMissing,
-                                format!("SSH identity file not found: {identity_file}"),
+                                "Configured SSH identity file not found",
                             ));
                         }
                     }
@@ -4068,14 +4057,16 @@ impl McpServer {
                                     DiagnosticCode::SshTunnelAttempt,
                                     "Establishing SSH tunnel...",
                                 ));
-                                if let Err(e) = setup_ssh_tunnels(
+                                if setup_ssh_tunnels(
                                     &self.repo_root,
                                     std::slice::from_ref(&self.env_name),
-                                ) {
+                                )
+                                .is_err()
+                                {
                                     lines.push(diagnostics::line(
                                         DiagnosticStatus::Fail,
                                         DiagnosticCode::SshTunnelFailed,
-                                        format!("SSH tunnel setup failed: {e}"),
+                                        "SSH tunnel setup failed; configuration details redacted",
                                     ));
                                     let resp = trusted_tool_response(id, "failed", lines.join("\n"), "Stop and report the failed check diagnostics to the user; fix the reported configuration or connectivity issue before retrying.");
                                     return self.write_response(&resp);
@@ -4087,13 +4078,13 @@ impl McpServer {
                                 lines.push(diagnostics::line(
                                     DiagnosticStatus::Ok,
                                     DiagnosticCode::PostgresReachable,
-                                    format!("PostgreSQL reachable at {host}:{port}"),
+                                    "PostgreSQL reachable",
                                 ));
                             } else {
                                 lines.push(diagnostics::line(
                                     DiagnosticStatus::Fail,
                                     DiagnosticCode::PostgresUnreachable,
-                                    format!("PostgreSQL unreachable at {host}:{port} (read timed out after 2s)"),
+                                    "PostgreSQL unreachable (read timed out after 2s)",
                                 ));
                                 let resp = trusted_tool_response(id, "failed", lines.join("\n"), "Stop and report the failed check diagnostics to the user; fix the reported configuration or connectivity issue before retrying.");
                                 return self.write_response(&resp);
@@ -4125,14 +4116,16 @@ impl McpServer {
                                 DiagnosticCode::SshTunnelAttempt,
                                 "Establishing SSH tunnel...",
                             ));
-                            if let Err(e) = setup_ssh_tunnels(
+                            if setup_ssh_tunnels(
                                 &self.repo_root,
                                 std::slice::from_ref(&self.env_name),
-                            ) {
+                            )
+                            .is_err()
+                            {
                                 lines.push(diagnostics::line(
                                     DiagnosticStatus::Fail,
                                     DiagnosticCode::SshTunnelFailed,
-                                    format!("SSH tunnel setup failed: {e}"),
+                                    "SSH tunnel setup failed; configuration details redacted",
                                 ));
                                 let resp = trusted_tool_response(id, "failed", lines.join("\n"), "Stop and report the failed check diagnostics to the user; fix the reported configuration or connectivity issue before retrying.");
                                 return self.write_response(&resp);
@@ -4144,12 +4137,12 @@ impl McpServer {
                             )
                         };
                         if document_reachable {
-                            lines.push(format!("  Document database reachable at {host}:{port}"));
+                            lines.push("  Document database reachable".into());
                         } else {
                             lines.push(diagnostics::line(
                                 DiagnosticStatus::Fail,
                                 DiagnosticCode::SshTunnelFailed,
-                                format!("Document database tunnel not reachable at {host}:{port}"),
+                                "Document database tunnel not reachable",
                             ));
                             let resp = trusted_tool_response(id, "failed", lines.join("\n"), "Stop and report the failed check diagnostics to the user; fix the reported configuration or connectivity issue before retrying.");
                             return self.write_response(&resp);
@@ -4176,11 +4169,11 @@ impl McpServer {
                     },
                 ));
             }
-            Err(e) => {
+            Err(_) => {
                 lines.push(diagnostics::line(
                     DiagnosticStatus::Fail,
                     DiagnosticCode::SidecarConnectionFailed,
-                    format!("Sidecar connection failed: {e}"),
+                    "Sidecar connection failed; connection details redacted",
                 ));
                 lines.push(
                     "  Do not call reconnect for a sidecar startup failure; inspect the failing backend, SSH tunnel, and configuration first."
@@ -4255,10 +4248,7 @@ impl McpServer {
         lines.push(diagnostics::line(
             DiagnosticStatus::Ok,
             DiagnosticCode::AllChecksPassed,
-            format!(
-                "All checks passed for {}/{}",
-                self.project_name, self.env_name
-            ),
+            format!("All checks passed for environment {}", self.env_name),
         ));
 
         let resp = trusted_tool_response(id, "ok", lines.join("\n"), "Call database_info to confirm capabilities before discovery or queries, or stop if the health check was the user’s only request.");
@@ -4278,13 +4268,13 @@ impl McpServer {
                         "Preparing SSH tunnel before reconnect ({:?})",
                         start.elapsed()
                     );
-                    if let Err(e) =
-                        setup_ssh_tunnels(&self.repo_root, std::slice::from_ref(&self.env_name))
+                    if setup_ssh_tunnels(&self.repo_root, std::slice::from_ref(&self.env_name))
+                        .is_err()
                     {
                         return self.send_error(
                             id,
                             -32000,
-                            format!("SSH tunnel setup failed: {e}"),
+                            "SSH tunnel setup failed; configuration details redacted.",
                         );
                     }
                     tracing::info!("SSH tunnel established ({:?})", start.elapsed());
@@ -4297,14 +4287,7 @@ impl McpServer {
             Ok(()) => {
                 tracing::info!("Sidecar restarted ({:?})", start.elapsed());
             }
-            Err(e) => {
-                return self.send_backend_error(
-                    id,
-                    "Reconnect failed.",
-                    &e.to_string(),
-                    "Stop and report the restart failure; inspect configuration and connectivity before retrying.",
-                )
-            }
+            Err(_) => return self.send_error(id, -32000, "Reconnect failed."),
         }
 
         let backend_kind = self.backend.kind;
@@ -4497,6 +4480,24 @@ impl McpServer {
         writeln!(writer, "{line}")?;
         writer.flush()?;
         Ok(())
+    }
+}
+
+fn connection_setup_error_message() -> &'static str {
+    "Database connection could not be prepared. Check the connection configuration and required dependencies."
+}
+
+fn redact_connection_setup_error(error: &crate::error::SafeselectError) -> &'static str {
+    match error {
+        crate::error::SafeselectError::EnvVarNotSet(_)
+        | crate::error::SafeselectError::KeychainNotFound(_)
+        | crate::error::SafeselectError::Secret(_) => "required secret could not be resolved",
+        crate::error::SafeselectError::Config(_)
+        | crate::error::SafeselectError::Toml(_)
+        | crate::error::SafeselectError::Io(_) => "configuration could not be loaded",
+        crate::error::SafeselectError::Sidecar(_)
+        | crate::error::SafeselectError::SidecarJavaNotFound(_) => "sidecar startup failed",
+        _ => "connection preparation failed",
     }
 }
 
@@ -5490,6 +5491,26 @@ fn uri_query_parameter<'a>(uri: &'a str, name: &str) -> Option<&'a str> {
     })
 }
 
+fn redacted_config_summary(
+    resolved: &crate::config::ResolvedConfig,
+    environment: &str,
+) -> Vec<String> {
+    let mut lines = vec![
+        format!("Environment: {environment}"),
+        format!("Backend: {:?}", resolved.environment.database.kind),
+        format!("Vendor: {}", resolved.environment.database.vendor()),
+    ];
+    if let Some(driver) = resolved.driver.as_ref() {
+        lines.push(format!("Driver: {}", driver.vendor));
+    }
+    lines.extend([
+        "Database: configured (details redacted)".into(),
+        "Username: configured (redacted)".into(),
+        "Password: [redacted]".into(),
+    ]);
+    lines
+}
+
 fn config_tls_status(
     backend: crate::backend::BackendKind,
     uri: &str,
@@ -5792,6 +5813,53 @@ mod tests {
         assert!(!detail.contains("super-secret"));
         assert!(detail.contains("password=[redacted]"));
         assert!(detail.contains("SQLSTATE=08001"));
+    }
+
+    #[test]
+    fn redacts_connection_setup_errors() {
+        let secret =
+            super::redact_connection_setup_error(&crate::error::SafeselectError::KeychainNotFound(
+                "private-service/private-account".into(),
+            ));
+        assert_eq!(secret, "required secret could not be resolved");
+        assert!(!secret.contains("private-account"));
+
+        let startup = super::redact_connection_setup_error(
+            &crate::error::SafeselectError::SidecarJavaNotFound("/private/java".into()),
+        );
+        assert_eq!(startup, "sidecar startup failed");
+        assert!(!super::connection_setup_error_message().contains("/private"));
+    }
+
+    #[test]
+    fn redacts_connection_identifiers_from_config_summary() {
+        let resolved = crate::config::ResolvedConfig {
+            project: crate::config::ProjectConfig::default(),
+            environment: crate::config::EnvironmentConfig {
+                version: 1,
+                database: crate::config::DatabaseConfig {
+                    kind: crate::backend::BackendKind::Document,
+                    vendor: Some("mongodb".into()),
+                    driver: None,
+                    url: "mongodb://reader:secret@db.internal/private".into(),
+                    username: "private-reader".into(),
+                    secret: None,
+                },
+                tls: None,
+                ssh: None,
+                limits: Default::default(),
+            },
+            driver: None,
+            password: "secret".into(),
+            repo_root: "/private/project-name".into(),
+        };
+
+        let summary = redacted_config_summary(&resolved, "production").join("\n");
+        assert!(summary.contains("Environment: production"));
+        assert!(summary.contains("Database: configured (details redacted)"));
+        for sensitive in ["db.internal", "private-reader", "secret", "project-name"] {
+            assert!(!summary.contains(sensitive));
+        }
     }
 
     fn test_server(repo_root: &Path) -> McpServer {
