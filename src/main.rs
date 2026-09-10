@@ -231,6 +231,16 @@ fn redact_connection_start_error(error: SafeselectError) -> SafeselectError {
     }
 }
 
+fn redact_audit_initialization_error(error: SafeselectError) -> SafeselectError {
+    match error {
+        SafeselectError::Audit(_) => SafeselectError::Other(
+            "Audit logging could not be initialized. Check the audit configuration and permissions."
+                .into(),
+        ),
+        error => error,
+    }
+}
+
 fn list_environment_names(repo_root: &Path) -> Result<Vec<String>> {
     let env_dir = repo_root.join(".safeselect").join("environments");
     let mut env_names = Vec::new();
@@ -304,7 +314,8 @@ fn cmd_serve(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
         &db_password,
         repo_root,
         loader.config_dir(),
-    )?;
+    )
+    .map_err(redact_audit_initialization_error)?;
 
     server.run()?;
 
@@ -4806,6 +4817,15 @@ mod tests {
             unsupported,
             "Config error: connectivity actions currently support only JDBC environments"
         );
+
+        let audit = super::redact_audit_initialization_error(super::SafeselectError::Audit(
+            "cannot create audit file /private/project/audit/project/dev/log.jsonl: permission denied".into(),
+        ));
+        assert_eq!(
+            audit.to_string(),
+            "Audit logging could not be initialized. Check the audit configuration and permissions."
+        );
+        assert!(!audit.to_string().contains("/private/project"));
     }
 
     #[test]
