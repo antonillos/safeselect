@@ -18,13 +18,24 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("actions/upload-artifact@v7", build)
         self.assertNotIn("gh release upload", build)
         self.assertNotIn("contents: write", build)
+        self.assertNotIn("outputs.target-ref }}\n          path: release-source", build)
+        self.assertIn("actions/download-artifact@v8", build)
+        self.assertIn("name: validated-source", build)
+        self.assertIn("release-source.tar", build)
         self.assertIn("permissions:\n  contents: read", self.release)
+
+    def test_validated_source_survives_the_release_retry_window(self):
+        validate = self.jobs["validate-version"]
+        self.assertIn("name: validated-source", validate)
+        self.assertIn("retention-days: 14", validate)
 
     def test_publish_requires_entire_matrix_and_downloads_artifacts(self):
         publish = self.jobs["publish-release"]
         self.assertIn("needs: [validate-version, integration-tests, build]", publish)
         self.assertIn("actions/download-artifact@v8", publish)
         self.assertIn("release.py publish", publish)
+        self.assertNotIn("outputs.target-ref }}\n          path: release-source", publish)
+        self.assertIn("--source .", publish)
         self.assertNotIn("always()", publish)
 
     def test_distribution_waits_for_verified_public_release(self):
@@ -67,8 +78,10 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("steps.recovery.outputs.source-ref || github.sha", self.release)
         self.assertIn("recovery-source --version", self.release)
         self.assertIn("VERSION:-v$(sed", self.release)
+        self.assertIn("git archive --format=tar HEAD", self.release)
+        self.assertIn("source-date: ${{ steps.parse.outputs.source-date }}", self.release)
         self.assertNotIn("inputs.target_ref", self.release)
-        self.assertIn("outputs.target-ref", self.jobs["build"])
+        self.assertNotIn("outputs.target-ref", self.jobs["build"])
         for name in ("integration-tests", "prepare-release"):
             text = (ROOT / f".github/workflows/{name}.yml").read_text()
             self.assertIn("ref: ${{ github.sha }}", text)
