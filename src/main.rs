@@ -182,7 +182,7 @@ fn project_display_name(dir: &std::path::Path) -> String {
 fn redact_cli_error(error: &SafeselectError) -> String {
     match error {
         SafeselectError::LocalProjectNotFound(_) => {
-            "No local SafeSelect project found. Use --project or run from a project directory."
+            "Local SafeSelect project not found. Use --project or run from a project directory."
                 .into()
         }
         error => error.to_string(),
@@ -4787,7 +4787,7 @@ mod tests {
         ));
         assert_eq!(
             project,
-            "No local SafeSelect project found. Use --project or run from a project directory."
+            "Local SafeSelect project not found. Use --project or run from a project directory."
         );
         assert!(!project.contains("private-project"));
 
