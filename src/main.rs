@@ -182,10 +182,6 @@ fn redact_cli_error(error: &SafeselectError) -> String {
             "Local SafeSelect project not found. Use --project or run from a project directory."
                 .into()
         }
-        SafeselectError::Config(_)
-        | SafeselectError::Toml(_)
-        | SafeselectError::TomlSer(_)
-        | SafeselectError::Io(_) => "Configuration could not be loaded.".into(),
         error => error.to_string(),
     }
 }
@@ -238,11 +234,8 @@ fn redact_connection_start_error(error: SafeselectError) -> SafeselectError {
 fn list_environment_names(repo_root: &Path) -> Result<Vec<String>> {
     let env_dir = repo_root.join(".safeselect").join("environments");
     let mut env_names = Vec::new();
-    let entries = std::fs::read_dir(&env_dir).map_err(|e| {
-        SafeselectError::Config(format!(
-            "cannot read environments in {}: {e}",
-            env_dir.display()
-        ))
+    let entries = std::fs::read_dir(&env_dir).map_err(|_| {
+        SafeselectError::Config("Unable to read environment configurations.".into())
     })?;
 
     for entry in entries {
@@ -4148,7 +4141,10 @@ fn collect_posture_reports<'a>(
         match outcome {
             Ok(Some(report)) => reports.push(report),
             Ok(None) => {}
-            Err(error) => failures.push((environment, error.to_string())),
+            Err(error) => failures.push((
+                environment,
+                redact_connection_start_error(error).to_string(),
+            )),
         }
     }
 
@@ -4801,6 +4797,14 @@ mod tests {
             "Database connection could not be started. Check the connection configuration and driver availability."
         );
         assert!(!connection.to_string().contains("db.internal"));
+
+        let unsupported = super::redact_cli_error(&super::SafeselectError::Config(
+            "connectivity actions currently support only JDBC environments".into(),
+        ));
+        assert_eq!(
+            unsupported,
+            "Config error: connectivity actions currently support only JDBC environments"
+        );
     }
 
     #[test]
