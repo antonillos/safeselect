@@ -2994,8 +2994,12 @@ impl McpServer {
     }
 
     fn handle_connect(&mut self, id: Option<serde_json::Value>) -> Result<()> {
-        if let Err(e) = self.ensure_ssh_ready_for_query().map(|_| ()) {
-            return self.send_error(id, -32000, format!("SSH tunnel is not ready: {e}"));
+        if let Err(error) = self.ensure_ssh_ready_for_query().map(|_| ()) {
+            tracing::warn!(
+                "Connection preparation failed: {}",
+                redact_connection_setup_error(&error)
+            );
+            return self.send_error(id, -32000, connection_setup_error_message());
         }
 
         match self.restart_sidecar() {
@@ -3009,12 +3013,13 @@ impl McpServer {
                 );
                 self.write_response(&resp)
             }
-            Err(e) => self.send_backend_error(
-                id,
-                "Reconnect failed.",
-                &e.to_string(),
-                "Stop and report the startup failure; inspect configuration and connectivity before any retry.",
-            ),
+            Err(error) => {
+                tracing::warn!(
+                    "Connection restart failed: {}",
+                    redact_connection_setup_error(&error)
+                );
+                self.send_error(id, -32000, connection_setup_error_message())
+            }
         }
     }
 
@@ -4478,6 +4483,24 @@ impl McpServer {
     }
 }
 
+fn connection_setup_error_message() -> &'static str {
+    "Database connection could not be prepared. Check the connection configuration and required dependencies."
+}
+
+fn redact_connection_setup_error(error: &crate::error::SafeselectError) -> &'static str {
+    match error {
+        crate::error::SafeselectError::EnvVarNotSet(_)
+        | crate::error::SafeselectError::KeychainNotFound(_)
+        | crate::error::SafeselectError::Secret(_) => "required secret could not be resolved",
+        crate::error::SafeselectError::Config(_)
+        | crate::error::SafeselectError::Toml(_)
+        | crate::error::SafeselectError::Io(_) => "configuration could not be loaded",
+        crate::error::SafeselectError::Sidecar(_)
+        | crate::error::SafeselectError::SidecarJavaNotFound(_) => "sidecar startup failed",
+        _ => "connection preparation failed",
+    }
+}
+
 fn trusted_backend_error_message(trusted_message: &str, next_suggestion: &str) -> String {
     format!("{trusted_message} Next suggestion: {next_suggestion}")
 }
@@ -5790,6 +5813,22 @@ mod tests {
         assert!(!detail.contains("super-secret"));
         assert!(detail.contains("password=[redacted]"));
         assert!(detail.contains("SQLSTATE=08001"));
+    }
+
+    #[test]
+    fn redacts_connection_setup_errors() {
+        let secret =
+            super::redact_connection_setup_error(&crate::error::SafeselectError::KeychainNotFound(
+                "private-service/private-account".into(),
+            ));
+        assert_eq!(secret, "required secret could not be resolved");
+        assert!(!secret.contains("private-account"));
+
+        let startup = super::redact_connection_setup_error(
+            &crate::error::SafeselectError::SidecarJavaNotFound("/private/java".into()),
+        );
+        assert_eq!(startup, "sidecar startup failed");
+        assert!(!super::connection_setup_error_message().contains("/private"));
     }
 
     #[test]

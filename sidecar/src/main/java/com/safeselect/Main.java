@@ -247,15 +247,28 @@ public class Main {
             dispatchRequest(writer, request, id, method);
         } catch (Exception e) {
             error("Error processing request: " + requestFailureMessage(e));
-            sendRequestError(line, writer);
+            sendRequestError(line, writer, e);
         }
     }
 
     private static String requestFailureMessage(Throwable throwable) {
+        if (isExecutionTimeout(throwable)) {
+            return "operation timed out";
+        }
         return "request failed; details redacted";
     }
 
-    private static void sendRequestError(String line, PrintWriter writer) {
+    private static boolean isExecutionTimeout(Throwable throwable) {
+        for (Throwable current = throwable; current != null; current = current.getCause()) {
+            if (current instanceof MongoCommandException
+                    && ((MongoCommandException) current).getErrorCode() == 50) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static void sendRequestError(String line, PrintWriter writer, Throwable cause) {
         try {
             @SuppressWarnings("unchecked")
             final var failedRequest = (Map<String, Object>) MAPPER.readValue(line, Map.class);
@@ -263,7 +276,7 @@ public class Main {
             final var method = String.valueOf(failedRequest.get("method"));
             sendResponse(writer, id, null, Map.of(
                     "code", "REQUEST_FAILED",
-                    "message", method + " failed: " + requestFailureMessage(null)));
+                    "message", method + " failed: " + requestFailureMessage(cause)));
         } catch (Exception responseError) {
             error("Failed to send error response; details redacted");
         }

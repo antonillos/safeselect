@@ -16,6 +16,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import com.mongodb.MongoCommandException;
 import org.junit.jupiter.api.Test;
 
 class MainTest {
@@ -141,14 +142,26 @@ class MainTest {
         String failure = (String) invoke("requestFailureMessage", new Class<?>[]{Throwable.class},
                 new IllegalStateException("Unknown host db.internal.example"));
         StringWriter output = new StringWriter();
-        invoke("sendRequestError", new Class<?>[]{String.class, PrintWriter.class},
+        invoke("sendRequestError", new Class<?>[]{String.class, PrintWriter.class, Throwable.class},
                 "{\"jsonrpc\":\"2.0\",\"id\":\"id\",\"method\":\"list_databases\"}",
-                new PrintWriter(output));
+                new PrintWriter(output), new IllegalStateException("Unknown host db.internal.example"));
 
         assertEquals("request failed; details redacted", failure);
         assertFalse(failure.contains("db.internal.example"));
         assertTrue(output.toString().contains("list_databases failed: request failed; details redacted"));
         assertFalse(output.toString().contains("db.internal.example"));
+    }
+
+    @Test
+    void keepsTheMongoExecutionTimeoutCategoryWithoutExceptionDetails() throws Exception {
+        var response = new org.bson.BsonDocument("code", new org.bson.BsonInt32(50))
+                .append("errmsg", new org.bson.BsonString("db.internal.example exceeded time limit"));
+        var timeout = new MongoCommandException(response, new com.mongodb.ServerAddress());
+
+        String failure = (String) invoke("requestFailureMessage", new Class<?>[]{Throwable.class}, timeout);
+
+        assertEquals("operation timed out", failure);
+        assertFalse(failure.contains("db.internal.example"));
     }
 
     @Test
