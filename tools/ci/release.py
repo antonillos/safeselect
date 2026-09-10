@@ -158,8 +158,14 @@ def resolve(args):
     if version != "v" + current:
         raise ValueError("Requested version does not match Cargo.toml")
     sha = command("git", "rev-parse", "HEAD", cwd=args.source)
+    source_date = command("git", "show", "-s", "--format=%cs", "HEAD", cwd=args.source)
     verify_tag(args.repo, version, sha, args.source)
-    write_outputs({"version": version, "semver": current, "target-ref": sha})
+    write_outputs({
+        "version": version,
+        "semver": current,
+        "target-ref": sha,
+        "source-date": source_date,
+    })
 
 
 def download_existing(repo, version, info, directory, targets=TARGETS):

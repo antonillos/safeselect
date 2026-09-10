@@ -65,6 +65,10 @@ release tag for a public release. It deliberately does not accept a manually
 supplied source ref, preventing arbitrary code from executing in a release run
 or populating caches shared with trusted workflows.
 
+After validation, the workflow archives tracked files from that exact commit and
+passes the archive to build and publication jobs as a same-run artifact. Those
+jobs never check out the recovered ref and do not write dependency caches.
+
 Recovery does **not** delete a release, move a tag, overwrite assets or stop merely
 because a release already exists. Complete platform assets are verified and
 reused. Missing files are uploaded; missing checksum files are computed from the
