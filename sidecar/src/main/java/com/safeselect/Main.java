@@ -10,6 +10,7 @@ import com.mongodb.client.MongoCursor;
 import com.mongodb.client.MongoDatabase;
 import com.mongodb.ReadPreference;
 import com.mongodb.MongoCommandException;
+import com.mongodb.MongoException;
 import org.bson.BsonArray;
 import org.bson.BsonBinary;
 import org.bson.BsonDocument;
@@ -260,8 +261,7 @@ public class Main {
 
     private static boolean isExecutionTimeout(Throwable throwable) {
         for (Throwable current = throwable; current != null; current = current.getCause()) {
-            if (current instanceof MongoCommandException
-                    && ((MongoCommandException) current).getErrorCode() == 50) {
+            if (current instanceof MongoException && ((MongoException) current).getCode() == 50) {
                 return true;
             }
         }
