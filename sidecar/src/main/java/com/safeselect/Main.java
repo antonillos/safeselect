@@ -172,13 +172,7 @@ public class Main {
         password = reader.readLine();
         validatePassword();
         configureIdleTimer(writer);
-        try {
-            connectBackend();
-        } catch (Exception e) {
-            error("Fatal error: " + connectionFailureMessage(e));
-            System.exit(1);
-            return;
-        }
+        connectBackendOrExit();
         try {
             writer.println("ready");
             writer.flush();
@@ -186,6 +180,15 @@ public class Main {
             closeBackends();
         } catch (Exception e) {
             error("Fatal error: " + summarizeException(e));
+            System.exit(1);
+        }
+    }
+
+    private static void connectBackendOrExit() {
+        try {
+            connectBackend();
+        } catch (Exception e) {
+            error("Fatal error: " + connectionFailureMessage(e));
             System.exit(1);
         }
     }
@@ -608,10 +611,24 @@ public class Main {
         } catch (IllegalStateException e) {
             return;
         }
-        final var result = mongoClient
-                .getDatabase("admin")
-                .runCommand(new Document("ping", 1), ReadPreference.secondaryPreferred());
-        sendBoundedResponse(writer, id, result);
+        verifyDocumentConnectionSafely(writer, id);
+    }
+
+    private static void verifyDocumentConnectionSafely(PrintWriter writer, Object id) throws Exception {
+        try {
+            final var result = mongoClient
+                    .getDatabase("admin")
+                    .runCommand(new Document("ping", 1), ReadPreference.secondaryPreferred());
+            sendBoundedResponse(writer, id, result);
+        } catch (Exception e) {
+            sendConnectionFailureResponse(writer, id);
+        }
+    }
+
+    private static void sendConnectionFailureResponse(PrintWriter writer, Object id) throws Exception {
+        sendResponse(writer, id, null, Map.of(
+                "code", "CONNECTION_FAILED",
+                "message", connectionFailureMessage(null)));
     }
 
     @SuppressWarnings("unchecked")

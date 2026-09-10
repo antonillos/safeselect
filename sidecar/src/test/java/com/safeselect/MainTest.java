@@ -126,9 +126,14 @@ class MainTest {
     void redactsConnectionExceptionDetailsBeforeLogging() throws Exception {
         String failure = (String) invoke("connectionFailureMessage", new Class<?>[]{Throwable.class},
                 new IllegalStateException("Unknown host db.internal.example"));
+        StringWriter output = new StringWriter();
+        invoke("sendConnectionFailureResponse", new Class<?>[]{PrintWriter.class, Object.class},
+                new PrintWriter(output), "id");
 
         assertEquals("database connection failed; details redacted", failure);
         assertFalse(failure.contains("db.internal.example"));
+        assertTrue(output.toString().contains("database connection failed; details redacted"));
+        assertFalse(output.toString().contains("db.internal.example"));
     }
 
     @Test
