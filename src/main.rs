@@ -180,6 +180,33 @@ fn project_display_name(dir: &std::path::Path) -> String {
     config::project_account_prefix(dir)
 }
 
+fn resolve_local_for_cli(
+    loader: &ConfigLoader,
+    repo_root: &Path,
+    environment: &str,
+) -> Result<config::ResolvedConfig> {
+    loader
+        .resolve_local(repo_root, environment)
+        .map_err(redact_resolution_error)
+}
+
+fn redact_resolution_error(error: SafeselectError) -> SafeselectError {
+    match error {
+        SafeselectError::EnvVarNotSet(_)
+        | SafeselectError::KeychainNotFound(_)
+        | SafeselectError::Secret(_) => {
+            SafeselectError::Other("Required secret could not be resolved.".into())
+        }
+        SafeselectError::Config(_)
+        | SafeselectError::Toml(_)
+        | SafeselectError::TomlSer(_)
+        | SafeselectError::Io(_) => {
+            SafeselectError::Other("Configuration could not be resolved.".into())
+        }
+        error => error,
+    }
+}
+
 fn list_environment_names(repo_root: &Path) -> Result<Vec<String>> {
     let env_dir = repo_root.join(".safeselect").join("environments");
     let mut env_names = Vec::new();
@@ -223,7 +250,7 @@ fn cmd_serve(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
     let name = project_display_name(repo_root);
     tracing::info!("Loading config for {name}/{environment}");
 
-    let resolved = loader.resolve_local(repo_root, environment)?;
+    let resolved = resolve_local_for_cli(loader, repo_root, environment)?;
 
     if let Some(ref ssh) = resolved.environment.ssh {
         if ssh.enabled {
@@ -273,7 +300,7 @@ fn cmd_config_show(
     environment: String,
 ) -> Result<()> {
     let dir = resolve_project_dir(loader, project)?;
-    let resolved = loader.resolve_local(&dir, &environment)?;
+    let resolved = resolve_local_for_cli(loader, &dir, &environment)?;
     println!("Project configuration: loaded");
     println!("Environment: {environment}");
     println!("Backend: {:?}", resolved.environment.database.kind);
@@ -361,7 +388,7 @@ fn validate_explicit_project(
 }
 
 fn validate_environment_config(loader: &ConfigLoader, dir: &Path, environment: &str) -> Result<()> {
-    let _ = loader.resolve_local(dir, environment)?;
+    let _ = resolve_local_for_cli(loader, dir, environment)?;
     print_terminal_line(&format!("✓ Config valid: {environment}"));
     Ok(())
 }
@@ -3587,7 +3614,7 @@ fn cmd_check(
         println!("Checking configuration for environment {environment}...");
     }
 
-    let resolved = loader.resolve_local(repo_root, environment)?;
+    let resolved = resolve_local_for_cli(loader, repo_root, environment)?;
 
     diagnostics::print(
         DiagnosticStatus::Ok,
@@ -3841,7 +3868,7 @@ fn cmd_query(
     sql: Option<&str>,
     verbose: bool,
 ) -> Result<()> {
-    let resolved = loader.resolve_local(repo_root, environment)?;
+    let resolved = resolve_local_for_cli(loader, repo_root, environment)?;
 
     let sql = match sql {
         Some(s) => s.to_string(),
@@ -4112,7 +4139,7 @@ fn inspect_posture_environment<'a>(
     if posture_environment_is_unsupported(repo_root, environment, skip_unsupported)? {
         return Ok(None);
     }
-    let resolved = loader.resolve_local(repo_root, environment)?;
+    let resolved = resolve_local_for_cli(loader, repo_root, environment)?;
     prepare_posture_tunnel(repo_root, environment, &resolved, tunnel_endpoints)?;
     let report = posture::inspect(&resolved, loader.config_dir())?;
     acknowledge_posture_report(loader, &report, acknowledge)?;
@@ -4402,7 +4429,7 @@ fn cmd_connectivity_action(
     environment: &str,
     action: &str,
 ) -> Result<()> {
-    let resolved = loader.resolve_local(repo_root, environment)?;
+    let resolved = resolve_local_for_cli(loader, repo_root, environment)?;
 
     let driver = resolved.driver.as_ref().ok_or_else(|| {
         SafeselectError::Config(
@@ -4448,7 +4475,7 @@ fn cmd_reconnect(
 ) -> Result<()> {
     println!("Reconnecting to environment {environment}...");
 
-    let resolved = loader.resolve_local(repo_root, environment)?;
+    let resolved = resolve_local_for_cli(loader, repo_root, environment)?;
 
     // Establish SSH tunnel if configured
     if let Some(ref ssh) = resolved.environment.ssh {
@@ -4678,6 +4705,21 @@ mod tests {
         for line in ["  ⚠ copilot config could not be inspected", "  ✗ cursor"] {
             assert_eq!(super::terminal_line(line, true), line);
         }
+    }
+
+    #[test]
+    fn redacts_sensitive_configuration_resolution_errors() {
+        let secret = super::redact_resolution_error(super::SafeselectError::EnvVarNotSet(
+            "DATABASE_PASSWORD".into(),
+        ));
+        assert_eq!(secret.to_string(), "Required secret could not be resolved.");
+        assert!(!secret.to_string().contains("DATABASE_PASSWORD"));
+
+        let config = super::redact_resolution_error(super::SafeselectError::Config(
+            "invalid configuration in /tmp/project/.safeselect/environments/dev.toml".into(),
+        ));
+        assert_eq!(config.to_string(), "Configuration could not be resolved.");
+        assert!(!config.to_string().contains(".safeselect"));
     }
 
     #[test]
