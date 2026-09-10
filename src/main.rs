@@ -278,8 +278,8 @@ fn cmd_config_show(
     println!("Environment: {environment}");
     println!("Backend: {:?}", resolved.environment.database.kind);
     println!("Vendor: {}", resolved.environment.database.vendor());
-    if let Some(driver) = resolved.driver.as_ref() {
-        println!("Driver: {} ({})", driver.vendor, driver.class);
+    if resolved.driver.is_some() {
+        println!("Driver: configured");
     }
     println!("Connection: configured (details redacted)");
     println!("Username: [redacted]");
@@ -3118,18 +3118,18 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
 
         if !can_establish && !bastion_up {
             // Can't establish and no existing tunnel — inform user with timeout details
-            println!("  ⚠  SSH bastion {bastion_host}:{bastion_port} unreachable (connect timed out after 3s)");
+            println!("  ⚠  SSH bastion unreachable (connect timed out after 3s)");
             if !use_password && ssh.identity_file.is_none() {
                 println!("  ⚠  No SSH key or password configured");
             }
             if let Some(ref identity_file) = ssh.identity_file {
                 if !std::path::Path::new(identity_file).exists() {
-                    println!("  ⚠  SSH identity file not found: {identity_file}");
+                    println!("  ⚠  SSH identity file not found");
                 }
             }
             print_manual_tunnel_hint();
             failures.push(format!(
-                "{env_name}: SSH bastion {bastion_host}:{bastion_port} unreachable and no active PostgreSQL tunnel"
+                "{env_name}: SSH bastion unreachable and no active PostgreSQL tunnel"
             ));
             continue;
         }
@@ -3219,11 +3219,11 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
             let extra = vec!["-o".into(), "BatchMode=yes".into()];
             match spawn_ssh(extra) {
                 Ok(c) => c,
-                Err(e) => {
-                    print_terminal_error_line(&format!("FAILED: {e}"));
+                Err(_) => {
+                    print_terminal_error_line("FAILED: unable to start SSH command");
                     println!("  Check that ssh is installed and the identity file is accessible.");
                     print_manual_tunnel_hint();
-                    failures.push(format!("{env_name}: failed to spawn ssh: {e}"));
+                    failures.push(format!("{env_name}: failed to start SSH command"));
                     continue;
                 }
             }
@@ -3283,9 +3283,7 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
                 tunnel_wait.as_secs()
             );
             println!("  Possible causes:");
-            let forward_host = ssh.forward_host.as_deref().unwrap_or("");
-            let forward_port = ssh.forward_port.unwrap_or(0);
-            println!("    - Database host:port is wrong: {forward_host}:{forward_port}");
+            println!("    - Database connection settings are wrong");
             println!("    - Database is not running or not accepting connections");
             println!("    - SSH tunnel failed to forward (check bastion logs)");
             print_manual_tunnel_hint();
@@ -3625,7 +3623,7 @@ fn cmd_check(
                     diagnostics::print(
                         DiagnosticStatus::Ok,
                         DiagnosticCode::PostgresReachable,
-                        format!("PostgreSQL reachable at {host}:{port}"),
+                        "PostgreSQL endpoint reachable",
                     );
                 }
             }
@@ -3641,26 +3639,26 @@ fn cmd_check(
                     diagnostics::print(
                         DiagnosticStatus::Ok,
                         DiagnosticCode::SshBastionReachable,
-                        format!("Bastion reachable at {bastion_host}:{bastion_port}"),
+                        "SSH bastion reachable",
                     );
                 } else {
                     diagnostics::print(
                         DiagnosticStatus::Fail,
                         DiagnosticCode::SshBastionUnreachable,
-                        format!("Bastion unreachable at {bastion_host}:{bastion_port} (connect timed out after 3s)"),
+                        "SSH bastion unreachable (connect timed out after 3s)",
                     );
                     if let Some(ref identity_file) = ssh.identity_file {
                         if !std::path::Path::new(identity_file).exists() {
                             diagnostics::print(
                                 DiagnosticStatus::Fail,
                                 DiagnosticCode::SshIdentityMissing,
-                                format!("SSH identity file not found: {identity_file}"),
+                                "SSH identity file not found",
                             );
                         }
                     }
                     print_manual_tunnel_hint();
                     return Err(SafeselectError::Other(
-                        format!("SSH bastion {bastion_host}:{bastion_port} not reachable (connect timed out after 3s).")
+                        "SSH bastion not reachable (connect timed out after 3s).".into(),
                     ));
                 }
             }
@@ -3688,23 +3686,21 @@ fn cmd_check(
                     true => diagnostics::print(
                         DiagnosticStatus::Ok,
                         DiagnosticCode::PostgresReachable,
-                        format!("PostgreSQL reachable at {host}:{port}"),
+                        "PostgreSQL endpoint reachable",
                     ),
                     _ => {
                         diagnostics::print(
                             DiagnosticStatus::Fail,
                             DiagnosticCode::PostgresUnreachable,
-                            format!("PostgreSQL unreachable at {host}:{port}"),
+                            "PostgreSQL endpoint unreachable",
                         );
                         println!("  Possible causes:");
-                        println!("    - Database host:port is wrong ({host}:{port})");
+                        println!("    - Database connection settings are wrong");
                         println!("    - Database is not running or not accepting connections");
                         println!("    - SSH tunnel is not established or not forwarding correctly");
                         print_manual_tunnel_hint();
                         let elapsed = tunnel_attempt_elapsed.unwrap_or_default();
-                        return Err(SafeselectError::Other(ssh_tunnel_failure_message(
-                            &host, port, elapsed,
-                        )));
+                        return Err(SafeselectError::Other(ssh_tunnel_failure_message(elapsed)));
                     }
                 }
             }
@@ -3735,12 +3731,12 @@ fn cmd_check(
                     diagnostics::print(
                         DiagnosticStatus::Fail,
                         DiagnosticCode::SshTunnelFailed,
-                        format!("Document database tunnel not reachable at {host}:{port}"),
+                        "Document database tunnel not reachable",
                     );
                     print_manual_tunnel_hint();
-                    return Err(SafeselectError::Other(format!(
-                        "Cannot reach document database at {host}:{port} through SSH tunnel."
-                    )));
+                    return Err(SafeselectError::Other(
+                        "Cannot reach document database through SSH tunnel.".into(),
+                    ));
                 }
             }
         }
@@ -3831,9 +3827,9 @@ fn cmd_check(
     Ok(())
 }
 
-fn ssh_tunnel_failure_message(host: &str, port: u16, elapsed: std::time::Duration) -> String {
+fn ssh_tunnel_failure_message(elapsed: std::time::Duration) -> String {
     format!(
-        "Cannot reach PostgreSQL at {host}:{port} through SSH tunnel after {} (the final PostgreSQL probe timed out after 2s).",
+        "Cannot reach PostgreSQL through SSH tunnel after {} (the final PostgreSQL probe timed out after 2s).",
         format_elapsed(elapsed.as_millis() as u64)
     )
 }
@@ -4698,11 +4694,12 @@ mod tests {
     }
 
     #[test]
-    fn reports_the_full_ssh_tunnel_attempt_duration() {
-        let message =
-            ssh_tunnel_failure_message("localhost", 15432, std::time::Duration::from_secs(20));
+    fn reports_ssh_tunnel_duration_without_endpoint_details() {
+        let message = ssh_tunnel_failure_message(std::time::Duration::from_secs(20));
         assert!(message.contains("after 20.0s"));
         assert!(message.contains("final PostgreSQL probe timed out after 2s"));
+        assert!(!message.contains("localhost"));
+        assert!(!message.contains("15432"));
     }
 
     #[test]
