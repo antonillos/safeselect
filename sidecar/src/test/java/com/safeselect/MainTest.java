@@ -110,6 +110,19 @@ class MainTest {
     }
 
     @Test
+    void redactsConnectionDetailsFromVerboseLogs() throws Exception {
+        String jdbc = (String) invoke("connectionLogMessage",
+                new Class<?>[]{String.class, String.class}, "JDBC", "org.postgresql.Driver");
+        String mongodb = (String) invoke("connectionLogMessage",
+                new Class<?>[]{String.class, String.class}, "MongoDB", null);
+
+        assertEquals("Connecting JDBC: endpoint=[redacted] user=[redacted] driver=org.postgresql.Driver", jdbc);
+        assertEquals("Connecting MongoDB: endpoint=[redacted] user=[redacted]", mongodb);
+        assertFalse(jdbc.contains("jdbc:postgresql://"));
+        assertFalse(mongodb.contains("mongodb://"));
+    }
+
+    @Test
     void coversExtractedExecuteValidationAndResponseHelpers() throws Exception {
         var writer = new PrintWriter(new StringWriter());
         setStatic("connection", null);

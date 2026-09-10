@@ -310,7 +310,7 @@ public class Main {
             requirePostgresqlJdbc();
             Class.forName(driverClass);
             DriverManager.setLoginTimeout(3);
-            log("Connecting JDBC: url=" + databaseUrl + " user=" + user + " driver=" + driverClass);
+            log(connectionLogMessage("JDBC", driverClass));
             connection = DriverManager.getConnection(databaseUrl, user, password);
             applyStatementTimeout();
             configureReadOnlyConnection();
@@ -318,11 +318,16 @@ public class Main {
         }
         if ("mongodb".equals(backend)) {
             String url = databaseUrl.replace("__SAFESELECT_PASSWORD__", URLEncoder.encode(password == null ? "" : password, java.nio.charset.StandardCharsets.UTF_8));
-            log("Connecting MongoDB: url=" + databaseUrl + " user=" + user);
+            log(connectionLogMessage("MongoDB", null));
             mongoClient = MongoClients.create(url);
             return;
         }
         throw new IllegalArgumentException("Unsupported backend: " + backend);
+    }
+
+    private static String connectionLogMessage(String backendName, String configuredDriverClass) {
+        String message = "Connecting " + backendName + ": endpoint=[redacted] user=[redacted]";
+        return configuredDriverClass == null ? message : message + " driver=" + configuredDriverClass;
     }
 
     private static void applyStatementTimeout() throws SQLException {

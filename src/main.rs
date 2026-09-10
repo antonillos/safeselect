@@ -4200,13 +4200,12 @@ fn prepare_posture_tunnel<'a>(
     let Some(endpoint) = posture_tunnel_endpoint(resolved) else {
         return Ok(());
     };
-    if let Some((other_endpoint, other)) = tunnel_endpoints
+    if let Some((_, other)) = tunnel_endpoints
         .iter()
         .find(|(existing, _)| tunnel_endpoints_overlap(existing, &endpoint))
     {
         return Err(SafeselectError::Config(format!(
-            "posture cannot inspect '{environment}' and '{other}' because both use SSH local endpoint {}:{}",
-            other_endpoint.0, other_endpoint.1
+            "posture cannot inspect '{environment}' and '{other}' because their SSH local endpoints overlap"
         )));
     }
     // Posture uses its own short-lived sidecar, so it cannot rely on a tunnel
@@ -5099,6 +5098,15 @@ mod tests {
             posture_tunnel_endpoint(&candidate),
             Some(("local".into(), 15432))
         );
+
+        let other_environment = "other".to_string();
+        let mut occupied = vec![(("local".to_string(), 15432), &other_environment)];
+        let error =
+            prepare_posture_tunnel(&PathBuf::from("."), &environment, &candidate, &mut occupied)
+                .unwrap_err();
+        assert!(error.to_string().contains("SSH local endpoints overlap"));
+        assert!(!error.to_string().contains("15432"));
+        assert!(!error.to_string().contains("127.0.0.1"));
     }
 
     use super::*;
