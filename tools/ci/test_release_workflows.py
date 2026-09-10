@@ -64,11 +64,20 @@ class WorkflowTests(unittest.TestCase):
 
     def test_older_source_uses_current_tooling_and_source_sha(self):
         self.assertIn("path: release-source", self.release)
+        self.assertIn("steps.recovery.outputs.source-ref || github.sha", self.release)
+        self.assertIn("recovery-source --version", self.release)
+        self.assertIn("VERSION:-v$(sed", self.release)
+        self.assertNotIn("inputs.target_ref", self.release)
         self.assertIn("outputs.target-ref", self.jobs["build"])
         for name in ("integration-tests", "prepare-release"):
             text = (ROOT / f".github/workflows/{name}.yml").read_text()
             self.assertIn("ref: ${{ github.sha }}", text)
             self.assertIn("path: .ci-tools", text)
+
+    def test_smart_merge_release_dispatch_matches_release_inputs(self):
+        smart_merge = (ROOT / ".github/workflows/smart-merge.yml").read_text()
+        self.assertIn('workflow_id: "release.yml"', smart_merge)
+        self.assertNotIn('target_ref: "main"', smart_merge)
 
     def test_package_manager_recovery_has_same_verification_and_no_silent_skips(self):
         package = (ROOT / ".github/workflows/publish-package-managers.yml").read_text()
