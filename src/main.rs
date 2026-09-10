@@ -3143,8 +3143,7 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
                     println!("  ⚠  SSH identity file not found: {identity_file}");
                 }
             }
-            let cmd = build_ssh_command(ssh, &cfg.database.url).unwrap_or_default();
-            println!("  Establish tunnel manually:\n    {cmd}");
+            print_manual_tunnel_hint();
             failures.push(format!(
                 "{env_name}: SSH bastion {bastion_host}:{bastion_port} unreachable and no active PostgreSQL tunnel"
             ));
@@ -3214,9 +3213,7 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
                 Ok(p) => p,
                 Err(_) => {
                     println!("NO PASSWORD");
-                    let cmd = build_ssh_command(ssh, &cfg.database.url)
-                        .unwrap_or_else(|| "ssh command unavailable".to_string());
-                    println!("  Establish it manually:\n    {cmd}");
+                    print_manual_tunnel_hint();
                     failures.push(format!("{env_name}: SSH password not found in Keychain"));
                     continue;
                 }
@@ -3229,28 +3226,19 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
                     println!("  Other systems: install sshpass with your package manager.");
                     println!("  Prefer SSH key authentication when possible.");
                     println!("  Then run:  safeselect check --environment {env_name}");
-                    let cmd = build_ssh_command(ssh, &cfg.database.url).unwrap_or_default();
-                    println!("  Or establish the tunnel manually:\n    {cmd}");
+                    print_manual_tunnel_hint();
                     failures.push(format!("{env_name}: sshpass not installed"));
                     continue;
                 }
             }
         } else {
             let extra = vec!["-o".into(), "BatchMode=yes".into()];
-            let full_cmd = {
-                let mut parts = vec!["ssh".to_string()];
-                parts.extend(extra.clone());
-                parts.extend(ssh_args.clone());
-                parts.join(" ")
-            };
             match spawn_ssh(extra) {
                 Ok(c) => c,
                 Err(e) => {
                     print_terminal_error_line(&format!("FAILED: {e}"));
-                    println!("  Command: {full_cmd}");
                     println!("  Check that ssh is installed and the identity file is accessible.");
-                    let cmd = build_ssh_command(ssh, &cfg.database.url).unwrap_or_default();
-                    println!("  Establish it manually:\n    {cmd}");
+                    print_manual_tunnel_hint();
                     failures.push(format!("{env_name}: failed to spawn ssh: {e}"));
                     continue;
                 }
@@ -3301,8 +3289,10 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
                 (!detail.is_empty()).then_some(detail)
             });
             print_terminal_error_line("FAILED");
-            if let Some(detail) = ssh_error {
-                print_terminal_error_line(&format!("  SSH error: {detail}"));
+            if ssh_error.is_some() {
+                print_terminal_error_line(
+                    "  SSH command failed; inspect the configured SSH connection.",
+                );
             }
             println!(
                 "  Database not reachable through SSH tunnel (polled for up to {}s)",
@@ -3314,9 +3304,7 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
             println!("    - Database host:port is wrong: {forward_host}:{forward_port}");
             println!("    - Database is not running or not accepting connections");
             println!("    - SSH tunnel failed to forward (check bastion logs)");
-            let cmd = build_ssh_command(ssh, &cfg.database.url)
-                .unwrap_or_else(|| "ssh command unavailable".to_string());
-            println!("  Establish tunnel manually for debug:\n    {cmd}");
+            print_manual_tunnel_hint();
             failures.push(format!(
                 "{env_name}: database not reachable through SSH tunnel after {}s",
                 tunnel_wait.as_secs()
@@ -3584,31 +3572,8 @@ fn kill_processes(pids: &str) -> bool {
     killed
 }
 
-/// Build an SSH command string to establish a tunnel for the given SSH config + DB URL.
-/// Returns None if there isn't enough information to build the command.
-fn build_ssh_command(ssh: &config::SshConfig, _db_url: &str) -> Option<String> {
-    let bastion = ssh.host.as_deref()?;
-    let user = ssh.username.as_deref()?;
-    let forward_host = ssh.forward_host.as_deref()?;
-    let forward_port = ssh.forward_port?;
-
-    let local_host = ssh.local_host.as_deref().unwrap_or("localhost");
-    let local_port = ssh.local_port.unwrap_or(15432);
-
-    let mut cmd =
-        format!("ssh -L {local_host}:{local_port}:{forward_host}:{forward_port} {user}@{bastion}");
-
-    if let Some(p) = ssh.port {
-        if p != 22 {
-            cmd.push_str(&format!(" -p {p}"));
-        }
-    }
-
-    if let Some(ref key) = ssh.identity_file {
-        cmd.push_str(&format!(" -i {key}"));
-    }
-
-    Some(cmd)
+fn print_manual_tunnel_hint() {
+    print_terminal_error_line("  Establish the tunnel manually using the configured SSH settings.");
 }
 
 fn print_check_verbose(resolved: &config::ResolvedConfig, environment: &str) {
@@ -3737,10 +3702,7 @@ fn cmd_check(
                             );
                         }
                     }
-                    let cmd = build_ssh_command(ssh, &resolved.environment.database.url);
-                    if let Some(c) = cmd {
-                        println!("  To establish: {c}");
-                    }
+                    print_manual_tunnel_hint();
                     return Err(SafeselectError::Other(
                         format!("SSH bastion {bastion_host}:{bastion_port} not reachable (connect timed out after 3s).")
                     ));
@@ -3782,10 +3744,7 @@ fn cmd_check(
                         println!("    - Database host:port is wrong ({host}:{port})");
                         println!("    - Database is not running or not accepting connections");
                         println!("    - SSH tunnel is not established or not forwarding correctly");
-                        let cmd = build_ssh_command(ssh, &resolved.environment.database.url);
-                        if let Some(c) = cmd {
-                            println!("  To establish tunnel: {c}");
-                        }
+                        print_manual_tunnel_hint();
                         let elapsed = tunnel_attempt_elapsed.unwrap_or_default();
                         return Err(SafeselectError::Other(ssh_tunnel_failure_message(
                             &host, port, elapsed,
@@ -3822,10 +3781,7 @@ fn cmd_check(
                         DiagnosticCode::SshTunnelFailed,
                         format!("Document database tunnel not reachable at {host}:{port}"),
                     );
-                    let cmd = build_ssh_command(ssh, &resolved.environment.database.url);
-                    if let Some(c) = cmd {
-                        println!("  To establish tunnel: {c}");
-                    }
+                    print_manual_tunnel_hint();
                     return Err(SafeselectError::Other(format!(
                         "Cannot reach document database at {host}:{port} through SSH tunnel."
                     )));
@@ -5999,95 +5955,6 @@ username = "usr_app"
         assert_eq!(
             result,
             "mongodb://user:__SAFESELECT_PASSWORD__@localhost:2222/app?retryWrites=true"
-        );
-    }
-
-    #[test]
-    fn builds_ssh_command_with_defaults_and_optional_arguments() {
-        let config = config::SshConfig {
-            enabled: true,
-            bastion: None,
-            host: Some("bastion".into()),
-            username: Some("user".into()),
-            port: Some(2200),
-            secret_account: None,
-            identity_file: Some("/tmp/key".into()),
-            known_hosts: None,
-            forward_host: Some("db.internal".into()),
-            forward_port: Some(5432),
-            local_host: None,
-            local_port: None,
-            auth_type: None,
-        };
-        assert_eq!(
-            build_ssh_command(&config, "postgresql://db"),
-            Some("ssh -L localhost:15432:db.internal:5432 user@bastion -p 2200 -i /tmp/key".into())
-        );
-    }
-
-    #[test]
-    fn rejects_incomplete_ssh_command_configuration() {
-        let config = config::SshConfig {
-            enabled: true,
-            bastion: None,
-            host: Some("bastion".into()),
-            username: None,
-            port: None,
-            secret_account: None,
-            identity_file: None,
-            known_hosts: None,
-            forward_host: Some("db.internal".into()),
-            forward_port: Some(5432),
-            local_host: None,
-            local_port: None,
-            auth_type: None,
-        };
-        assert!(build_ssh_command(&config, "postgresql://db").is_none());
-    }
-
-    #[test]
-    fn builds_ssh_command_with_custom_local_endpoint_and_default_port() {
-        let config = config::SshConfig {
-            enabled: true,
-            bastion: None,
-            host: Some("bastion".into()),
-            username: Some("user".into()),
-            port: Some(22),
-            secret_account: None,
-            identity_file: None,
-            known_hosts: None,
-            forward_host: Some("db.internal".into()),
-            forward_port: Some(5432),
-            local_host: Some("127.0.0.1".into()),
-            local_port: Some(15433),
-            auth_type: None,
-        };
-        assert_eq!(
-            build_ssh_command(&config, "postgresql://db").as_deref(),
-            Some("ssh -L 127.0.0.1:15433:db.internal:5432 user@bastion")
-        );
-    }
-
-    #[test]
-    fn builds_ssh_command_without_optional_port_or_identity() {
-        let config = config::SshConfig {
-            enabled: true,
-            bastion: None,
-            host: Some("bastion".into()),
-            username: Some("user".into()),
-            port: None,
-            secret_account: None,
-            identity_file: None,
-            known_hosts: None,
-            forward_host: Some("db.internal".into()),
-            forward_port: Some(5432),
-            local_host: None,
-            local_port: None,
-            auth_type: None,
-        };
-        assert_eq!(
-            build_ssh_command(&config, "postgresql://db").as_deref(),
-            Some("ssh -L localhost:15432:db.internal:5432 user@bastion")
         );
     }
 
