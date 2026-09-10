@@ -137,6 +137,21 @@ class MainTest {
     }
 
     @Test
+    void redactsLazyRequestExceptionDetailsFromMcpResponses() throws Exception {
+        String failure = (String) invoke("requestFailureMessage", new Class<?>[]{Throwable.class},
+                new IllegalStateException("Unknown host db.internal.example"));
+        StringWriter output = new StringWriter();
+        invoke("sendRequestError", new Class<?>[]{String.class, PrintWriter.class},
+                "{\"jsonrpc\":\"2.0\",\"id\":\"id\",\"method\":\"list_databases\"}",
+                new PrintWriter(output));
+
+        assertEquals("request failed; details redacted", failure);
+        assertFalse(failure.contains("db.internal.example"));
+        assertTrue(output.toString().contains("list_databases failed: request failed; details redacted"));
+        assertFalse(output.toString().contains("db.internal.example"));
+    }
+
+    @Test
     void coversExtractedExecuteValidationAndResponseHelpers() throws Exception {
         var writer = new PrintWriter(new StringWriter());
         setStatic("connection", null);

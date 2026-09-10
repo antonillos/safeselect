@@ -246,12 +246,16 @@ public class Main {
             String method = (String) request.get("method");
             dispatchRequest(writer, request, id, method);
         } catch (Exception e) {
-            error("Error processing request: " + summarizeException(e));
-            sendRequestError(line, writer, e);
+            error("Error processing request: " + requestFailureMessage(e));
+            sendRequestError(line, writer);
         }
     }
 
-    private static void sendRequestError(String line, PrintWriter writer, Exception cause) {
+    private static String requestFailureMessage(Throwable throwable) {
+        return "request failed; details redacted";
+    }
+
+    private static void sendRequestError(String line, PrintWriter writer) {
         try {
             @SuppressWarnings("unchecked")
             final var failedRequest = (Map<String, Object>) MAPPER.readValue(line, Map.class);
@@ -259,9 +263,9 @@ public class Main {
             final var method = String.valueOf(failedRequest.get("method"));
             sendResponse(writer, id, null, Map.of(
                     "code", "REQUEST_FAILED",
-                    "message", method + " failed: " + summarizeException(cause)));
+                    "message", method + " failed: " + requestFailureMessage(null)));
         } catch (Exception responseError) {
-            error("Failed to send error response: " + summarizeException(responseError));
+            error("Failed to send error response; details redacted");
         }
     }
 
