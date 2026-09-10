@@ -174,6 +174,12 @@ public class Main {
         configureIdleTimer(writer);
         try {
             connectBackend();
+        } catch (Exception e) {
+            error("Fatal error: " + connectionFailureMessage(e));
+            System.exit(1);
+            return;
+        }
+        try {
             writer.println("ready");
             writer.flush();
             processRequests(reader, writer);
@@ -182,6 +188,10 @@ public class Main {
             error("Fatal error: " + summarizeException(e));
             System.exit(1);
         }
+    }
+
+    private static String connectionFailureMessage(Throwable throwable) {
+        return "database connection failed; details redacted";
     }
 
     private static void configureLogging() throws IOException {

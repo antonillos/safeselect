@@ -123,6 +123,15 @@ class MainTest {
     }
 
     @Test
+    void redactsConnectionExceptionDetailsBeforeLogging() throws Exception {
+        String failure = (String) invoke("connectionFailureMessage", new Class<?>[]{Throwable.class},
+                new IllegalStateException("Unknown host db.internal.example"));
+
+        assertEquals("database connection failed; details redacted", failure);
+        assertFalse(failure.contains("db.internal.example"));
+    }
+
+    @Test
     void coversExtractedExecuteValidationAndResponseHelpers() throws Exception {
         var writer = new PrintWriter(new StringWriter());
         setStatic("connection", null);
