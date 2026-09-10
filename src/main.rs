@@ -413,10 +413,7 @@ fn validate_environment_config(loader: &ConfigLoader, dir: &Path, environment: &
 fn validate_all_environment_configs(loader: &ConfigLoader, dir: &Path) -> Result<()> {
     let environments = list_environment_names(dir)?;
     if environments.is_empty() {
-        return Err(SafeselectError::Config(format!(
-            "no environments found in {}",
-            dir.join(".safeselect/environments").display()
-        )));
+        return Err(no_environments_error());
     }
 
     for env in environments {
@@ -3369,10 +3366,7 @@ fn run_checks_for_environments(
     if env_names.is_empty() {
         print_no_environments(repo_root);
         if fail_on_error {
-            return Err(SafeselectError::Config(format!(
-                "no environments found in {}",
-                repo_root.join(".safeselect/environments").display()
-            )));
+            return Err(no_environments_error());
         }
         return Ok(());
     }
@@ -4185,8 +4179,16 @@ fn posture_environment_is_unsupported(
     environment: &str,
     skip_unsupported: bool,
 ) -> Result<bool> {
-    let environment_config = load_environment_config(repo_root, environment)?;
+    let environment_config =
+        load_environment_config(repo_root, environment).map_err(redact_resolution_error)?;
     Ok(skip_unsupported && !supports_posture(&environment_config))
+}
+
+fn no_environments_error() -> SafeselectError {
+    SafeselectError::Config(
+        "No environment configurations found. Create or import an environment before retrying."
+            .into(),
+    )
 }
 
 fn prepare_posture_tunnel<'a>(
@@ -4814,8 +4816,40 @@ mod tests {
         let env_dir = root.join(".safeselect/environments");
         std::fs::create_dir_all(&env_dir).unwrap();
 
-        assert!(run_checks_for_environments(&root, &[], false, false, true).is_err());
+        let check_error = run_checks_for_environments(&root, &[], false, false, true).unwrap_err();
+        assert_eq!(
+            check_error.to_string(),
+            "Config error: No environment configurations found. Create or import an environment before retrying."
+        );
+        assert!(!check_error
+            .to_string()
+            .contains(root.to_string_lossy().as_ref()));
+
+        let validation_error =
+            validate_all_environment_configs(&super::ConfigLoader::new(), &root).unwrap_err();
+        assert_eq!(validation_error.to_string(), check_error.to_string());
+        assert!(!validation_error
+            .to_string()
+            .contains(root.to_string_lossy().as_ref()));
+
         assert!(run_checks_for_environments(&root, &[], false, false, false).is_ok());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn redacts_posture_environment_load_failures() {
+        let root = std::env::temp_dir().join(format!(
+            "safeselect-posture-invalid-environment-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let env_dir = root.join(".safeselect/environments");
+        std::fs::create_dir_all(&env_dir).unwrap();
+        std::fs::write(env_dir.join("broken.toml"), "not valid TOML = [").unwrap();
+
+        let error = posture_environment_is_unsupported(&root, "broken", true).unwrap_err();
+        assert_eq!(error.to_string(), "Configuration could not be resolved.");
+        assert!(!error.to_string().contains(root.to_string_lossy().as_ref()));
 
         let _ = std::fs::remove_dir_all(root);
     }
