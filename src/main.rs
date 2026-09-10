@@ -274,23 +274,15 @@ fn cmd_config_show(
 ) -> Result<()> {
     let dir = resolve_project_dir(loader, project)?;
     let resolved = loader.resolve_local(&dir, &environment)?;
-    let name = project_display_name(&dir);
-    println!("Project: {name}");
+    println!("Project configuration: loaded");
     println!("Environment: {environment}");
     println!("Backend: {:?}", resolved.environment.database.kind);
     println!("Vendor: {}", resolved.environment.database.vendor());
-    let connection_details = resolved
-        .driver
-        .as_ref()
-        .map(|driver| {
-            format!(
-                "Driver: {} ({})\nJDBC URL: {}",
-                driver.vendor, driver.class, resolved.environment.database.url
-            )
-        })
-        .unwrap_or_else(|| format!("URL: {}", resolved.environment.database.url));
-    println!("{connection_details}");
-    println!("Username: {}", resolved.environment.database.username);
+    if let Some(driver) = resolved.driver.as_ref() {
+        println!("Driver: {} ({})", driver.vendor, driver.class);
+    }
+    println!("Connection: configured (details redacted)");
+    println!("Username: [redacted]");
     println!("Password: [redacted]");
     println!();
     println!("--- Security Policy ---");
@@ -370,11 +362,7 @@ fn validate_explicit_project(
 
 fn validate_environment_config(loader: &ConfigLoader, dir: &Path, environment: &str) -> Result<()> {
     let _ = loader.resolve_local(dir, environment)?;
-    print_terminal_line(&format!(
-        "✓ Config valid: {}/{}",
-        project_display_name(dir),
-        environment
-    ));
+    print_terminal_line(&format!("✓ Config valid: {environment}"));
     Ok(())
 }
 
@@ -405,11 +393,7 @@ fn validate_current_project(
         return Ok(());
     };
 
-    println!(
-        ".safeselect/ found at {} ({})",
-        dir.display(),
-        project_display_name(&dir)
-    );
+    println!(".safeselect/ directory found.");
     validate_explicit_project(loader, &dir, environment)
 }
 
@@ -3578,46 +3562,19 @@ fn print_manual_tunnel_hint() {
 
 fn print_check_verbose(resolved: &config::ResolvedConfig, environment: &str) {
     println!("  · environment={environment}");
-    println!("  · jdbc_url={}", resolved.environment.database.url);
-    println!("  · db_user={}", resolved.environment.database.username);
-    if let Some(secret) = resolved.environment.database.secret.as_ref() {
-        match secret.source.as_str() {
-            "macos-keychain" => {
-                println!(
-                    "  · db_secret=macos-keychain:{}",
-                    secret.account.as_deref().unwrap_or("unknown")
-                );
-            }
-            "env" => {
-                println!(
-                    "  · db_secret=env:{}",
-                    secret.variable.as_deref().unwrap_or("unknown")
-                );
-            }
-            other => println!("  · db_secret={other}"),
-        }
+    println!("  · database=configured (details redacted)");
+    if resolved.environment.database.secret.is_some() {
+        println!("  · db_secret=configured");
     }
     if let Some(ssh) = resolved.environment.ssh.as_ref() {
         println!(
-            "  · ssh_bastion={} ({})",
-            ssh.bastion.as_deref().unwrap_or("-"),
-            ssh.host.as_deref().unwrap_or("unknown")
+            "  · ssh={}",
+            if ssh.enabled {
+                "configured"
+            } else {
+                "disabled"
+            }
         );
-        println!(
-            "  · ssh_target={}:{}",
-            ssh.username.as_deref().unwrap_or("unknown"),
-            ssh.port.unwrap_or(22)
-        );
-        println!(
-            "  · ssh_forward={}:{} -> {}:{}",
-            ssh.local_host.as_deref().unwrap_or("localhost"),
-            ssh.local_port.unwrap_or(DEFAULT_SSH_LOCAL_PORT),
-            ssh.forward_host.as_deref().unwrap_or("unknown"),
-            ssh.forward_port.unwrap_or(0)
-        );
-        if let Some(secret_account) = ssh.secret_account.as_deref() {
-            println!("  · ssh_secret=macos-keychain:{secret_account}");
-        }
     }
 }
 
@@ -3628,9 +3585,8 @@ fn cmd_check(
     verbose: bool,
     show_progress: bool,
 ) -> Result<()> {
-    let name = project_display_name(repo_root);
     if show_progress {
-        println!("Checking configuration for {name}/{environment}...");
+        println!("Checking configuration for environment {environment}...");
     }
 
     let resolved = loader.resolve_local(repo_root, environment)?;
@@ -3660,7 +3616,7 @@ fn cmd_check(
         if ssh.enabled {
             let bastion_host = ssh.host.as_deref().unwrap_or("unknown");
             let bastion_port = ssh.port.unwrap_or(22);
-            println!("  SSH bastion: {bastion_host}:{bastion_port}");
+            println!("  SSH tunnel: configured");
 
             let mut postgres_reachable = false;
             if let Some((host, port)) = extract_host_port(&resolved.environment.database.url) {
@@ -3796,12 +3752,7 @@ fn cmd_check(
             DiagnosticCode::SidecarStartAttempt,
             "Attempting sidecar connection...",
         );
-        println!(
-            "    url={} user={} db={}",
-            resolved.environment.database.url,
-            resolved.environment.database.username,
-            display_database_target(&resolved.environment.database.url)
-        );
+        println!("    connection parameters loaded (redacted)");
     }
 
     let limits = ResultLimits {
@@ -3874,7 +3825,7 @@ fn cmd_check(
     diagnostics::print(
         DiagnosticStatus::Ok,
         DiagnosticCode::AllChecksPassed,
-        format!("All checks passed for {name}/{environment}"),
+        format!("All checks passed for environment {environment}"),
     );
 
     Ok(())
@@ -4455,7 +4406,6 @@ fn cmd_connectivity_action(
     environment: &str,
     action: &str,
 ) -> Result<()> {
-    let name = project_display_name(repo_root);
     let resolved = loader.resolve_local(repo_root, environment)?;
 
     let driver = resolved.driver.as_ref().ok_or_else(|| {
@@ -4481,12 +4431,12 @@ fn cmd_connectivity_action(
     match action {
         "disconnect" => {
             sidecar.disconnect()?;
-            println!("Disconnected from {name}/{environment}.");
+            println!("Disconnected from environment {environment}.");
             println!("  The AI agent can reconnect via the 'connect' MCP tool.");
         }
         "connect" => {
             sidecar.connect()?;
-            println!("Connected to {name}/{environment}.");
+            println!("Connected to environment {environment}.");
         }
         _ => unreachable!(),
     }
@@ -4500,8 +4450,7 @@ fn cmd_reconnect(
     repo_root: &std::path::Path,
     environment: &str,
 ) -> Result<()> {
-    let name = project_display_name(repo_root);
-    println!("Reconnecting to {name}/{environment}...");
+    println!("Reconnecting to environment {environment}...");
 
     let resolved = loader.resolve_local(repo_root, environment)?;
 
@@ -4567,7 +4516,7 @@ fn cmd_reconnect(
 
     sidecar.shutdown()?;
     print_terminal_line(&format!(
-        "  ✓ Reconnection successful to {name}/{environment}"
+        "  ✓ Reconnection successful to environment {environment}"
     ));
 
     Ok(())
