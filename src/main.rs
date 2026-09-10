@@ -203,6 +203,12 @@ fn redact_resolution_error(error: SafeselectError) -> SafeselectError {
         | SafeselectError::Io(_) => {
             SafeselectError::Other("Configuration could not be resolved.".into())
         }
+        SafeselectError::EnvironmentNotFound(_, _) => {
+            SafeselectError::Other("Requested environment configuration was not found.".into())
+        }
+        SafeselectError::DriverFileNotFound(_) | SafeselectError::InsecurePermissions(_) => {
+            SafeselectError::Other("Configured driver file is unavailable or unsafe.".into())
+        }
         error => error,
     }
 }
@@ -4720,6 +4726,36 @@ mod tests {
         ));
         assert_eq!(config.to_string(), "Configuration could not be resolved.");
         assert!(!config.to_string().contains(".safeselect"));
+
+        let environment =
+            super::redact_resolution_error(super::SafeselectError::EnvironmentNotFound(
+                "production".into(),
+                "/tmp/project/.safeselect/environments".into(),
+            ));
+        assert_eq!(
+            environment.to_string(),
+            "Requested environment configuration was not found."
+        );
+        assert!(!environment.to_string().contains(".safeselect"));
+
+        let driver = super::redact_resolution_error(super::SafeselectError::DriverFileNotFound(
+            std::path::PathBuf::from("/tmp/project/.safeselect/drivers/postgresql.jar"),
+        ));
+        assert_eq!(
+            driver.to_string(),
+            "Configured driver file is unavailable or unsafe."
+        );
+        assert!(!driver.to_string().contains("postgresql.jar"));
+
+        let permissions =
+            super::redact_resolution_error(super::SafeselectError::InsecurePermissions(
+                std::path::PathBuf::from("/tmp/project/.safeselect/drivers/postgresql.jar"),
+            ));
+        assert_eq!(
+            permissions.to_string(),
+            "Configured driver file is unavailable or unsafe."
+        );
+        assert!(!permissions.to_string().contains("postgresql.jar"));
     }
 
     #[test]
