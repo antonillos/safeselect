@@ -3573,7 +3573,7 @@ fn kill_processes(pids: &str) -> bool {
 }
 
 fn print_manual_tunnel_hint() {
-    println!("  Establish the tunnel manually using the configured SSH settings.");
+    print_terminal_error_line("  Establish the tunnel manually using the configured SSH settings.");
 }
 
 fn print_check_verbose(resolved: &config::ResolvedConfig, environment: &str) {
