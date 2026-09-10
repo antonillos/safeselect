@@ -36,7 +36,7 @@ fn main() {
     let cli = Cli::parse();
 
     if let Err(e) = run(cli) {
-        tracing::error!("{e}");
+        tracing::error!("{}", redact_cli_error(&e));
         std::process::exit(1);
     }
 }
@@ -55,10 +55,9 @@ fn run(cli: Cli) -> Result<()> {
                     .clone()
                     .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
                 if !cwd.exists() {
-                    return Err(SafeselectError::Other(format!(
-                        "path does not exist: {}",
-                        cwd.display()
-                    )));
+                    return Err(SafeselectError::Other(
+                        "Project path does not exist.".into(),
+                    ));
                 }
                 cmd_serve_setup(&loader, &cwd)
             }
@@ -180,6 +179,16 @@ fn project_display_name(dir: &std::path::Path) -> String {
     config::project_account_prefix(dir)
 }
 
+fn redact_cli_error(error: &SafeselectError) -> String {
+    match error {
+        SafeselectError::LocalProjectNotFound(_) => {
+            "No local SafeSelect project found. Use --project or run from a project directory."
+                .into()
+        }
+        error => error.to_string(),
+    }
+}
+
 fn resolve_local_for_cli(
     loader: &ConfigLoader,
     repo_root: &Path,
@@ -208,6 +217,18 @@ fn redact_resolution_error(error: SafeselectError) -> SafeselectError {
         }
         SafeselectError::DriverFileNotFound(_) | SafeselectError::InsecurePermissions(_) => {
             SafeselectError::Other("Configured driver file is unavailable or unsafe.".into())
+        }
+        error => error,
+    }
+}
+
+fn redact_connection_start_error(error: SafeselectError) -> SafeselectError {
+    match error {
+        SafeselectError::Sidecar(_) | SafeselectError::SidecarJavaNotFound(_) => {
+            SafeselectError::Other(
+                "Database connection could not be started. Check the connection configuration and driver availability."
+                    .into(),
+            )
         }
         error => error,
     }
@@ -253,15 +274,14 @@ fn print_no_environments(repo_root: &Path) {
 }
 
 fn cmd_serve(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &str) -> Result<()> {
-    let name = project_display_name(repo_root);
-    tracing::info!("Loading config for {name}/{environment}");
+    tracing::info!("Loading configuration for environment {environment}");
 
     let resolved = resolve_local_for_cli(loader, repo_root, environment)?;
+    let name = project_display_name(repo_root);
 
     if let Some(ref ssh) = resolved.environment.ssh {
         if ssh.enabled {
-            tracing::warn!("SSH bastion configured — ensure tunnel is active before connecting");
-            tracing::warn!("Example: ssh -L 5432:db.internal:5432 bastion.example.com");
+            tracing::warn!("SSH tunnel configured — ensure it is active before connecting");
         }
     }
 
@@ -3803,7 +3823,8 @@ fn cmd_check(
                 resolved.project.limits.statement_timeout_ms,
                 limits,
                 false,
-            )?;
+            )
+            .map_err(redact_connection_start_error)?;
 
             sidecar.ping()?;
             diagnostics::print(
@@ -3833,7 +3854,8 @@ fn cmd_check(
                 resolved.project.limits.statement_timeout_ms,
                 limits,
                 false,
-            )?;
+            )
+            .map_err(redact_connection_start_error)?;
 
             sidecar.ping()?;
             diagnostics::print(
@@ -4756,6 +4778,27 @@ mod tests {
             "Configured driver file is unavailable or unsafe."
         );
         assert!(!permissions.to_string().contains("postgresql.jar"));
+    }
+
+    #[test]
+    fn redacts_project_lookup_and_connection_start_errors() {
+        let project = super::redact_cli_error(&super::SafeselectError::LocalProjectNotFound(
+            std::path::PathBuf::from("/tmp/private-project"),
+        ));
+        assert_eq!(
+            project,
+            "No local SafeSelect project found. Use --project or run from a project directory."
+        );
+        assert!(!project.contains("private-project"));
+
+        let connection = super::redact_connection_start_error(super::SafeselectError::Sidecar(
+            "startup failed for jdbc:postgresql://db.internal/app".into(),
+        ));
+        assert_eq!(
+            connection.to_string(),
+            "Database connection could not be started. Check the connection configuration and driver availability."
+        );
+        assert!(!connection.to_string().contains("db.internal"));
     }
 
     #[test]
