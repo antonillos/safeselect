@@ -10,6 +10,7 @@ use crate::compose;
 use crate::config::{ConfigLoader, DriverConfig, EnvironmentConfig, ProjectConfig, ResolvedConfig};
 use crate::diagnostics::{self, DiagnosticCode, DiagnosticStatus};
 use crate::error::{Result, SafeselectError};
+use crate::maintenance;
 use crate::security::SecurityEngine;
 use crate::sidecar::{ResultLimits, SidecarProcess};
 use crate::{is_ssh_ready_for_query, setup_ssh_tunnels, update_generated_by};
@@ -754,6 +755,18 @@ impl McpServer {
             });
         }
 
+        if self.backend.has(BackendCapability::MaintenanceDiagnostics) {
+            tools.push(ToolDefinition {
+                name: "get_maintenance_diagnostics".into(),
+                description: self.tool_description("diagnose possible PostgreSQL ANALYZE and VACUUM needs from bounded catalog statistics; read-only and never executes maintenance; optionally restrict to one exact allowed schema"),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {"schema": {"type": "string", "description": "Optional exact allowed schema name"}},
+                    "additionalProperties": false
+                }),
+            });
+        }
+
         if self.is_postgres() {
             tools.extend([
                 ToolDefinition {
@@ -1474,6 +1487,14 @@ impl McpServer {
                 ),
             },
             "get_table_stats" => self.handle_get_table_stats(msg.id.clone(), &args),
+            "get_maintenance_diagnostics" if self.is_postgres() => {
+                self.handle_get_maintenance_diagnostics(msg.id.clone(), &args)
+            }
+            "get_maintenance_diagnostics" => self.send_error(
+                msg.id.clone(),
+                -32601,
+                "get_maintenance_diagnostics is available only for PostgreSQL backends",
+            ),
             "list_functions" => self.handle_list_functions(msg.id.clone(), &args),
             "list_triggers" => self.handle_list_triggers(msg.id.clone(), &args),
             "list_scheduled_jobs" => self.handle_list_scheduled_jobs(msg.id.clone(), &args),
@@ -1644,6 +1665,7 @@ impl McpServer {
                 BackendCapability::TableIndexes => "table_indexes",
                 BackendCapability::DatabaseStats => "database_stats",
                 BackendCapability::TableStats => "table_stats",
+                BackendCapability::MaintenanceDiagnostics => "maintenance_diagnostics",
                 BackendCapability::DatabaseDiscovery => "database_discovery",
                 BackendCapability::CollectionDiscovery => "collection_discovery",
                 BackendCapability::DocumentFind => "document_find",
@@ -2621,6 +2643,113 @@ impl McpServer {
             "Call list_table_indexes for this relation, then use explain with a selective predicate before any targeted select.",
             "Call list_tables, choose one exact allowed relation, then retry get_table_stats once.",
         )
+    }
+
+    fn handle_get_maintenance_diagnostics(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        let schema = match Self::parse_maintenance_schema(args, self.security.allowed_schemas()) {
+            Ok(schema) => schema,
+            Err((code, message)) => return self.send_error(id, code, message),
+        };
+        let sql = build_maintenance_diagnostics_sql(
+            self.security.allowed_schemas(),
+            self.security.denied_relations(),
+            schema,
+            self.security.limits().max_rows.max(1),
+        );
+        self.execute_maintenance_diagnostics(id, &sql)
+    }
+
+    fn execute_maintenance_diagnostics(
+        &mut self,
+        id: Option<serde_json::Value>,
+        sql: &str,
+    ) -> Result<()> {
+        if let Err(error) = self.security.validate_system(sql) {
+            self.audit.record("REJECT", "reject", sql)?;
+            let _ = self.write_response(&tool_error_response(
+                id,
+                format!("get_maintenance_diagnostics rejected: {error}"),
+                "Stop and report this SafeSelect security rejection; do not retry unchanged.",
+            ));
+            self.fail_closed("Security violation");
+            return Ok(());
+        }
+        let result = self.execute_with_reconnect(sql);
+        self.write_maintenance_result(id, sql, result)
+    }
+
+    fn write_maintenance_result(
+        &mut self,
+        id: Option<serde_json::Value>,
+        sql: &str,
+        result: Result<crate::sidecar::QueryResult>,
+    ) -> Result<()> {
+        let result = match result {
+            Ok(result) => result,
+            Err(_) => {
+                self.audit.record("JDBC_ERROR", "error", sql)?;
+                return self.write_response(&tool_error_response(
+                    id,
+                    "get_maintenance_diagnostics failed.".into(),
+                    "Call check; if the connection is healthy, report the failure without inferring maintenance state.",
+                ));
+            }
+        };
+        let Some(payload) = maintenance::payload_from_query(&result) else {
+            self.audit.record("PASS", "allow", sql)?;
+            return self.write_response(&tool_error_response(
+                id,
+                "PostgreSQL version is not supported by this diagnostic.".into(),
+                "Use get_table_stats or upgrade to PostgreSQL 17 or 18; no maintenance recommendation was produced.",
+            ));
+        };
+        self.audit.record("PASS", "allow", sql)?;
+        self.write_response(&data_tool_response(
+            id,
+            &payload,
+            "Review the evidence with a DBA; this diagnostic never executes ANALYZE or VACUUM.",
+        )?)
+    }
+
+    fn parse_maintenance_schema<'a>(
+        args: &'a serde_json::Value,
+        allowed_schemas: &[String],
+    ) -> std::result::Result<Option<&'a str>, (i64, String)> {
+        if !has_only_keys(args, &["schema"]) {
+            return Err((
+                -32602,
+                "get_maintenance_diagnostics accepts only the optional 'schema' argument".into(),
+            ));
+        }
+        let Some(value) = args.get("schema") else {
+            return Ok(None);
+        };
+        let Some(schema) = value.as_str() else {
+            return Err((
+                -32602,
+                "Invalid schema name: only alphanumeric and underscores allowed".into(),
+            ));
+        };
+        if !is_valid_identifier(schema) || is_system_catalog_schema(schema) {
+            return Err((
+                -32602,
+                "Invalid schema name: only alphanumeric and underscores allowed".into(),
+            ));
+        }
+        if !allowed_schemas.is_empty() && !allowed_schemas.iter().any(|allowed| allowed == schema) {
+            return Err((
+                -32000,
+                format!(
+                    "Schema '{schema}' is not in the allowed schemas list ({})",
+                    allowed_schemas.join(", ")
+                ),
+            ));
+        }
+        Ok(Some(schema))
     }
 
     fn exact_catalog_relation(
@@ -5293,6 +5422,40 @@ fn build_table_stats_sql(schema: &str, table: &str) -> String {
     )
 }
 
+fn build_maintenance_diagnostics_sql(
+    allowed_schemas: &[String],
+    denied_relations: &[String],
+    schema: Option<&str>,
+    limit: u64,
+) -> String {
+    let schema_predicate = match schema {
+        Some(schema) => format!("n.nspname = '{}'", schema.replace('\'', "''")),
+        None => allowed_catalog_schema_predicate(allowed_schemas, "n"),
+    };
+    let denied = denied_relations
+        .iter()
+        .map(|relation| {
+            let escaped = relation.replace('\'', "''");
+            if let Some((denied_schema, denied_table)) = relation.split_once('.') {
+                format!(
+                    "lower(n.nspname || '.' || c.relname) <> lower('{}')",
+                    format!("{denied_schema}.{denied_table}").replace('\'', "''")
+                )
+            } else {
+                format!("lower(c.relname) <> lower('{}')", escaped)
+            }
+        })
+        .collect::<Vec<_>>();
+    let denied_predicate = if denied.is_empty() {
+        String::new()
+    } else {
+        format!(" AND {}", denied.join(" AND "))
+    };
+    format!(
+        "SELECT current_setting('server_version_num')::integer, n.nspname, c.relname, c.relkind, c.reltuples, s.n_live_tup, s.n_dead_tup, s.n_mod_since_analyze, s.last_analyze, s.last_autoanalyze, s.last_vacuum, s.last_autovacuum, (COALESCE(o.autovacuum_enabled, 'on') <> 'off') AS autovacuum_enabled, COALESCE(o.autovacuum_analyze_scale_factor, current_setting('autovacuum_analyze_scale_factor')::float8) AS analyze_scale_factor, COALESCE(o.autovacuum_analyze_threshold, current_setting('autovacuum_analyze_threshold')::float8) AS analyze_threshold, COALESCE(o.autovacuum_vacuum_scale_factor, current_setting('autovacuum_vacuum_scale_factor')::float8) AS vacuum_scale_factor, COALESCE(o.autovacuum_vacuum_threshold, current_setting('autovacuum_vacuum_threshold')::float8) AS vacuum_threshold, COALESCE(o.autovacuum_vacuum_max_threshold, current_setting('autovacuum_vacuum_max_threshold', true)::float8) AS vacuum_max_threshold, (c.relkind = 'p') AS is_partitioned FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace LEFT JOIN pg_stat_user_tables AS s ON s.relid = c.oid LEFT JOIN LATERAL (SELECT max(option_value) FILTER (WHERE option_name = 'autovacuum_enabled') AS autovacuum_enabled, max(NULLIF(option_value, '')::float8) FILTER (WHERE option_name = 'autovacuum_analyze_scale_factor') AS autovacuum_analyze_scale_factor, max(NULLIF(option_value, '')::float8) FILTER (WHERE option_name = 'autovacuum_analyze_threshold') AS autovacuum_analyze_threshold, max(NULLIF(option_value, '')::float8) FILTER (WHERE option_name = 'autovacuum_vacuum_scale_factor') AS autovacuum_vacuum_scale_factor, max(NULLIF(option_value, '')::float8) FILTER (WHERE option_name = 'autovacuum_vacuum_threshold') AS autovacuum_vacuum_threshold, max(NULLIF(option_value, '')::float8) FILTER (WHERE option_name = 'autovacuum_vacuum_max_threshold') AS autovacuum_vacuum_max_threshold FROM pg_options_to_table(COALESCE(c.reloptions, ARRAY[]::text[]))) AS o ON true WHERE {schema_predicate}{denied_predicate} AND c.relkind IN ('r', 'p') ORDER BY n.nspname, c.relname LIMIT {limit}",
+    )
+}
+
 fn build_list_table_partitions_sql(schema: &str, table: &str, limit: u64) -> String {
     format!(
         "WITH RECURSIVE partition_tree AS (SELECT child.oid AS relation_oid, child_ns.nspname AS schema_name, child.relname AS table_name, 1::integer AS depth FROM pg_inherits AS inheritance JOIN pg_class AS parent ON parent.oid = inheritance.inhparent JOIN pg_namespace AS parent_ns ON parent_ns.oid = parent.relnamespace JOIN pg_class AS child ON child.oid = inheritance.inhrelid JOIN pg_namespace AS child_ns ON child_ns.oid = child.relnamespace WHERE parent_ns.nspname = '{}' AND parent.relname = '{}' UNION ALL SELECT child.oid AS relation_oid, child_ns.nspname AS schema_name, child.relname AS table_name, tree.depth + 1 AS depth FROM partition_tree AS tree JOIN pg_inherits AS inheritance ON inheritance.inhparent = tree.relation_oid JOIN pg_class AS child ON child.oid = inheritance.inhrelid JOIN pg_namespace AS child_ns ON child_ns.oid = child.relnamespace) SELECT schema_name, table_name, depth, (SELECT COUNT(*) FROM partition_tree) AS total_partitions FROM partition_tree ORDER BY depth, schema_name, table_name LIMIT {limit}",
@@ -6403,6 +6566,33 @@ mod tests {
     }
 
     #[test]
+    fn maintenance_diagnostics_query_is_bounded_and_hides_denied_relations() {
+        let sql = build_maintenance_diagnostics_sql(
+            &["public".into()],
+            &["public.secrets".into(), "passwords".into()],
+            None,
+            25,
+        );
+        assert!(sql.starts_with("SELECT "));
+        assert!(sql.contains("pg_stat_user_tables"));
+        assert!(sql.contains("pg_options_to_table"));
+        assert!(sql.contains("LIMIT 25"));
+        assert!(sql.contains("lower(n.nspname || '.' || c.relname) <> lower('public.secrets')"));
+        assert!(sql.contains("lower(c.relname) <> lower('passwords')"));
+        assert!(!sql.contains(';'));
+        assert!(!sql.contains(" VACUUM "));
+        assert!(!sql.contains(" ANALYZE "));
+        let security = SecurityEngine::new(
+            crate::config::SecurityPolicy::default(),
+            crate::config::LimitsConfig::default(),
+        );
+        assert!(
+            security.validate_system(&sql).is_ok(),
+            "maintenance catalog query must pass the existing read-only validator"
+        );
+    }
+
+    #[test]
     fn database_stats_respect_allowed_catalog_schemas() {
         let sql = build_database_stats_sql(&["app".to_string(), "reporting".to_string()]);
 
@@ -7063,6 +7253,100 @@ services:
                 &serde_json::json!({"schema":"private"})
             )
             .is_err());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn validates_maintenance_schema_arguments() {
+        let root =
+            std::env::temp_dir().join(format!("safeselect-maintenance-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut server = test_server(&root);
+        assert_eq!(
+            McpServer::parse_maintenance_schema(&serde_json::json!({}), &[]).unwrap(),
+            None
+        );
+        assert_eq!(
+            McpServer::parse_maintenance_schema(
+                &serde_json::json!({"schema":"public"}),
+                &["public".into()]
+            )
+            .unwrap(),
+            Some("public")
+        );
+        assert!(McpServer::parse_maintenance_schema(
+            &serde_json::json!({"schema":"pg_catalog"}),
+            &[]
+        )
+        .is_err());
+        assert!(
+            McpServer::parse_maintenance_schema(&serde_json::json!({"unexpected":true}), &[])
+                .is_err()
+        );
+        server.security = SecurityEngine::new(
+            crate::config::SecurityPolicy {
+                allowed_schemas: vec!["public".into()],
+                ..Default::default()
+            },
+            crate::config::LimitsConfig::default(),
+        );
+        assert!(McpServer::parse_maintenance_schema(
+            &serde_json::json!({"schema":"private"}),
+            server.security.allowed_schemas()
+        )
+        .is_err());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn maintenance_handler_and_result_paths_are_exercised_without_backend() {
+        let root = std::env::temp_dir().join(format!(
+            "safeselect-maintenance-paths-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut server = test_server(&root);
+        server
+            .handle_get_maintenance_diagnostics(
+                Some(serde_json::json!(1)),
+                &serde_json::json!({"unexpected": true}),
+            )
+            .unwrap();
+        server
+            .handle_get_maintenance_diagnostics(
+                Some(serde_json::json!(2)),
+                &serde_json::json!({"schema": "public"}),
+            )
+            .unwrap();
+        let query = crate::sidecar::QueryResult {
+            columns: vec![],
+            rows: vec![vec![serde_json::json!(170000)]],
+            row_count: 1,
+            byte_count: 0,
+            elapsed_ms: 0,
+            elapsed: String::new(),
+        };
+        server
+            .write_maintenance_result(Some(serde_json::json!(3)), "SELECT 1", Ok(query))
+            .unwrap();
+        let unsupported = crate::sidecar::QueryResult {
+            columns: vec![],
+            rows: vec![vec![serde_json::json!(160000)]],
+            row_count: 1,
+            byte_count: 0,
+            elapsed_ms: 0,
+            elapsed: String::new(),
+        };
+        server
+            .write_maintenance_result(Some(serde_json::json!(4)), "SELECT 1", Ok(unsupported))
+            .unwrap();
+        server
+            .write_maintenance_result(
+                Some(serde_json::json!(5)),
+                "SELECT 1",
+                Err(crate::error::SafeselectError::Sidecar("test".into())),
+            )
+            .unwrap();
         let _ = std::fs::remove_dir_all(root);
     }
 

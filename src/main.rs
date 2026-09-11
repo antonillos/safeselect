@@ -10,6 +10,7 @@ mod config;
 mod dbeaver;
 mod diagnostics;
 mod error;
+mod maintenance;
 mod mcp;
 mod posture;
 mod security;

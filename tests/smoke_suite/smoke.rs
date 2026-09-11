@@ -212,6 +212,7 @@ fn assert_mcp_sql_error_stays_alive(repo_root: &std::path::Path, config_dir: &st
             && tools_response.contains("list_table_indexes")
             && tools_response.contains("get_database_stats")
             && tools_response.contains("get_table_stats")
+            && tools_response.contains("get_maintenance_diagnostics")
             && !tools_response.contains("discover_document_schema")
             && tools.iter().all(|tool| {
                 tool["outputSchema"]["required"]
