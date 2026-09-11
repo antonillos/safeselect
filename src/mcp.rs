@@ -2705,7 +2705,7 @@ impl McpServer {
             return self.write_response(&tool_error_response(
                 id,
                 "PostgreSQL version is not supported by this diagnostic.".into(),
-                "Use get_table_stats or upgrade to PostgreSQL 16, 17, or 18; no maintenance recommendation was produced.",
+                "Use get_table_stats or upgrade to PostgreSQL 15, 16, 17, or 18; no maintenance recommendation was produced.",
             ));
         };
         self.audit.record("PASS", "allow", sql)?;
@@ -7358,7 +7358,7 @@ services:
             .unwrap();
         let unsupported = crate::sidecar::QueryResult {
             columns: vec![],
-            rows: vec![vec![serde_json::json!(150000)]],
+            rows: vec![vec![serde_json::json!(140000)]],
             row_count: 1,
             byte_count: 0,
             elapsed_ms: 0,

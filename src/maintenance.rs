@@ -248,7 +248,7 @@ pub fn payload_from_query(result: &QueryResult) -> Option<serde_json::Value> {
 }
 
 fn is_supported_version(version: i64) -> bool {
-    matches!(version / 10_000, 16..=18)
+    matches!(version / 10_000, 15..=18)
 }
 
 #[cfg(test)]
@@ -357,7 +357,7 @@ mod tests {
             rows: vec![row("r", Some(1.0), Some(1.0))
                 .into_iter()
                 .enumerate()
-                .map(|(i, v)| if i == 0 { serde_json::json!(150000) } else { v })
+                .map(|(i, v)| if i == 0 { serde_json::json!(140000) } else { v })
                 .collect()],
             row_count: 1,
             byte_count: 0,
@@ -365,6 +365,22 @@ mod tests {
             elapsed: String::new(),
         };
         assert!(payload_from_query(&result).is_none());
+    }
+
+    #[test]
+    fn postgres_15_is_supported() {
+        let mut values = row("r", Some(151.0), Some(251.0));
+        values[0] = serde_json::json!(150000);
+        let result = QueryResult {
+            columns: vec![],
+            rows: vec![values],
+            row_count: 1,
+            byte_count: 0,
+            elapsed_ms: 0,
+            elapsed: String::new(),
+        };
+        let payload = payload_from_query(&result).expect("PostgreSQL 15 is supported");
+        assert_eq!(payload["server_version_num"], 150000);
     }
 
     #[test]
