@@ -43,7 +43,9 @@ safeselect import-dbeaver ~/Downloads/connections.dbp
 ```
 
 Select the intended PostgreSQL connection. In this walkthrough, name the
-environment `staging`; if you choose another name, replace it in later commands.
+environment `staging`. A sole imported environment is selected by convention.
+If this project already has other environments, add `--environment staging`
+(or your chosen name) to the checks and agent installation commands below.
 Review imported host, database, SSH settings and policy before allowing access.
 Enter secrets through the local prompts, not the chat. On macOS, database
 passwords are stored in Keychain rather than the project TOML.
@@ -58,18 +60,22 @@ safeselect driver download --vendor postgresql
 ## 3. Validate before connecting the agent
 
 ```bash
-safeselect check --environment staging
+safeselect check
 ```
+
+Without an environment flag, `check` and `doctor` check every environment and
+may open SSH tunnels and database connections. Restrict the target as described
+above when other environments must remain untouched.
 
 Do not continue until the check succeeds. Follow the reported correction for
 missing secrets, unavailable Java, database connectivity or SSH configuration.
-Use `safeselect doctor --environment staging` for deeper diagnostics. Never
+Use `safeselect doctor` for deeper diagnostics. Never
 work around a failure by pasting the connection string into Codex.
 
 ## 4. Install a project-scoped Codex entry
 
 ```bash
-safeselect agent install codex --environment staging --local
+safeselect agent install codex --local
 safeselect agent status
 ```
 
@@ -81,7 +87,7 @@ See [agent integration](../agents.md) for configuration locations and scopes.
 Claude Code is an alternative, not an additional requirement:
 
 ```bash
-safeselect agent install claude-code --environment staging --local
+safeselect agent install claude-code --local
 ```
 
 ## 5. Ask for one bounded read

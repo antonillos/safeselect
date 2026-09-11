@@ -24,8 +24,9 @@ pub enum Command {
         /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
         #[arg(long)]
         project: Option<PathBuf>,
+        /// Environment to serve (inferred when the project has exactly one)
         #[arg(long)]
-        environment: String,
+        environment: Option<String>,
     },
     /// Validate configuration without starting the server
     Config {
@@ -108,8 +109,9 @@ pub enum Command {
         /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
         #[arg(long)]
         project: Option<PathBuf>,
+        /// Environment to query (inferred when the project has exactly one)
         #[arg(long)]
-        environment: String,
+        environment: Option<String>,
         /// SQL query to execute (reads from stdin if omitted)
         #[arg(long)]
         sql: Option<String>,
@@ -117,23 +119,25 @@ pub enum Command {
         #[arg(long, default_value_t = false)]
         verbose: bool,
     },
-    /// Disconnect from the database (MCP tool — callable by AI agents)
+    /// Test disconnect on a temporary JDBC sidecar (does not affect an active MCP session)
     Disconnect {
         /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
         #[arg(long)]
         project: Option<PathBuf>,
+        /// Environment to disconnect (inferred when the project has exactly one)
         #[arg(long)]
-        environment: String,
+        environment: Option<String>,
     },
-    /// Reconnect to the database (MCP tool — callable by AI agents)
+    /// Test connect on a temporary JDBC sidecar (does not affect an active MCP session)
     Connect {
         /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
         #[arg(long)]
         project: Option<PathBuf>,
+        /// Environment to connect (inferred when the project has exactly one)
         #[arg(long)]
-        environment: String,
+        environment: Option<String>,
     },
-    /// Restart sidecar and verify the database connection
+    /// Verify connectivity with a temporary sidecar (all environments by default)
     Reconnect {
         /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
         #[arg(long)]
@@ -167,8 +171,9 @@ pub enum ConfigAction {
         /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
         #[arg(long)]
         project: Option<PathBuf>,
+        /// Environment to show (inferred when the project has exactly one)
         #[arg(long)]
-        environment: String,
+        environment: Option<String>,
     },
     /// Rename an environment
     RenameEnvironment {
@@ -193,8 +198,9 @@ pub enum ConfigAction {
     },
     /// Store a password in the Keychain and update the environment config
     SetPassword {
+        /// Environment whose password is stored (inferred when the project has exactly one)
         #[arg(long)]
-        environment: String,
+        environment: Option<String>,
         /// Password value (prompts securely if omitted)
         #[arg(long)]
         password: Option<String>,
@@ -204,8 +210,9 @@ pub enum ConfigAction {
     },
     /// Store an SSH password in the Keychain and update the environment SSH config
     SetSshPassword {
+        /// Environment whose SSH password is stored (inferred when the project has exactly one)
         #[arg(long)]
-        environment: String,
+        environment: Option<String>,
         /// SSH password value (prompts securely if omitted)
         #[arg(long)]
         password: Option<String>,
@@ -321,5 +328,20 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn single_environment_commands_allow_convention_based_selection() {
+        for args in [
+            ["safeselect", "serve"].as_slice(),
+            ["safeselect", "query"].as_slice(),
+            ["safeselect", "connect"].as_slice(),
+            ["safeselect", "disconnect"].as_slice(),
+            ["safeselect", "config", "show"].as_slice(),
+            ["safeselect", "config", "set-password"].as_slice(),
+            ["safeselect", "config", "set-ssh-password"].as_slice(),
+        ] {
+            assert!(Cli::try_parse_from(args).is_ok(), "{args:?}");
+        }
     }
 }
