@@ -23,12 +23,11 @@ ignored. The social card is `public/og.png`.
 
 ### Brand assets
 
-`public/icon.svg` is the editable source. Its background, tier gaps and lens
-interior are transparent; the lens masks the underlying write-access tier.
-The cylinder tiers have a subtle 1.5-unit white outline on the 512-unit canvas.
-`public/icon-dark.svg` is generated with a lighter palette for dark surfaces.
-The README selects the matching SVG using `<picture>`; the light website uses
-the original. No opaque square is embedded in either variant or the PNGs.
+`public/icon.svg` is the editable source for SafeSelect's geometric S
+monogram. `public/icon-dark.svg` is generated from the identical geometry in
+white for dark surfaces. The README selects the matching SVG using `<picture>`;
+the light website uses the original. No opaque square is embedded in either
+variant or the PNGs.
 
 After editing the source, run `npm run icons:export`. Validate the derivatives
 without writing with `npm run icons:export -- --check`. Equal outputs are not
