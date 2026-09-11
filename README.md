@@ -262,10 +262,11 @@ summary without exposing database-derived detail.
 | MongoDB analysis | `profile_document_field`, `discover_document_schema`, `generate_document_fixture`, `list_collection_indexes`, `get_database_stats`, `get_collection_stats` |
 | Connection | `database_info`, `check`, `connect`, `disconnect`, `reconnect` |
 
-`get_maintenance_diagnostics` supports PostgreSQL 16, 17, and 18.
 | Audit | `audit_status`, `audit_recent` |
 | Config | `config_validate`, `config_show`, `config_set_password`, `config_rename_environment`, `config_delete_environment`, `config_reset` |
 | Setup | `import_compose`, `driver_list`, `driver_add`, `driver_download`, `agent_detect`, `agent_install`, `agent_status`, `agent_uninstall` |
+
+`get_maintenance_diagnostics` supports PostgreSQL 16, 17, and 18.
 
 When no `.safeselect/` directory exists, `safeselect serve --environment <env>` enters setup mode automatically and exposes only the setup-safe tools.
 

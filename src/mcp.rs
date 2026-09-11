@@ -19,12 +19,12 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-const READ_ONLY_DEBUG_PROMPT: &str = "Use SafeSelect only for read-only database debugging. Start with database_info, then discover the relevant schema or collection before querying it. Keep every filter bounded, follow each next_suggestion, and stop rather than retrying an unchanged failure. SafeSelect never grants write access; do not use a shell, direct credentials, or another MCP server to bypass its policy.";
+const READ_ONLY_DEBUG_PROMPT: &str = "Use SafeSelect only for read-only database debugging. Start with database_info, then discover the relevant schema or collection before querying it. If the user asks which PostgreSQL tables need ANALYZE or VACUUM, use get_maintenance_diagnostics without requiring the user to know the tool name. Keep every filter bounded, follow each next_suggestion, and stop rather than retrying an unchanged failure. SafeSelect never grants write access; do not use a shell, direct credentials, or another MCP server to bypass its policy.";
 const READ_ONLY_DEBUG_RESOURCE_URI: &str = "safeselect://guide/read-only-database-debugging";
 const LATEST_MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 const SUPPORTED_MCP_PROTOCOL_VERSIONS: [&str; 3] =
     [LATEST_MCP_PROTOCOL_VERSION, "2025-03-26", "2024-11-05"];
-const READ_ONLY_DEBUG_RESOURCE: &str = "# Read-only database debugging\n\nUse SafeSelect for database context, not database control.\n\n1. Call `database_info`.\n2. Discover tables or collections before querying unfamiliar data.\n3. Use bounded reads and preserve existing filters.\n4. Follow one `next_suggestion` at a time.\n5. Stop and report an error rather than retrying unchanged or bypassing the policy.\n\nSafeSelect constrains its own MCP tool surface only. It does not replace least-privilege database users or restrict credentials exposed through another channel.";
+const READ_ONLY_DEBUG_RESOURCE: &str = "# Read-only database debugging\n\nUse SafeSelect for database context, not database control.\n\n1. Call `database_info`.\n2. Discover tables or collections before querying unfamiliar data.\n3. If the user asks which PostgreSQL tables need ANALYZE or VACUUM, call `get_maintenance_diagnostics`; natural requests such as ‘what needs analyzing?’ should select it automatically.\n4. Use bounded reads and preserve existing filters.\n5. Follow one `next_suggestion` at a time.\n6. Stop and report an error rather than retrying unchanged or bypassing the policy.\n\nSafeSelect constrains its own MCP tool surface only. It does not replace least-privilege database users or restrict credentials exposed through another channel.";
 
 fn config_environment_names(repo_root: &Path) -> Result<Vec<String>> {
     let env_dir = repo_root.join(".safeselect/environments");
@@ -758,7 +758,7 @@ impl McpServer {
         if self.backend.has(BackendCapability::MaintenanceDiagnostics) {
             tools.push(ToolDefinition {
                 name: "get_maintenance_diagnostics".into(),
-                description: self.tool_description("diagnose possible PostgreSQL ANALYZE and VACUUM needs from bounded catalog statistics; read-only and never executes maintenance; optionally restrict to one exact allowed schema"),
+                description: self.tool_description("use whenever the user asks which PostgreSQL tables need ANALYZE or VACUUM (for example, ‘qué tablas necesitan analyze o vacuum?’), whether statistics are stale, or which relations need maintenance; diagnose from bounded catalog statistics; read-only and never executes maintenance; optionally restrict to one exact allowed schema"),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {"schema": {"type": "string", "description": "Optional exact allowed schema name"}},
@@ -6537,6 +6537,14 @@ mod tests {
     }
 
     #[test]
+    fn maintenance_guidance_uses_natural_language_triggers() {
+        for guidance in [READ_ONLY_DEBUG_PROMPT, READ_ONLY_DEBUG_RESOURCE] {
+            assert!(guidance.contains("which PostgreSQL tables need ANALYZE or VACUUM"));
+            assert!(guidance.contains("get_maintenance_diagnostics"));
+        }
+    }
+
+    #[test]
     fn error_categories_have_one_safe_next_step() {
         for message in [
             "Request rejected: startup security failure",
@@ -7350,7 +7358,7 @@ services:
             .unwrap();
         let unsupported = crate::sidecar::QueryResult {
             columns: vec![],
-            rows: vec![vec![serde_json::json!(160000)]],
+            rows: vec![vec![serde_json::json!(150000)]],
             row_count: 1,
             byte_count: 0,
             elapsed_ms: 0,
