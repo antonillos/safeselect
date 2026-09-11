@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:17
+    image: ${POSTGRES_IMAGE:-postgres:17}
     environment:
       POSTGRES_PASSWORD: testpass
       POSTGRES_DB: testdb

@@ -1105,6 +1105,33 @@
       }
     },
     {
+      "description": "PostgreSQL only. diagnose possible PostgreSQL ANALYZE and VACUUM needs from bounded catalog statistics; read-only and never executes maintenance; optionally restrict to one exact allowed schema. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "schema": {
+            "description": "Optional exact allowed schema name",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "get_maintenance_diagnostics",
+      "outputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "next_suggestion": {
+            "description": "The single safest action for the AI agent to take next",
+            "type": "string"
+          }
+        },
+        "required": [
+          "next_suggestion"
+        ],
+        "type": "object"
+      }
+    },
+    {
       "description": "PostgreSQL only. show a bounded safe subset of PostgreSQL table and index statistics for one exact allowed relation; copy schema and table from list_tables. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "additionalProperties": false,

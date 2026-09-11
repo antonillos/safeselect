@@ -24,9 +24,14 @@ jobs:
   integration-tests:
     name: Real Integration Tests
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres-version: ['17', '18']
     env:
       CARGO_HTTP_MULTIPLEXING: "false"
       CARGO_NET_RETRY: "10"
+      POSTGRES_IMAGE: postgres:${{ matrix.postgres-version }}
 
     steps:
       - name: Checkout code

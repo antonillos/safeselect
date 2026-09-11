@@ -16,6 +16,7 @@ pub enum BackendCapability {
     TableIndexes,
     DatabaseStats,
     TableStats,
+    MaintenanceDiagnostics,
     DatabaseDiscovery,
     CollectionDiscovery,
     DocumentFind,
@@ -154,6 +155,7 @@ impl BackendDescriptor {
                 BackendCapability::TableIndexes,
                 BackendCapability::DatabaseStats,
                 BackendCapability::TableStats,
+                BackendCapability::MaintenanceDiagnostics,
             ]);
         }
         Self {

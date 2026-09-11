@@ -1,7 +1,8 @@
 //! Shared PostgreSQL smoke-test helpers.
 
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 const TEST_DB_PREFIX: &str = "safeselect_test";
@@ -284,12 +285,80 @@ pub fn run_safeselect_args(
         .env("SAFESELECT_SECURITY_TEST_PASSWORD", TEST_PASSWORD)
         .env("NO_COLOR", "1")
         .current_dir(root)
+        .current_dir(root)
         .output()
         .expect("failed to run safeselect");
 
     (
         strip_ansi(&String::from_utf8_lossy(&output.stdout)),
         strip_ansi(&String::from_utf8_lossy(&output.stderr)),
+        output.status.success(),
+    )
+}
+
+/// Run one MCP tool against the disposable PostgreSQL environment.
+#[allow(dead_code)]
+pub fn run_mcp_tool(
+    root: &Path,
+    config_dir: &Path,
+    tool: &str,
+    arguments: serde_json::Value,
+) -> (serde_json::Value, String, bool) {
+    let mut child = Command::new(safeselect_bin())
+        .args([
+            "serve",
+            "--project",
+            root.to_str().unwrap(),
+            "--environment",
+            "testing",
+        ])
+        .env("SAFESELECT_CONFIG_DIR", config_dir)
+        .env("SAFESELECT_SECURITY_TEST_PASSWORD", TEST_PASSWORD)
+        .env("NO_COLOR", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to start MCP server");
+    let mut stdin = child.stdin.take().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let mut reader = BufReader::new(stdout);
+    let mut write_error = None;
+    for message in [
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"safeselect-real-test"}}}),
+        serde_json::json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+        serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":tool,"arguments":arguments}}),
+    ] {
+        if let Err(error) = writeln!(stdin, "{message}").and_then(|_| stdin.flush()) {
+            write_error = Some(error);
+            break;
+        }
+        if message.get("id").and_then(|v| v.as_i64()) == Some(1) {
+            let mut ignored = String::new();
+            reader.read_line(&mut ignored).unwrap();
+        }
+    }
+    if let Some(error) = write_error {
+        drop(stdin);
+        let output = child
+            .wait_with_output()
+            .expect("failed waiting for MCP server");
+        panic!(
+            "MCP server closed before tool response: {error}; stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let mut response = String::new();
+    reader.read_line(&mut response).unwrap();
+    drop(stdin);
+    let output = child
+        .wait_with_output()
+        .expect("failed waiting for MCP server");
+    let parsed = serde_json::from_str(response.trim())
+        .unwrap_or_else(|e| panic!("invalid MCP response: {e}; raw: {response}"));
+    (
+        parsed,
+        String::from_utf8_lossy(&output.stderr).into_owned(),
         output.status.success(),
     )
 }

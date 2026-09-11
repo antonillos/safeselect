@@ -28,12 +28,72 @@ pub fn run() {
     postgres::setup_database();
     log_step("writing SafeSelect test config");
     postgres::write_config(&repo_root);
+    let project_config = repo_root.join(".safeselect/project.toml");
+    let config = std::fs::read_to_string(&project_config).unwrap();
+    std::fs::write(
+        &project_config,
+        config.replace("enabled = false", "enabled = true"),
+    )
+    .unwrap();
     log_step("downloading PostgreSQL JDBC driver");
     postgres::download_driver(&config_dir);
 
     let result = std::panic::catch_unwind(|| {
         let baseline = database_state();
         log_step(&format!("captured baseline database state: {:?}", baseline));
+
+        log_check("aggregated PostgreSQL maintenance diagnostics remain read-only");
+        postgres::psql(
+            &postgres::test_db(),
+            &format!(
+                "DROP TABLE IF EXISTS public.aaa_maintenance_probe; CREATE TABLE public.aaa_maintenance_probe (id integer, value text) WITH (autovacuum_enabled=false, autovacuum_analyze_scale_factor=0.1, autovacuum_vacuum_scale_factor=0.2); INSERT INTO public.aaa_maintenance_probe SELECT g, 'fixture' FROM generate_series(1, 100) AS g; ANALYZE public.aaa_maintenance_probe; UPDATE public.aaa_maintenance_probe SET value = 'changed'; DELETE FROM public.aaa_maintenance_probe WHERE id <= 80; GRANT SELECT ON public.aaa_maintenance_probe TO {};",
+                postgres::test_user()
+            ),
+        );
+        let server_version_num: u32 =
+            postgres::psql(&postgres::test_db(), "SHOW server_version_num")
+                .parse()
+                .expect("server_version_num must be numeric");
+        if server_version_num >= 180000 {
+            postgres::psql(
+                &postgres::test_db(),
+                "ALTER TABLE public.aaa_maintenance_probe SET (autovacuum_vacuum_threshold=1000, autovacuum_vacuum_max_threshold=10)",
+            );
+        }
+        let (diagnostics, stderr, success) = postgres::run_mcp_tool(
+            &repo_root,
+            &config_dir,
+            "get_maintenance_diagnostics",
+            serde_json::json!({"schema":"public"}),
+        );
+        assert!(
+            success,
+            "maintenance diagnostics MCP server failed: {stderr}"
+        );
+        let value = &diagnostics["result"]["structuredContent"]["untrusted_data"]["value"];
+        let probe = value["diagnostics"]
+            .as_array()
+            .and_then(|rows| {
+                rows.iter()
+                    .find(|row| row["table"] == "aaa_maintenance_probe")
+            })
+            .unwrap_or_else(|| panic!("maintenance probe must be present in diagnostics: {value}"));
+        assert_eq!(probe["analyze"]["status"], "threshold_exceeded");
+        assert_eq!(probe["vacuum"]["status"], "threshold_exceeded");
+        assert_eq!(
+            probe["vacuum"]["threshold"].as_f64(),
+            Some(if server_version_num >= 180000 {
+                10.0
+            } else {
+                70.0
+            })
+        );
+        assert!(value["summary"]["relations"].as_u64().unwrap_or(0) >= 1);
+        assert!(!diagnostics.to_string().contains("VACUUM ANALYZE"));
+        postgres::psql(
+            &postgres::test_db(),
+            "DROP TABLE public.aaa_maintenance_probe;",
+        );
 
         for case in manifest::implemented_for("postgresql") {
             let sql = case

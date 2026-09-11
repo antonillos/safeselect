@@ -83,6 +83,10 @@ impl SecurityEngine {
         &self.policy.allowed_schemas
     }
 
+    pub fn denied_relations(&self) -> &[String] {
+        &self.policy.denied_relations
+    }
+
     pub fn validate_relation_access(&self, schema: &str, relation: &str) -> Result<()> {
         if is_system_schema(schema) {
             return Err(SafeselectError::QueryRejected(format!(

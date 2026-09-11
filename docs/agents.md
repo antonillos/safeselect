@@ -229,6 +229,11 @@ catalogs, honour the existing schema and relation policies, and never accept
 arbitrary SQL. After statistics, inspect the specific schema or indexes; do not
 start an unbounded data read solely because statistics are available.
 
+`get_maintenance_diagnostics` aggregates bounded PostgreSQL catalog statistics to
+flag possible ANALYZE or VACUUM threshold exceedances. It reports evidence and
+unknown states, never executes maintenance, and does not claim to measure bloat,
+locks, wraparound risk, or overall database health.
+
 `list_table_partitions` returns the bounded metadata for all descendant
 partitions of one exact allowed PostgreSQL table: schema, table name, depth,
 total count, and whether the configured result limit truncated the list. Use it
