@@ -27,7 +27,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        postgres-version: ['16', '17', '18']
+        postgres-version: ['15', '16', '17', '18']
     env:
       CARGO_HTTP_MULTIPLEXING: "false"
       CARGO_NET_RETRY: "10"
