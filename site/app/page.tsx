@@ -67,8 +67,9 @@ export default function Home() {
             you already use.
           </h2>
           <p>
-            Import from DBeaver, Docker Compose or MongoDB Compass. Check the
-            environment, then install a project-scoped MCP entry.
+            Import from DBeaver, Docker Compose or MongoDB Compass. SafeSelect
+            follows the repository convention first: with one environment,
+            checks and agent setup infer it automatically.
           </p>
           <a className="text-link" href={sitePath("/guides/dbeaver-codex/")}>
             Follow DBeaver → Codex →
@@ -87,14 +88,16 @@ export default function Home() {
           <pre>
             <code>{`brew install antonillos/tap/safeselect
 safeselect import-dbeaver ~/Downloads/connections.dbp
-# Choose staging during import, or use your environment name.
-safeselect check --environment staging
-safeselect agent install codex --environment staging --local
+# The sole environment is inferred by convention.
+safeselect check
+safeselect agent install codex --local
 safeselect agent status`}</code>
           </pre>
           <p>
             Review imports and policy yourself. Never paste an export or
-            database password into the agent chat.
+            database password into the agent chat. If the project has multiple
+            environments, add <code>--environment &lt;name&gt;</code> deliberately
+            to avoid touching an unrelated database.
           </p>
         </div>
       </section>

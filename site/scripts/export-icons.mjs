@@ -48,9 +48,7 @@ async function save(name, bytes) {
 // Light-on-dark variant for GitHub's <picture> theme switch. Geometry stays
 // identical; do not apply an opaque background or change the knockout mask.
 const dark = source.toString()
-  .replaceAll("#152a27", "#dbe9e2")
-  .replaceAll("#225b42", "#7eaf92")
-  .replaceAll("#956f5d", "#b59684");
+  .replaceAll("#111111", "#ffffff");
 await save("icon-dark.svg", Buffer.from(dark));
 for (const [name, size] of [
   ["favicon-32.png", 32],

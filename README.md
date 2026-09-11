@@ -1,53 +1,200 @@
-<p>
+<h1 align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="site/public/icon-dark.svg">
-    <img src="site/public/icon.svg" width="32" height="32" align="absmiddle" alt="" aria-hidden="true">
+    <img src="site/public/icon.svg" width="48" height="48" align="absmiddle" alt="">
   </picture>
-  &nbsp;<strong>SafeSelect</strong> <code>MCP</code>
+  SafeSelect
+</h1>
+
+<h6 align="center">Agents can look. They cannot mutate.</h6>
+
+<h3 align="center">Read-only PostgreSQL &amp; MongoDB access for coding agents.</h3>
+
+<p align="center">
+  Debug with real database context, without exposing write tools.<br>
+  Local, project-scoped policy—even when your existing credentials allow writes.
 </p>
 
-<h1>Agents can look.<br>They cannot mutate.</h1>
+<p align="center">
+  <a href="#quick-start"><strong>Get started →</strong></a> ·
+  <a href="#see-it-in-action">Demo</a> ·
+  <a href="#supported-agents">Agents</a> ·
+  <a href="docs/security-proof.md">Security</a> ·
+  <a href="#documentation">Docs</a> ·
+  <a href="https://antonillos.github.io/safeselect/">Website</a>
+</p>
 
-**Read-only PostgreSQL & MongoDB access for coding agents.**
+<p align="center">
+  <a href="https://github.com/antonillos/safeselect/actions/workflows/verify.yml"><img src="https://github.com/antonillos/safeselect/actions/workflows/verify.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/antonillos/safeselect/actions/workflows/verify.yml"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fantonillos.github.io%2Fsafeselect%2Fcrap-badge.json" alt="CRAP"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-225b42" alt="License: MIT"></a>
+</p>
 
-Debug with real database context, without exposing write tools—even when your
-existing credentials allow writes. SafeSelect puts local, project-scoped policy
-between your agent and your data.
+## What you can do
 
-[**Get started →**](#quick-start) ·
-[Website](https://antonillos.github.io/safeselect/) ·
-[Compare approaches](docs/compare.md) ·
-[DBeaver → Codex guide](docs/guides/dbeaver-codex.md)
+- **Inspect PostgreSQL** — discover tables, indexes and query plans; read bounded rows.
+- **Explore MongoDB** — discover collections, infer sampled schemas and run bounded reads.
+- **Reuse your connections** — import from DBeaver, Docker Compose or MongoDB Compass.
+- **Connect your coding agent** — install a project/environment-pinned MCP entry.
+- **Keep control** — local stdio, project policy, external secrets and audit metadata.
 
-[![CI](https://github.com/antonillos/safeselect/actions/workflows/verify.yml/badge.svg)](https://github.com/antonillos/safeselect/actions/workflows/verify.yml)
-[![CRAP](https://img.shields.io/endpoint?url=https%3A%2F%2Fantonillos.github.io%2Fsafeselect%2Fcrap-badge.json)](https://github.com/antonillos/safeselect/actions/workflows/verify.yml)
-[![License](https://img.shields.io/badge/License-MIT-225b42)](LICENSE)
+> [!IMPORTANT]
+> Read-only applies to SafeSelect's database tools, not to an agent's shell,
+> other MCP servers or direct credentials. Start with development data or a
+> sanitized replica and use least-privilege database users. Review the
+> [threat model and limits](docs/security-proof.md) before connecting sensitive data.
 
-[![Listed on mcpservers.org](https://mcpservers.org/badge.svg)](https://mcpservers.org/servers/antonillos/safeselect)
-[![Indexed on TensorBlock MCP Index](https://mcp-index.tensorblock.co/v1/servers/github-antonillos-safeselect-4c99dff4/badge.svg)](https://www.tensorblock.co/mcp/servers/github-antonillos-safeselect-4c99dff4)
-[![MCP Badge](https://lobehub.com/badge/mcp/antonillos-safeselect?style=flat)](https://lobehub.com/mcp/antonillos-safeselect)
+## See it in action
+
+### Complete onboarding: from Homebrew to a protected agent
+
+<p align="center">
+  <img src="docs/recordings/onboarding-full-local.gif" alt="SafeSelect onboarding: Homebrew, DBeaver SSH import, Keychain and OpenCode" width="900">
+</p>
+
+Install SafeSelect from Homebrew, import an SSH-backed DBeaver connection,
+keep the password in macOS Keychain, install the OpenCode integration, and see
+the agent read a paid order while its `DELETE` attempt is rejected. Focused
+agent and backend clips remain in the [complete demo gallery](demo/README.md).
+
+## Quick Start
+
+Run setup from your repository root. You will need a PostgreSQL or MongoDB
+connection and a **Java 17+ runtime** for database commands.
+
+### 1. Install
+
+<a id="homebrew-macos"></a>
+
+On macOS with Homebrew:
+
+```bash
+brew install antonillos/tap/safeselect
+```
 
 <details>
-<summary>Runtime and distribution</summary>
+<summary>Other installation methods: prebuilt binaries and asdf</summary>
 
-[![Security](https://img.shields.io/badge/Security-fail--closed-success?logo=trustpilot&logoColor=white)]()
-[![Rust](https://img.shields.io/badge/Rust-1.85%2B-dea584?logo=rust&logoColor=white)]()
-[![Java](https://img.shields.io/badge/Java-17%2B-5382a1?logo=openjdk&logoColor=white)]()
-[![MCP](https://img.shields.io/badge/MCP-stdio%20tools-7b68ee)]()
-[![Homebrew](https://img.shields.io/badge/Homebrew-tap-FBB040?logo=homebrew&logoColor=white)](https://github.com/antonillos/homebrew-tap)
-[![asdf](https://img.shields.io/badge/asdf-plugin-8A2BE2)](https://github.com/antonillos/asdf-safeselect)
+### Prebuilt binaries (macOS & glibc Linux)
+
+Download a platform-specific, prebuilt binary for macOS or glibc-based Linux
+from the [latest GitHub release](https://github.com/antonillos/safeselect/releases/latest).
+The verified installer selects the matching macOS or glibc Linux architecture,
+checks the published SHA-256 digest, and installs to `~/.local/bin`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/antonillos/safeselect/main/packaging/install/install-release.sh | sh
+```
+
+Set `PREFIX` to choose another installation directory. SafeSelect still needs
+a Java 17+ runtime at execution time.
+
+### asdf (macOS & Linux)
+
+```bash
+asdf plugin add safeselect https://github.com/antonillos/asdf-safeselect.git
+asdf install safeselect latest
+SAFESELECT_VERSION="$(asdf latest safeselect | sed -n '$p')"
+asdf set -u safeselect "${SAFESELECT_VERSION}"
+asdf reshim safeselect "${SAFESELECT_VERSION}"
+```
 
 </details>
 
-Discover structure, inspect bounded rows, explain queries, and diagnose
-connectivity—without giving the agent write-capable tools or database credentials.
-Start with development data or a sanitized replica, then review the policy and
-effective database permissions before connecting to a more sensitive environment.
+SafeSelect uses any available Java 17+ runtime rather than requiring a specific
+package-manager formula. If Java is missing or too old, install or select a
+Java 17+ runtime before running database commands. On macOS with Homebrew, you
+can install one with `brew install openjdk@17`.
 
-> [!NOTE]
-> SafeSelect is a safety boundary for agent access, not a replacement for database permissions. Use least-privilege database users when you can; SafeSelect still constrains overpowered credentials when agents connect through it.
+### 2. Import one connection source
 
-Current backend support: PostgreSQL and MongoDB.
+Choose the source you already use; you do not need to run all three:
+
+| Connection source | Command |
+|---|---|
+| DBeaver export | `safeselect import-dbeaver ~/Downloads/dbeaver-export.zip` |
+| PostgreSQL in Docker Compose | `safeselect import-compose` |
+| MongoDB Compass | `safeselect import-compass --path "$HOME/.config/MongoDB Compass"` |
+
+Use your actual export or Compass directory. Follow the importer's next steps
+for driver and password setup before continuing. Keep secrets out of project
+files. For an SSH-backed walkthrough, see [DBeaver → Codex](docs/guides/dbeaver-codex.md).
+
+### 3. Check and connect your agent
+
+```bash
+# Check configured environments; this can open SSH tunnels and contact databases.
+safeselect check
+
+# Install for OpenCode (replace with codex for OpenAI Codex).
+safeselect agent install opencode
+
+# Inspect the installed MCP entry and its configuration location.
+safeselect agent status
+```
+
+**Multiple environments?** Use `safeselect check --environment <name>` to avoid
+checking unrelated databases, and add `--environment <name>` to
+`agent install` to select the intended target. Installation infers the name only
+when there is one environment.
+
+Open or restart your agent and approve the MCP server if prompted. Installation
+uses user scope by default; see [supported agents](#supported-agents) and the
+[client setup guide](docs/agents.md) for project scope and client-specific steps.
+
+### 4. Try a first read
+
+Ask your agent:
+
+> Use SafeSelect to identify the connected backend and discover its available
+> tables or collections. Describe one, then stop before querying row or document
+> contents. Follow next suggestions only within that discovery-only scope.
+
+**Success looks like:** the agent calls `database_info`, uses the matching
+schema-discovery tools, and reports the structure it found. No write tools or
+database passwords are needed in the conversation.
+
+**Stuck?** Run `safeselect doctor --environment <name>` for concise diagnostics
+(this can contact the database), then follow the reported next step. Do not
+relax policy to get past a rejection. See [agent recovery](docs/agents.md#agent-recovery-flow).
+
+<details>
+<summary>What gets installed? MCP configuration and scope</summary>
+
+The generated MCP name defaults to `safeselect-<project>-<environment>`.
+
+The generated MCP entry is a stdio server scoped to one project and environment:
+
+```json
+{
+  "mcpServers": {
+    "safeselect-myapp-testing": {
+      "command": "safeselect",
+      "args": ["serve", "--project", "/path/to/myapp", "--environment", "testing"]
+    }
+  }
+}
+```
+
+SafeSelect uses each client's official MCP configuration contract, pins the
+absolute repository path, and defaults to user scope. Add `--local` for a
+project-scoped entry where the client supports it. See
+[AI agent integration](docs/agents.md) for exact paths, scopes, and manual
+configuration.
+
+</details>
+
+## Documentation
+
+| I want to… | Start here |
+|---|---|
+| Choose a client or configure MCP manually | [AI agent integration](docs/agents.md) |
+| Import an SSH-backed DBeaver connection | [DBeaver → Codex walkthrough](docs/guides/dbeaver-codex.md) |
+| Watch other clients and backends | [Demo gallery](demo/README.md) |
+| Understand the boundary and its limits | [Security proof and threat model](docs/security-proof.md) |
+| Compare database MCP approaches | [Comparison](docs/compare.md) |
+| Find a command or tool | [CLI essentials](#cli-essentials) · [MCP tools](#mcp-tools) |
+| Build or contribute | [Contributing](CONTRIBUTING.md) |
 
 ## Where It Helps
 
@@ -100,99 +247,6 @@ also available to the agent. Use least-privilege database users and review the
 </p>
 
 The agent talks to SafeSelect through MCP stdio. SafeSelect enforces policy in Rust, stores secrets outside project files, and reaches databases through an embedded Java sidecar: JDBC for SQL backends and the MongoDB driver for MongoDB. The Rust to Java channel is JSON-lines over stdin/stdout: no sockets, no open ports.
-
-## See it in action
-
-### Complete onboarding: from Homebrew to a protected agent
-
-<p align="center">
-  <img src="docs/recordings/onboarding-full-local.gif" alt="SafeSelect onboarding: Homebrew, DBeaver SSH import, Keychain and OpenCode" width="900">
-</p>
-
-Install SafeSelect from Homebrew, import an SSH-backed DBeaver connection,
-keep the password in macOS Keychain, install the OpenCode integration, and see
-the agent read a paid order while its `DELETE` attempt is rejected. Focused
-agent and backend clips remain in the [complete demo gallery](demo/README.md).
-
-## Quick Start
-
-Install SafeSelect with one of the following methods:
-
-### Prebuilt binaries (macOS & glibc Linux)
-
-Download a platform-specific, prebuilt binary for macOS or glibc-based Linux
-from the [latest GitHub release](https://github.com/antonillos/safeselect/releases/latest).
-The verified installer selects the matching macOS or glibc Linux architecture,
-checks the published SHA-256 digest, and installs to `~/.local/bin`:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/antonillos/safeselect/main/packaging/install/install-release.sh | sh
-```
-
-Set `PREFIX` to choose another installation directory. SafeSelect still needs
-a Java 17+ runtime at execution time.
-
-### Homebrew (macOS)
-
-```bash
-brew install antonillos/tap/safeselect
-```
-
-### asdf (macOS & Linux)
-
-```bash
-asdf plugin add safeselect https://github.com/antonillos/asdf-safeselect.git
-asdf install safeselect latest
-SAFESELECT_VERSION="$(asdf latest safeselect | sed -n '$p')"
-asdf set -u safeselect "${SAFESELECT_VERSION}"
-asdf reshim safeselect "${SAFESELECT_VERSION}"
-```
-
-After installing the binary, configure a project database and its MCP entry:
-
-```bash
-# Import a project database
-safeselect import-dbeaver ~/Downloads/dbeaver-export.zip
-# or:
-# safeselect import-compose
-# safeselect import-compass --path "$HOME/.config/MongoDB Compass"
-
-# Check all configured environments (may open SSH tunnels and database connections).
-# To limit this to one environment, add --environment <name>.
-safeselect check
-
-# Install the MCP entry. If this is the only environment, its name is inferred.
-safeselect agent install opencode
-
-# Verify exactly what was installed and where.
-safeselect agent status
-```
-
-SafeSelect uses any available Java 17+ runtime rather than requiring a specific
-package-manager formula. If Java is missing or too old, install or select a
-Java 17+ runtime before running database commands. On macOS with Homebrew, you
-can install one with `brew install openjdk@17`.
-
-The generated MCP name defaults to `safeselect-<project>-<environment>`.
-
-The generated MCP entry is a stdio server scoped to one project and environment:
-
-```json
-{
-  "mcpServers": {
-    "safeselect-myapp-testing": {
-      "command": "safeselect",
-      "args": ["serve", "--project", "/path/to/myapp", "--environment", "testing"]
-    }
-  }
-}
-```
-
-SafeSelect uses each client's official MCP configuration contract, pins the
-absolute repository path, and defaults to user scope. Add `--local` for a
-project-scoped entry where the client supports it. See
-[AI agent integration](docs/agents.md) for exact paths, scopes, and manual
-configuration.
 
 ## Guided MCP Context
 
@@ -392,6 +446,29 @@ password-based SSH tunnels. Add `~/.local/bin` to your `PATH` before invoking
 - [Changelog](CHANGELOG.md)
 
 Release notes are generated from `CHANGELOG.md`.
+
+## Ecosystem
+
+<details>
+<summary>Directory listings</summary>
+
+[![Listed on mcpservers.org](https://mcpservers.org/badge.svg)](https://mcpservers.org/servers/antonillos/safeselect)
+[![Indexed on TensorBlock MCP Index](https://mcp-index.tensorblock.co/v1/servers/github-antonillos-safeselect-4c99dff4/badge.svg)](https://www.tensorblock.co/mcp/servers/github-antonillos-safeselect-4c99dff4)
+[![MCP Badge](https://lobehub.com/badge/mcp/antonillos-safeselect?style=flat)](https://lobehub.com/mcp/antonillos-safeselect)
+
+</details>
+
+<details>
+<summary>Runtime and distribution</summary>
+
+[![Security](https://img.shields.io/badge/Security-fail--closed-success?logo=trustpilot&logoColor=white)]()
+[![Rust](https://img.shields.io/badge/Rust-1.85%2B-dea584?logo=rust&logoColor=white)]()
+[![Java](https://img.shields.io/badge/Java-17%2B-5382a1?logo=openjdk&logoColor=white)]()
+[![MCP](https://img.shields.io/badge/MCP-stdio%20tools-7b68ee)]()
+[![Homebrew](https://img.shields.io/badge/Homebrew-tap-FBB040?logo=homebrew&logoColor=white)](https://github.com/antonillos/homebrew-tap)
+[![asdf](https://img.shields.io/badge/asdf-plugin-8A2BE2)](https://github.com/antonillos/asdf-safeselect)
+
+</details>
 
 ## License
 

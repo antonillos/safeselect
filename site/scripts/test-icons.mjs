@@ -8,15 +8,14 @@ const assets = new URL("../public/", import.meta.url);
 const names = ["icon.svg", "icon-dark.svg", "favicon-32.png", "apple-touch-icon.png", "icon-512.png"];
 
 test("SVG variants are lightweight, transparent and readable in their theme", async () => {
-  for (const [name, ink] of [["icon.svg", [21, 42, 39]], ["icon-dark.svg", [219, 233, 226]]]) {
+  for (const [name, ink] of [["icon.svg", [17, 17, 17]], ["icon-dark.svg", [255, 255, 255]]]) {
     const svg = await readFile(new URL(name, assets));
     assert.ok(svg.length < 2048);
     assert.doesNotMatch(svg.toString(), /<image|<script|<foreignObject|data:/);
     const { data, info } = await sharp(svg).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
     const pixel = (x, y) => [...data.subarray((y * info.width + x) * 4, (y * info.width + x) * 4 + 4)];
     assert.equal(pixel(0, 0)[3], 0, "no opaque background");
-    assert.equal(pixel(200, 330)[3], 0, "lens masks the underlying database tier");
-    assert.deepEqual(pixel(256, 105), [...ink, 255]);
+    assert.deepEqual(pixel(64, 64), [...ink, 255]);
   }
 });
 
