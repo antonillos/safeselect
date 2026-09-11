@@ -1,7 +1,7 @@
 <h1 align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/safeselect-mark-dark.svg">
-    <img src="docs/brand/safeselect-mark.svg" width="48" height="48" align="absmiddle" alt="">
+    <source media="(prefers-color-scheme: dark)" srcset="site/public/icon-dark.svg">
+    <img src="site/public/icon.svg" width="48" height="48" align="absmiddle" alt="">
   </picture>
   SafeSelect
 </h1>
