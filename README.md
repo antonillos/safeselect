@@ -157,8 +157,9 @@ safeselect import-dbeaver ~/Downloads/dbeaver-export.zip
 # safeselect import-compose
 # safeselect import-compass --path "$HOME/.config/MongoDB Compass"
 
-# Verify the environment
-safeselect check --environment testing
+# Check all configured environments (may open SSH tunnels and database connections).
+# To limit this to one environment, add --environment <name>.
+safeselect check
 
 # Install the MCP entry. If this is the only environment, its name is inferred.
 safeselect agent install opencode
@@ -267,7 +268,11 @@ summary without exposing database-derived detail.
 
 `get_maintenance_diagnostics` supports PostgreSQL 15, 16, 17, and 18.
 
-When no `.safeselect/` directory exists, `safeselect serve --environment <env>` enters setup mode automatically and exposes only the setup-safe tools.
+When no `.safeselect/` directory exists, `safeselect serve` scans for PostgreSQL
+Compose services. If found, it enters setup mode automatically: it imports them,
+writes project configuration, and starts a setup-only MCP server. Otherwise it
+prints setup instructions and exits.
+An existing but empty or invalid configuration is rejected, not replaced by setup.
 
 > [!IMPORTANT]
 > Setup mode does not expose query tools. Agents can help import and validate configuration before any database inspection tools become available.
@@ -276,16 +281,16 @@ When no `.safeselect/` directory exists, `safeselect serve --environment <env>` 
 
 | Command | Purpose |
 |---|---|
-| `safeselect serve --environment <env>` | Start the MCP server |
-| `safeselect check --environment <env>` | Verify config, secrets, tunnels, sidecar, and backend connectivity |
+| `safeselect serve [--environment <env>]` | Start the MCP server |
+| `safeselect check [--environment <env>]` | Verify config, secrets, tunnels, sidecar, and backend connectivity for all environments by default |
 | `safeselect doctor [--environment <env>]` | Print concise findings with stable codes for every environment by default |
 | `safeselect posture [--environment <env>]` | Inspect PostgreSQL posture for every environment by default |
 | `safeselect import-dbeaver <zip>` | Import DBeaver connections |
 | `safeselect import-compose [--path <path>]` | Import from docker-compose |
 | `safeselect import-compass [--path <path>]` | Import MongoDB Compass connections |
-| `safeselect agent install <client> --environment <env>` | Install an MCP entry |
-| `safeselect config set-password --environment <env>` | Store the database password |
-| `safeselect config set-ssh-password --environment <env>` | Store the SSH password |
+| `safeselect agent install <client> [--environment <env>]` | Install an MCP entry |
+| `safeselect config set-password [--environment <env>]` | Store the database password |
+| `safeselect config set-ssh-password [--environment <env>]` | Store the SSH password |
 | `safeselect uninstall` | Remove installed binaries, global state, audit data, and Keychain entries |
 | `safeselect uninstall --binary-only` | Remove only user-local binaries and preserve configuration |
 
@@ -309,6 +314,41 @@ Global state lives in `~/.config/safeselect/` by default. Project policy lives i
 ```
 
 SafeSelect walks upward from the current directory to find `.safeselect/`. Use `--project <path>` when an agent or script should target a specific repository.
+
+### Convention before configuration
+
+From inside a configured repository, commands infer the project from the nearest
+`.safeselect/` directory and infer the environment when exactly one
+`environments/*.toml` file exists. For example, `safeselect serve`,
+`safeselect check`, `safeselect query --sql "SELECT 1"`, and
+`safeselect config show` need no project or environment flags in a
+single-environment project. `--project` and `--environment` remain available
+for scripts, other working directories, and deliberate selection. If multiple
+environments exist, commands that act on one fail rather than guess and tell
+you to pass `--environment <name>`.
+
+The defaults differ by operation:
+
+- `serve`, `query`, `connect`, `disconnect`, `config show`, and password
+  commands require one explicit or uniquely inferred environment. With no
+  environments they fail; `serve` has the separate first-run behavior above.
+- `check`, `doctor`, `posture`, `reconnect`, and `config validate` inspect or
+  process all environments when the flag is omitted. Checks are not offline:
+  they can resolve secrets, establish SSH tunnels, and contact databases. Use
+  `--environment <name>` to avoid touching unrelated or production environments.
+- `query` supports JDBC environments only and still needs SQL through `--sql`
+  or stdin (interactive stdin waits for EOF). Selecting a MongoDB environment
+  does not turn it into a MongoDB query command.
+- CLI `connect` and `disconnect` operate on a new, temporary JDBC sidecar and
+  shut it down before exiting. They do not control an already-running MCP
+  session; use that session's MCP connection tools instead.
+- Password commands modify local Keychain/configuration, not the database
+  password itself. `config set-ssh-password` switches SSH authentication to
+  password and clears the configured identity-file reference.
+
+Generated MCP entries deliberately pin both project and environment. Keep those
+arguments in client configuration and unattended scripts: inference is a CLI
+convenience, not a persistent default environment.
 
 ## Supported Agents
 

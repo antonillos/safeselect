@@ -51,35 +51,36 @@ setup: |
   # Register a JDBC driver
   safeselect driver add --vendor postgresql --path /path/to/postgresql.jar --class org.postgresql.Driver
 
-  # Install agent integration
-  safeselect agent install opencode --project myproject --environment testing --name safeselect-myproject-testing
-
-  # Upgrade from the current project and migrate to the default name
-  safeselect agent upgrade opencode --environment testing
-
   # Import config from DBeaver export or docker-compose
   safeselect import-dbeaver ~/Downloads/dbeaver-export.zip
-  safeselect import-compose --path compose.yml
+  safeselect import-compose
   safeselect import-compass --path "$HOME/.config/MongoDB Compass"
+
+  # Install agent integration
+  safeselect agent install opencode
+
+  # Upgrade from the current project and migrate to the default name
+  safeselect agent upgrade opencode
+
 commands:
-  - safeselect serve --project <name> --environment <env>
-  - safeselect config validate --project <name> --environment <env>
-  - safeselect config show --project <name> --environment <env>
+  - safeselect serve [--project <path>] [--environment <env>]
+  - safeselect config validate [--project <path>] [--environment <env>]
+  - safeselect config show [--project <path>] [--environment <env>]
   - safeselect config rename-environment --old <name> --new <name>
   - safeselect config delete-environment --name <name>
-  - safeselect check --project <name> --environment <env>
-  - safeselect query --project <name> --environment <env> --sql "SELECT 1"
-  - safeselect connect --project <name> --environment <env>
-  - safeselect disconnect --project <name> --environment <env>
+  - safeselect check [--project <path>] [--environment <env>]
+  - safeselect query [--project <path>] [--environment <env>] --sql "SELECT 1"
+  - safeselect connect [--project <path>] [--environment <env>]
+  - safeselect disconnect [--project <path>] [--environment <env>]
   - safeselect driver list
   - safeselect driver download --vendor postgresql
   - safeselect driver add --vendor postgresql --path <jar> --class <class>
   - safeselect agent detect
-  - safeselect agent install <client> --project <p> --environment <e> --name <n>
+  - safeselect agent install <client> [--project <path>] [--environment <env>] [--name <name>]
   - safeselect agent upgrade <client> [--name <n>] [--project <p>] [--environment <e>]
   - safeselect agent uninstall <client> --name <n>
   - safeselect import-dbeaver <path-to-zip>
-  - safeselect import-compose --path compose.yml
+  - safeselect import-compose
   - safeselect import-compass [--path <compass-file-or-directory>]
   - safeselect uninstall
 config:
@@ -137,3 +138,13 @@ audit:
   - audit_recent returns at most 20 current-session metadata entries, including the MCP client and operation tool when available
   - Audit responses never include SQL, returned data, filters, secrets, or local paths
   - Audit location: ~/.local/state/safeselect/audit/
+
+cli_conventions: |
+  Run setup from the application repository and import connections before installing
+  the agent entry. Single-environment CLI commands infer the sole environment;
+  multiple environments require explicit selection. `check`, `doctor`, `posture`,
+  `reconnect`, and `config validate` process all environments by default. Checks
+  can open tunnels and database connections; use `--environment` to restrict them.
+  CLI connection commands use a temporary sidecar, not the agent's active MCP
+  session. For full effects and first-run behavior, see
+  [CLI conventions](../README.md#convention-before-configuration).

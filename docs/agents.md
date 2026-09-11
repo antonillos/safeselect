@@ -53,6 +53,10 @@ SafeSelect rejects `--local` for Windsurf rather than silently changing a global
 file. User scope is the default for every other client; pass `--local` when the
 integration should travel with the repository.
 
+CLI `connect`, `disconnect`, and `reconnect` use their own temporary sidecar;
+they do not control an existing agent session. To change that session's
+connection state, invoke its MCP tools. See [CLI conventions and effects](../README.md#convention-before-configuration).
+
 ## Installing in an Agent
 
 ```bash

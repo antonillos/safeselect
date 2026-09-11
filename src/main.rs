@@ -50,7 +50,10 @@ fn run(cli: Cli) -> Result<()> {
             project,
             environment,
         } => match resolve_project_dir(&loader, project.clone()) {
-            Ok(dir) => cmd_serve(&loader, &dir, &environment),
+            Ok(dir) => {
+                let environment = resolve_single_environment(&dir, environment.as_deref())?;
+                cmd_serve(&loader, &dir, &environment)
+            }
             Err(_) => {
                 let cwd = project
                     .clone()
@@ -119,6 +122,7 @@ fn run(cli: Cli) -> Result<()> {
             verbose,
         } => {
             let dir = resolve_project_dir(&loader, project)?;
+            let environment = resolve_single_environment(&dir, environment.as_deref())?;
             cmd_query(&loader, &dir, &environment, sql.as_deref(), verbose)
         }
         Command::Disconnect {
@@ -126,6 +130,7 @@ fn run(cli: Cli) -> Result<()> {
             environment,
         } => {
             let dir = resolve_project_dir(&loader, project)?;
+            let environment = resolve_single_environment(&dir, environment.as_deref())?;
             cmd_connectivity_action(&loader, &dir, &environment, "disconnect")
         }
         Command::Connect {
@@ -133,6 +138,7 @@ fn run(cli: Cli) -> Result<()> {
             environment,
         } => {
             let dir = resolve_project_dir(&loader, project)?;
+            let environment = resolve_single_environment(&dir, environment.as_deref())?;
             cmd_connectivity_action(&loader, &dir, &environment, "connect")
         }
         Command::Reconnect {
@@ -271,6 +277,24 @@ fn selected_environment_names(repo_root: &Path, environment: Option<&str>) -> Re
     }
 }
 
+/// Resolve an explicitly selected environment or safely infer the sole convention.
+///
+/// Commands that act on one environment must never guess when several are present.
+fn resolve_single_environment(repo_root: &Path, environment: Option<&str>) -> Result<String> {
+    if let Some(environment) = environment {
+        return Ok(environment.to_string());
+    }
+
+    match list_environment_names(repo_root)?.as_slice() {
+        [environment] => Ok(environment.clone()),
+        [] => Err(no_environments_error()),
+        environments => Err(SafeselectError::Config(format!(
+            "Multiple environments found ({}). Specify --environment <name>.",
+            environments.join(", ")
+        ))),
+    }
+}
+
 fn print_no_environments(_repo_root: &Path) {
     println!("No environments found in the selected project.");
 }
@@ -326,9 +350,10 @@ fn cmd_serve(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
 fn cmd_config_show(
     loader: &ConfigLoader,
     project: Option<PathBuf>,
-    environment: String,
+    environment: Option<String>,
 ) -> Result<()> {
     let dir = resolve_project_dir(loader, project)?;
+    let environment = resolve_single_environment(&dir, environment.as_deref())?;
     let resolved = resolve_local_for_cli(loader, &dir, &environment)?;
     println!("Project configuration: loaded");
     println!("Environment: {environment}");
@@ -517,10 +542,12 @@ fn cmd_config_uninstall(loader: &ConfigLoader, project: Option<PathBuf>) -> Resu
 
 fn set_password_for_environment(
     loader: &ConfigLoader,
-    environment: String,
+    environment: Option<String>,
     password: Option<String>,
     project: Option<PathBuf>,
 ) -> Result<()> {
+    let dir = resolve_project_dir(loader, project.clone())?;
+    let environment = resolve_single_environment(&dir, environment.as_deref())?;
     set_password_for_environment_with_store(
         loader,
         environment,
@@ -574,10 +601,12 @@ fn resolve_password(password: Option<String>, account: &str) -> Result<String> {
 
 fn set_ssh_password_for_environment(
     loader: &ConfigLoader,
-    environment: String,
+    environment: Option<String>,
     password: Option<String>,
     project: Option<PathBuf>,
 ) -> Result<()> {
+    let dir = resolve_project_dir(loader, project.clone())?;
+    let environment = resolve_single_environment(&dir, environment.as_deref())?;
     set_ssh_password_for_environment_with_store(
         loader,
         environment,
@@ -4491,12 +4520,13 @@ fn cmd_connectivity_action(
     match action {
         "disconnect" => {
             sidecar.disconnect()?;
-            println!("Disconnected from environment {environment}.");
-            println!("  The AI agent can reconnect via the 'connect' MCP tool.");
+            println!("Temporary sidecar disconnected from environment {environment}.");
+            println!("  Existing MCP sessions are unchanged; use their connection tools.");
         }
         "connect" => {
             sidecar.connect()?;
-            println!("Connected to environment {environment}.");
+            println!("Temporary sidecar connected to environment {environment}.");
+            println!("  This sidecar closes on exit; existing MCP sessions are unchanged.");
         }
         _ => unreachable!(),
     }
@@ -5394,7 +5424,7 @@ enabled = true
         let result = cmd_config_show(
             &ConfigLoader::new(),
             Some(repo_root.clone()),
-            "local".to_string(),
+            Some("local".to_string()),
         );
 
         assert!(result.is_ok());
@@ -5480,14 +5510,14 @@ enabled = true
         let loader = ConfigLoader::new();
         assert!(set_password_for_environment(
             &loader,
-            "missing".to_string(),
+            Some("missing".to_string()),
             Some("secret".to_string()),
             Some(repo_root.clone()),
         )
         .is_err());
         assert!(set_ssh_password_for_environment(
             &loader,
-            "without-ssh".to_string(),
+            Some("without-ssh".to_string()),
             Some("secret".to_string()),
             Some(repo_root.clone()),
         )
@@ -6112,6 +6142,95 @@ username = "usr_app"
             vec!["dev", "prod"]
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn resolves_the_only_environment_and_refuses_ambiguous_selection() {
+        let root = std::env::temp_dir().join(format!("safeselect-env-{}", uuid::Uuid::new_v4()));
+        let env_dir = root.join(".safeselect/environments");
+        std::fs::create_dir_all(&env_dir).unwrap();
+        std::fs::write(env_dir.join("development.toml"), "").unwrap();
+
+        assert_eq!(
+            resolve_single_environment(&root, None).unwrap(),
+            "development"
+        );
+        assert_eq!(
+            resolve_single_environment(&root, Some("explicit")).unwrap(),
+            "explicit"
+        );
+
+        std::fs::write(env_dir.join("production.toml"), "").unwrap();
+        let error = resolve_single_environment(&root, None)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("Multiple environments found"));
+        assert!(error.contains("--environment <name>"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn single_environment_dispatch_rejects_before_operating_on_invalid_configs() {
+        let root =
+            std::env::temp_dir().join(format!("safeselect-dispatch-{}", uuid::Uuid::new_v4()));
+        let env_dir = root.join(".safeselect/environments");
+        std::fs::create_dir_all(&env_dir).unwrap();
+        let commands = [
+            vec!["serve"],
+            vec!["query"],
+            vec!["connect"],
+            vec!["disconnect"],
+            vec!["config", "show"],
+            vec!["config", "set-password"],
+            vec!["config", "set-ssh-password"],
+        ];
+
+        // No configuration contains connection details or secret references.
+        // A selection error must occur before config loading, SQL input, or prompts.
+        for names in [vec![], vec!["development", "production"]] {
+            for name in &names {
+                std::fs::write(env_dir.join(format!("{name}.toml")), "invalid TOML [").unwrap();
+            }
+            for command in &commands {
+                let mut args = vec!["safeselect"];
+                args.extend(command.iter().copied());
+                args.extend(["--project", root.to_str().unwrap()]);
+                let error = run(Cli::try_parse_from(args).unwrap())
+                    .unwrap_err()
+                    .to_string();
+                if names.is_empty() {
+                    assert_eq!(error, no_environments_error().to_string());
+                } else {
+                    assert!(
+                        error.contains("Multiple environments found"),
+                        "{command:?}: {error}"
+                    );
+                }
+            }
+            for name in &names {
+                let path = env_dir.join(format!("{name}.toml"));
+                assert_eq!(std::fs::read_to_string(&path).unwrap(), "invalid TOML [");
+                std::fs::remove_file(path).unwrap();
+            }
+        }
+
+        // A unique environment is selected, but malformed config is not bypassed.
+        std::fs::write(env_dir.join("development.toml"), "invalid TOML [").unwrap();
+        for command in &commands {
+            let mut args = vec!["safeselect"];
+            args.extend(command.iter().copied());
+            args.extend(["--project", root.to_str().unwrap()]);
+            let error = run(Cli::try_parse_from(args).unwrap())
+                .unwrap_err()
+                .to_string();
+            assert!(!error.contains("Multiple environments found"));
+            assert_eq!(
+                std::fs::read_to_string(env_dir.join("development.toml")).unwrap(),
+                "invalid TOML ["
+            );
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
