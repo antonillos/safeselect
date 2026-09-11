@@ -1105,7 +1105,7 @@
       }
     },
     {
-      "description": "PostgreSQL only. Diagnose possible ANALYZE and VACUUM maintenance needs from bounded catalog statistics; read-only and never executes maintenance.",
+      "description": "PostgreSQL only. diagnose possible PostgreSQL ANALYZE and VACUUM needs from bounded catalog statistics; read-only and never executes maintenance; optionally restrict to one exact allowed schema. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {

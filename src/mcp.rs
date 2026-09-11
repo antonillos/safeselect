@@ -2699,7 +2699,8 @@ impl McpServer {
                 ));
             }
         };
-        let Some(payload) = maintenance::payload_from_query(&result) else {
+        let payload = self.maintenance_payload(&result);
+        let Some(payload) = payload else {
             self.audit.record("PASS", "allow", sql)?;
             return self.write_response(&tool_error_response(
                 id,
@@ -2713,6 +2714,24 @@ impl McpServer {
             &payload,
             "Review the evidence with a DBA; this diagnostic never executes ANALYZE or VACUUM.",
         )?)
+    }
+
+    fn maintenance_payload(
+        &mut self,
+        result: &crate::sidecar::QueryResult,
+    ) -> Option<serde_json::Value> {
+        if result.rows.is_empty() {
+            let version_result = self.execute_with_reconnect(
+                "SELECT current_setting('server_version_num')::integer AS server_version_num",
+            );
+            let version = version_result
+                .ok()
+                .and_then(|value| value.rows.first().and_then(|row| row.first()).cloned())
+                .and_then(|value| value.as_i64().or_else(|| value.as_u64().map(|n| n as i64)));
+            version.and_then(maintenance::empty_payload)
+        } else {
+            maintenance::payload_from_query(result)
+        }
     }
 
     fn parse_maintenance_schema<'a>(
@@ -5452,7 +5471,7 @@ fn build_maintenance_diagnostics_sql(
         format!(" AND {}", denied.join(" AND "))
     };
     format!(
-        "SELECT current_setting('server_version_num')::integer, n.nspname, c.relname, c.relkind, c.reltuples, s.n_live_tup, s.n_dead_tup, s.n_mod_since_analyze, s.last_analyze, s.last_autoanalyze, s.last_vacuum, s.last_autovacuum, (COALESCE(o.autovacuum_enabled, 'on') <> 'off') AS autovacuum_enabled, COALESCE(o.autovacuum_analyze_scale_factor, current_setting('autovacuum_analyze_scale_factor')::float8) AS analyze_scale_factor, COALESCE(o.autovacuum_analyze_threshold, current_setting('autovacuum_analyze_threshold')::float8) AS analyze_threshold, COALESCE(o.autovacuum_vacuum_scale_factor, current_setting('autovacuum_vacuum_scale_factor')::float8) AS vacuum_scale_factor, COALESCE(o.autovacuum_vacuum_threshold, current_setting('autovacuum_vacuum_threshold')::float8) AS vacuum_threshold, COALESCE(o.autovacuum_vacuum_max_threshold, current_setting('autovacuum_vacuum_max_threshold', true)::float8) AS vacuum_max_threshold, (c.relkind = 'p') AS is_partitioned FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace LEFT JOIN pg_stat_user_tables AS s ON s.relid = c.oid LEFT JOIN LATERAL (SELECT max(option_value) FILTER (WHERE option_name = 'autovacuum_enabled') AS autovacuum_enabled, max(NULLIF(option_value, '')::float8) FILTER (WHERE option_name = 'autovacuum_analyze_scale_factor') AS autovacuum_analyze_scale_factor, max(NULLIF(option_value, '')::float8) FILTER (WHERE option_name = 'autovacuum_analyze_threshold') AS autovacuum_analyze_threshold, max(NULLIF(option_value, '')::float8) FILTER (WHERE option_name = 'autovacuum_vacuum_scale_factor') AS autovacuum_vacuum_scale_factor, max(NULLIF(option_value, '')::float8) FILTER (WHERE option_name = 'autovacuum_vacuum_threshold') AS autovacuum_vacuum_threshold, max(NULLIF(option_value, '')::float8) FILTER (WHERE option_name = 'autovacuum_vacuum_max_threshold') AS autovacuum_vacuum_max_threshold FROM pg_options_to_table(COALESCE(c.reloptions, ARRAY[]::text[]))) AS o ON true WHERE {schema_predicate}{denied_predicate} AND c.relkind IN ('r', 'p') ORDER BY n.nspname, c.relname LIMIT {limit}",
+        "SELECT current_setting('server_version_num')::integer, n.nspname, c.relname, c.relkind, c.reltuples, s.n_live_tup, s.n_dead_tup, s.n_mod_since_analyze, s.last_analyze::text, s.last_autoanalyze::text, s.last_vacuum::text, s.last_autovacuum::text, COALESCE(o.autovacuum_enabled, current_setting('autovacuum'))::boolean AS autovacuum_enabled, COALESCE(o.autovacuum_analyze_scale_factor, current_setting('autovacuum_analyze_scale_factor')::float8) AS analyze_scale_factor, COALESCE(o.autovacuum_analyze_threshold, current_setting('autovacuum_analyze_threshold')::float8) AS analyze_threshold, COALESCE(o.autovacuum_vacuum_scale_factor, current_setting('autovacuum_vacuum_scale_factor')::float8) AS vacuum_scale_factor, COALESCE(o.autovacuum_vacuum_threshold, current_setting('autovacuum_vacuum_threshold')::float8) AS vacuum_threshold, COALESCE(o.autovacuum_vacuum_max_threshold, current_setting('autovacuum_vacuum_max_threshold', true)::float8) AS vacuum_max_threshold, (c.relkind = 'p') AS is_partitioned, COUNT(*) OVER () AS total_relations FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace LEFT JOIN pg_stat_user_tables AS s ON s.relid = c.oid LEFT JOIN LATERAL (SELECT max(option_value) FILTER (WHERE option_name = 'autovacuum_enabled') AS autovacuum_enabled, max(NULLIF(option_value, '')::float8) FILTER (WHERE option_name = 'autovacuum_analyze_scale_factor') AS autovacuum_analyze_scale_factor, max(NULLIF(option_value, '')::float8) FILTER (WHERE option_name = 'autovacuum_analyze_threshold') AS autovacuum_analyze_threshold, max(NULLIF(option_value, '')::float8) FILTER (WHERE option_name = 'autovacuum_vacuum_scale_factor') AS autovacuum_vacuum_scale_factor, max(NULLIF(option_value, '')::float8) FILTER (WHERE option_name = 'autovacuum_vacuum_threshold') AS autovacuum_vacuum_threshold, max(NULLIF(option_value, '')::float8) FILTER (WHERE option_name = 'autovacuum_vacuum_max_threshold') AS autovacuum_vacuum_max_threshold FROM pg_options_to_table(COALESCE(c.reloptions, ARRAY[]::text[]))) AS o ON true WHERE {schema_predicate}{denied_predicate} AND c.relkind IN ('r', 'p') ORDER BY n.nspname, c.relname LIMIT {limit}",
     )
 }
 

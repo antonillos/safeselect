@@ -107,7 +107,7 @@ fn metrics_for_relation(
 
 fn effective_vacuum_threshold(raw: Option<f64>, max: Option<f64>) -> Option<f64> {
     match (raw, max) {
-        (Some(raw), Some(max)) if max > 0.0 => Some(raw.min(max)),
+        (Some(raw), Some(max)) if max >= 0.0 => Some(raw.min(max)),
         (Some(raw), _) => Some(raw),
         _ => None,
     }
@@ -115,6 +115,12 @@ fn effective_vacuum_threshold(raw: Option<f64>, max: Option<f64>) -> Option<f64>
 
 pub fn diagnostics_from_query(result: &QueryResult) -> (Vec<MaintenanceDiagnostic>, bool) {
     let mut diagnostics = Vec::new();
+    let total_relations = result
+        .rows
+        .first()
+        .and_then(|row| number(row, 19))
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .map(|value| value as u64);
     for row in &result.rows {
         let server_version = row
             .first()
@@ -185,7 +191,26 @@ pub fn diagnostics_from_query(result: &QueryResult) -> (Vec<MaintenanceDiagnosti
         });
     }
     diagnostics.sort_by(|a, b| (&a.schema, &a.table).cmp(&(&b.schema, &b.table)));
-    (diagnostics, result.row_count > result.rows.len() as u64)
+    let truncated = total_relations.is_some_and(|total| total > diagnostics.len() as u64);
+    (diagnostics, truncated)
+}
+
+pub fn empty_payload(server_version_num: i64) -> Option<serde_json::Value> {
+    if !(170000..=179999).contains(&server_version_num)
+        && !(180000..=189999).contains(&server_version_num)
+    {
+        return None;
+    }
+    Some(serde_json::json!({
+        "server_version_num": server_version_num,
+        "diagnostics": [],
+        "summary": {
+            "relations": 0,
+            "truncated": false,
+            "analyze": {"threshold_exceeded": 0, "below_threshold": 0, "unknown": 0, "not_applicable": 0},
+            "vacuum": {"threshold_exceeded": 0, "below_threshold": 0, "unknown": 0, "not_applicable": 0}
+        }
+    }))
 }
 
 pub fn payload_from_query(result: &QueryResult) -> Option<serde_json::Value> {
@@ -249,7 +274,7 @@ mod tests {
             serde_json::json!(50),
             serde_json::json!(100000000),
             serde_json::json!(false),
-            serde_json::Value::Null,
+            serde_json::json!(1),
         ]
     }
 
@@ -276,6 +301,18 @@ mod tests {
         assert_eq!(items[0].vacuum_threshold, Some(250.0));
         assert_eq!(items[0].vacuum_threshold_setting, Some(50.0));
         assert_eq!(items[1].vacuum.status, "threshold_exceeded");
+    }
+
+    #[test]
+    fn zero_vacuum_cap_is_applied_and_negative_disables_cap() {
+        assert_eq!(
+            effective_vacuum_threshold(Some(100.0), Some(0.0)),
+            Some(0.0)
+        );
+        assert_eq!(
+            effective_vacuum_threshold(Some(100.0), Some(-1.0)),
+            Some(100.0)
+        );
     }
 
     #[test]
@@ -349,7 +386,11 @@ mod tests {
     fn payload_marks_catalog_truncation() {
         let result = QueryResult {
             columns: vec![],
-            rows: vec![row("r", Some(1.0), Some(1.0))],
+            rows: vec![{
+                let mut row = row("r", Some(1.0), Some(1.0));
+                row[19] = serde_json::json!(2);
+                row
+            }],
             row_count: 2,
             byte_count: 0,
             elapsed_ms: 0,
@@ -357,5 +398,12 @@ mod tests {
         };
         let payload = payload_from_query(&result).expect("supported PostgreSQL version");
         assert_eq!(payload["summary"]["truncated"], true);
+    }
+
+    #[test]
+    fn empty_supported_payload_preserves_server_version() {
+        let payload = empty_payload(180000).expect("supported version");
+        assert_eq!(payload["server_version_num"], 180000);
+        assert_eq!(payload["summary"]["relations"], 0);
     }
 }
