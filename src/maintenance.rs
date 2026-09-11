@@ -196,9 +196,7 @@ pub fn diagnostics_from_query(result: &QueryResult) -> (Vec<MaintenanceDiagnosti
 }
 
 pub fn empty_payload(server_version_num: i64) -> Option<serde_json::Value> {
-    if !(170000..=179999).contains(&server_version_num)
-        && !(180000..=189999).contains(&server_version_num)
-    {
+    if !is_supported_version(server_version_num) {
         return None;
     }
     Some(serde_json::json!({
@@ -219,7 +217,7 @@ pub fn payload_from_query(result: &QueryResult) -> Option<serde_json::Value> {
         .first()
         .and_then(|row| row.first())
         .and_then(|v| v.as_i64().or_else(|| v.as_u64().map(|n| n as i64)))?;
-    if !(170000..=179999).contains(&version) && !(180000..=189999).contains(&version) {
+    if !is_supported_version(version) {
         return None;
     }
     let (items, truncated) = diagnostics_from_query(result);
@@ -247,6 +245,10 @@ pub fn payload_from_query(result: &QueryResult) -> Option<serde_json::Value> {
             "vacuum": summary(|item| &item.vacuum)
         }
     }))
+}
+
+fn is_supported_version(version: i64) -> bool {
+    matches!(version / 10_000, 16..=18)
 }
 
 #[cfg(test)]
@@ -355,7 +357,7 @@ mod tests {
             rows: vec![row("r", Some(1.0), Some(1.0))
                 .into_iter()
                 .enumerate()
-                .map(|(i, v)| if i == 0 { serde_json::json!(160000) } else { v })
+                .map(|(i, v)| if i == 0 { serde_json::json!(150000) } else { v })
                 .collect()],
             row_count: 1,
             byte_count: 0,
@@ -402,8 +404,8 @@ mod tests {
 
     #[test]
     fn empty_supported_payload_preserves_server_version() {
-        let payload = empty_payload(180000).expect("supported version");
-        assert_eq!(payload["server_version_num"], 180000);
+        let payload = empty_payload(160000).expect("supported version");
+        assert_eq!(payload["server_version_num"], 160000);
         assert_eq!(payload["summary"]["relations"], 0);
     }
 }

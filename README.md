@@ -265,6 +265,8 @@ summary without exposing database-derived detail.
 | Config | `config_validate`, `config_show`, `config_set_password`, `config_rename_environment`, `config_delete_environment`, `config_reset` |
 | Setup | `import_compose`, `driver_list`, `driver_add`, `driver_download`, `agent_detect`, `agent_install`, `agent_status`, `agent_uninstall` |
 
+`get_maintenance_diagnostics` supports PostgreSQL 16, 17, and 18.
+
 When no `.safeselect/` directory exists, `safeselect serve --environment <env>` enters setup mode automatically and exposes only the setup-safe tools.
 
 > [!IMPORTANT]
