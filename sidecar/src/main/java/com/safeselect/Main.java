@@ -262,7 +262,8 @@ public class Main {
                     || current instanceof SQLRecoverableException
                     || (current instanceof SQLException sqlException
                         && sqlException.getSQLState() != null
-                        && sqlException.getSQLState().startsWith("08"))) {
+                        && (sqlException.getSQLState().startsWith("08")
+                            || sqlException.getSQLState().equals("57P01")))) {
                 return "database connection failed; details redacted";
             }
         }

@@ -45,6 +45,7 @@ class MainTest {
                 new com.mongodb.MongoSocketException(detail, new com.mongodb.ServerAddress("localhost")),
                 new com.mongodb.MongoTimeoutException(detail),
                 new java.sql.SQLException(detail, "08006"),
+                new java.sql.SQLException(detail, "57P01"),
                 new java.sql.SQLRecoverableException(detail))) {
             Object message = invoke("requestFailureMessage", new Class<?>[]{Throwable.class}, new RuntimeException(detail, cause));
             assertEquals("database connection failed; details redacted", message);
