@@ -123,7 +123,9 @@ jobs:
           name: validated-source
       - name: Extract validated release source
         if: steps.reuse.outputs.reused != 'true'
-        run: mkdir release-source && tar -xf release-source.tar -C release-source
+        run: |
+          mkdir release-source
+          tar -xf release-source.tar -C release-source
       - name: Install Rust
         if: steps.reuse.outputs.reused != 'true'
         run: rustup toolchain install stable --profile minimal && rustup target add "$TARGET"
@@ -141,10 +143,11 @@ jobs:
         uses: ./.github/actions/setup-makevn
       - name: Initialize, test, and package sidecar
         if: steps.reuse.outputs.reused != 'true'
-        working-directory: release-source
         run: |
-          makevn --repo "$GITHUB_WORKSPACE/release-source" doctor init test package
-          cp sidecar/target/safeselect-sidecar-*.jar sidecar/target/safeselect-sidecar.jar
+          makevn doctor
+          makevn init
+          makevn --repo "$GITHUB_WORKSPACE/release-source" test package
+          cp release-source/sidecar/target/safeselect-sidecar-*.jar release-source/sidecar/target/safeselect-sidecar.jar
       - name: Build Rust binary
         if: steps.reuse.outputs.reused != 'true'
         working-directory: release-source
