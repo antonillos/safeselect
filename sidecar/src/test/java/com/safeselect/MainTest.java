@@ -43,12 +43,15 @@ class MainTest {
         String detail = "private-host-and-credentials";
         for (Throwable cause : List.of(
                 new com.mongodb.MongoSocketException(detail, new com.mongodb.ServerAddress("localhost")),
-                new com.mongodb.MongoTimeoutException(detail))) {
+                new com.mongodb.MongoTimeoutException(detail),
+                new java.sql.SQLException(detail, "08006"),
+                new java.sql.SQLRecoverableException(detail))) {
             Object message = invoke("requestFailureMessage", new Class<?>[]{Throwable.class}, new RuntimeException(detail, cause));
             assertEquals("database connection failed; details redacted", message);
             assertFalse(message.toString().contains(detail));
         }
         assertEquals("request failed; details redacted", invoke("requestFailureMessage", new Class<?>[]{Throwable.class}, new com.mongodb.MongoException(13, detail)));
+        assertEquals("request failed; details redacted", invoke("requestFailureMessage", new Class<?>[]{Throwable.class}, new java.sql.SQLException(detail, "42501")));
         assertEquals("operation timed out", invoke("requestFailureMessage", new Class<?>[]{Throwable.class}, new com.mongodb.MongoException(50, detail)));
     }
 

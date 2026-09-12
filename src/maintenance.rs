@@ -200,6 +200,26 @@ fn vacuum_metric(
     }
 }
 
+fn age_metric(
+    observed: Option<f64>,
+    threshold: Option<f64>,
+    reason: &'static str,
+) -> MaintenanceMetric {
+    match (observed, threshold) {
+        (Some(value), Some(limit)) if value.is_finite() && limit.is_finite() => MaintenanceMetric {
+            status: if value >= limit {
+                "threshold_exceeded"
+            } else {
+                "below_threshold"
+            },
+            reason,
+            observed: Some(value),
+            threshold: Some(limit),
+        },
+        _ => metric(observed, threshold, reason),
+    }
+}
+
 fn include_freeze_triggers(
     base: MaintenanceMetric,
     row: &[serde_json::Value],
@@ -207,8 +227,8 @@ fn include_freeze_triggers(
     if base.status == "not_applicable" {
         return base;
     }
-    let xid = metric(number(row, 25), number(row, 27), "transaction_age");
-    let mxid = metric(number(row, 26), number(row, 28), "multixact_age");
+    let xid = age_metric(number(row, 25), number(row, 27), "transaction_age");
+    let mxid = age_metric(number(row, 26), number(row, 28), "multixact_age");
     let age_unknown = xid.status == "unknown" || mxid.status == "unknown";
     for age in [xid, mxid] {
         if age.status == "threshold_exceeded" {
@@ -608,7 +628,9 @@ mod tests {
         for (xid, mxid, expected) in [
             (101, 0, "transaction_age"),
             (0, 101, "multixact_age"),
-            (100, 100, "dead_tuples"),
+            (100, 0, "transaction_age"),
+            (0, 100, "multixact_age"),
+            (99, 99, "dead_tuples"),
         ] {
             let mut values = row("r", Some(0.0), Some(0.0));
             values.truncate(25);
@@ -623,7 +645,7 @@ mod tests {
             assert_eq!(result.reason, expected);
             assert_eq!(
                 result.status,
-                if xid > 100 || mxid > 100 {
+                if xid >= 100 || mxid >= 100 {
                     "threshold_exceeded"
                 } else {
                     "below_threshold"

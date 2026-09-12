@@ -258,7 +258,11 @@ public class Main {
         }
         for (Throwable current = throwable; current != null; current = current.getCause()) {
             if (current instanceof com.mongodb.MongoSocketException
-                    || current instanceof com.mongodb.MongoTimeoutException) {
+                    || current instanceof com.mongodb.MongoTimeoutException
+                    || current instanceof SQLRecoverableException
+                    || (current instanceof SQLException sqlException
+                        && sqlException.getSQLState() != null
+                        && sqlException.getSQLState().startsWith("08"))) {
                 return "database connection failed; details redacted";
             }
         }
