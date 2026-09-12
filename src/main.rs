@@ -583,7 +583,7 @@ where
     let password = resolve_password(password, &account)?;
 
     store_password(&account, &password)?;
-    print_terminal_line(&format!("  ✓ Password stored in Keychain ({account})"));
+    print_terminal_line("  ✓ Password stored in Keychain");
     config::write_keychain_secret_to_env_file(&env_file, &account)?;
     print_terminal_line(&format!("  ✓ Updated {}", env_file.display()));
     println!("\nDone. Run: safeselect check --environment {environment}");
@@ -646,7 +646,7 @@ where
     let env_toml =
         toml::to_string_pretty(&env_config).map_err(|e| SafeselectError::TomlSer(e.to_string()))?;
     std::fs::write(&env_file, env_toml)?;
-    print_terminal_line(&format!("  ✓ SSH password stored in Keychain ({account})"));
+    print_terminal_line("  ✓ SSH password stored in Keychain");
     print_terminal_line(&format!("  ✓ Updated {}", env_file.display()));
     println!("\nDone. Run: safeselect check --environment {environment}");
     Ok(())
