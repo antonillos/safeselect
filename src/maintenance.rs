@@ -34,6 +34,10 @@ pub struct MaintenanceDiagnostic {
     pub vacuum_insert_scale_factor: Option<f64>,
     pub vacuum_insert_threshold_setting: Option<f64>,
     pub vacuum_insert_threshold: Option<f64>,
+    pub xid_age: Option<f64>,
+    pub multixact_age: Option<f64>,
+    pub freeze_max_age: Option<f64>,
+    pub multixact_freeze_max_age: Option<f64>,
     pub warnings: Vec<&'static str>,
     pub analyze: MaintenanceMetric,
     pub vacuum: MaintenanceMetric,
@@ -196,6 +200,27 @@ fn vacuum_metric(
     }
 }
 
+fn include_freeze_triggers(
+    base: MaintenanceMetric,
+    row: &[serde_json::Value],
+) -> MaintenanceMetric {
+    if base.status == "not_applicable" {
+        return base;
+    }
+    let xid = metric(number(row, 25), number(row, 27), "transaction_age");
+    let mxid = metric(number(row, 26), number(row, 28), "multixact_age");
+    let age_unknown = xid.status == "unknown" || mxid.status == "unknown";
+    for age in [xid, mxid] {
+        if age.status == "threshold_exceeded" {
+            return age;
+        }
+    }
+    if age_unknown && base.status == "below_threshold" {
+        return metric(None, None, "statistics_unavailable");
+    }
+    base
+}
+
 pub fn diagnostics_from_query(result: &QueryResult) -> (Vec<MaintenanceDiagnostic>, bool) {
     let mut diagnostics = Vec::new();
     let total_relations = result
@@ -239,11 +264,11 @@ pub fn diagnostics_from_query(result: &QueryResult) -> (Vec<MaintenanceDiagnosti
         let analyze_threshold = reltuples
             .zip(analyze_scale)
             .zip(analyze_base)
-            .map(|((r, s), b)| b + s * r);
+            .map(|((r, s), b)| b + s * r.max(0.0));
         let vacuum_raw = reltuples
             .zip(vacuum_scale)
             .zip(vacuum_base)
-            .map(|((r, s), b)| b + s * r);
+            .map(|((r, s), b)| b + s * r.max(0.0));
         let vacuum_threshold = effective_vacuum_threshold(vacuum_raw, vacuum_max);
         let vacuum_insert_threshold = effective_vacuum_insert_threshold(
             vacuum_insert_base,
@@ -302,9 +327,13 @@ pub fn diagnostics_from_query(result: &QueryResult) -> (Vec<MaintenanceDiagnosti
             vacuum_insert_scale_factor: vacuum_insert_scale,
             vacuum_insert_threshold_setting: vacuum_insert_base,
             vacuum_insert_threshold,
+            xid_age: number(row, 25),
+            multixact_age: number(row, 26),
+            freeze_max_age: number(row, 27),
+            multixact_freeze_max_age: number(row, 28),
             warnings,
             analyze,
-            vacuum,
+            vacuum: include_freeze_triggers(vacuum, row),
         });
     }
     diagnostics.sort_by(|a, b| (&a.schema, &a.table).cmp(&(&b.schema, &b.table)));
@@ -399,6 +428,10 @@ mod tests {
             serde_json::json!(100),
             serde_json::json!(false),
             serde_json::json!(1),
+            serde_json::json!(0),
+            serde_json::json!(0),
+            serde_json::json!(200000000),
+            serde_json::json!(400000000),
         ]
     }
 
@@ -546,6 +579,82 @@ mod tests {
         assert_eq!(
             vacuum_metric(None, Some(250.0), Some(301.0), Some(300.0), false).status,
             "threshold_exceeded"
+        );
+    }
+
+    #[test]
+    fn unknown_tuple_estimates_use_zero_for_all_thresholds() {
+        let mut values = row("r", Some(50.0), Some(50.0));
+        values[4] = serde_json::json!(-1);
+        let result = QueryResult {
+            columns: vec![],
+            rows: vec![values],
+            row_count: 1,
+            byte_count: 0,
+            elapsed_ms: 0,
+            elapsed: String::new(),
+        };
+        let (items, _) = diagnostics_from_query(&result);
+        assert_eq!(items[0].analyze.threshold, Some(50.0));
+        assert_eq!(items[0].vacuum.threshold, Some(50.0));
+        assert_eq!(items[0].analyze.status, "below_threshold");
+        assert_eq!(items[0].vacuum.status, "below_threshold");
+    }
+
+    #[test]
+    fn freeze_age_triggers_override_counters_but_not_partitioned_parents() {
+        for (xid, mxid, expected) in [
+            (101, 0, "transaction_age"),
+            (0, 101, "multixact_age"),
+            (100, 100, "dead_tuples"),
+        ] {
+            let mut values = row("r", Some(0.0), Some(0.0));
+            values.truncate(25);
+            values.extend([
+                serde_json::json!(xid),
+                serde_json::json!(mxid),
+                serde_json::json!(100),
+                serde_json::json!(100),
+            ]);
+            let result =
+                include_freeze_triggers(metric(Some(0.0), Some(50.0), "dead_tuples"), &values);
+            assert_eq!(result.reason, expected);
+            assert_eq!(
+                result.status,
+                if xid > 100 || mxid > 100 {
+                    "threshold_exceeded"
+                } else {
+                    "below_threshold"
+                }
+            );
+            let (_, parent) = metrics_for_relation("p", None, None, None, None);
+            assert_eq!(
+                include_freeze_triggers(parent, &values).status,
+                "not_applicable"
+            );
+        }
+    }
+
+    #[test]
+    fn forced_vacuum_ignores_disabled_autovacuum_and_missing_counters() {
+        let mut values = row("r", None, None);
+        values[12] = serde_json::json!(false);
+        values[25] = serde_json::json!(200000001);
+        let result = QueryResult {
+            columns: vec![],
+            rows: vec![values],
+            row_count: 1,
+            byte_count: 0,
+            elapsed_ms: 0,
+            elapsed: String::new(),
+        };
+        let (items, _) = diagnostics_from_query(&result);
+        assert_eq!(items[0].vacuum.reason, "transaction_age");
+        assert_eq!(items[0].vacuum.status, "threshold_exceeded");
+        assert_eq!(items[0].warnings, vec!["autovacuum_disabled"]);
+        assert_eq!(
+            include_freeze_triggers(metric(Some(0.0), Some(50.0), "dead_tuples"), &[]).status,
+            "unknown"
         );
     }
 

@@ -95,6 +95,10 @@ pub fn run() {
         assert_eq!(insert_probe["vacuum"]["reason"], "inserts_since_vacuum");
         assert_eq!(insert_probe["vacuum"]["threshold"], 10.0);
         assert_eq!(insert_probe["dead_rows"], 0.0);
+        assert!(probe["xid_age"].as_f64().is_some());
+        assert!(probe["multixact_age"].as_f64().is_some());
+        assert!(probe["freeze_max_age"].as_f64().unwrap() > 0.0);
+        assert!(probe["multixact_freeze_max_age"].as_f64().unwrap() > 0.0);
         assert_eq!(probe["analyze"]["status"], "threshold_exceeded");
         assert_eq!(probe["vacuum"]["status"], "threshold_exceeded");
         assert_eq!(
