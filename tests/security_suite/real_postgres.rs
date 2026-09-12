@@ -84,7 +84,11 @@ pub fn run() {
                 rows.iter()
                     .find(|row| row["table"] == "aaa_maintenance_probe")
             })
-            .unwrap_or_else(|| panic!("maintenance probe must be present in diagnostics: {value}"));
+            .unwrap_or_else(|| {
+                panic!(
+                    "maintenance probe must be present in diagnostics: {value}; raw={diagnostics}; stderr={stderr}"
+                )
+            });
         let insert_probe = value["diagnostics"]
             .as_array()
             .unwrap()
