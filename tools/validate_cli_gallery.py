@@ -3,7 +3,10 @@
 
 from __future__ import annotations
 
+import binascii
 import json
+import struct
+import zlib
 from pathlib import Path
 
 
@@ -35,6 +38,82 @@ EXPECTED = {
 }
 
 
+def valid_png(path: Path) -> bool:
+    data = path.read_bytes()
+    signature = b"\x89PNG\r\n\x1a\n"
+    if not data.startswith(signature):
+        return False
+    offset = len(signature)
+    saw_ihdr = False
+    saw_idat = False
+    saw_iend = False
+    idat_chunks: list[bytes] = []
+    width = height = bit_depth = color_type = interlace = 0
+    channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}
+    saw_plte = False
+    while offset + 12 <= len(data):
+        length = struct.unpack(">I", data[offset : offset + 4])[0]
+        chunk_type = data[offset + 4 : offset + 8]
+        end = offset + 12 + length
+        if end > len(data):
+            return False
+        chunk_data = data[offset + 8 : offset + 8 + length]
+        stored_crc = struct.unpack(">I", data[offset + 8 + length : end])[0]
+        if binascii.crc32(chunk_type + chunk_data) & 0xFFFFFFFF != stored_crc:
+            return False
+        if chunk_type == b"IHDR":
+            if saw_ihdr or offset != len(signature) or length != 13:
+                return False
+            width, height, bit_depth, color_type, compression, filtering, interlace = struct.unpack(
+                ">IIBBBBB", chunk_data
+            )
+            if (
+                width == 0
+                or height == 0
+                or compression != 0
+                or filtering != 0
+                or interlace != 0
+                or color_type not in channels
+                or bit_depth != 8
+            ):
+                return False
+            saw_ihdr = True
+        elif chunk_type == b"PLTE":
+            if not saw_ihdr or saw_idat or saw_plte or not chunk_data:
+                return False
+            if len(chunk_data) % 3 != 0 or len(chunk_data) > 256 * 3:
+                return False
+            saw_plte = True
+        elif chunk_type == b"IDAT":
+            if not saw_ihdr or saw_iend:
+                return False
+            saw_idat = True
+            idat_chunks.append(chunk_data)
+        elif chunk_type == b"IEND":
+            if length != 0 or not saw_ihdr or not saw_idat or (color_type == 3 and not saw_plte):
+                return False
+            saw_iend = True
+            if end != len(data):
+                return False
+            try:
+                decoder = zlib.decompressobj()
+                pixels = decoder.decompress(b"".join(idat_chunks), 64 * 1024 * 1024 + 1)
+                if decoder.unconsumed_tail:
+                    return False
+                pixels += decoder.flush()
+            except zlib.error:
+                return False
+            if decoder.unused_data or not decoder.eof:
+                return False
+            row_bytes = width * channels[color_type]
+            expected = height * (row_bytes + 1)
+            if expected > 64 * 1024 * 1024 or len(pixels) != expected:
+                return False
+            return all(pixels[row * (row_bytes + 1)] <= 4 for row in range(height))
+        offset = end
+    return False
+
+
 def main() -> int:
     catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
     groups = catalog.get("groups", [])
@@ -51,10 +130,22 @@ def main() -> int:
         if f"docs/recordings/{item['image']}" not in readme:
             raise SystemExit(f"README is missing the shared capture for {item['id']}")
 
+    seen_images: set[str] = set()
     for item in commands:
+        image_name = Path(item["image"]).name
+        expected_image = f"{item['id']}.png"
+        if image_name != expected_image:
+            raise SystemExit(
+                f"capture mapping mismatch for {item['id']}: expected {expected_image}, got {item['image']}"
+            )
+        if item["image"] in seen_images:
+            raise SystemExit(f"duplicate capture mapping: {item['image']}")
+        seen_images.add(item["image"])
         image = ROOT / "docs" / "recordings" / item["image"]
         if not image.is_file():
             raise SystemExit(f"missing capture for {item['id']}: {image}")
+        if not valid_png(image):
+            raise SystemExit(f"capture is not a valid PNG: {image}")
         if image.stat().st_size > 250_000:
             raise SystemExit(f"capture is too large for the gallery: {image}")
         text = " ".join(
