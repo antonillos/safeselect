@@ -256,18 +256,31 @@ public class Main {
         if (isExecutionTimeout(throwable)) {
             return "operation timed out";
         }
-        for (Throwable current = throwable; current != null; current = current.getCause()) {
-            if (current instanceof com.mongodb.MongoSocketException
-                    || current instanceof com.mongodb.MongoTimeoutException
-                    || current instanceof SQLRecoverableException
-                    || (current instanceof SQLException sqlException
-                        && sqlException.getSQLState() != null
-                        && (sqlException.getSQLState().startsWith("08")
-                            || sqlException.getSQLState().equals("57P01")))) {
-                return "database connection failed; details redacted";
-            }
+        if (isRecoverableConnectionFailure(throwable)) {
+            return "database connection failed; details redacted";
         }
         return "request failed; details redacted";
+    }
+
+    private static boolean isRecoverableConnectionFailure(Throwable throwable) {
+        for (Throwable current = throwable; current != null; current = current.getCause()) {
+            if (isRecoverableConnectionException(current)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isRecoverableConnectionException(Throwable throwable) {
+        return throwable instanceof com.mongodb.MongoSocketException
+                || throwable instanceof com.mongodb.MongoTimeoutException
+                || throwable instanceof SQLRecoverableException
+                || (throwable instanceof SQLException sqlException
+                    && isRecoverableSqlState(sqlException.getSQLState()));
+    }
+
+    private static boolean isRecoverableSqlState(String sqlState) {
+        return sqlState != null && (sqlState.startsWith("08") || sqlState.equals("57P01"));
     }
 
     private static boolean isExecutionTimeout(Throwable throwable) {
