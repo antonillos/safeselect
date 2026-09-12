@@ -1,5 +1,6 @@
 use crate::error::Result;
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::Path;
 
 fn secret_env_var(env_name: &str) -> String {
@@ -399,6 +400,15 @@ pub fn write_config_files(
     connections: &[ComposeConnection],
     project_name: &str,
 ) -> Result<ImportResult> {
+    write_config_files_with_warning(repo_root, connections, project_name, &mut std::io::stderr())
+}
+
+fn write_config_files_with_warning<W: Write>(
+    repo_root: &Path,
+    connections: &[ComposeConnection],
+    project_name: &str,
+    warning_writer: &mut W,
+) -> Result<ImportResult> {
     use crate::config;
 
     let safeselect_dir = repo_root.join(".safeselect");
@@ -474,7 +484,7 @@ pub fn write_config_files(
         if !env_file.exists() {
             if conn.password_var.is_none() && conn.password_literal.is_none() {
                 let account = format!("{}/{}", project_name, conn.env_name);
-                eprintln!("{MISSING_PASSWORD_WARNING}");
+                let _ = writeln!(warning_writer, "{MISSING_PASSWORD_WARNING}");
                 no_password.push((conn.env_name.clone(), account));
             }
             std::fs::write(&env_file, env_toml)?;
@@ -809,6 +819,42 @@ services:
         assert!(!warning.contains("project"));
         assert!(!warning.contains("environment"));
         assert!(!warning.contains("<password>"));
+    }
+
+    #[test]
+    fn import_warning_output_redacts_connection_identifiers() {
+        let root = std::env::temp_dir().join(format!(
+            "safeselect-compose-warning-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let connection = ComposeConnection {
+            name: "sentinel-name".to_string(),
+            env_name: "sentinel-environment".to_string(),
+            service: "sentinel-service".to_string(),
+            host: "localhost".to_string(),
+            port: 5432,
+            database: "app".to_string(),
+            username: "reader".to_string(),
+            password_literal: None,
+            password_var: None,
+            compose_path: root.join("compose.yaml").display().to_string(),
+        };
+        let mut output = Vec::new();
+
+        write_config_files_with_warning(&root, &[connection], "sentinel-project", &mut output)
+            .unwrap();
+
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains(MISSING_PASSWORD_WARNING));
+        for sentinel in [
+            "sentinel-project",
+            "sentinel-environment",
+            "sentinel-service",
+        ] {
+            assert!(!output.contains(sentinel), "warning leaked {sentinel}");
+        }
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
