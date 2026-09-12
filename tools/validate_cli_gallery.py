@@ -50,6 +50,7 @@ def valid_png(path: Path) -> bool:
     idat_chunks: list[bytes] = []
     width = height = bit_depth = color_type = interlace = 0
     channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}
+    saw_plte = False
     while offset + 12 <= len(data):
         length = struct.unpack(">I", data[offset : offset + 4])[0]
         chunk_type = data[offset + 4 : offset + 8]
@@ -77,13 +78,19 @@ def valid_png(path: Path) -> bool:
             ):
                 return False
             saw_ihdr = True
+        elif chunk_type == b"PLTE":
+            if not saw_ihdr or saw_idat or saw_plte or not chunk_data:
+                return False
+            if len(chunk_data) % 3 != 0 or len(chunk_data) > 256 * 3:
+                return False
+            saw_plte = True
         elif chunk_type == b"IDAT":
             if not saw_ihdr or saw_iend:
                 return False
             saw_idat = True
             idat_chunks.append(chunk_data)
         elif chunk_type == b"IEND":
-            if length != 0 or not saw_ihdr or not saw_idat:
+            if length != 0 or not saw_ihdr or not saw_idat or (color_type == 3 and not saw_plte):
                 return False
             saw_iend = True
             if end != len(data):
