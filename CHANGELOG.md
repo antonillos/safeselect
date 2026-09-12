@@ -2,6 +2,50 @@
 
 All notable changes to this project are documented in this file.
 
+## [v0.7.9] - 2026-09-12
+
+### Added
+
+- feat(postgres): add maintenance diagnostics (#243)
+- feat(postgres): support maintenance diagnostics on 16 (#244)
+- feat(postgres): support maintenance diagnostics on 15 (#245)
+- feat: refresh SafeSelect brand and onboarding (#247)
+- feat: add MongoDB command gallery workflow
+
+### Fixed
+
+- fix(release): tolerate delayed draft visibility safely
+- fix(site): resolve Dependabot sharp alert (#235)
+- fix(release): isolate validated source artifact (#240)
+- fix(security): redact SSH tunnel diagnostics (#241)
+- fix(security): redact CLI configuration output (#242)
+- fix(security): redact sensitive CLI logging (#248)
+- fix(postgres): account for insert-triggered vacuum
+- fix(postgres): preserve version-specific vacuum thresholds
+- fix: address maintenance and integration review feedback
+- fix: preserve MongoDB recovery and diagnose materialized views
+- fix: preserve JDBC recovery and freeze boundaries
+- fix(postgres): preserve admin shutdown recovery
+- fix(postgres): honor global autovacuum setting
+- fix: use dark logo on light page header
+- fix(postgres): cast autovacuum relation option
+
+### Documentation
+
+- docs: align CLI convention behavior (#246)
+
+### Build And CI
+
+- ci: restrict integration test token permissions (#236)
+- ci: avoid caching untrusted release dependencies (#237)
+- test: generate ephemeral secret values (#238)
+- ci: bind release builds to workflow ref (#239)
+
+### Other
+
+- refactor: reduce connection failure complexity
+- refactor: shorten NoSQL gallery label
+
 ## [v0.7.8] - 2026-09-09
 
 ### Added
