@@ -93,17 +93,30 @@ safeselect import-compose
 # or:
 safeselect import-compass --path "$HOME/.config/MongoDB Compass"
 
-safeselect check --environment testing
-safeselect agent install opencode --environment testing
+# Check all environments; add --environment <name> to restrict the target.
+safeselect check
+safeselect agent install opencode
 
 # Later, after upgrading the safeselect binary:
-safeselect agent upgrade opencode --environment testing
+safeselect agent upgrade opencode
 ```
 
 The agent installation writes an MCP stdio entry that runs `safeselect serve` for
 one project and one environment. Agents do not receive raw database passwords.
 `agent upgrade` also migrates older entry names to the canonical
 `safeselect-<project>-<environment>` convention when it can detect the project.
+
+SafeSelect follows the repository convention before requiring flags: it finds
+the nearest `.safeselect/` directory and uses its sole environment. Supply
+`--project` outside that repository or `--environment <name>` when the project
+contains more than one environment; single-environment commands never guess
+among several candidates.
+
+Unlike single-environment commands, `check`, `doctor`, `posture`,
+`reconnect`, and `config validate` process all environments by default. Checks
+can access secrets, open tunnels, and connect to databases. Select an environment
+explicitly when other connections, especially production, must remain untouched.
+See [CLI conventions and effects](../README.md#convention-before-configuration).
 
 During an interactive OpenCode installation, SafeSelect can use the existing
 project-local config, create `.opencode/opencode.jsonc` alongside an existing

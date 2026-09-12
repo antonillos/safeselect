@@ -121,6 +121,27 @@ def verify_tag(repo, version, sha, source, *, required=False):
     return info
 
 
+def validate_version(version):
+    if not re.fullmatch(r"v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?", version):
+        raise ValueError("Invalid release tag")
+
+
+def recovery_source(args):
+    """Select only a source frozen by an existing release or draft."""
+    validate_version(args.version)
+    info = release_info(args.repo, args.version)
+    if info is None:
+        write_outputs({"source-ref": ""})
+        return
+    if not info["draft"]:
+        write_outputs({"source-ref": f"refs/tags/{args.version}"})
+        return
+    source = info.get("target_commitish", "")
+    if not re.fullmatch(r"[0-9a-f]{40}", source):
+        raise ValueError("Draft release source must be a full commit SHA")
+    write_outputs({"source-ref": source})
+
+
 def write_outputs(values):
     text = "".join(f"{key}={value}\n" for key, value in values.items())
     print(text, end="")
@@ -133,13 +154,18 @@ def resolve(args):
     manifest = (args.source / "Cargo.toml").read_text()
     current = re.search(r'^version = "([^"]+)"', manifest, re.MULTILINE)[1]
     version = args.version or "v" + current
-    if not re.fullmatch(r"v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?", version):
-        raise ValueError("Invalid release tag")
+    validate_version(version)
     if version != "v" + current:
         raise ValueError("Requested version does not match Cargo.toml")
     sha = command("git", "rev-parse", "HEAD", cwd=args.source)
+    source_date = command("git", "show", "-s", "--format=%cs", "HEAD", cwd=args.source)
     verify_tag(args.repo, version, sha, args.source)
-    write_outputs({"version": version, "semver": current, "target-ref": sha})
+    write_outputs({
+        "version": version,
+        "semver": current,
+        "target-ref": sha,
+        "source-date": source_date,
+    })
 
 
 def download_existing(repo, version, info, directory, targets=TARGETS):
@@ -247,7 +273,7 @@ def attach_file(repo, version, path):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=["resolve", "reuse", "verify", "publish", "check-public"])
+    parser.add_argument("operation", choices=["recovery-source", "resolve", "reuse", "verify", "publish", "check-public"])
     parser.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY"))
     parser.add_argument("--version", default="")
     parser.add_argument("--source", type=Path, default=Path("."))
@@ -268,7 +294,7 @@ def main():
         parser.error("--sha must be a full commit SHA")
     if args.operation == "reuse" and not args.target:
         parser.error("--target is required for reuse")
-    operations = {"resolve": resolve, "reuse": reuse, "verify": lambda a: verify_assets(a.directory, a.version),
+    operations = {"recovery-source": recovery_source, "resolve": resolve, "reuse": reuse, "verify": lambda a: verify_assets(a.directory, a.version),
                   "publish": publish, "check-public": check_public}
     try:
         operations[args.operation](args)

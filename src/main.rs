@@ -10,6 +10,7 @@ mod config;
 mod dbeaver;
 mod diagnostics;
 mod error;
+mod maintenance;
 mod mcp;
 mod posture;
 mod security;
@@ -36,7 +37,7 @@ fn main() {
     let cli = Cli::parse();
 
     if let Err(e) = run(cli) {
-        tracing::error!("{e}");
+        tracing::error!("{}", redact_cli_error(&e));
         std::process::exit(1);
     }
 }
@@ -49,16 +50,18 @@ fn run(cli: Cli) -> Result<()> {
             project,
             environment,
         } => match resolve_project_dir(&loader, project.clone()) {
-            Ok(dir) => cmd_serve(&loader, &dir, &environment),
+            Ok(dir) => {
+                let environment = resolve_single_environment(&dir, environment.as_deref())?;
+                cmd_serve(&loader, &dir, &environment)
+            }
             Err(_) => {
                 let cwd = project
                     .clone()
                     .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
                 if !cwd.exists() {
-                    return Err(SafeselectError::Other(format!(
-                        "path does not exist: {}",
-                        cwd.display()
-                    )));
+                    return Err(SafeselectError::Other(
+                        "Project path does not exist.".into(),
+                    ));
                 }
                 cmd_serve_setup(&loader, &cwd)
             }
@@ -119,6 +122,7 @@ fn run(cli: Cli) -> Result<()> {
             verbose,
         } => {
             let dir = resolve_project_dir(&loader, project)?;
+            let environment = resolve_single_environment(&dir, environment.as_deref())?;
             cmd_query(&loader, &dir, &environment, sql.as_deref(), verbose)
         }
         Command::Disconnect {
@@ -126,6 +130,7 @@ fn run(cli: Cli) -> Result<()> {
             environment,
         } => {
             let dir = resolve_project_dir(&loader, project)?;
+            let environment = resolve_single_environment(&dir, environment.as_deref())?;
             cmd_connectivity_action(&loader, &dir, &environment, "disconnect")
         }
         Command::Connect {
@@ -133,6 +138,7 @@ fn run(cli: Cli) -> Result<()> {
             environment,
         } => {
             let dir = resolve_project_dir(&loader, project)?;
+            let environment = resolve_single_environment(&dir, environment.as_deref())?;
             cmd_connectivity_action(&loader, &dir, &environment, "connect")
         }
         Command::Reconnect {
@@ -145,10 +151,7 @@ fn run(cli: Cli) -> Result<()> {
             } else {
                 let env_names = list_environment_names(&dir)?;
                 if env_names.is_empty() {
-                    println!(
-                        "No environments found in {}",
-                        dir.join(".safeselect").join("environments").display()
-                    );
+                    println!("No environments found in the selected project.");
                     return Ok(());
                 }
                 run_reconnects(&loader, &dir, &env_names)
@@ -180,14 +183,76 @@ fn project_display_name(dir: &std::path::Path) -> String {
     config::project_account_prefix(dir)
 }
 
+fn redact_cli_error(error: &SafeselectError) -> String {
+    match error {
+        SafeselectError::LocalProjectNotFound(_) => {
+            "Local SafeSelect project not found. Use --project or run from a project directory."
+                .into()
+        }
+        error => error.to_string(),
+    }
+}
+
+fn resolve_local_for_cli(
+    loader: &ConfigLoader,
+    repo_root: &Path,
+    environment: &str,
+) -> Result<config::ResolvedConfig> {
+    loader
+        .resolve_local(repo_root, environment)
+        .map_err(redact_resolution_error)
+}
+
+fn redact_resolution_error(error: SafeselectError) -> SafeselectError {
+    match error {
+        SafeselectError::EnvVarNotSet(_)
+        | SafeselectError::KeychainNotFound(_)
+        | SafeselectError::Secret(_) => {
+            SafeselectError::Other("Required secret could not be resolved.".into())
+        }
+        SafeselectError::Config(_)
+        | SafeselectError::Toml(_)
+        | SafeselectError::TomlSer(_)
+        | SafeselectError::Io(_) => {
+            SafeselectError::Other("Configuration could not be resolved.".into())
+        }
+        SafeselectError::EnvironmentNotFound(_, _) => {
+            SafeselectError::Other("Requested environment configuration was not found.".into())
+        }
+        SafeselectError::DriverFileNotFound(_) | SafeselectError::InsecurePermissions(_) => {
+            SafeselectError::Other("Configured driver file is unavailable or unsafe.".into())
+        }
+        error => error,
+    }
+}
+
+fn redact_connection_start_error(error: SafeselectError) -> SafeselectError {
+    match error {
+        SafeselectError::Sidecar(_) | SafeselectError::SidecarJavaNotFound(_) => {
+            SafeselectError::Other(
+                "Database connection could not be started. Check the connection configuration and driver availability."
+                    .into(),
+            )
+        }
+        error => error,
+    }
+}
+
+fn redact_audit_initialization_error(error: SafeselectError) -> SafeselectError {
+    match error {
+        SafeselectError::Audit(_) => SafeselectError::Other(
+            "Audit logging could not be initialized. Check the audit configuration and permissions."
+                .into(),
+        ),
+        error => error,
+    }
+}
+
 fn list_environment_names(repo_root: &Path) -> Result<Vec<String>> {
     let env_dir = repo_root.join(".safeselect").join("environments");
     let mut env_names = Vec::new();
-    let entries = std::fs::read_dir(&env_dir).map_err(|e| {
-        SafeselectError::Config(format!(
-            "cannot read environments in {}: {e}",
-            env_dir.display()
-        ))
+    let entries = std::fs::read_dir(&env_dir).map_err(|_| {
+        SafeselectError::Config("Unable to read environment configurations.".into())
     })?;
 
     for entry in entries {
@@ -212,23 +277,37 @@ fn selected_environment_names(repo_root: &Path, environment: Option<&str>) -> Re
     }
 }
 
-fn print_no_environments(repo_root: &Path) {
-    println!(
-        "No environments found in {}",
-        repo_root.join(".safeselect").join("environments").display()
-    );
+/// Resolve an explicitly selected environment or safely infer the sole convention.
+///
+/// Commands that act on one environment must never guess when several are present.
+fn resolve_single_environment(repo_root: &Path, environment: Option<&str>) -> Result<String> {
+    if let Some(environment) = environment {
+        return Ok(environment.to_string());
+    }
+
+    match list_environment_names(repo_root)?.as_slice() {
+        [environment] => Ok(environment.clone()),
+        [] => Err(no_environments_error()),
+        environments => Err(SafeselectError::Config(format!(
+            "Multiple environments found ({}). Specify --environment <name>.",
+            environments.join(", ")
+        ))),
+    }
+}
+
+fn print_no_environments(_repo_root: &Path) {
+    println!("No environments found in the selected project.");
 }
 
 fn cmd_serve(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &str) -> Result<()> {
-    let name = project_display_name(repo_root);
-    tracing::info!("Loading config for {name}/{environment}");
+    tracing::info!("Loading configuration for environment {environment}");
 
-    let resolved = loader.resolve_local(repo_root, environment)?;
+    let resolved = resolve_local_for_cli(loader, repo_root, environment)?;
+    let name = project_display_name(repo_root);
 
     if let Some(ref ssh) = resolved.environment.ssh {
         if ssh.enabled {
-            tracing::warn!("SSH bastion configured — ensure tunnel is active before connecting");
-            tracing::warn!("Example: ssh -L 5432:db.internal:5432 bastion.example.com");
+            tracing::warn!("SSH tunnel configured — ensure it is active before connecting");
         }
     }
 
@@ -260,7 +339,8 @@ fn cmd_serve(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
         &db_password,
         repo_root,
         loader.config_dir(),
-    )?;
+    )
+    .map_err(redact_audit_initialization_error)?;
 
     server.run()?;
 
@@ -270,27 +350,20 @@ fn cmd_serve(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
 fn cmd_config_show(
     loader: &ConfigLoader,
     project: Option<PathBuf>,
-    environment: String,
+    environment: Option<String>,
 ) -> Result<()> {
     let dir = resolve_project_dir(loader, project)?;
-    let resolved = loader.resolve_local(&dir, &environment)?;
-    let name = project_display_name(&dir);
-    println!("Project: {name}");
+    let environment = resolve_single_environment(&dir, environment.as_deref())?;
+    let resolved = resolve_local_for_cli(loader, &dir, &environment)?;
+    println!("Project configuration: loaded");
     println!("Environment: {environment}");
     println!("Backend: {:?}", resolved.environment.database.kind);
     println!("Vendor: {}", resolved.environment.database.vendor());
-    let connection_details = resolved
-        .driver
-        .as_ref()
-        .map(|driver| {
-            format!(
-                "Driver: {} ({})\nJDBC URL: {}",
-                driver.vendor, driver.class, resolved.environment.database.url
-            )
-        })
-        .unwrap_or_else(|| format!("URL: {}", resolved.environment.database.url));
-    println!("{connection_details}");
-    println!("Username: {}", resolved.environment.database.username);
+    if resolved.driver.is_some() {
+        println!("Driver: configured");
+    }
+    println!("Connection: configured (details redacted)");
+    println!("Username: [redacted]");
     println!("Password: [redacted]");
     println!();
     println!("--- Security Policy ---");
@@ -369,22 +442,15 @@ fn validate_explicit_project(
 }
 
 fn validate_environment_config(loader: &ConfigLoader, dir: &Path, environment: &str) -> Result<()> {
-    let _ = loader.resolve_local(dir, environment)?;
-    print_terminal_line(&format!(
-        "✓ Config valid: {}/{}",
-        project_display_name(dir),
-        environment
-    ));
+    let _ = resolve_local_for_cli(loader, dir, environment)?;
+    print_terminal_line(&format!("✓ Config valid: {environment}"));
     Ok(())
 }
 
 fn validate_all_environment_configs(loader: &ConfigLoader, dir: &Path) -> Result<()> {
     let environments = list_environment_names(dir)?;
     if environments.is_empty() {
-        return Err(SafeselectError::Config(format!(
-            "no environments found in {}",
-            dir.join(".safeselect/environments").display()
-        )));
+        return Err(no_environments_error());
     }
 
     for env in environments {
@@ -405,11 +471,7 @@ fn validate_current_project(
         return Ok(());
     };
 
-    println!(
-        ".safeselect/ found at {} ({})",
-        dir.display(),
-        project_display_name(&dir)
-    );
+    println!(".safeselect/ directory found.");
     validate_explicit_project(loader, &dir, environment)
 }
 
@@ -480,10 +542,12 @@ fn cmd_config_uninstall(loader: &ConfigLoader, project: Option<PathBuf>) -> Resu
 
 fn set_password_for_environment(
     loader: &ConfigLoader,
-    environment: String,
+    environment: Option<String>,
     password: Option<String>,
     project: Option<PathBuf>,
 ) -> Result<()> {
+    let dir = resolve_project_dir(loader, project.clone())?;
+    let environment = resolve_single_environment(&dir, environment.as_deref())?;
     set_password_for_environment_with_store(
         loader,
         environment,
@@ -519,7 +583,7 @@ where
     let password = resolve_password(password, &account)?;
 
     store_password(&account, &password)?;
-    print_terminal_line(&format!("  ✓ Password stored in Keychain ({account})"));
+    print_terminal_line("  ✓ Password stored in Keychain");
     config::write_keychain_secret_to_env_file(&env_file, &account)?;
     print_terminal_line(&format!("  ✓ Updated {}", env_file.display()));
     println!("\nDone. Run: safeselect check --environment {environment}");
@@ -537,10 +601,12 @@ fn resolve_password(password: Option<String>, account: &str) -> Result<String> {
 
 fn set_ssh_password_for_environment(
     loader: &ConfigLoader,
-    environment: String,
+    environment: Option<String>,
     password: Option<String>,
     project: Option<PathBuf>,
 ) -> Result<()> {
+    let dir = resolve_project_dir(loader, project.clone())?;
+    let environment = resolve_single_environment(&dir, environment.as_deref())?;
     set_ssh_password_for_environment_with_store(
         loader,
         environment,
@@ -580,7 +646,7 @@ where
     let env_toml =
         toml::to_string_pretty(&env_config).map_err(|e| SafeselectError::TomlSer(e.to_string()))?;
     std::fs::write(&env_file, env_toml)?;
-    print_terminal_line(&format!("  ✓ SSH password stored in Keychain ({account})"));
+    print_terminal_line("  ✓ SSH password stored in Keychain");
     print_terminal_line(&format!("  ✓ Updated {}", env_file.display()));
     println!("\nDone. Run: safeselect check --environment {environment}");
     Ok(())
@@ -3134,19 +3200,18 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
 
         if !can_establish && !bastion_up {
             // Can't establish and no existing tunnel — inform user with timeout details
-            println!("  ⚠  SSH bastion {bastion_host}:{bastion_port} unreachable (connect timed out after 3s)");
+            println!("  ⚠  SSH bastion unreachable (connect timed out after 3s)");
             if !use_password && ssh.identity_file.is_none() {
                 println!("  ⚠  No SSH key or password configured");
             }
             if let Some(ref identity_file) = ssh.identity_file {
                 if !std::path::Path::new(identity_file).exists() {
-                    println!("  ⚠  SSH identity file not found: {identity_file}");
+                    println!("  ⚠  SSH identity file not found");
                 }
             }
-            let cmd = build_ssh_command(ssh, &cfg.database.url).unwrap_or_default();
-            println!("  Establish tunnel manually:\n    {cmd}");
+            print_manual_tunnel_hint();
             failures.push(format!(
-                "{env_name}: SSH bastion {bastion_host}:{bastion_port} unreachable and no active PostgreSQL tunnel"
+                "{env_name}: SSH bastion unreachable and no active PostgreSQL tunnel"
             ));
             continue;
         }
@@ -3214,9 +3279,7 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
                 Ok(p) => p,
                 Err(_) => {
                     println!("NO PASSWORD");
-                    let cmd = build_ssh_command(ssh, &cfg.database.url)
-                        .unwrap_or_else(|| "ssh command unavailable".to_string());
-                    println!("  Establish it manually:\n    {cmd}");
+                    print_manual_tunnel_hint();
                     failures.push(format!("{env_name}: SSH password not found in Keychain"));
                     continue;
                 }
@@ -3229,29 +3292,20 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
                     println!("  Other systems: install sshpass with your package manager.");
                     println!("  Prefer SSH key authentication when possible.");
                     println!("  Then run:  safeselect check --environment {env_name}");
-                    let cmd = build_ssh_command(ssh, &cfg.database.url).unwrap_or_default();
-                    println!("  Or establish the tunnel manually:\n    {cmd}");
+                    print_manual_tunnel_hint();
                     failures.push(format!("{env_name}: sshpass not installed"));
                     continue;
                 }
             }
         } else {
             let extra = vec!["-o".into(), "BatchMode=yes".into()];
-            let full_cmd = {
-                let mut parts = vec!["ssh".to_string()];
-                parts.extend(extra.clone());
-                parts.extend(ssh_args.clone());
-                parts.join(" ")
-            };
             match spawn_ssh(extra) {
                 Ok(c) => c,
-                Err(e) => {
-                    print_terminal_error_line(&format!("FAILED: {e}"));
-                    println!("  Command: {full_cmd}");
+                Err(_) => {
+                    print_terminal_error_line("FAILED: unable to start SSH command");
                     println!("  Check that ssh is installed and the identity file is accessible.");
-                    let cmd = build_ssh_command(ssh, &cfg.database.url).unwrap_or_default();
-                    println!("  Establish it manually:\n    {cmd}");
-                    failures.push(format!("{env_name}: failed to spawn ssh: {e}"));
+                    print_manual_tunnel_hint();
+                    failures.push(format!("{env_name}: failed to start SSH command"));
                     continue;
                 }
             }
@@ -3301,22 +3355,20 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
                 (!detail.is_empty()).then_some(detail)
             });
             print_terminal_error_line("FAILED");
-            if let Some(detail) = ssh_error {
-                print_terminal_error_line(&format!("  SSH error: {detail}"));
+            if ssh_error.is_some() {
+                print_terminal_error_line(
+                    "  SSH command failed; inspect the configured SSH connection.",
+                );
             }
             println!(
                 "  Database not reachable through SSH tunnel (polled for up to {}s)",
                 tunnel_wait.as_secs()
             );
             println!("  Possible causes:");
-            let forward_host = ssh.forward_host.as_deref().unwrap_or("");
-            let forward_port = ssh.forward_port.unwrap_or(0);
-            println!("    - Database host:port is wrong: {forward_host}:{forward_port}");
+            println!("    - Database connection settings are wrong");
             println!("    - Database is not running or not accepting connections");
             println!("    - SSH tunnel failed to forward (check bastion logs)");
-            let cmd = build_ssh_command(ssh, &cfg.database.url)
-                .unwrap_or_else(|| "ssh command unavailable".to_string());
-            println!("  Establish tunnel manually for debug:\n    {cmd}");
+            print_manual_tunnel_hint();
             failures.push(format!(
                 "{env_name}: database not reachable through SSH tunnel after {}s",
                 tunnel_wait.as_secs()
@@ -3355,10 +3407,7 @@ fn run_checks_for_environments(
     if env_names.is_empty() {
         print_no_environments(repo_root);
         if fail_on_error {
-            return Err(SafeselectError::Config(format!(
-                "no environments found in {}",
-                repo_root.join(".safeselect/environments").display()
-            )));
+            return Err(no_environments_error());
         }
         return Ok(());
     }
@@ -3584,75 +3633,25 @@ fn kill_processes(pids: &str) -> bool {
     killed
 }
 
-/// Build an SSH command string to establish a tunnel for the given SSH config + DB URL.
-/// Returns None if there isn't enough information to build the command.
-fn build_ssh_command(ssh: &config::SshConfig, _db_url: &str) -> Option<String> {
-    let bastion = ssh.host.as_deref()?;
-    let user = ssh.username.as_deref()?;
-    let forward_host = ssh.forward_host.as_deref()?;
-    let forward_port = ssh.forward_port?;
-
-    let local_host = ssh.local_host.as_deref().unwrap_or("localhost");
-    let local_port = ssh.local_port.unwrap_or(15432);
-
-    let mut cmd =
-        format!("ssh -L {local_host}:{local_port}:{forward_host}:{forward_port} {user}@{bastion}");
-
-    if let Some(p) = ssh.port {
-        if p != 22 {
-            cmd.push_str(&format!(" -p {p}"));
-        }
-    }
-
-    if let Some(ref key) = ssh.identity_file {
-        cmd.push_str(&format!(" -i {key}"));
-    }
-
-    Some(cmd)
+fn print_manual_tunnel_hint() {
+    print_terminal_error_line("  Establish the tunnel manually using the configured SSH settings.");
 }
 
 fn print_check_verbose(resolved: &config::ResolvedConfig, environment: &str) {
     println!("  · environment={environment}");
-    println!("  · jdbc_url={}", resolved.environment.database.url);
-    println!("  · db_user={}", resolved.environment.database.username);
-    if let Some(secret) = resolved.environment.database.secret.as_ref() {
-        match secret.source.as_str() {
-            "macos-keychain" => {
-                println!(
-                    "  · db_secret=macos-keychain:{}",
-                    secret.account.as_deref().unwrap_or("unknown")
-                );
-            }
-            "env" => {
-                println!(
-                    "  · db_secret=env:{}",
-                    secret.variable.as_deref().unwrap_or("unknown")
-                );
-            }
-            other => println!("  · db_secret={other}"),
-        }
+    println!("  · database=configured (details redacted)");
+    if resolved.environment.database.secret.is_some() {
+        println!("  · db_secret=configured");
     }
     if let Some(ssh) = resolved.environment.ssh.as_ref() {
         println!(
-            "  · ssh_bastion={} ({})",
-            ssh.bastion.as_deref().unwrap_or("-"),
-            ssh.host.as_deref().unwrap_or("unknown")
+            "  · ssh={}",
+            if ssh.enabled {
+                "configured"
+            } else {
+                "disabled"
+            }
         );
-        println!(
-            "  · ssh_target={}:{}",
-            ssh.username.as_deref().unwrap_or("unknown"),
-            ssh.port.unwrap_or(22)
-        );
-        println!(
-            "  · ssh_forward={}:{} -> {}:{}",
-            ssh.local_host.as_deref().unwrap_or("localhost"),
-            ssh.local_port.unwrap_or(DEFAULT_SSH_LOCAL_PORT),
-            ssh.forward_host.as_deref().unwrap_or("unknown"),
-            ssh.forward_port.unwrap_or(0)
-        );
-        if let Some(secret_account) = ssh.secret_account.as_deref() {
-            println!("  · ssh_secret=macos-keychain:{secret_account}");
-        }
     }
 }
 
@@ -3663,12 +3662,11 @@ fn cmd_check(
     verbose: bool,
     show_progress: bool,
 ) -> Result<()> {
-    let name = project_display_name(repo_root);
     if show_progress {
-        println!("Checking configuration for {name}/{environment}...");
+        println!("Checking configuration for environment {environment}...");
     }
 
-    let resolved = loader.resolve_local(repo_root, environment)?;
+    let resolved = resolve_local_for_cli(loader, repo_root, environment)?;
 
     diagnostics::print(
         DiagnosticStatus::Ok,
@@ -3695,7 +3693,7 @@ fn cmd_check(
         if ssh.enabled {
             let bastion_host = ssh.host.as_deref().unwrap_or("unknown");
             let bastion_port = ssh.port.unwrap_or(22);
-            println!("  SSH bastion: {bastion_host}:{bastion_port}");
+            println!("  SSH tunnel: configured");
 
             let mut postgres_reachable = false;
             if let Some((host, port)) = extract_host_port(&resolved.environment.database.url) {
@@ -3704,7 +3702,7 @@ fn cmd_check(
                     diagnostics::print(
                         DiagnosticStatus::Ok,
                         DiagnosticCode::PostgresReachable,
-                        format!("PostgreSQL reachable at {host}:{port}"),
+                        "PostgreSQL endpoint reachable",
                     );
                 }
             }
@@ -3720,29 +3718,26 @@ fn cmd_check(
                     diagnostics::print(
                         DiagnosticStatus::Ok,
                         DiagnosticCode::SshBastionReachable,
-                        format!("Bastion reachable at {bastion_host}:{bastion_port}"),
+                        "SSH bastion reachable",
                     );
                 } else {
                     diagnostics::print(
                         DiagnosticStatus::Fail,
                         DiagnosticCode::SshBastionUnreachable,
-                        format!("Bastion unreachable at {bastion_host}:{bastion_port} (connect timed out after 3s)"),
+                        "SSH bastion unreachable (connect timed out after 3s)",
                     );
                     if let Some(ref identity_file) = ssh.identity_file {
                         if !std::path::Path::new(identity_file).exists() {
                             diagnostics::print(
                                 DiagnosticStatus::Fail,
                                 DiagnosticCode::SshIdentityMissing,
-                                format!("SSH identity file not found: {identity_file}"),
+                                "SSH identity file not found",
                             );
                         }
                     }
-                    let cmd = build_ssh_command(ssh, &resolved.environment.database.url);
-                    if let Some(c) = cmd {
-                        println!("  To establish: {c}");
-                    }
+                    print_manual_tunnel_hint();
                     return Err(SafeselectError::Other(
-                        format!("SSH bastion {bastion_host}:{bastion_port} not reachable (connect timed out after 3s).")
+                        "SSH bastion not reachable (connect timed out after 3s).".into(),
                     ));
                 }
             }
@@ -3770,26 +3765,21 @@ fn cmd_check(
                     true => diagnostics::print(
                         DiagnosticStatus::Ok,
                         DiagnosticCode::PostgresReachable,
-                        format!("PostgreSQL reachable at {host}:{port}"),
+                        "PostgreSQL endpoint reachable",
                     ),
                     _ => {
                         diagnostics::print(
                             DiagnosticStatus::Fail,
                             DiagnosticCode::PostgresUnreachable,
-                            format!("PostgreSQL unreachable at {host}:{port}"),
+                            "PostgreSQL endpoint unreachable",
                         );
                         println!("  Possible causes:");
-                        println!("    - Database host:port is wrong ({host}:{port})");
+                        println!("    - Database connection settings are wrong");
                         println!("    - Database is not running or not accepting connections");
                         println!("    - SSH tunnel is not established or not forwarding correctly");
-                        let cmd = build_ssh_command(ssh, &resolved.environment.database.url);
-                        if let Some(c) = cmd {
-                            println!("  To establish tunnel: {c}");
-                        }
+                        print_manual_tunnel_hint();
                         let elapsed = tunnel_attempt_elapsed.unwrap_or_default();
-                        return Err(SafeselectError::Other(ssh_tunnel_failure_message(
-                            &host, port, elapsed,
-                        )));
+                        return Err(SafeselectError::Other(ssh_tunnel_failure_message(elapsed)));
                     }
                 }
             }
@@ -3820,15 +3810,12 @@ fn cmd_check(
                     diagnostics::print(
                         DiagnosticStatus::Fail,
                         DiagnosticCode::SshTunnelFailed,
-                        format!("Document database tunnel not reachable at {host}:{port}"),
+                        "Document database tunnel not reachable",
                     );
-                    let cmd = build_ssh_command(ssh, &resolved.environment.database.url);
-                    if let Some(c) = cmd {
-                        println!("  To establish tunnel: {c}");
-                    }
-                    return Err(SafeselectError::Other(format!(
-                        "Cannot reach document database at {host}:{port} through SSH tunnel."
-                    )));
+                    print_manual_tunnel_hint();
+                    return Err(SafeselectError::Other(
+                        "Cannot reach document database through SSH tunnel.".into(),
+                    ));
                 }
             }
         }
@@ -3840,12 +3827,7 @@ fn cmd_check(
             DiagnosticCode::SidecarStartAttempt,
             "Attempting sidecar connection...",
         );
-        println!(
-            "    url={} user={} db={}",
-            resolved.environment.database.url,
-            resolved.environment.database.username,
-            display_database_target(&resolved.environment.database.url)
-        );
+        println!("    connection parameters loaded (redacted)");
     }
 
     let limits = ResultLimits {
@@ -3867,7 +3849,8 @@ fn cmd_check(
                 resolved.project.limits.statement_timeout_ms,
                 limits,
                 false,
-            )?;
+            )
+            .map_err(redact_connection_start_error)?;
 
             sidecar.ping()?;
             diagnostics::print(
@@ -3897,7 +3880,8 @@ fn cmd_check(
                 resolved.project.limits.statement_timeout_ms,
                 limits,
                 false,
-            )?;
+            )
+            .map_err(redact_connection_start_error)?;
 
             sidecar.ping()?;
             diagnostics::print(
@@ -3918,15 +3902,15 @@ fn cmd_check(
     diagnostics::print(
         DiagnosticStatus::Ok,
         DiagnosticCode::AllChecksPassed,
-        format!("All checks passed for {name}/{environment}"),
+        format!("All checks passed for environment {environment}"),
     );
 
     Ok(())
 }
 
-fn ssh_tunnel_failure_message(host: &str, port: u16, elapsed: std::time::Duration) -> String {
+fn ssh_tunnel_failure_message(elapsed: std::time::Duration) -> String {
     format!(
-        "Cannot reach PostgreSQL at {host}:{port} through SSH tunnel after {} (the final PostgreSQL probe timed out after 2s).",
+        "Cannot reach PostgreSQL through SSH tunnel after {} (the final PostgreSQL probe timed out after 2s).",
         format_elapsed(elapsed.as_millis() as u64)
     )
 }
@@ -3938,7 +3922,7 @@ fn cmd_query(
     sql: Option<&str>,
     verbose: bool,
 ) -> Result<()> {
-    let resolved = loader.resolve_local(repo_root, environment)?;
+    let resolved = resolve_local_for_cli(loader, repo_root, environment)?;
 
     let sql = match sql {
         Some(s) => s.to_string(),
@@ -3987,7 +3971,8 @@ fn cmd_query(
             max_result_bytes: resolved.project.limits.max_result_bytes,
         },
         verbose,
-    )?;
+    )
+    .map_err(redact_connection_start_error)?;
 
     let result = match sidecar.execute(&sql) {
         Ok(result) => result,
@@ -4191,7 +4176,10 @@ fn collect_posture_reports<'a>(
         match outcome {
             Ok(Some(report)) => reports.push(report),
             Ok(None) => {}
-            Err(error) => failures.push((environment, error.to_string())),
+            Err(error) => failures.push((
+                environment,
+                redact_connection_start_error(error).to_string(),
+            )),
         }
     }
 
@@ -4209,7 +4197,7 @@ fn inspect_posture_environment<'a>(
     if posture_environment_is_unsupported(repo_root, environment, skip_unsupported)? {
         return Ok(None);
     }
-    let resolved = loader.resolve_local(repo_root, environment)?;
+    let resolved = resolve_local_for_cli(loader, repo_root, environment)?;
     prepare_posture_tunnel(repo_root, environment, &resolved, tunnel_endpoints)?;
     let report = posture::inspect(&resolved, loader.config_dir())?;
     acknowledge_posture_report(loader, &report, acknowledge)?;
@@ -4232,8 +4220,16 @@ fn posture_environment_is_unsupported(
     environment: &str,
     skip_unsupported: bool,
 ) -> Result<bool> {
-    let environment_config = load_environment_config(repo_root, environment)?;
+    let environment_config =
+        load_environment_config(repo_root, environment).map_err(redact_resolution_error)?;
     Ok(skip_unsupported && !supports_posture(&environment_config))
+}
+
+fn no_environments_error() -> SafeselectError {
+    SafeselectError::Config(
+        "No environment configurations found. Create or import an environment before retrying."
+            .into(),
+    )
 }
 
 fn prepare_posture_tunnel<'a>(
@@ -4245,13 +4241,12 @@ fn prepare_posture_tunnel<'a>(
     let Some(endpoint) = posture_tunnel_endpoint(resolved) else {
         return Ok(());
     };
-    if let Some((other_endpoint, other)) = tunnel_endpoints
+    if let Some((_, other)) = tunnel_endpoints
         .iter()
         .find(|(existing, _)| tunnel_endpoints_overlap(existing, &endpoint))
     {
         return Err(SafeselectError::Config(format!(
-            "posture cannot inspect '{environment}' and '{other}' because both use SSH local endpoint {}:{}",
-            other_endpoint.0, other_endpoint.1
+            "posture cannot inspect '{environment}' and '{other}' because their SSH local endpoints overlap"
         )));
     }
     // Posture uses its own short-lived sidecar, so it cannot rely on a tunnel
@@ -4499,8 +4494,7 @@ fn cmd_connectivity_action(
     environment: &str,
     action: &str,
 ) -> Result<()> {
-    let name = project_display_name(repo_root);
-    let resolved = loader.resolve_local(repo_root, environment)?;
+    let resolved = resolve_local_for_cli(loader, repo_root, environment)?;
 
     let driver = resolved.driver.as_ref().ok_or_else(|| {
         SafeselectError::Config(
@@ -4520,17 +4514,19 @@ fn cmd_connectivity_action(
             max_result_bytes: resolved.project.limits.max_result_bytes,
         },
         false,
-    )?;
+    )
+    .map_err(redact_connection_start_error)?;
 
     match action {
         "disconnect" => {
             sidecar.disconnect()?;
-            println!("Disconnected from {name}/{environment}.");
-            println!("  The AI agent can reconnect via the 'connect' MCP tool.");
+            println!("Temporary sidecar disconnected from environment {environment}.");
+            println!("  Existing MCP sessions are unchanged; use their connection tools.");
         }
         "connect" => {
             sidecar.connect()?;
-            println!("Connected to {name}/{environment}.");
+            println!("Temporary sidecar connected to environment {environment}.");
+            println!("  This sidecar closes on exit; existing MCP sessions are unchanged.");
         }
         _ => unreachable!(),
     }
@@ -4544,10 +4540,9 @@ fn cmd_reconnect(
     repo_root: &std::path::Path,
     environment: &str,
 ) -> Result<()> {
-    let name = project_display_name(repo_root);
-    println!("Reconnecting to {name}/{environment}...");
+    println!("Reconnecting to environment {environment}...");
 
-    let resolved = loader.resolve_local(repo_root, environment)?;
+    let resolved = resolve_local_for_cli(loader, repo_root, environment)?;
 
     // Establish SSH tunnel if configured
     if let Some(ref ssh) = resolved.environment.ssh {
@@ -4578,7 +4573,8 @@ fn cmd_reconnect(
                 resolved.project.limits.statement_timeout_ms,
                 limits,
                 false,
-            )?
+            )
+            .map_err(redact_connection_start_error)?
         }
         crate::backend::BackendKind::Document => SidecarProcess::start_document_with_timeout(
             resolved.environment.database.vendor(),
@@ -4589,7 +4585,8 @@ fn cmd_reconnect(
             resolved.project.limits.statement_timeout_ms,
             limits,
             false,
-        )?,
+        )
+        .map_err(redact_connection_start_error)?,
     };
 
     sidecar.ping()?;
@@ -4611,7 +4608,7 @@ fn cmd_reconnect(
 
     sidecar.shutdown()?;
     print_terminal_line(&format!(
-        "  ✓ Reconnection successful to {name}/{environment}"
+        "  ✓ Reconnection successful to environment {environment}"
     ));
 
     Ok(())
@@ -4780,24 +4777,140 @@ mod tests {
     }
 
     #[test]
+    fn redacts_sensitive_configuration_resolution_errors() {
+        let secret = super::redact_resolution_error(super::SafeselectError::EnvVarNotSet(
+            "DATABASE_PASSWORD".into(),
+        ));
+        assert_eq!(secret.to_string(), "Required secret could not be resolved.");
+        assert!(!secret.to_string().contains("DATABASE_PASSWORD"));
+
+        let config = super::redact_resolution_error(super::SafeselectError::Config(
+            "invalid configuration in /tmp/project/.safeselect/environments/dev.toml".into(),
+        ));
+        assert_eq!(config.to_string(), "Configuration could not be resolved.");
+        assert!(!config.to_string().contains(".safeselect"));
+
+        let environment =
+            super::redact_resolution_error(super::SafeselectError::EnvironmentNotFound(
+                "production".into(),
+                "/tmp/project/.safeselect/environments".into(),
+            ));
+        assert_eq!(
+            environment.to_string(),
+            "Requested environment configuration was not found."
+        );
+        assert!(!environment.to_string().contains(".safeselect"));
+
+        let driver = super::redact_resolution_error(super::SafeselectError::DriverFileNotFound(
+            std::path::PathBuf::from("/tmp/project/.safeselect/drivers/postgresql.jar"),
+        ));
+        assert_eq!(
+            driver.to_string(),
+            "Configured driver file is unavailable or unsafe."
+        );
+        assert!(!driver.to_string().contains("postgresql.jar"));
+
+        let permissions =
+            super::redact_resolution_error(super::SafeselectError::InsecurePermissions(
+                std::path::PathBuf::from("/tmp/project/.safeselect/drivers/postgresql.jar"),
+            ));
+        assert_eq!(
+            permissions.to_string(),
+            "Configured driver file is unavailable or unsafe."
+        );
+        assert!(!permissions.to_string().contains("postgresql.jar"));
+    }
+
+    #[test]
+    fn redacts_project_lookup_and_connection_start_errors() {
+        let project = super::redact_cli_error(&super::SafeselectError::LocalProjectNotFound(
+            std::path::PathBuf::from("/tmp/private-project"),
+        ));
+        assert_eq!(
+            project,
+            "Local SafeSelect project not found. Use --project or run from a project directory."
+        );
+        assert!(!project.contains("private-project"));
+
+        let connection = super::redact_connection_start_error(super::SafeselectError::Sidecar(
+            "startup failed for jdbc:postgresql://db.internal/app".into(),
+        ));
+        assert_eq!(
+            connection.to_string(),
+            "Database connection could not be started. Check the connection configuration and driver availability."
+        );
+        assert!(!connection.to_string().contains("db.internal"));
+
+        let unsupported = super::redact_cli_error(&super::SafeselectError::Config(
+            "connectivity actions currently support only JDBC environments".into(),
+        ));
+        assert_eq!(
+            unsupported,
+            "Config error: connectivity actions currently support only JDBC environments"
+        );
+
+        let audit = super::redact_audit_initialization_error(super::SafeselectError::Audit(
+            "cannot create audit file /private/project/audit/project/dev/log.jsonl: permission denied".into(),
+        ));
+        assert_eq!(
+            audit.to_string(),
+            "Audit logging could not be initialized. Check the audit configuration and permissions."
+        );
+        assert!(!audit.to_string().contains("/private/project"));
+    }
+
+    #[test]
     fn doctor_fails_when_no_environments_are_available() {
         let root =
             std::env::temp_dir().join(format!("safeselect-doctor-empty-{}", uuid::Uuid::new_v4()));
         let env_dir = root.join(".safeselect/environments");
         std::fs::create_dir_all(&env_dir).unwrap();
 
-        assert!(run_checks_for_environments(&root, &[], false, false, true).is_err());
+        let check_error = run_checks_for_environments(&root, &[], false, false, true).unwrap_err();
+        assert_eq!(
+            check_error.to_string(),
+            "Config error: No environment configurations found. Create or import an environment before retrying."
+        );
+        assert!(!check_error
+            .to_string()
+            .contains(root.to_string_lossy().as_ref()));
+
+        let validation_error =
+            validate_all_environment_configs(&super::ConfigLoader::new(), &root).unwrap_err();
+        assert_eq!(validation_error.to_string(), check_error.to_string());
+        assert!(!validation_error
+            .to_string()
+            .contains(root.to_string_lossy().as_ref()));
+
         assert!(run_checks_for_environments(&root, &[], false, false, false).is_ok());
 
         let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
-    fn reports_the_full_ssh_tunnel_attempt_duration() {
-        let message =
-            ssh_tunnel_failure_message("localhost", 15432, std::time::Duration::from_secs(20));
+    fn redacts_posture_environment_load_failures() {
+        let root = std::env::temp_dir().join(format!(
+            "safeselect-posture-invalid-environment-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let env_dir = root.join(".safeselect/environments");
+        std::fs::create_dir_all(&env_dir).unwrap();
+        std::fs::write(env_dir.join("broken.toml"), "not valid TOML = [").unwrap();
+
+        let error = posture_environment_is_unsupported(&root, "broken", true).unwrap_err();
+        assert_eq!(error.to_string(), "Configuration could not be resolved.");
+        assert!(!error.to_string().contains(root.to_string_lossy().as_ref()));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn reports_ssh_tunnel_duration_without_endpoint_details() {
+        let message = ssh_tunnel_failure_message(std::time::Duration::from_secs(20));
         assert!(message.contains("after 20.0s"));
         assert!(message.contains("final PostgreSQL probe timed out after 2s"));
+        assert!(!message.contains("localhost"));
+        assert!(!message.contains("15432"));
     }
 
     #[test]
@@ -5036,6 +5149,15 @@ mod tests {
             posture_tunnel_endpoint(&candidate),
             Some(("local".into(), 15432))
         );
+
+        let other_environment = "other".to_string();
+        let mut occupied = vec![(("local".to_string(), 15432), &other_environment)];
+        let error =
+            prepare_posture_tunnel(&PathBuf::from("."), &environment, &candidate, &mut occupied)
+                .unwrap_err();
+        assert!(error.to_string().contains("SSH local endpoints overlap"));
+        assert!(!error.to_string().contains("15432"));
+        assert!(!error.to_string().contains("127.0.0.1"));
     }
 
     use super::*;
@@ -5302,7 +5424,7 @@ enabled = true
         let result = cmd_config_show(
             &ConfigLoader::new(),
             Some(repo_root.clone()),
-            "local".to_string(),
+            Some("local".to_string()),
         );
 
         assert!(result.is_ok());
@@ -5388,14 +5510,14 @@ enabled = true
         let loader = ConfigLoader::new();
         assert!(set_password_for_environment(
             &loader,
-            "missing".to_string(),
+            Some("missing".to_string()),
             Some("secret".to_string()),
             Some(repo_root.clone()),
         )
         .is_err());
         assert!(set_ssh_password_for_environment(
             &loader,
-            "without-ssh".to_string(),
+            Some("without-ssh".to_string()),
             Some("secret".to_string()),
             Some(repo_root.clone()),
         )
@@ -6003,95 +6125,6 @@ username = "usr_app"
     }
 
     #[test]
-    fn builds_ssh_command_with_defaults_and_optional_arguments() {
-        let config = config::SshConfig {
-            enabled: true,
-            bastion: None,
-            host: Some("bastion".into()),
-            username: Some("user".into()),
-            port: Some(2200),
-            secret_account: None,
-            identity_file: Some("/tmp/key".into()),
-            known_hosts: None,
-            forward_host: Some("db.internal".into()),
-            forward_port: Some(5432),
-            local_host: None,
-            local_port: None,
-            auth_type: None,
-        };
-        assert_eq!(
-            build_ssh_command(&config, "postgresql://db"),
-            Some("ssh -L localhost:15432:db.internal:5432 user@bastion -p 2200 -i /tmp/key".into())
-        );
-    }
-
-    #[test]
-    fn rejects_incomplete_ssh_command_configuration() {
-        let config = config::SshConfig {
-            enabled: true,
-            bastion: None,
-            host: Some("bastion".into()),
-            username: None,
-            port: None,
-            secret_account: None,
-            identity_file: None,
-            known_hosts: None,
-            forward_host: Some("db.internal".into()),
-            forward_port: Some(5432),
-            local_host: None,
-            local_port: None,
-            auth_type: None,
-        };
-        assert!(build_ssh_command(&config, "postgresql://db").is_none());
-    }
-
-    #[test]
-    fn builds_ssh_command_with_custom_local_endpoint_and_default_port() {
-        let config = config::SshConfig {
-            enabled: true,
-            bastion: None,
-            host: Some("bastion".into()),
-            username: Some("user".into()),
-            port: Some(22),
-            secret_account: None,
-            identity_file: None,
-            known_hosts: None,
-            forward_host: Some("db.internal".into()),
-            forward_port: Some(5432),
-            local_host: Some("127.0.0.1".into()),
-            local_port: Some(15433),
-            auth_type: None,
-        };
-        assert_eq!(
-            build_ssh_command(&config, "postgresql://db").as_deref(),
-            Some("ssh -L 127.0.0.1:15433:db.internal:5432 user@bastion")
-        );
-    }
-
-    #[test]
-    fn builds_ssh_command_without_optional_port_or_identity() {
-        let config = config::SshConfig {
-            enabled: true,
-            bastion: None,
-            host: Some("bastion".into()),
-            username: Some("user".into()),
-            port: None,
-            secret_account: None,
-            identity_file: None,
-            known_hosts: None,
-            forward_host: Some("db.internal".into()),
-            forward_port: Some(5432),
-            local_host: None,
-            local_port: None,
-            auth_type: None,
-        };
-        assert_eq!(
-            build_ssh_command(&config, "postgresql://db").as_deref(),
-            Some("ssh -L localhost:15432:db.internal:5432 user@bastion")
-        );
-    }
-
-    #[test]
     fn lists_only_environment_toml_files() {
         let root = std::env::temp_dir().join(format!("safeselect-envs-{}", uuid::Uuid::new_v4()));
         let env_dir = root.join(".safeselect/environments");
@@ -6109,6 +6142,95 @@ username = "usr_app"
             vec!["dev", "prod"]
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn resolves_the_only_environment_and_refuses_ambiguous_selection() {
+        let root = std::env::temp_dir().join(format!("safeselect-env-{}", uuid::Uuid::new_v4()));
+        let env_dir = root.join(".safeselect/environments");
+        std::fs::create_dir_all(&env_dir).unwrap();
+        std::fs::write(env_dir.join("development.toml"), "").unwrap();
+
+        assert_eq!(
+            resolve_single_environment(&root, None).unwrap(),
+            "development"
+        );
+        assert_eq!(
+            resolve_single_environment(&root, Some("explicit")).unwrap(),
+            "explicit"
+        );
+
+        std::fs::write(env_dir.join("production.toml"), "").unwrap();
+        let error = resolve_single_environment(&root, None)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("Multiple environments found"));
+        assert!(error.contains("--environment <name>"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn single_environment_dispatch_rejects_before_operating_on_invalid_configs() {
+        let root =
+            std::env::temp_dir().join(format!("safeselect-dispatch-{}", uuid::Uuid::new_v4()));
+        let env_dir = root.join(".safeselect/environments");
+        std::fs::create_dir_all(&env_dir).unwrap();
+        let commands = [
+            vec!["serve"],
+            vec!["query"],
+            vec!["connect"],
+            vec!["disconnect"],
+            vec!["config", "show"],
+            vec!["config", "set-password"],
+            vec!["config", "set-ssh-password"],
+        ];
+
+        // No configuration contains connection details or secret references.
+        // A selection error must occur before config loading, SQL input, or prompts.
+        for names in [vec![], vec!["development", "production"]] {
+            for name in &names {
+                std::fs::write(env_dir.join(format!("{name}.toml")), "invalid TOML [").unwrap();
+            }
+            for command in &commands {
+                let mut args = vec!["safeselect"];
+                args.extend(command.iter().copied());
+                args.extend(["--project", root.to_str().unwrap()]);
+                let error = run(Cli::try_parse_from(args).unwrap())
+                    .unwrap_err()
+                    .to_string();
+                if names.is_empty() {
+                    assert_eq!(error, no_environments_error().to_string());
+                } else {
+                    assert!(
+                        error.contains("Multiple environments found"),
+                        "{command:?}: {error}"
+                    );
+                }
+            }
+            for name in &names {
+                let path = env_dir.join(format!("{name}.toml"));
+                assert_eq!(std::fs::read_to_string(&path).unwrap(), "invalid TOML [");
+                std::fs::remove_file(path).unwrap();
+            }
+        }
+
+        // A unique environment is selected, but malformed config is not bypassed.
+        std::fs::write(env_dir.join("development.toml"), "invalid TOML [").unwrap();
+        for command in &commands {
+            let mut args = vec!["safeselect"];
+            args.extend(command.iter().copied());
+            args.extend(["--project", root.to_str().unwrap()]);
+            let error = run(Cli::try_parse_from(args).unwrap())
+                .unwrap_err()
+                .to_string();
+            assert!(!error.contains("Multiple environments found"));
+            assert_eq!(
+                std::fs::read_to_string(env_dir.join("development.toml")).unwrap(),
+                "invalid TOML ["
+            );
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -10,6 +10,7 @@ use crate::compose;
 use crate::config::{ConfigLoader, DriverConfig, EnvironmentConfig, ProjectConfig, ResolvedConfig};
 use crate::diagnostics::{self, DiagnosticCode, DiagnosticStatus};
 use crate::error::{Result, SafeselectError};
+use crate::maintenance;
 use crate::security::SecurityEngine;
 use crate::sidecar::{ResultLimits, SidecarProcess};
 use crate::{is_ssh_ready_for_query, setup_ssh_tunnels, update_generated_by};
@@ -18,12 +19,12 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-const READ_ONLY_DEBUG_PROMPT: &str = "Use SafeSelect only for read-only database debugging. Start with database_info, then discover the relevant schema or collection before querying it. Keep every filter bounded, follow each next_suggestion, and stop rather than retrying an unchanged failure. SafeSelect never grants write access; do not use a shell, direct credentials, or another MCP server to bypass its policy.";
+const READ_ONLY_DEBUG_PROMPT: &str = "Use SafeSelect only for read-only database debugging. Start with database_info, then discover the relevant schema or collection before querying it. If the user asks which PostgreSQL tables need ANALYZE or VACUUM, use get_maintenance_diagnostics without requiring the user to know the tool name. Keep every filter bounded, follow each next_suggestion, and stop rather than retrying an unchanged failure. SafeSelect never grants write access; do not use a shell, direct credentials, or another MCP server to bypass its policy.";
 const READ_ONLY_DEBUG_RESOURCE_URI: &str = "safeselect://guide/read-only-database-debugging";
 const LATEST_MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 const SUPPORTED_MCP_PROTOCOL_VERSIONS: [&str; 3] =
     [LATEST_MCP_PROTOCOL_VERSION, "2025-03-26", "2024-11-05"];
-const READ_ONLY_DEBUG_RESOURCE: &str = "# Read-only database debugging\n\nUse SafeSelect for database context, not database control.\n\n1. Call `database_info`.\n2. Discover tables or collections before querying unfamiliar data.\n3. Use bounded reads and preserve existing filters.\n4. Follow one `next_suggestion` at a time.\n5. Stop and report an error rather than retrying unchanged or bypassing the policy.\n\nSafeSelect constrains its own MCP tool surface only. It does not replace least-privilege database users or restrict credentials exposed through another channel.";
+const READ_ONLY_DEBUG_RESOURCE: &str = "# Read-only database debugging\n\nUse SafeSelect for database context, not database control.\n\n1. Call `database_info`.\n2. Discover tables or collections before querying unfamiliar data.\n3. If the user asks which PostgreSQL tables need ANALYZE or VACUUM, call `get_maintenance_diagnostics`; natural requests such as ‘what needs analyzing?’ should select it automatically.\n4. Use bounded reads and preserve existing filters.\n5. Follow one `next_suggestion` at a time.\n6. Stop and report an error rather than retrying unchanged or bypassing the policy.\n\nSafeSelect constrains its own MCP tool surface only. It does not replace least-privilege database users or restrict credentials exposed through another channel.";
 
 fn config_environment_names(repo_root: &Path) -> Result<Vec<String>> {
     let env_dir = repo_root.join(".safeselect/environments");
@@ -62,7 +63,6 @@ fn config_environment_names(repo_root: &Path) -> Result<Vec<String>> {
 fn config_validation_text(
     loader: &ConfigLoader,
     repo_root: &Path,
-    project_name: &str,
     environment: Option<&str>,
 ) -> Result<String> {
     let environments = match environment {
@@ -73,7 +73,7 @@ fn config_validation_text(
         .into_iter()
         .map(|environment| {
             loader.resolve_local(repo_root, &environment)?;
-            Ok(format!("Config valid: {project_name}/{environment}"))
+            Ok(format!("Config valid: {environment}"))
         })
         .collect::<Result<Vec<_>>>()
         .map(|validated| validated.join("\n"))
@@ -460,8 +460,8 @@ impl McpServer {
 
     fn tool_description(&self, action: &str) -> String {
         format!(
-            "SafeSelect database query MCP for project '{}' environment '{}': {action}. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
-            self.project_name, self.env_name
+            "SafeSelect database query MCP for environment '{}': {action}. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+            self.env_name
         )
     }
 
@@ -512,7 +512,7 @@ impl McpServer {
                     }
                 },
                 "serverInfo": {
-                    "name": format!("safeselect-{}-{}", self.project_name, self.env_name),
+                    "name": format!("safeselect-{}", self.env_name),
                     "version": env!("CARGO_PKG_VERSION")
                 }
             })),
@@ -750,6 +750,18 @@ impl McpServer {
                         "table": {"type": "string", "description": "Exact table_name copied from the same list_tables row"}
                     },
                     "required": ["schema", "table"],
+                    "additionalProperties": false
+                }),
+            });
+        }
+
+        if self.backend.has(BackendCapability::MaintenanceDiagnostics) {
+            tools.push(ToolDefinition {
+                name: "get_maintenance_diagnostics".into(),
+                description: self.tool_description("use whenever the user asks which PostgreSQL tables need ANALYZE or VACUUM (for example, ‘qué tablas necesitan analyze o vacuum?’), whether statistics are stale, or which relations need maintenance; diagnose from bounded catalog statistics; read-only and never executes maintenance; optionally restrict to one exact allowed schema"),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {"schema": {"type": "string", "description": "Optional exact allowed schema name"}},
                     "additionalProperties": false
                 }),
             });
@@ -1475,6 +1487,14 @@ impl McpServer {
                 ),
             },
             "get_table_stats" => self.handle_get_table_stats(msg.id.clone(), &args),
+            "get_maintenance_diagnostics" if self.is_postgres() => {
+                self.handle_get_maintenance_diagnostics(msg.id.clone(), &args)
+            }
+            "get_maintenance_diagnostics" => self.send_error(
+                msg.id.clone(),
+                -32601,
+                "get_maintenance_diagnostics is available only for PostgreSQL backends",
+            ),
             "list_functions" => self.handle_list_functions(msg.id.clone(), &args),
             "list_triggers" => self.handle_list_triggers(msg.id.clone(), &args),
             "list_scheduled_jobs" => self.handle_list_scheduled_jobs(msg.id.clone(), &args),
@@ -1645,6 +1665,7 @@ impl McpServer {
                 BackendCapability::TableIndexes => "table_indexes",
                 BackendCapability::DatabaseStats => "database_stats",
                 BackendCapability::TableStats => "table_stats",
+                BackendCapability::MaintenanceDiagnostics => "maintenance_diagnostics",
                 BackendCapability::DatabaseDiscovery => "database_discovery",
                 BackendCapability::CollectionDiscovery => "collection_discovery",
                 BackendCapability::DocumentFind => "document_find",
@@ -2624,6 +2645,132 @@ impl McpServer {
         )
     }
 
+    fn handle_get_maintenance_diagnostics(
+        &mut self,
+        id: Option<serde_json::Value>,
+        args: &serde_json::Value,
+    ) -> Result<()> {
+        let schema = match Self::parse_maintenance_schema(args, self.security.allowed_schemas()) {
+            Ok(schema) => schema,
+            Err((code, message)) => return self.send_error(id, code, message),
+        };
+        let sql = build_maintenance_diagnostics_sql(
+            self.security.allowed_schemas(),
+            self.security.denied_relations(),
+            schema,
+            self.security.limits().max_rows.max(1),
+        );
+        self.execute_maintenance_diagnostics(id, &sql)
+    }
+
+    fn execute_maintenance_diagnostics(
+        &mut self,
+        id: Option<serde_json::Value>,
+        sql: &str,
+    ) -> Result<()> {
+        if let Err(error) = self.security.validate_system(sql) {
+            self.audit.record("REJECT", "reject", sql)?;
+            let _ = self.write_response(&tool_error_response(
+                id,
+                format!("get_maintenance_diagnostics rejected: {error}"),
+                "Stop and report this SafeSelect security rejection; do not retry unchanged.",
+            ));
+            self.fail_closed("Security violation");
+            return Ok(());
+        }
+        let result = self.execute_with_reconnect(sql);
+        self.write_maintenance_result(id, sql, result)
+    }
+
+    fn write_maintenance_result(
+        &mut self,
+        id: Option<serde_json::Value>,
+        sql: &str,
+        result: Result<crate::sidecar::QueryResult>,
+    ) -> Result<()> {
+        let result = match result {
+            Ok(result) => result,
+            Err(_) => {
+                self.audit.record("JDBC_ERROR", "error", sql)?;
+                return self.write_response(&tool_error_response(
+                    id,
+                    "get_maintenance_diagnostics failed.".into(),
+                    "Call check; if the connection is healthy, report the failure without inferring maintenance state.",
+                ));
+            }
+        };
+        let payload = self.maintenance_payload(&result);
+        let Some(payload) = payload else {
+            self.audit.record("PASS", "allow", sql)?;
+            return self.write_response(&tool_error_response(
+                id,
+                "PostgreSQL version is not supported by this diagnostic.".into(),
+                "Use get_table_stats or upgrade to PostgreSQL 15, 16, 17, or 18; no maintenance recommendation was produced.",
+            ));
+        };
+        self.audit.record("PASS", "allow", sql)?;
+        self.write_response(&data_tool_response(
+            id,
+            &payload,
+            "Review the evidence with a DBA; this diagnostic never executes ANALYZE or VACUUM.",
+        )?)
+    }
+
+    fn maintenance_payload(
+        &mut self,
+        result: &crate::sidecar::QueryResult,
+    ) -> Option<serde_json::Value> {
+        if result.rows.is_empty() {
+            let version_result = self.execute_with_reconnect(
+                "SELECT current_setting('server_version_num')::integer AS server_version_num",
+            );
+            let version = version_result
+                .ok()
+                .and_then(|value| value.rows.first().and_then(|row| row.first()).cloned())
+                .and_then(|value| value.as_i64().or_else(|| value.as_u64().map(|n| n as i64)));
+            version.and_then(maintenance::empty_payload)
+        } else {
+            maintenance::payload_from_query(result)
+        }
+    }
+
+    fn parse_maintenance_schema<'a>(
+        args: &'a serde_json::Value,
+        allowed_schemas: &[String],
+    ) -> std::result::Result<Option<&'a str>, (i64, String)> {
+        if !has_only_keys(args, &["schema"]) {
+            return Err((
+                -32602,
+                "get_maintenance_diagnostics accepts only the optional 'schema' argument".into(),
+            ));
+        }
+        let Some(value) = args.get("schema") else {
+            return Ok(None);
+        };
+        let Some(schema) = value.as_str() else {
+            return Err((
+                -32602,
+                "Invalid schema name: only alphanumeric and underscores allowed".into(),
+            ));
+        };
+        if !is_valid_identifier(schema) || is_system_catalog_schema(schema) {
+            return Err((
+                -32602,
+                "Invalid schema name: only alphanumeric and underscores allowed".into(),
+            ));
+        }
+        if !allowed_schemas.is_empty() && !allowed_schemas.iter().any(|allowed| allowed == schema) {
+            return Err((
+                -32000,
+                format!(
+                    "Schema '{schema}' is not in the allowed schemas list ({})",
+                    allowed_schemas.join(", ")
+                ),
+            ));
+        }
+        Ok(Some(schema))
+    }
+
     fn exact_catalog_relation(
         &mut self,
         id: Option<serde_json::Value>,
@@ -2995,8 +3142,12 @@ impl McpServer {
     }
 
     fn handle_connect(&mut self, id: Option<serde_json::Value>) -> Result<()> {
-        if let Err(e) = self.ensure_ssh_ready_for_query().map(|_| ()) {
-            return self.send_error(id, -32000, format!("SSH tunnel is not ready: {e}"));
+        if let Err(error) = self.ensure_ssh_ready_for_query().map(|_| ()) {
+            tracing::warn!(
+                "Connection preparation failed: {}",
+                redact_connection_setup_error(&error)
+            );
+            return self.send_error(id, -32000, connection_setup_error_message());
         }
 
         match self.restart_sidecar() {
@@ -3010,12 +3161,13 @@ impl McpServer {
                 );
                 self.write_response(&resp)
             }
-            Err(e) => self.send_backend_error(
-                id,
-                "Reconnect failed.",
-                &e.to_string(),
-                "Stop and report the startup failure; inspect configuration and connectivity before any retry.",
-            ),
+            Err(error) => {
+                tracing::warn!(
+                    "Connection restart failed: {}",
+                    redact_connection_setup_error(&error)
+                );
+                self.send_error(id, -32000, connection_setup_error_message())
+            }
         }
     }
 
@@ -3269,12 +3421,10 @@ impl McpServer {
         let environment = args.get("environment").and_then(|v| v.as_str());
         let loader = ConfigLoader::new();
 
-        let text =
-            match config_validation_text(&loader, &self.repo_root, &self.project_name, environment)
-            {
-                Ok(text) => text,
-                Err(e) => return self.send_error(id, -32000, format!("Validation failed: {e}")),
-            };
+        let text = match config_validation_text(&loader, &self.repo_root, environment) {
+            Ok(text) => text,
+            Err(_) => return self.send_error(id, -32000, "Configuration validation failed."),
+        };
 
         let resp = trusted_tool_response(id, "ok", text, "Configuration is valid. Continue with check for the active environment, or stop if validation was the user’s only request.");
         self.write_response(&resp)
@@ -3293,24 +3443,11 @@ impl McpServer {
         let loader = ConfigLoader::new();
         let resolved = match loader.resolve_local(&self.repo_root, environment) {
             Ok(r) => r,
-            Err(e) => return self.send_error(id, -32000, format!("Config resolution failed: {e}")),
+            Err(_) => return self.send_error(id, -32000, "Configuration could not be resolved."),
         };
 
-        let mut lines = vec![
-            format!("Project: {}", self.project_name),
-            format!("Environment: {environment}"),
-            format!("Backend: {:?}", resolved.environment.database.kind),
-            format!("Vendor: {}", resolved.environment.database.vendor()),
-        ];
-        if let Some(driver) = resolved.driver.as_ref() {
-            lines.push(format!("Driver: {} ({})", driver.vendor, driver.class));
-            lines.push(format!("JDBC URL: {}", resolved.environment.database.url));
-        } else {
-            lines.push(format!("URL: {}", resolved.environment.database.url));
-        }
+        let mut lines = redacted_config_summary(&resolved, environment);
         lines.extend([
-            format!("Username: {}", resolved.environment.database.username),
-            "Password: [redacted]".into(),
             String::new(),
             "--- Security Policy ---".into(),
             "Read only: enforced (cannot be disabled)".into(),
@@ -3991,13 +4128,13 @@ impl McpServer {
         let loader = ConfigLoader::new();
         let resolved = match loader.resolve_local(&self.repo_root, &self.env_name) {
             Ok(r) => r,
-            Err(e) => return self.send_error(id, -32000, format!("Config resolution failed: {e}")),
+            Err(_) => return self.send_error(id, -32000, "Configuration could not be resolved."),
         };
 
         let mut lines = vec![
             format!(
-                "Checking configuration for {}/{}...",
-                self.project_name, self.env_name
+                "Checking configuration for environment {}...",
+                self.env_name
             ),
             diagnostics::line(
                 DiagnosticStatus::Ok,
@@ -4023,7 +4160,7 @@ impl McpServer {
             if ssh.enabled {
                 let bastion_host = ssh.host.as_deref().unwrap_or("unknown");
                 let bastion_port = ssh.port.unwrap_or(22);
-                lines.push(format!("  SSH bastion: {bastion_host}:{bastion_port}"));
+                lines.push("  SSH bastion: configured (details redacted)".into());
 
                 if crate::check_tcp_endpoint(
                     bastion_host,
@@ -4033,20 +4170,20 @@ impl McpServer {
                     lines.push(diagnostics::line(
                         DiagnosticStatus::Ok,
                         DiagnosticCode::SshBastionReachable,
-                        format!("SSH bastion reachable at {bastion_host}:{bastion_port}"),
+                        "SSH bastion reachable",
                     ));
                 } else {
                     lines.push(diagnostics::line(
                         DiagnosticStatus::Fail,
                         DiagnosticCode::SshBastionUnreachable,
-                        format!("SSH bastion unreachable at {bastion_host}:{bastion_port} (connect timed out after 3s)"),
+                        "SSH bastion unreachable (connect timed out after 3s)",
                     ));
                     if let Some(ref identity_file) = ssh.identity_file {
                         if !std::path::Path::new(identity_file).exists() {
                             lines.push(diagnostics::line(
                                 DiagnosticStatus::Fail,
                                 DiagnosticCode::SshIdentityMissing,
-                                format!("SSH identity file not found: {identity_file}"),
+                                "Configured SSH identity file not found",
                             ));
                         }
                     }
@@ -4068,14 +4205,16 @@ impl McpServer {
                                     DiagnosticCode::SshTunnelAttempt,
                                     "Establishing SSH tunnel...",
                                 ));
-                                if let Err(e) = setup_ssh_tunnels(
+                                if setup_ssh_tunnels(
                                     &self.repo_root,
                                     std::slice::from_ref(&self.env_name),
-                                ) {
+                                )
+                                .is_err()
+                                {
                                     lines.push(diagnostics::line(
                                         DiagnosticStatus::Fail,
                                         DiagnosticCode::SshTunnelFailed,
-                                        format!("SSH tunnel setup failed: {e}"),
+                                        "SSH tunnel setup failed; configuration details redacted",
                                     ));
                                     let resp = trusted_tool_response(id, "failed", lines.join("\n"), "Stop and report the failed check diagnostics to the user; fix the reported configuration or connectivity issue before retrying.");
                                     return self.write_response(&resp);
@@ -4087,13 +4226,13 @@ impl McpServer {
                                 lines.push(diagnostics::line(
                                     DiagnosticStatus::Ok,
                                     DiagnosticCode::PostgresReachable,
-                                    format!("PostgreSQL reachable at {host}:{port}"),
+                                    "PostgreSQL reachable",
                                 ));
                             } else {
                                 lines.push(diagnostics::line(
                                     DiagnosticStatus::Fail,
                                     DiagnosticCode::PostgresUnreachable,
-                                    format!("PostgreSQL unreachable at {host}:{port} (read timed out after 2s)"),
+                                    "PostgreSQL unreachable (read timed out after 2s)",
                                 ));
                                 let resp = trusted_tool_response(id, "failed", lines.join("\n"), "Stop and report the failed check diagnostics to the user; fix the reported configuration or connectivity issue before retrying.");
                                 return self.write_response(&resp);
@@ -4125,14 +4264,16 @@ impl McpServer {
                                 DiagnosticCode::SshTunnelAttempt,
                                 "Establishing SSH tunnel...",
                             ));
-                            if let Err(e) = setup_ssh_tunnels(
+                            if setup_ssh_tunnels(
                                 &self.repo_root,
                                 std::slice::from_ref(&self.env_name),
-                            ) {
+                            )
+                            .is_err()
+                            {
                                 lines.push(diagnostics::line(
                                     DiagnosticStatus::Fail,
                                     DiagnosticCode::SshTunnelFailed,
-                                    format!("SSH tunnel setup failed: {e}"),
+                                    "SSH tunnel setup failed; configuration details redacted",
                                 ));
                                 let resp = trusted_tool_response(id, "failed", lines.join("\n"), "Stop and report the failed check diagnostics to the user; fix the reported configuration or connectivity issue before retrying.");
                                 return self.write_response(&resp);
@@ -4144,12 +4285,12 @@ impl McpServer {
                             )
                         };
                         if document_reachable {
-                            lines.push(format!("  Document database reachable at {host}:{port}"));
+                            lines.push("  Document database reachable".into());
                         } else {
                             lines.push(diagnostics::line(
                                 DiagnosticStatus::Fail,
                                 DiagnosticCode::SshTunnelFailed,
-                                format!("Document database tunnel not reachable at {host}:{port}"),
+                                "Document database tunnel not reachable",
                             ));
                             let resp = trusted_tool_response(id, "failed", lines.join("\n"), "Stop and report the failed check diagnostics to the user; fix the reported configuration or connectivity issue before retrying.");
                             return self.write_response(&resp);
@@ -4176,11 +4317,11 @@ impl McpServer {
                     },
                 ));
             }
-            Err(e) => {
+            Err(_) => {
                 lines.push(diagnostics::line(
                     DiagnosticStatus::Fail,
                     DiagnosticCode::SidecarConnectionFailed,
-                    format!("Sidecar connection failed: {e}"),
+                    "Sidecar connection failed; connection details redacted",
                 ));
                 lines.push(
                     "  Do not call reconnect for a sidecar startup failure; inspect the failing backend, SSH tunnel, and configuration first."
@@ -4255,10 +4396,7 @@ impl McpServer {
         lines.push(diagnostics::line(
             DiagnosticStatus::Ok,
             DiagnosticCode::AllChecksPassed,
-            format!(
-                "All checks passed for {}/{}",
-                self.project_name, self.env_name
-            ),
+            format!("All checks passed for environment {}", self.env_name),
         ));
 
         let resp = trusted_tool_response(id, "ok", lines.join("\n"), "Call database_info to confirm capabilities before discovery or queries, or stop if the health check was the user’s only request.");
@@ -4278,13 +4416,13 @@ impl McpServer {
                         "Preparing SSH tunnel before reconnect ({:?})",
                         start.elapsed()
                     );
-                    if let Err(e) =
-                        setup_ssh_tunnels(&self.repo_root, std::slice::from_ref(&self.env_name))
+                    if setup_ssh_tunnels(&self.repo_root, std::slice::from_ref(&self.env_name))
+                        .is_err()
                     {
                         return self.send_error(
                             id,
                             -32000,
-                            format!("SSH tunnel setup failed: {e}"),
+                            "SSH tunnel setup failed; configuration details redacted.",
                         );
                     }
                     tracing::info!("SSH tunnel established ({:?})", start.elapsed());
@@ -4297,14 +4435,7 @@ impl McpServer {
             Ok(()) => {
                 tracing::info!("Sidecar restarted ({:?})", start.elapsed());
             }
-            Err(e) => {
-                return self.send_backend_error(
-                    id,
-                    "Reconnect failed.",
-                    &e.to_string(),
-                    "Stop and report the restart failure; inspect configuration and connectivity before retrying.",
-                )
-            }
+            Err(_) => return self.send_error(id, -32000, "Reconnect failed."),
         }
 
         let backend_kind = self.backend.kind;
@@ -4497,6 +4628,24 @@ impl McpServer {
         writeln!(writer, "{line}")?;
         writer.flush()?;
         Ok(())
+    }
+}
+
+fn connection_setup_error_message() -> &'static str {
+    "Database connection could not be prepared. Check the connection configuration and required dependencies."
+}
+
+fn redact_connection_setup_error(error: &crate::error::SafeselectError) -> &'static str {
+    match error {
+        crate::error::SafeselectError::EnvVarNotSet(_)
+        | crate::error::SafeselectError::KeychainNotFound(_)
+        | crate::error::SafeselectError::Secret(_) => "required secret could not be resolved",
+        crate::error::SafeselectError::Config(_)
+        | crate::error::SafeselectError::Toml(_)
+        | crate::error::SafeselectError::Io(_) => "configuration could not be loaded",
+        crate::error::SafeselectError::Sidecar(_)
+        | crate::error::SafeselectError::SidecarJavaNotFound(_) => "sidecar startup failed",
+        _ => "connection preparation failed",
     }
 }
 
@@ -5199,6 +5348,7 @@ fn is_recoverable_connection_error(message: &str) -> bool {
         "08006",
         "08001",
         "57p01",
+        "database connection failed",
         "connection refused",
         "connection is closed",
         "broken pipe",
@@ -5289,6 +5439,40 @@ fn build_table_stats_sql(schema: &str, table: &str) -> String {
         "SELECT COALESCE(s.n_live_tup, 0) AS estimated_live_rows, pg_relation_size(c.oid) AS table_size, pg_indexes_size(c.oid) AS index_size, pg_total_relation_size(c.oid) AS total_size, COALESCE(s.seq_scan, 0) AS sequential_scans, COALESCE(s.idx_scan, 0) AS index_scans FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace LEFT JOIN pg_stat_user_tables AS s ON s.relid = c.oid WHERE n.nspname = '{}' AND c.relname = '{}' AND c.relkind IN ('r', 'p')",
         schema.replace('\'', "''"),
         table.replace('\'', "''")
+    )
+}
+
+fn build_maintenance_diagnostics_sql(
+    allowed_schemas: &[String],
+    denied_relations: &[String],
+    schema: Option<&str>,
+    limit: u64,
+) -> String {
+    let schema_predicate = match schema {
+        Some(schema) => format!("n.nspname = '{}'", schema.replace('\'', "''")),
+        None => allowed_catalog_schema_predicate(allowed_schemas, "n"),
+    };
+    let denied = denied_relations
+        .iter()
+        .map(|relation| {
+            let escaped = relation.replace('\'', "''");
+            if let Some((denied_schema, denied_table)) = relation.split_once('.') {
+                format!(
+                    "lower(n.nspname || '.' || c.relname) <> lower('{}')",
+                    format!("{denied_schema}.{denied_table}").replace('\'', "''")
+                )
+            } else {
+                format!("lower(c.relname) <> lower('{}')", escaped)
+            }
+        })
+        .collect::<Vec<_>>();
+    let denied_predicate = if denied.is_empty() {
+        String::new()
+    } else {
+        format!(" AND {}", denied.join(" AND "))
+    };
+    format!(
+        "SELECT current_setting('server_version_num')::integer, n.nspname, c.relname, c.relkind, c.reltuples, s.n_live_tup, s.n_dead_tup, s.n_mod_since_analyze, s.last_analyze::text, s.last_autoanalyze::text, s.last_vacuum::text, s.last_autovacuum::text, (current_setting('autovacuum')::boolean AND COALESCE(o.autovacuum_enabled, true)) AS autovacuum_enabled, COALESCE(o.autovacuum_analyze_scale_factor, current_setting('autovacuum_analyze_scale_factor')::float8) AS analyze_scale_factor, COALESCE(o.autovacuum_analyze_threshold, current_setting('autovacuum_analyze_threshold')::float8) AS analyze_threshold, COALESCE(o.autovacuum_vacuum_scale_factor, current_setting('autovacuum_vacuum_scale_factor')::float8) AS vacuum_scale_factor, COALESCE(o.autovacuum_vacuum_threshold, current_setting('autovacuum_vacuum_threshold')::float8) AS vacuum_threshold, COALESCE(o.autovacuum_vacuum_max_threshold, current_setting('autovacuum_vacuum_max_threshold', true)::float8) AS vacuum_max_threshold, s.n_ins_since_vacuum, c.relpages, (to_jsonb(c) ->> 'relallfrozen')::float8, COALESCE(o.autovacuum_vacuum_insert_scale_factor, current_setting('autovacuum_vacuum_insert_scale_factor', true)::float8) AS vacuum_insert_scale_factor, COALESCE(o.autovacuum_vacuum_insert_threshold, current_setting('autovacuum_vacuum_insert_threshold', true)::float8) AS vacuum_insert_threshold, (c.relkind = 'p') AS is_partitioned, COUNT(*) OVER () AS total_relations, CASE WHEN c.relfrozenxid::text::bigint >= 3 THEN age(c.relfrozenxid) ELSE 0 END, CASE WHEN c.relminmxid::text::bigint >= 1 THEN mxid_age(c.relminmxid) ELSE 0 END, LEAST(o.autovacuum_freeze_max_age, current_setting('autovacuum_freeze_max_age')::float8), LEAST(o.autovacuum_multixact_freeze_max_age, current_setting('autovacuum_multixact_freeze_max_age')::float8) FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace LEFT JOIN pg_stat_user_tables AS s ON s.relid = c.oid LEFT JOIN LATERAL (SELECT bool_or(NULLIF(option_value, '')::boolean) FILTER (WHERE option_name = 'autovacuum_enabled') AS autovacuum_enabled, max(NULLIF(option_value, '')::float8) FILTER (WHERE option_name = 'autovacuum_analyze_scale_factor') AS autovacuum_analyze_scale_factor, max(NULLIF(option_value, '')::float8) FILTER (WHERE option_name = 'autovacuum_analyze_threshold') AS autovacuum_analyze_threshold, max(NULLIF(option_value, '')::float8) FILTER (WHERE option_name = 'autovacuum_vacuum_scale_factor') AS autovacuum_vacuum_scale_factor, max(NULLIF(option_value, '')::float8) FILTER (WHERE option_name = 'autovacuum_vacuum_threshold') AS autovacuum_vacuum_threshold, max(NULLIF(option_value, '')::float8) FILTER (WHERE option_name = 'autovacuum_vacuum_max_threshold') AS autovacuum_vacuum_max_threshold, max(NULLIF(option_value, '')::float8) FILTER (WHERE option_name = 'autovacuum_vacuum_insert_scale_factor') AS autovacuum_vacuum_insert_scale_factor, max(NULLIF(option_value, '')::float8) FILTER (WHERE option_name = 'autovacuum_vacuum_insert_threshold') AS autovacuum_vacuum_insert_threshold, max(NULLIF(option_value, '')::float8) FILTER (WHERE option_name = 'autovacuum_freeze_max_age') AS autovacuum_freeze_max_age, max(NULLIF(option_value, '')::float8) FILTER (WHERE option_name = 'autovacuum_multixact_freeze_max_age') AS autovacuum_multixact_freeze_max_age FROM pg_options_to_table(COALESCE(c.reloptions, ARRAY[]::text[]))) AS o ON true WHERE {schema_predicate}{denied_predicate} AND c.relkind IN ('r', 'p', 'm') ORDER BY n.nspname, c.relname LIMIT {limit}",
     )
 }
 
@@ -5488,6 +5672,26 @@ fn uri_query_parameter<'a>(uri: &'a str, name: &str) -> Option<&'a str> {
         let (key, value) = parameter.split_once('=')?;
         key.eq_ignore_ascii_case(name).then_some(value)
     })
+}
+
+fn redacted_config_summary(
+    resolved: &crate::config::ResolvedConfig,
+    environment: &str,
+) -> Vec<String> {
+    let mut lines = vec![
+        format!("Environment: {environment}"),
+        format!("Backend: {:?}", resolved.environment.database.kind),
+        format!("Vendor: {}", resolved.environment.database.vendor()),
+    ];
+    if let Some(driver) = resolved.driver.as_ref() {
+        lines.push(format!("Driver: {}", driver.vendor));
+    }
+    lines.extend([
+        "Database: configured (details redacted)".into(),
+        "Username: configured (redacted)".into(),
+        "Password: [redacted]".into(),
+    ]);
+    lines
 }
 
 fn config_tls_status(
@@ -5794,7 +5998,55 @@ mod tests {
         assert!(detail.contains("SQLSTATE=08001"));
     }
 
+    #[test]
+    fn redacts_connection_setup_errors() {
+        let secret =
+            super::redact_connection_setup_error(&crate::error::SafeselectError::KeychainNotFound(
+                "private-service/private-account".into(),
+            ));
+        assert_eq!(secret, "required secret could not be resolved");
+        assert!(!secret.contains("private-account"));
+
+        let startup = super::redact_connection_setup_error(
+            &crate::error::SafeselectError::SidecarJavaNotFound("/private/java".into()),
+        );
+        assert_eq!(startup, "sidecar startup failed");
+        assert!(!super::connection_setup_error_message().contains("/private"));
+    }
+
+    #[test]
+    fn redacts_connection_identifiers_from_config_summary() {
+        let resolved = crate::config::ResolvedConfig {
+            project: crate::config::ProjectConfig::default(),
+            environment: crate::config::EnvironmentConfig {
+                version: 1,
+                database: crate::config::DatabaseConfig {
+                    kind: crate::backend::BackendKind::Document,
+                    vendor: Some("mongodb".into()),
+                    driver: None,
+                    url: "mongodb://reader:secret@db.internal/private".into(),
+                    username: "private-reader".into(),
+                    secret: None,
+                },
+                tls: None,
+                ssh: None,
+                limits: Default::default(),
+            },
+            driver: None,
+            password: "secret".into(),
+            repo_root: "/private/project-name".into(),
+        };
+
+        let summary = redacted_config_summary(&resolved, "production").join("\n");
+        assert!(summary.contains("Environment: production"));
+        assert!(summary.contains("Database: configured (details redacted)"));
+        for sensitive in ["db.internal", "private-reader", "secret", "project-name"] {
+            assert!(!summary.contains(sensitive));
+        }
+    }
+
     fn test_server(repo_root: &Path) -> McpServer {
+        let password = uuid::Uuid::new_v4().to_string();
         let project = crate::config::ProjectConfig {
             audit: crate::config::AuditConfig {
                 enabled: true,
@@ -5827,7 +6079,7 @@ mod tests {
             "org.postgresql.Driver",
             "jdbc:postgresql://127.0.0.1:5432/app",
             "agent",
-            "password",
+            &password,
             repo_root,
             &repo_root.join(".safeselect"),
         )
@@ -6286,6 +6538,14 @@ mod tests {
     }
 
     #[test]
+    fn maintenance_guidance_uses_natural_language_triggers() {
+        for guidance in [READ_ONLY_DEBUG_PROMPT, READ_ONLY_DEBUG_RESOURCE] {
+            assert!(guidance.contains("which PostgreSQL tables need ANALYZE or VACUUM"));
+            assert!(guidance.contains("get_maintenance_diagnostics"));
+        }
+    }
+
+    #[test]
     fn error_categories_have_one_safe_next_step() {
         for message in [
             "Request rejected: startup security failure",
@@ -6331,6 +6591,60 @@ mod tests {
         assert!(indexes.contains("pg_get_indexdef"));
         assert!(database_stats.contains("pg_database_size"));
         assert!(table_stats.contains("pg_stat_user_tables"));
+    }
+
+    #[test]
+    fn redacted_database_failure_is_recoverable() {
+        assert!(is_recoverable_connection_error(
+            "database connection failed; details redacted"
+        ));
+        assert!(!is_recoverable_connection_error(
+            "request failed; details redacted"
+        ));
+        assert!(!is_recoverable_connection_error("operation timed out"));
+    }
+
+    #[test]
+    fn maintenance_diagnostics_query_is_bounded_and_hides_denied_relations() {
+        let sql = build_maintenance_diagnostics_sql(
+            &["public".into()],
+            &["public.secrets".into(), "passwords".into()],
+            None,
+            25,
+        );
+        assert!(sql.starts_with("SELECT "));
+        assert!(sql.contains("pg_stat_user_tables"));
+        assert!(sql.contains("pg_options_to_table"));
+        assert!(sql.contains("n_ins_since_vacuum"));
+        assert!(sql.contains(
+            "current_setting('autovacuum')::boolean AND COALESCE(o.autovacuum_enabled, true)"
+        ));
+        assert!(sql.contains(
+            "bool_or(NULLIF(option_value, '')::boolean) FILTER (WHERE option_name = 'autovacuum_enabled')"
+        ));
+        assert!(sql.contains("c.relkind IN ('r', 'p', 'm')"));
+        assert!(sql.contains("age(c.relfrozenxid)"));
+        assert!(sql.contains("mxid_age(c.relminmxid)"));
+        assert!(sql.contains("LEAST(o.autovacuum_freeze_max_age"));
+        assert!(sql.contains("LEAST(o.autovacuum_multixact_freeze_max_age"));
+        // JSON lookup returns NULL on PG15–17 instead of referencing a missing column.
+        assert!(sql.contains("(to_jsonb(c) ->> 'relallfrozen')::float8"));
+        assert!(!sql.contains("c.relallfrozen"));
+        assert!(sql.contains("autovacuum_vacuum_insert_scale_factor"));
+        assert!(sql.contains("LIMIT 25"));
+        assert!(sql.contains("lower(n.nspname || '.' || c.relname) <> lower('public.secrets')"));
+        assert!(sql.contains("lower(c.relname) <> lower('passwords')"));
+        assert!(!sql.contains(';'));
+        assert!(!sql.contains(" VACUUM "));
+        assert!(!sql.contains(" ANALYZE "));
+        let security = SecurityEngine::new(
+            crate::config::SecurityPolicy::default(),
+            crate::config::LimitsConfig::default(),
+        );
+        assert!(
+            security.validate_system(&sql).is_ok(),
+            "maintenance catalog query must pass the existing read-only validator"
+        );
     }
 
     #[test]
@@ -6994,6 +7308,100 @@ services:
                 &serde_json::json!({"schema":"private"})
             )
             .is_err());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn validates_maintenance_schema_arguments() {
+        let root =
+            std::env::temp_dir().join(format!("safeselect-maintenance-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut server = test_server(&root);
+        assert_eq!(
+            McpServer::parse_maintenance_schema(&serde_json::json!({}), &[]).unwrap(),
+            None
+        );
+        assert_eq!(
+            McpServer::parse_maintenance_schema(
+                &serde_json::json!({"schema":"public"}),
+                &["public".into()]
+            )
+            .unwrap(),
+            Some("public")
+        );
+        assert!(McpServer::parse_maintenance_schema(
+            &serde_json::json!({"schema":"pg_catalog"}),
+            &[]
+        )
+        .is_err());
+        assert!(
+            McpServer::parse_maintenance_schema(&serde_json::json!({"unexpected":true}), &[])
+                .is_err()
+        );
+        server.security = SecurityEngine::new(
+            crate::config::SecurityPolicy {
+                allowed_schemas: vec!["public".into()],
+                ..Default::default()
+            },
+            crate::config::LimitsConfig::default(),
+        );
+        assert!(McpServer::parse_maintenance_schema(
+            &serde_json::json!({"schema":"private"}),
+            server.security.allowed_schemas()
+        )
+        .is_err());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn maintenance_handler_and_result_paths_are_exercised_without_backend() {
+        let root = std::env::temp_dir().join(format!(
+            "safeselect-maintenance-paths-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut server = test_server(&root);
+        server
+            .handle_get_maintenance_diagnostics(
+                Some(serde_json::json!(1)),
+                &serde_json::json!({"unexpected": true}),
+            )
+            .unwrap();
+        server
+            .handle_get_maintenance_diagnostics(
+                Some(serde_json::json!(2)),
+                &serde_json::json!({"schema": "public"}),
+            )
+            .unwrap();
+        let query = crate::sidecar::QueryResult {
+            columns: vec![],
+            rows: vec![vec![serde_json::json!(170000)]],
+            row_count: 1,
+            byte_count: 0,
+            elapsed_ms: 0,
+            elapsed: String::new(),
+        };
+        server
+            .write_maintenance_result(Some(serde_json::json!(3)), "SELECT 1", Ok(query))
+            .unwrap();
+        let unsupported = crate::sidecar::QueryResult {
+            columns: vec![],
+            rows: vec![vec![serde_json::json!(140000)]],
+            row_count: 1,
+            byte_count: 0,
+            elapsed_ms: 0,
+            elapsed: String::new(),
+        };
+        server
+            .write_maintenance_result(Some(serde_json::json!(4)), "SELECT 1", Ok(unsupported))
+            .unwrap();
+        server
+            .write_maintenance_result(
+                Some(serde_json::json!(5)),
+                "SELECT 1",
+                Err(crate::error::SafeselectError::Sidecar("test".into())),
+            )
+            .unwrap();
         let _ = std::fs::remove_dir_all(root);
     }
 

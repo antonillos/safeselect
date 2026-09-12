@@ -1,5 +1,8 @@
 name: Integration Tests
 
+permissions:
+  contents: read
+
 on:
   push:
     tags:
@@ -21,9 +24,14 @@ jobs:
   integration-tests:
     name: Real Integration Tests
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres-version: ['15', '16', '17', '18']
     env:
       CARGO_HTTP_MULTIPLEXING: "false"
       CARGO_NET_RETRY: "10"
+      POSTGRES_IMAGE: postgres:${{ matrix.postgres-version }}
 
     steps:
       - name: Checkout code
@@ -36,13 +44,21 @@ jobs:
         with:
           toolchain: stable
 
-      - name: Install Java
+      - name: Install Java (trusted ref)
+        if: ${{ !inputs.target_ref }}
         uses: actions/setup-java@v6
         with:
           distribution: 'temurin'
           java-version: '17'
           cache: maven
           cache-dependency-path: '**/pom.xml'
+
+      - name: Install Java (selected ref)
+        if: ${{ inputs.target_ref }}
+        uses: actions/setup-java@v6
+        with:
+          distribution: 'temurin'
+          java-version: '17'
 
       - name: Checkout CI tooling
         uses: actions/checkout@v7
@@ -59,6 +75,7 @@ jobs:
         run: docker compose -f docker-compose.integration.yml up -d --wait
 
       - name: Cache cargo dependencies
+        if: ${{ !inputs.target_ref }}
         uses: actions/cache@v6
         with:
           path: |
@@ -123,7 +140,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: integration-test-logs
+          name: integration-test-logs-pg${{ matrix.postgres-version }}
           path: |
             target/debug/deps/*.log
             ~/.local/state/safeselect/logs/

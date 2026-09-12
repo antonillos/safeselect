@@ -12,10 +12,6 @@ on:
       version:
         description: Release tag (e.g. v0.1.0)
         required: true
-      target_ref:
-        description: Branch or commit to release
-        required: true
-        default: main
       prerelease:
         description: Mark as prerelease
         type: boolean
@@ -46,15 +42,26 @@ jobs:
       semver: ${{ steps.parse.outputs.semver }}
       version: ${{ steps.parse.outputs.version }}
       target-ref: ${{ steps.parse.outputs.target-ref }}
+      source-date: ${{ steps.parse.outputs.source-date }}
       prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}
       draft: ${{ github.event_name == 'workflow_dispatch' && inputs.draft || false }}
     steps:
       - name: Checkout workflow tooling
         uses: actions/checkout@v7
+      - name: Recover frozen release source when present
+        id: recovery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          version="${VERSION:-v$(sed -nE 's/^version = "([^"]+)"/\1/p' Cargo.toml | sed -n '1p')}"
+          python3 tools/ci/release.py recovery-source --version "$version"
       - name: Checkout release source
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.target_ref || github.sha }}
+          # Recovery may only use the immutable target recorded in an existing
+          # draft/tag; otherwise build the selected workflow ref.
+          ref: ${{ steps.recovery.outputs.source-ref || github.sha }}
           path: release-source
       - name: Validate version and freeze source SHA
         id: parse
@@ -62,6 +69,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
         run: python3 tools/ci/release.py resolve --source release-source --version "$VERSION"
+      - name: Archive validated release source
+        working-directory: release-source
+        run: git archive --format=tar HEAD > ../release-source.tar
+      - name: Upload validated release source
+        uses: actions/upload-artifact@v7
+        with:
+          name: validated-source
+          path: release-source.tar
+          if-no-files-found: error
+          retention-days: 14
 
   integration-tests:
     needs: validate-version
@@ -87,22 +104,26 @@ jobs:
     env:
       VERSION: ${{ needs.validate-version.outputs.version }}
       TARGET: ${{ matrix.target }}
+      SOURCE_DATE: ${{ needs.validate-version.outputs.source-date }}
     defaults:
       run:
         shell: bash
     steps:
       - name: Checkout workflow tooling
         uses: actions/checkout@v7
-      - name: Checkout release source
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.validate-version.outputs.target-ref }}
-          path: release-source
       - name: Reuse existing verified release assets
         id: reuse
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 tools/ci/release.py reuse --version "$VERSION" --target "$TARGET"
+      - name: Download validated release source
+        if: steps.reuse.outputs.reused != 'true'
+        uses: actions/download-artifact@v8
+        with:
+          name: validated-source
+      - name: Extract validated release source
+        if: steps.reuse.outputs.reused != 'true'
+        run: mkdir release-source && tar -xf release-source.tar -C release-source
       - name: Install Rust
         if: steps.reuse.outputs.reused != 'true'
         run: rustup toolchain install stable --profile minimal && rustup target add "$TARGET"
@@ -115,8 +136,6 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
-          cache: maven
-          cache-dependency-path: '**/pom.xml'
       - name: Install makevn
         if: steps.reuse.outputs.reused != 'true'
         uses: ./.github/actions/setup-makevn
@@ -134,8 +153,7 @@ jobs:
           CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
         run: |
           # A retry must use the same source timestamp, not the current wall clock.
-          build_stamp="$(git show -s --format=%cs HEAD)"
-          SAFESELECT_BUILD_VERSION="$VERSION ($build_stamp)" cargo build --release --target "$TARGET"
+          SAFESELECT_BUILD_VERSION="$VERSION ($SOURCE_DATE)" cargo build --release --target "$TARGET"
       - name: Run tests (native host only)
         if: steps.reuse.outputs.reused != 'true' && matrix.target == 'x86_64-unknown-linux-gnu'
         working-directory: release-source
@@ -172,11 +190,12 @@ jobs:
     steps:
       - name: Checkout workflow tooling
         uses: actions/checkout@v7
-      - name: Checkout release source
-        uses: actions/checkout@v7
+      - name: Download validated release source
+        uses: actions/download-artifact@v8
         with:
-          ref: ${{ needs.validate-version.outputs.target-ref }}
-          path: release-source
+          name: validated-source
+      - name: Extract validated release source
+        run: mkdir release-source && tar -xf release-source.tar -C release-source
       - name: Download all build artifacts
         uses: actions/download-artifact@v8
         with:
@@ -234,7 +253,7 @@ jobs:
           if [[ "$DRAFT" == true ]]; then flags+=(--draft); fi
           if [[ "$PRERELEASE" == true ]]; then flags+=(--prerelease); fi
           python3 tools/ci/release.py publish --version "$VERSION" --sha "$SOURCE_SHA" \
-            --source release-source --notes release-source/release-notes.md "${flags[@]}"
+            --source . --notes release-source/release-notes.md "${flags[@]}"
 
   publish-mcp-registry:
     if: needs.validate-version.outputs.prerelease != 'true' && needs.validate-version.outputs.draft != 'true' && needs.integration-tests.result == 'success'

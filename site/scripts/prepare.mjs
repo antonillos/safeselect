@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir, copyFile } from "node:fs/promises";
+import { readFile, writeFile, mkdir, copyFile, cp } from "node:fs/promises";
 import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { marked } from "marked";
@@ -75,6 +75,16 @@ await writeFile(
   `${JSON.stringify(documents, null, 2)}\n`,
 );
 await copyFile(
+  resolve(root, "docs/cli-gallery.json"),
+  resolve(site, "content/cli-gallery.json"),
+);
+await mkdir(resolve(site, "public/cli"), { recursive: true });
+await cp(
+  resolve(root, "docs/recordings/cli"),
+  resolve(site, "public/cli"),
+  { recursive: true },
+);
+await copyFile(
   resolve(root, "docs/recordings/onboarding-full-local.gif"),
   resolve(site, "public/onboarding.gif"),
 );
@@ -83,5 +93,5 @@ if (existsSync(dbeaverRecording)) {
   await copyFile(dbeaverRecording, resolve(site, "public/dbeaver-codex.gif"));
 }
 console.log(
-  `Prepared ${definitions.length} reviewed documents and the onboarding recording.`,
+  `Prepared ${definitions.length} reviewed documents, the CLI gallery and recordings.`,
 );

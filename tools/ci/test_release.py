@@ -17,6 +17,7 @@ import publish_registry
 
 VERSION = "v1.2.3"
 SHA = "a" * 40
+SOURCE_DATE = "2026-09-10"
 
 
 def fixtures(directory, targets=release.TARGETS, suffix=""):
@@ -52,6 +53,8 @@ class Hosting:
             return f"{self.tag}\trefs/tags/{VERSION}" if self.tag else ""
         if args[:3] == ("git", "rev-parse", "HEAD"):
             return SHA
+        if args[:3] == ("git", "show", "-s"):
+            return SOURCE_DATE
         operation = args[2]
         if operation == "create":
             assert "--draft" in args
@@ -248,10 +251,36 @@ class ReleaseTests(unittest.TestCase):
         (self.root / "Cargo.toml").write_text('[package]\nversion = "1.2.3"\n')
         with patch.object(release, "write_outputs") as outputs:
             release.resolve(self.args)
-            outputs.assert_called_once_with({"version": VERSION, "semver": "1.2.3", "target-ref": SHA})
+            outputs.assert_called_once_with({
+                "version": VERSION,
+                "semver": "1.2.3",
+                "target-ref": SHA,
+                "source-date": SOURCE_DATE,
+            })
         self.args.version = "v1.2.4"
         with self.assertRaisesRegex(ValueError, "does not match"):
             release.resolve(self.args)
+
+    def test_recovery_source_uses_only_existing_frozen_release_refs(self):
+        with patch.object(release, "write_outputs") as outputs:
+            release.recovery_source(self.args)
+            outputs.assert_called_once_with({"source-ref": ""})
+
+        self.host.exists = True
+        with patch.object(release, "write_outputs") as outputs:
+            release.recovery_source(self.args)
+            outputs.assert_called_once_with({"source-ref": SHA})
+
+        self.host.draft = False
+        with patch.object(release, "write_outputs") as outputs:
+            release.recovery_source(self.args)
+            outputs.assert_called_once_with({"source-ref": f"refs/tags/{VERSION}"})
+
+    def test_recovery_source_rejects_non_sha_draft_target(self):
+        self.host.exists = True
+        self.host.target = "main"
+        with self.assertRaisesRegex(ValueError, "full commit SHA"):
+            release.recovery_source(self.args)
 
     def test_public_release_without_tag_is_rejected(self):
         self.host.exists, self.host.draft = True, False

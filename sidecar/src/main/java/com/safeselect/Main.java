@@ -10,6 +10,7 @@ import com.mongodb.client.MongoCursor;
 import com.mongodb.client.MongoDatabase;
 import com.mongodb.ReadPreference;
 import com.mongodb.MongoCommandException;
+import com.mongodb.MongoException;
 import org.bson.BsonArray;
 import org.bson.BsonBinary;
 import org.bson.BsonDocument;
@@ -172,8 +173,8 @@ public class Main {
         password = reader.readLine();
         validatePassword();
         configureIdleTimer(writer);
+        connectBackendOrExit();
         try {
-            connectBackend();
             writer.println("ready");
             writer.flush();
             processRequests(reader, writer);
@@ -182,6 +183,19 @@ public class Main {
             error("Fatal error: " + summarizeException(e));
             System.exit(1);
         }
+    }
+
+    private static void connectBackendOrExit() {
+        try {
+            connectBackend();
+        } catch (Exception e) {
+            error("Fatal error: " + connectionFailureMessage(e));
+            System.exit(1);
+        }
+    }
+
+    private static String connectionFailureMessage(Throwable throwable) {
+        return "database connection failed; details redacted";
     }
 
     private static void configureLogging() throws IOException {
@@ -233,12 +247,52 @@ public class Main {
             String method = (String) request.get("method");
             dispatchRequest(writer, request, id, method);
         } catch (Exception e) {
-            error("Error processing request: " + summarizeException(e));
+            error("Error processing request: " + requestFailureMessage(e));
             sendRequestError(line, writer, e);
         }
     }
 
-    private static void sendRequestError(String line, PrintWriter writer, Exception cause) {
+    private static String requestFailureMessage(Throwable throwable) {
+        if (isExecutionTimeout(throwable)) {
+            return "operation timed out";
+        }
+        if (isRecoverableConnectionFailure(throwable)) {
+            return "database connection failed; details redacted";
+        }
+        return "request failed; details redacted";
+    }
+
+    private static boolean isRecoverableConnectionFailure(Throwable throwable) {
+        for (Throwable current = throwable; current != null; current = current.getCause()) {
+            if (isRecoverableConnectionException(current)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isRecoverableConnectionException(Throwable throwable) {
+        return throwable instanceof com.mongodb.MongoSocketException
+                || throwable instanceof com.mongodb.MongoTimeoutException
+                || throwable instanceof SQLRecoverableException
+                || (throwable instanceof SQLException sqlException
+                    && isRecoverableSqlState(sqlException.getSQLState()));
+    }
+
+    private static boolean isRecoverableSqlState(String sqlState) {
+        return sqlState != null && (sqlState.startsWith("08") || sqlState.equals("57P01"));
+    }
+
+    private static boolean isExecutionTimeout(Throwable throwable) {
+        for (Throwable current = throwable; current != null; current = current.getCause()) {
+            if (current instanceof MongoException && ((MongoException) current).getCode() == 50) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static void sendRequestError(String line, PrintWriter writer, Throwable cause) {
         try {
             @SuppressWarnings("unchecked")
             final var failedRequest = (Map<String, Object>) MAPPER.readValue(line, Map.class);
@@ -246,9 +300,9 @@ public class Main {
             final var method = String.valueOf(failedRequest.get("method"));
             sendResponse(writer, id, null, Map.of(
                     "code", "REQUEST_FAILED",
-                    "message", method + " failed: " + summarizeException(cause)));
+                    "message", method + " failed: " + requestFailureMessage(cause)));
         } catch (Exception responseError) {
-            error("Failed to send error response: " + summarizeException(responseError));
+            error("Failed to send error response; details redacted");
         }
     }
 
@@ -310,7 +364,7 @@ public class Main {
             requirePostgresqlJdbc();
             Class.forName(driverClass);
             DriverManager.setLoginTimeout(3);
-            log("Connecting JDBC: url=" + databaseUrl + " user=" + user + " driver=" + driverClass);
+            log(connectionLogMessage("JDBC", driverClass));
             connection = DriverManager.getConnection(databaseUrl, user, password);
             applyStatementTimeout();
             configureReadOnlyConnection();
@@ -318,11 +372,16 @@ public class Main {
         }
         if ("mongodb".equals(backend)) {
             String url = databaseUrl.replace("__SAFESELECT_PASSWORD__", URLEncoder.encode(password == null ? "" : password, java.nio.charset.StandardCharsets.UTF_8));
-            log("Connecting MongoDB: url=" + databaseUrl + " user=" + user);
+            log(connectionLogMessage("MongoDB", null));
             mongoClient = MongoClients.create(url);
             return;
         }
         throw new IllegalArgumentException("Unsupported backend: " + backend);
+    }
+
+    private static String connectionLogMessage(String backendName, String configuredDriverClass) {
+        String message = "Connecting " + backendName + ": endpoint=[redacted] user=[redacted]";
+        return configuredDriverClass == null ? message : message + " driver=" + configuredDriverClass;
     }
 
     private static void applyStatementTimeout() throws SQLException {
@@ -593,10 +652,24 @@ public class Main {
         } catch (IllegalStateException e) {
             return;
         }
-        final var result = mongoClient
-                .getDatabase("admin")
-                .runCommand(new Document("ping", 1), ReadPreference.secondaryPreferred());
-        sendBoundedResponse(writer, id, result);
+        verifyDocumentConnectionSafely(writer, id);
+    }
+
+    private static void verifyDocumentConnectionSafely(PrintWriter writer, Object id) throws Exception {
+        try {
+            final var result = mongoClient
+                    .getDatabase("admin")
+                    .runCommand(new Document("ping", 1), ReadPreference.secondaryPreferred());
+            sendBoundedResponse(writer, id, result);
+        } catch (Exception e) {
+            sendConnectionFailureResponse(writer, id);
+        }
+    }
+
+    private static void sendConnectionFailureResponse(PrintWriter writer, Object id) throws Exception {
+        sendResponse(writer, id, null, Map.of(
+                "code", "CONNECTION_FAILED",
+                "message", connectionFailureMessage(null)));
     }
 
     @SuppressWarnings("unchecked")

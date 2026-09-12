@@ -16,7 +16,7 @@ import tempfile
 from manifest_contract import ManifestError, load_manifest, validate_manifest
 
 
-PREFIX = "SafeSelect database query MCP for project 'example-project' environment 'example': "
+PREFIX = "SafeSelect database query MCP for environment 'example': "
 DATABASES = {
     "postgresql": 'driver = "postgresql"\nurl = "jdbc:postgresql://127.0.0.1:1/example"\n',
     "mongodb": 'kind = "document"\nvendor = "mongodb"\nurl = "mongodb://127.0.0.1:1/example"\n',

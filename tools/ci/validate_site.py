@@ -8,7 +8,13 @@ import xml.etree.ElementTree as ET
 ROOT = Path(__file__).resolve().parents[2] / "site" / "out"
 ORIGIN = "https://antonillos.github.io"
 BASE = "/safeselect"
-ROUTES = ["/", "/compare/", "/guides/dbeaver-codex/", "/read-only-is-not-a-boolean/"]
+ROUTES = [
+    "/",
+    "/commands/",
+    "/compare/",
+    "/guides/dbeaver-codex/",
+    "/read-only-is-not-a-boolean/",
+]
 GOOGLE_VERIFICATION_FILE = "googled7be89f4207cbfe7.html"
 GOOGLE_VERIFICATION_CONTENT = b"google-site-verification: googled7be89f4207cbfe7.html"
 

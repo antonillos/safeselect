@@ -1,3 +1,4 @@
+import CommandShowcase from "./command-showcase";
 import { Shell, sitePath, REPO } from "./shared";
 
 export default function Home() {
@@ -67,8 +68,9 @@ export default function Home() {
             you already use.
           </h2>
           <p>
-            Import from DBeaver, Docker Compose or MongoDB Compass. Check the
-            environment, then install a project-scoped MCP entry.
+            Import from DBeaver, Docker Compose or MongoDB Compass. SafeSelect
+            follows the repository convention first: with one environment,
+            checks and agent setup infer it automatically.
           </p>
           <a className="text-link" href={sitePath("/guides/dbeaver-codex/")}>
             Follow DBeaver → Codex →
@@ -83,18 +85,44 @@ export default function Home() {
           </p>
         </div>
         <div className="terminal">
-          <div className="terminal-bar">macOS / Homebrew + Java 17+</div>
+          <div className="terminal-bar">
+            <span className="terminal-lights" aria-hidden="true">
+              <i className="terminal-light terminal-light-red" />
+              <i className="terminal-light terminal-light-yellow" />
+              <i className="terminal-light terminal-light-green" />
+            </span>
+            <span>macOS / Homebrew + Java 17+</span>
+          </div>
           <pre>
-            <code>{`brew install antonillos/tap/safeselect
-safeselect import-dbeaver ~/Downloads/connections.dbp
-# Choose staging during import, or use your environment name.
-safeselect check --environment staging
-safeselect agent install codex --environment staging --local
-safeselect agent status`}</code>
+            <code>
+              <span className="terminal-line">
+                <span className="terminal-prompt">$</span> brew install
+                antonillos/tap/safeselect
+              </span>
+              <span className="terminal-line">
+                <span className="terminal-prompt">$</span> safeselect
+                import-dbeaver ~/Downloads/connections.dbp
+              </span>
+              <span className="terminal-line terminal-comment">
+                # The sole environment is inferred by convention.
+              </span>
+              <span className="terminal-line">
+                <span className="terminal-prompt">$</span> safeselect check
+              </span>
+              <span className="terminal-line">
+                <span className="terminal-prompt">$</span> safeselect agent
+                install codex --local
+              </span>
+              <span className="terminal-line terminal-success">
+                ✓ MCP entry installed for codex
+              </span>
+            </code>
           </pre>
           <p>
             Review imports and policy yourself. Never paste an export or
-            database password into the agent chat.
+            database password into the agent chat. If the project has multiple
+            environments, add <code>--environment &lt;name&gt;</code> deliberately
+            to avoid touching an unrelated database.
           </p>
         </div>
       </section>
@@ -127,6 +155,21 @@ safeselect agent status`}</code>
             </p>
           </article>
         </div>
+      </section>
+      <section className="section command-preview">
+        <div>
+          <p className="eyebrow">THE CLI, IN CONTEXT</p>
+          <h2>See the command before you run it.</h2>
+          <p>
+            Imports, checks, posture and connection recovery are easier to
+            remember when the important output is visible. Browse the grouped
+            gallery, then copy the exact command you need.
+          </p>
+          <a className="text-link" href={sitePath("/commands/")}>
+            Explore the CLI gallery →
+          </a>
+        </div>
+        <CommandShowcase />
       </section>
       <section className="section">
         <p className="eyebrow">THE WHOLE ONBOARDING, NOT A MOCKUP</p>

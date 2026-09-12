@@ -38,6 +38,8 @@ next-env.d.ts
 /work/
 /.build/
 /content/documents.json
+/content/cli-gallery.json
 /public/onboarding.gif
+/public/cli/
 *.tsbuildinfo
 /source-docs/

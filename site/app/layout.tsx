@@ -9,7 +9,7 @@ export const metadata: Metadata = {
   description: homeDescription,
   icons: {
     icon: [
-      { url: sitePath("/icon.svg"), type: "image/svg+xml" },
+      { url: sitePath("/icon-mark.svg"), type: "image/svg+xml" },
       { url: sitePath("/favicon-32.png"), type: "image/png", sizes: "32x32" },
     ],
     apple: [{ url: sitePath("/apple-touch-icon.png"), sizes: "180x180" }],

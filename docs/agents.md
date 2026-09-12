@@ -53,6 +53,10 @@ SafeSelect rejects `--local` for Windsurf rather than silently changing a global
 file. User scope is the default for every other client; pass `--local` when the
 integration should travel with the repository.
 
+CLI `connect`, `disconnect`, and `reconnect` use their own temporary sidecar;
+they do not control an existing agent session. To change that session's
+connection state, invoke its MCP tools. See [CLI conventions and effects](../README.md#convention-before-configuration).
+
 ## Installing in an Agent
 
 ```bash
@@ -228,6 +232,12 @@ counters for one exact allowed relation. They query fixed read-only PostgreSQL
 catalogs, honour the existing schema and relation policies, and never accept
 arbitrary SQL. After statistics, inspect the specific schema or indexes; do not
 start an unbounded data read solely because statistics are available.
+
+`get_maintenance_diagnostics` aggregates bounded PostgreSQL catalog statistics to
+flag possible ANALYZE or VACUUM threshold exceedances. It reports evidence and
+unknown states, never executes maintenance, and does not claim to measure bloat,
+locks, wraparound risk, or overall database health. The diagnostic supports
+PostgreSQL 15, 16, 17, and 18.
 
 `list_table_partitions` returns the bounded metadata for all descendant
 partitions of one exact allowed PostgreSQL table: schema, table name, depth,

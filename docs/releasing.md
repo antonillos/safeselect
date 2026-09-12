@@ -51,17 +51,23 @@ builds and only repeats failed jobs and their dependants:
 gh run rerun <run-id> --failed
 ```
 
-If a new invocation is needed (for example, after a workflow fix), run the current
-workflow but select the original tag/commit as the source:
+If a new invocation is needed (for example, after a workflow fix), merge the fix
+to `main` and run the workflow from `main`:
 
 ```bash
 gh workflow run release.yml --ref main \
-  -f version=v0.7.6 -f target_ref=v0.7.6
+  -f version=v0.7.6
 ```
 
 Use the release's actual prerelease/draft settings when applicable. The current
-workflow tooling is checked out separately from the source being released, so a
-tag predating these helper scripts can still be recovered.
+workflow recovers the source SHA frozen in an existing draft, or the immutable
+release tag for a public release. It deliberately does not accept a manually
+supplied source ref, preventing arbitrary code from executing in a release run
+or populating caches shared with trusted workflows.
+
+After validation, the workflow archives tracked files from that exact commit and
+passes the archive to build and publication jobs as a same-run artifact. Those
+jobs never check out the recovered ref and do not write dependency caches.
 
 Recovery does **not** delete a release, move a tag, overwrite assets or stop merely
 because a release already exists. Complete platform assets are verified and

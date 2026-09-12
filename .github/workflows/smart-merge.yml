@@ -596,7 +596,6 @@ jobs:
                   ref: "main",
                   inputs: {
                     version,
-                    target_ref: "main",
                     prerelease: version.includes("-") ? "true" : "false",
                     draft: "false",
                   },
