@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import binascii
 import json
+import struct
 from pathlib import Path
 
 
@@ -33,6 +35,40 @@ EXPECTED = {
     "connect",
     "reconnect",
 }
+
+
+def valid_png(path: Path) -> bool:
+    data = path.read_bytes()
+    signature = b"\x89PNG\r\n\x1a\n"
+    if not data.startswith(signature):
+        return False
+    offset = len(signature)
+    saw_ihdr = False
+    saw_iend = False
+    while offset + 12 <= len(data):
+        length = struct.unpack(">I", data[offset : offset + 4])[0]
+        chunk_type = data[offset + 4 : offset + 8]
+        end = offset + 12 + length
+        if end > len(data):
+            return False
+        chunk_data = data[offset + 8 : offset + 8 + length]
+        stored_crc = struct.unpack(">I", data[offset + 8 + length : end])[0]
+        if binascii.crc32(chunk_type + chunk_data) & 0xFFFFFFFF != stored_crc:
+            return False
+        if chunk_type == b"IHDR":
+            if saw_ihdr or length != 13:
+                return False
+            width, height = struct.unpack(">II", chunk_data[:8])
+            if width == 0 or height == 0:
+                return False
+            saw_ihdr = True
+        elif chunk_type == b"IEND":
+            if length != 0 or not saw_ihdr:
+                return False
+            saw_iend = True
+            return end == len(data)
+        offset = end
+    return False
 
 
 def main() -> int:
@@ -65,6 +101,8 @@ def main() -> int:
         image = ROOT / "docs" / "recordings" / item["image"]
         if not image.is_file():
             raise SystemExit(f"missing capture for {item['id']}: {image}")
+        if not valid_png(image):
+            raise SystemExit(f"capture is not a valid PNG: {image}")
         if image.stat().st_size > 250_000:
             raise SystemExit(f"capture is too large for the gallery: {image}")
         text = " ".join(
