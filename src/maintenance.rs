@@ -30,6 +30,10 @@ pub struct MaintenanceDiagnostic {
     pub vacuum_threshold_setting: Option<f64>,
     pub vacuum_threshold: Option<f64>,
     pub vacuum_max_threshold: Option<f64>,
+    pub inserts_since_vacuum: Option<f64>,
+    pub vacuum_insert_scale_factor: Option<f64>,
+    pub vacuum_insert_threshold_setting: Option<f64>,
+    pub vacuum_insert_threshold: Option<f64>,
     pub warnings: Vec<&'static str>,
     pub analyze: MaintenanceMetric,
     pub vacuum: MaintenanceMetric,
@@ -113,12 +117,91 @@ fn effective_vacuum_threshold(raw: Option<f64>, max: Option<f64>) -> Option<f64>
     }
 }
 
+fn effective_vacuum_insert_threshold(
+    raw: Option<f64>,
+    scale: Option<f64>,
+    reltuples: Option<f64>,
+    relpages: Option<f64>,
+    relallfrozen: Option<f64>,
+) -> Option<f64> {
+    let (Some(raw), Some(scale), Some(reltuples), Some(relpages), Some(relallfrozen)) =
+        (raw, scale, reltuples, relpages, relallfrozen)
+    else {
+        return None;
+    };
+    if !raw.is_finite()
+        || !scale.is_finite()
+        || !reltuples.is_finite()
+        || !relpages.is_finite()
+        || !relallfrozen.is_finite()
+        || raw < 0.0
+        || scale < 0.0
+        || reltuples < 0.0
+        || relpages <= 0.0
+        || relallfrozen < 0.0
+    {
+        return None;
+    }
+    let not_frozen_fraction = (1.0 - relallfrozen / relpages).clamp(0.0, 1.0);
+    Some(raw + scale * reltuples * not_frozen_fraction)
+}
+
+fn vacuum_metric(
+    dead_rows: Option<f64>,
+    vacuum_threshold: Option<f64>,
+    inserts_since_vacuum: Option<f64>,
+    vacuum_insert_threshold: Option<f64>,
+    insert_vacuum_disabled: bool,
+) -> MaintenanceMetric {
+    if insert_vacuum_disabled {
+        return metric(dead_rows, vacuum_threshold, "dead_tuples");
+    }
+    let dead = dead_rows
+        .zip(vacuum_threshold)
+        .filter(|(value, limit)| value.is_finite() && limit.is_finite());
+    let inserts = inserts_since_vacuum
+        .zip(vacuum_insert_threshold)
+        .filter(|(value, limit)| value.is_finite() && limit.is_finite());
+
+    if let Some((value, limit)) = dead.filter(|(value, limit)| value > limit) {
+        return MaintenanceMetric {
+            status: "threshold_exceeded",
+            reason: "dead_tuples",
+            observed: Some(value),
+            threshold: Some(limit),
+        };
+    }
+    if let Some((value, limit)) = inserts.filter(|(value, limit)| value > limit) {
+        return MaintenanceMetric {
+            status: "threshold_exceeded",
+            reason: "inserts_since_vacuum",
+            observed: Some(value),
+            threshold: Some(limit),
+        };
+    }
+    if let (Some((dead_value, dead_limit)), Some((_insert_value, _insert_limit))) = (dead, inserts)
+    {
+        return MaintenanceMetric {
+            status: "below_threshold",
+            reason: "dead_tuples_and_inserts_since_vacuum",
+            observed: Some(dead_value),
+            threshold: Some(dead_limit),
+        };
+    }
+    MaintenanceMetric {
+        status: "unknown",
+        reason: "statistics_unavailable",
+        observed: dead_rows.or(inserts_since_vacuum),
+        threshold: vacuum_threshold.or(vacuum_insert_threshold),
+    }
+}
+
 pub fn diagnostics_from_query(result: &QueryResult) -> (Vec<MaintenanceDiagnostic>, bool) {
     let mut diagnostics = Vec::new();
     let total_relations = result
         .rows
         .first()
-        .and_then(|row| number(row, 19))
+        .and_then(|row| number(row, 24))
         .filter(|value| value.is_finite() && *value >= 0.0)
         .map(|value| value as u64);
     for row in &result.rows {
@@ -144,6 +227,11 @@ pub fn diagnostics_from_query(result: &QueryResult) -> (Vec<MaintenanceDiagnosti
         let vacuum_max = (server_version >= 180000)
             .then(|| number(row, 17))
             .flatten();
+        let inserts_since_vacuum = number(row, 18);
+        let relpages = number(row, 19);
+        let relallfrozen = number(row, 20);
+        let vacuum_insert_scale = number(row, 21);
+        let vacuum_insert_base = number(row, 22);
         let analyze_threshold = reltuples
             .zip(analyze_scale)
             .zip(analyze_base)
@@ -153,13 +241,34 @@ pub fn diagnostics_from_query(result: &QueryResult) -> (Vec<MaintenanceDiagnosti
             .zip(vacuum_base)
             .map(|((r, s), b)| b + s * r);
         let vacuum_threshold = effective_vacuum_threshold(vacuum_raw, vacuum_max);
-        let (analyze, vacuum) = metrics_for_relation(
-            relkind,
-            changes,
-            dead_rows,
-            analyze_threshold,
-            vacuum_threshold,
+        let vacuum_insert_threshold = effective_vacuum_insert_threshold(
+            vacuum_insert_base,
+            vacuum_insert_scale,
+            reltuples,
+            relpages,
+            relallfrozen,
         );
+        let insert_vacuum_disabled = vacuum_insert_base.is_some_and(|value| value < 0.0);
+        let (analyze, vacuum) = if relkind == "p" {
+            metrics_for_relation(
+                relkind,
+                changes,
+                dead_rows,
+                analyze_threshold,
+                vacuum_threshold,
+            )
+        } else {
+            (
+                metric(changes, analyze_threshold, "changes_since_analyze"),
+                vacuum_metric(
+                    dead_rows,
+                    vacuum_threshold,
+                    inserts_since_vacuum,
+                    vacuum_insert_threshold,
+                    insert_vacuum_disabled,
+                ),
+            )
+        };
         let warnings = if autovacuum_enabled == Some(false) {
             vec!["autovacuum_disabled"]
         } else {
@@ -185,6 +294,10 @@ pub fn diagnostics_from_query(result: &QueryResult) -> (Vec<MaintenanceDiagnosti
             vacuum_threshold_setting: vacuum_base,
             vacuum_threshold,
             vacuum_max_threshold: vacuum_max,
+            inserts_since_vacuum,
+            vacuum_insert_scale_factor: vacuum_insert_scale,
+            vacuum_insert_threshold_setting: vacuum_insert_base,
+            vacuum_insert_threshold,
             warnings,
             analyze,
             vacuum,
@@ -275,6 +388,11 @@ mod tests {
             serde_json::json!(0.2),
             serde_json::json!(50),
             serde_json::json!(100000000),
+            serde_json::json!(0),
+            serde_json::json!(10),
+            serde_json::json!(0),
+            serde_json::json!(0.2),
+            serde_json::json!(100),
             serde_json::json!(false),
             serde_json::json!(1),
         ]
@@ -302,7 +420,46 @@ mod tests {
         assert_eq!(items[0].vacuum.status, "below_threshold");
         assert_eq!(items[0].vacuum_threshold, Some(250.0));
         assert_eq!(items[0].vacuum_threshold_setting, Some(50.0));
+        assert_eq!(items[0].vacuum_insert_threshold, Some(300.0));
         assert_eq!(items[1].vacuum.status, "threshold_exceeded");
+    }
+
+    #[test]
+    fn insert_threshold_can_trigger_vacuum_without_dead_tuples() {
+        let mut values = row("r", Some(0.0), Some(0.0));
+        values[18] = serde_json::json!(301);
+        let result = QueryResult {
+            columns: vec![],
+            rows: vec![values],
+            row_count: 1,
+            byte_count: 0,
+            elapsed_ms: 0,
+            elapsed: String::new(),
+        };
+        let (items, _) = diagnostics_from_query(&result);
+        assert_eq!(items[0].vacuum.status, "threshold_exceeded");
+        assert_eq!(items[0].vacuum.reason, "inserts_since_vacuum");
+        assert_eq!(items[0].vacuum.observed, Some(301.0));
+        assert_eq!(items[0].vacuum.threshold, Some(300.0));
+        assert_eq!(items[0].inserts_since_vacuum, Some(301.0));
+    }
+
+    #[test]
+    fn disabled_insert_threshold_does_not_hide_dead_tuple_decision() {
+        let mut values = row("r", Some(0.0), Some(0.0));
+        values[18] = serde_json::json!(10000);
+        values[22] = serde_json::json!(-1);
+        let result = QueryResult {
+            columns: vec![],
+            rows: vec![values],
+            row_count: 1,
+            byte_count: 0,
+            elapsed_ms: 0,
+            elapsed: String::new(),
+        };
+        let (items, _) = diagnostics_from_query(&result);
+        assert_eq!(items[0].vacuum.status, "below_threshold");
+        assert_eq!(items[0].vacuum.reason, "dead_tuples");
     }
 
     #[test]
@@ -406,7 +563,7 @@ mod tests {
             columns: vec![],
             rows: vec![{
                 let mut row = row("r", Some(1.0), Some(1.0));
-                row[19] = serde_json::json!(2);
+                row[24] = serde_json::json!(2);
                 row
             }],
             row_count: 2,
