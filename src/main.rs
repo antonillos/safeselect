@@ -1265,10 +1265,7 @@ fn check_gitignore(repo_root: &std::path::Path) {
         if let Ok(content) = std::fs::read_to_string(&gitignore) {
             if !content
                 .lines()
-                .any(|l| matches!(
-                    l.trim(),
-                    ".safeselect/" | ".safeselect" | "/.safeselect/" | "/.safeselect"
-                ))
+                .any(|l| matches!(l.trim(), ".safeselect/" | ".safeselect"))
             {
                 println!("  ⚠  .safeselect/ not found in .gitignore — consider adding it");
             }
@@ -5350,8 +5347,6 @@ mod tests {
         std::fs::write(root.join(".gitignore"), "target/\n").unwrap();
         check_gitignore(&root);
         std::fs::write(root.join(".gitignore"), ".safeselect/\n").unwrap();
-        check_gitignore(&root);
-        std::fs::write(root.join(".gitignore"), "/.safeselect/\n").unwrap();
         check_gitignore(&root);
 
         let _ = std::fs::remove_dir_all(root);
