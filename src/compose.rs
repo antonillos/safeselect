@@ -9,6 +9,9 @@ fn secret_env_var(env_name: &str) -> String {
     )
 }
 
+const MISSING_PASSWORD_WARNING: &str =
+    "WARN: No password configured. Configure the missing database secret before connecting.";
+
 /// Returns a platform-appropriate hint for configuring a database secret.
 pub fn secret_setup_hint(project_name: &str, env_name: &str) -> String {
     if cfg!(target_os = "macos") {
@@ -471,11 +474,7 @@ pub fn write_config_files(
         if !env_file.exists() {
             if conn.password_var.is_none() && conn.password_literal.is_none() {
                 let account = format!("{}/{}", project_name, conn.env_name);
-                eprintln!(
-                    "WARN: No password configured for '{}'.\n  {}",
-                    conn.service,
-                    secret_setup_hint(project_name, &conn.env_name)
-                );
+                eprintln!("{MISSING_PASSWORD_WARNING}");
                 no_password.push((conn.env_name.clone(), account));
             }
             std::fs::write(&env_file, env_toml)?;
@@ -800,6 +799,16 @@ services:
         assert!(guidance
             .text
             .contains("safeselect agent install opencode --environment testing"));
+    }
+
+    #[test]
+    fn missing_password_warning_does_not_include_connection_identifiers() {
+        let warning = MISSING_PASSWORD_WARNING;
+
+        assert!(warning.contains("No password configured"));
+        assert!(!warning.contains("project"));
+        assert!(!warning.contains("environment"));
+        assert!(!warning.contains("<password>"));
     }
 
     #[test]
