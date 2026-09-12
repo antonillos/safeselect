@@ -175,7 +175,7 @@
     },
     {
       "id": "nosql",
-      "title": "Explore NoSQL: discover, infer and read",
+      "title": "Explore NoSQL",
       "description": "Follow MongoDB discovery from databases to bounded documents, with sampled schema inference before reads.",
       "commands": [
         {
