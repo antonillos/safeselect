@@ -143,7 +143,7 @@ jobs:
         if: steps.reuse.outputs.reused != 'true'
         working-directory: release-source
         run: |
-          makevn doctor init test package
+          makevn --repo "$GITHUB_WORKSPACE/release-source" doctor init test package
           cp sidecar/target/safeselect-sidecar-*.jar sidecar/target/safeselect-sidecar.jar
       - name: Build Rust binary
         if: steps.reuse.outputs.reused != 'true'
