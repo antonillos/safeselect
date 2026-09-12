@@ -6,6 +6,7 @@ from __future__ import annotations
 import binascii
 import json
 import struct
+import zlib
 from pathlib import Path
 
 
@@ -44,7 +45,11 @@ def valid_png(path: Path) -> bool:
         return False
     offset = len(signature)
     saw_ihdr = False
+    saw_idat = False
     saw_iend = False
+    idat_chunks: list[bytes] = []
+    width = height = bit_depth = color_type = interlace = 0
+    channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}
     while offset + 12 <= len(data):
         length = struct.unpack(">I", data[offset : offset + 4])[0]
         chunk_type = data[offset + 4 : offset + 8]
@@ -56,17 +61,48 @@ def valid_png(path: Path) -> bool:
         if binascii.crc32(chunk_type + chunk_data) & 0xFFFFFFFF != stored_crc:
             return False
         if chunk_type == b"IHDR":
-            if saw_ihdr or length != 13:
+            if saw_ihdr or offset != len(signature) or length != 13:
                 return False
-            width, height = struct.unpack(">II", chunk_data[:8])
-            if width == 0 or height == 0:
+            width, height, bit_depth, color_type, compression, filtering, interlace = struct.unpack(
+                ">IIBBBBB", chunk_data
+            )
+            if (
+                width == 0
+                or height == 0
+                or compression != 0
+                or filtering != 0
+                or interlace != 0
+                or color_type not in channels
+                or bit_depth != 8
+            ):
                 return False
             saw_ihdr = True
+        elif chunk_type == b"IDAT":
+            if not saw_ihdr or saw_iend:
+                return False
+            saw_idat = True
+            idat_chunks.append(chunk_data)
         elif chunk_type == b"IEND":
-            if length != 0 or not saw_ihdr:
+            if length != 0 or not saw_ihdr or not saw_idat:
                 return False
             saw_iend = True
-            return end == len(data)
+            if end != len(data):
+                return False
+            try:
+                decoder = zlib.decompressobj()
+                pixels = decoder.decompress(b"".join(idat_chunks), 64 * 1024 * 1024 + 1)
+                if decoder.unconsumed_tail:
+                    return False
+                pixels += decoder.flush()
+            except zlib.error:
+                return False
+            if decoder.unused_data or not decoder.eof:
+                return False
+            row_bytes = width * channels[color_type]
+            expected = height * (row_bytes + 1)
+            if expected > 64 * 1024 * 1024 or len(pixels) != expected:
+                return False
+            return all(pixels[row * (row_bytes + 1)] <= 4 for row in range(height))
         offset = end
     return False
 
