@@ -6,7 +6,10 @@ const eslintConfig = defineConfig([
   ...nextVitals,
   ...nextTs,
   // Static Pages output deliberately has no image optimizer or Next runtime.
-  { files: ["app/page.tsx", "app/shared.tsx"], rules: { "@next/next/no-img-element": "off" } },
+  {
+    files: ["app/page.tsx", "app/shared.tsx", "app/commands/page.tsx"],
+    rules: { "@next/next/no-img-element": "off" },
+  },
   {
     files: ["scripts/export.tsx"],
     rules: {

@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile, copyFile } from "node:fs/promises";
 import { renderToStaticMarkup } from "react-dom/server";
 import Home from "../app/page";
+import Commands from "../app/commands/page";
 import { Document, type DocumentRoute } from "../app/document";
 import documents from "../content/documents.json";
 import { CANONICAL } from "../app/shared";
@@ -16,6 +17,13 @@ const pages = [
     description: homeDescription,
     content: <Home />,
   },
+  {
+    route: "/commands/",
+    title: "SafeSelect CLI command gallery",
+    description:
+      "A visual, grouped guide to SafeSelect CLI commands for PostgreSQL and MongoDB projects.",
+    content: <Commands />,
+  },
   ...Object.entries(documents).map(([route, doc]) => ({
     ...doc,
     route,
@@ -30,7 +38,7 @@ for (const page of pages) {
       <meta name="viewport" content="width=device-width, initial-scale=1" />
       <title>{page.title}</title>
       <meta name="description" content={page.description} />
-      <link rel="icon" href="/safeselect/icon.svg" type="image/svg+xml" />
+      <link rel="icon" href="/safeselect/icon-mark.svg" type="image/svg+xml" />
       <link rel="icon" href="/safeselect/favicon-32.png" type="image/png" sizes="32x32" />
       <link rel="apple-touch-icon" href="/safeselect/apple-touch-icon.png" sizes="180x180" />
       <link rel="canonical" href={`${CANONICAL}${page.route}`} />
@@ -74,11 +82,39 @@ const css = (await readFile("app/globals.css", "utf8")).replace(
 );
 await writeFile("out/site.css", css);
 await copyFile("public/og.png", "out/og.png");
-for (const asset of ["icon.svg", "icon-dark.svg", "icon-512.png", "favicon-32.png", "apple-touch-icon.png"]) {
+for (const asset of ["icon.svg", "icon-dark.svg", "icon-mark.svg", "icon-512.png", "favicon-32.png", "apple-touch-icon.png"]) {
   await copyFile(`public/${asset}`, `out/${asset}`);
 }
 await copyFile("public/onboarding.gif", "out/onboarding.gif");
 await copyFile("public/dbeaver-codex.gif", "out/dbeaver-codex.gif");
+await mkdir("out/cli", { recursive: true });
+for (const asset of [
+  "list_databases.png",
+  "list_collections.png",
+  "discover_document_schema.png",
+  "find_documents.png",
+  "list_tables.png",
+  "describe_table.png",
+  "get_maintenance_diagnostics.png",
+  "agent.png",
+  "check.png",
+  "config.png",
+  "connect.png",
+  "disconnect.png",
+  "doctor.png",
+  "driver.png",
+  "help.png",
+  "import-compass.png",
+  "import-compose.png",
+  "import-dbeaver.png",
+  "posture.png",
+  "query.png",
+  "reconnect.png",
+  "serve.png",
+  "uninstall.png",
+]) {
+  await copyFile(`public/cli/${asset}`, `out/cli/${asset}`);
+}
 // Keep Google's supplied ownership proof byte-for-byte on every Pages deploy.
 await copyFile(
   "public/googled7be89f4207cbfe7.html",

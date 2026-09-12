@@ -15,9 +15,10 @@ npm ci --ignore-scripts
 npm run dev
 ```
 
-`predev` and `prebuild` prepare the three reviewed Markdown documents from
-`../docs/` and copy the existing onboarding GIF. Those generated copies are
-ignored. The social card is `public/og.png`.
+`predev` and `prebuild` prepare the three reviewed Markdown documents and the
+shared CLI gallery catalog from `../docs/`, then copy the onboarding recording
+and command captures. Generated catalog copies are ignored. The social card is
+`public/og.png`.
 
 ## Validate and build
 
@@ -58,14 +59,16 @@ second independent Pages deploy that could replace either part.
 
 ## Editorial source and review snapshots
 
-Edit the comparison, guide and article in `../docs/`, not their generated JSON.
-The build accepts only those three fixed source files; it does not render
+Edit the comparison, guide, article and CLI gallery catalog in `../docs/`, not
+their generated copies. The build accepts only those reviewed sources; it does not render
 visitor-supplied Markdown. Other repository documentation links point to GitHub.
 
 When preparing an isolated Sites source repository, include the exact reviewed
-Markdown under `source-docs/docs/` (retaining its subdirectories) and the
-recordings at `source-docs/docs/recordings/onboarding-full-local.gif` and
-`source-docs/docs/recordings/safeselect-dbeaver-codex.gif`.
+Markdown under `source-docs/docs/` (retaining its subdirectories), the
+`source-docs/docs/cli-gallery.json` catalog, and the recordings at
+`source-docs/docs/recordings/onboarding-full-local.gif`,
+`source-docs/docs/recordings/safeselect-dbeaver-codex.gif` and
+`source-docs/docs/recordings/cli/`.
 The preparation script uses this fallback only when the parent repository docs
 are unavailable. Keep `.openai/hosting.json` with the same project ID and do not
 push the unrelated Rust repository to the Sites source remote.

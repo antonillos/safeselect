@@ -1,0 +1,216 @@
+{
+  "title": "SafeSelect command gallery",
+  "intro": "A visual tour of the CLI, grouped by the job each command helps you finish.",
+  "groups": [
+    {
+      "id": "imports",
+      "title": "Import connections",
+      "description": "Bring an existing DBeaver, Docker Compose or MongoDB Compass connection into the project.",
+      "commands": [
+        {
+          "id": "import-dbeaver",
+          "command": "safeselect import-dbeaver <zip>",
+          "purpose": "Import a DBeaver export into .safeselect/.",
+          "example": "safeselect import-dbeaver ~/Downloads/connections.zip",
+          "image": "cli/import-dbeaver.png",
+          "caption": "The importer keeps the connection shape while leaving passwords outside project files."
+        },
+        {
+          "id": "import-compose",
+          "command": "safeselect import-compose [--path <path>]",
+          "purpose": "Discover PostgreSQL services from Docker Compose.",
+          "example": "safeselect import-compose --path .",
+          "image": "cli/import-compose.png",
+          "caption": "Compose discovery turns an existing local service into a project environment."
+        },
+        {
+          "id": "import-compass",
+          "command": "safeselect import-compass [--path <path>]",
+          "purpose": "Import MongoDB Compass connections.",
+          "example": "safeselect import-compass --path ~/.config/MongoDB Compass",
+          "image": "cli/import-compass.png",
+          "caption": "Compass imports preserve MongoDB connection details without exposing credentials."
+        }
+      ]
+    },
+    {
+      "id": "prepare",
+      "title": "Prepare the project",
+      "description": "Validate local policy, install drivers and connect an AI client without repeating configuration flags.",
+      "commands": [
+        {
+          "id": "config",
+          "command": "safeselect config <COMMAND>",
+          "purpose": "Validate, inspect and maintain project configuration.",
+          "example": "safeselect config show --project demo --environment postgres",
+          "image": "cli/config.png",
+          "caption": "Configuration show reports a safe, redacted policy summary before the server starts."
+        },
+        {
+          "id": "driver",
+          "command": "safeselect driver <COMMAND>",
+          "purpose": "Register and verify JDBC drivers.",
+          "example": "safeselect driver list",
+          "image": "cli/driver.png",
+          "caption": "The driver registry shows the vendor and local verified artifact."
+        },
+        {
+          "id": "agent",
+          "command": "safeselect agent <COMMAND>",
+          "purpose": "Detect clients and install their MCP entry.",
+          "example": "safeselect agent detect",
+          "image": "cli/agent.png",
+          "caption": "Detection lists available clients before an explicit project-scoped MCP install."
+        }
+      ]
+    },
+    {
+      "id": "diagnose",
+      "title": "Verify and diagnose",
+      "description": "Check the complete path from project policy to the database, then inspect the effective PostgreSQL posture.",
+      "commands": [
+        {
+          "id": "check",
+          "command": "safeselect check [--environment <env>]",
+          "purpose": "Test configuration, secrets, tunnels, sidecar and backend connectivity.",
+          "example": "safeselect check",
+          "image": "cli/check.png",
+          "caption": "Checks follow convention and inspect every environment unless one is selected deliberately."
+        },
+        {
+          "id": "doctor",
+          "command": "safeselect doctor [--environment <env>]",
+          "purpose": "Print concise findings with stable diagnostic codes.",
+          "example": "safeselect doctor",
+          "image": "cli/doctor.png",
+          "caption": "Doctor turns a failed connection into a short next action instead of a log wall."
+        },
+        {
+          "id": "posture",
+          "command": "safeselect posture [--environment <env>]",
+          "purpose": "Inspect the effective PostgreSQL security posture.",
+          "example": "safeselect posture --strict",
+          "image": "cli/posture.png",
+          "caption": "Posture shows the effective read-only policy, limits and database posture before agent use."
+        }
+      ]
+    },
+    {
+      "id": "connection",
+      "title": "Manage a connection",
+      "description": "Start the local MCP server or exercise the temporary connection lifecycle directly.",
+      "commands": [
+        {
+          "id": "serve",
+          "command": "safeselect serve [--environment <env>]",
+          "purpose": "Start the local MCP server for a project environment.",
+          "example": "safeselect serve",
+          "image": "cli/serve.png",
+          "caption": "The server speaks local stdio: the MCP initialize response exposes SafeSelect capabilities, not a network listener."
+        },
+        {
+          "id": "connect",
+          "command": "safeselect connect [--environment <env>]",
+          "purpose": "Test a temporary JDBC connection.",
+          "example": "safeselect connect",
+          "image": "cli/connect.png",
+          "caption": "Connect verifies the temporary JDBC sidecar against the live fixture without taking over an active MCP session."
+        },
+        {
+          "id": "disconnect",
+          "command": "safeselect disconnect [--environment <env>]",
+          "purpose": "Close a temporary JDBC connection.",
+          "example": "safeselect disconnect",
+          "image": "cli/disconnect.png",
+          "caption": "Disconnect cleanly closes the temporary JDBC sidecar and reports the completed lifecycle step."
+        },
+        {
+          "id": "reconnect",
+          "command": "safeselect reconnect [--environment <env>]",
+          "purpose": "Restart the sidecar and verify connectivity.",
+          "example": "safeselect reconnect",
+          "image": "cli/reconnect.png",
+          "caption": "Reconnect restarts the sidecar and verifies the live fixture instead of hiding a stale database."
+        }
+      ]
+    },
+    {
+      "id": "query",
+      "title": "Explore SQL: discover, inspect and diagnose",
+      "description": "Discover tables and columns through MCP, run bounded SQL separately, and inspect read-only maintenance evidence.",
+      "commands": [
+        {
+          "id": "list_tables",
+          "command": "MCP \u00b7 list_tables",
+          "purpose": "Discover PostgreSQL tables through MCP.",
+          "example": "list_tables({\"schema\":\"public\"})",
+          "image": "cli/list_tables.png",
+          "caption": "Real MCP response, formatted as a table: five synthetic relations in public. Discover exact names before inspecting columns."
+        },
+        {
+          "id": "describe_table",
+          "command": "MCP \u00b7 describe_table",
+          "purpose": "Inspect column names, types and nullability through MCP.",
+          "example": "describe_table({\"schema\":\"public\",\"table\":\"demo_orders\"})",
+          "image": "cli/describe_table.png",
+          "caption": "Real MCP response, formatted as a table: eight columns including UUID, JSONB and a timestamp range. No data rows are queried."
+        },
+        {
+          "id": "query",
+          "command": "safeselect query --sql <SQL>",
+          "purpose": "Execute one bounded read-only SQL statement and display its results.",
+          "example": "safeselect query --sql \"SELECT order_id, status, subtotal FROM public.demo_orders WHERE status = 'paid' LIMIT 3\"",
+          "image": "cli/query.png",
+          "caption": "The bounded SQL request returns three synthetic fixture rows with row and byte counts; writes remain rejected."
+        },
+        {
+          "id": "get_maintenance_diagnostics",
+          "command": "MCP \u00b7 get_maintenance_diagnostics",
+          "purpose": "Inspect ANALYZE and VACUUM signals without running maintenance.",
+          "example": "get_maintenance_diagnostics({\"schema\":\"public\"})",
+          "image": "cli/get_maintenance_diagnostics.png",
+          "caption": "Real MCP response excerpt: all five fixture tables are below maintenance thresholds. This read-only diagnostic never executes ANALYZE or VACUUM; review the evidence with a DBA."
+        }
+      ]
+    },
+    {
+      "id": "nosql",
+      "title": "Explore NoSQL: discover, infer and read",
+      "description": "Follow MongoDB discovery from databases to bounded documents, with sampled schema inference before reads.",
+      "commands": [
+        {
+          "id": "list_databases",
+          "command": "MCP \u00b7 list_databases",
+          "purpose": "Discover MongoDB databases through MCP.",
+          "example": "list_databases()",
+          "image": "cli/list_databases.png",
+          "caption": "Real MCP response: the isolated demo exposes one allowed database. Choose it before discovering collections."
+        },
+        {
+          "id": "list_collections",
+          "command": "MCP \u00b7 list_collections",
+          "purpose": "Discover collections in an allowed MongoDB database.",
+          "example": "list_collections({\"database\":\"safeselect_demo\"})",
+          "image": "cli/list_collections.png",
+          "caption": "Real MCP response: four synthetic collections are listed without reading documents."
+        },
+        {
+          "id": "discover_document_schema",
+          "command": "MCP \u00b7 discover_document_schema",
+          "purpose": "Infer frequent fields and types from a bounded MongoDB sample.",
+          "example": "discover_document_schema({\"database\":\"safeselect_demo\",\"collection\":\"orders\",\"sample_size\":5})",
+          "image": "cli/discover_document_schema.png",
+          "caption": "Real MCP response: sampled fields and observed types guide the next bounded read; inference is explicitly non-exhaustive."
+        },
+        {
+          "id": "find_documents",
+          "command": "MCP \u00b7 find_documents",
+          "purpose": "Read bounded MongoDB documents with an explicit filter.",
+          "example": "find_documents({\"database\":\"safeselect_demo\",\"collection\":\"orders\",\"filter\":{\"status\":\"paid\"},\"limit\":3})",
+          "image": "cli/find_documents.png",
+          "caption": "Real MCP response: three paid orders, 994 bytes, returned in 7ms. The filter and limit keep the read bounded."
+        }
+      ]
+    }
+  ]
+}

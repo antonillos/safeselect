@@ -15,7 +15,7 @@ export function Shell({ children }: { children: ReactNode }) {
         <a className="brand" href={sitePath("/")}>
           <img
             className="brand-mark"
-            src={sitePath("/icon.svg")}
+            src={sitePath("/icon-mark.svg")}
             width="36"
             height="36"
             alt=""
@@ -24,6 +24,7 @@ export function Shell({ children }: { children: ReactNode }) {
           SafeSelect <span className="brand-mcp">MCP</span>
         </a>
         <nav aria-label="Main navigation">
+          <a href={sitePath("/commands/")}>CLI guide</a>
           <a href={`${REPO}/blob/develop/docs/security-proof.md`}>Security</a>
           <a href={sitePath("/compare/")}>Compare</a>
           <a href={REPO}>GitHub ↗</a>

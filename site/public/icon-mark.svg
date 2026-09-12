@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+  <title id="title">SafeSelect</title>
+  <desc id="desc">Geometric S monogram for read-only SQL and NoSQL database access.</desc>
+  <path fill="#ffffff" d="M61 9Q64 7 67 9L105 28Q108 29.5 108 33V48Q108 50 106 51L94 57Q92 58 90 57L46 37Q42 35 42 39V46L105 73Q108 74.5 108 78V98Q108 101 105 102.5L67 121Q64 123 61 121L23 102Q20 100.5 20 97V80Q20 78 22 77L32 72Q34 71 36 72L82 92V82L23 56Q20 54.5 20 51V33Q20 30 23 28.5Z"/>
+</svg>

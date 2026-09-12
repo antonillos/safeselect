@@ -193,7 +193,7 @@ configuration.
 | Watch other clients and backends | [Demo gallery](demo/README.md) |
 | Understand the boundary and its limits | [Security proof and threat model](docs/security-proof.md) |
 | Compare database MCP approaches | [Comparison](docs/compare.md) |
-| Find a command or tool | [CLI essentials](#cli-essentials) · [MCP tools](#mcp-tools) |
+| Find a command or tool | [CLI essentials](#cli-essentials) · [Visual command gallery](#visual-command-gallery) · [MCP tools](#mcp-tools) |
 | Build or contribute | [Contributing](CONTRIBUTING.md) |
 
 ## Where It Helps
@@ -347,6 +347,314 @@ An existing but empty or invalid configuration is rejected, not replaced by setu
 | `safeselect config set-ssh-password [--environment <env>]` | Store the SSH password |
 | `safeselect uninstall` | Remove installed binaries, global state, audit data, and Keychain entries |
 | `safeselect uninstall --binary-only` | Remove only user-local binaries and preserve configuration |
+
+### Visual command gallery
+
+The CLI is easier to scan by task than as one long list. The [web command gallery](https://antonillos.github.io/safeselect/commands/) uses the same synthetic-demo captures. `query` is kept separate because it is a direct SQL workflow; agents should normally discover schema first through MCP tools.
+
+<details>
+<summary><strong>Import connections</strong> — Bring an existing DBeaver, Docker Compose or MongoDB Compass connection into the project.</summary>
+
+
+#### `import-dbeaver`
+
+Import a DBeaver export into .safeselect/.
+
+```bash
+safeselect import-dbeaver ~/Downloads/connections.zip
+```
+
+<p><img src="docs/recordings/cli/import-dbeaver.png" alt="Terminal capture for safeselect import-dbeaver &lt;zip&gt;" width="720"></p>
+
+_The importer keeps the connection shape while leaving passwords outside project files._
+
+
+#### `import-compose`
+
+Discover PostgreSQL services from Docker Compose.
+
+```bash
+safeselect import-compose --path .
+```
+
+<p><img src="docs/recordings/cli/import-compose.png" alt="Terminal capture for safeselect import-compose [--path &lt;path&gt;]" width="720"></p>
+
+_Compose discovery turns an existing local service into a project environment._
+
+
+#### `import-compass`
+
+Import MongoDB Compass connections.
+
+```bash
+safeselect import-compass --path ~/.config/MongoDB Compass
+```
+
+<p><img src="docs/recordings/cli/import-compass.png" alt="Terminal capture for safeselect import-compass [--path &lt;path&gt;]" width="720"></p>
+
+_Compass imports preserve MongoDB connection details without exposing credentials._
+
+
+</details>
+
+<details>
+<summary><strong>Prepare the project</strong> — Validate local policy, install drivers and connect an AI client without repeating configuration flags.</summary>
+
+
+#### `config`
+
+Validate, inspect and maintain project configuration.
+
+```bash
+safeselect config show --project demo --environment postgres
+```
+
+<p><img src="docs/recordings/cli/config.png" alt="Terminal capture for safeselect config &lt;COMMAND&gt;" width="720"></p>
+
+_Configuration show reports a safe, redacted policy summary before the server starts._
+
+
+#### `driver`
+
+Register and verify JDBC drivers.
+
+```bash
+safeselect driver list
+```
+
+<p><img src="docs/recordings/cli/driver.png" alt="Terminal capture for safeselect driver &lt;COMMAND&gt;" width="720"></p>
+
+_The driver registry shows the vendor and local verified artifact._
+
+
+#### `agent`
+
+Detect clients and install their MCP entry.
+
+```bash
+safeselect agent detect
+```
+
+<p><img src="docs/recordings/cli/agent.png" alt="Terminal capture for safeselect agent &lt;COMMAND&gt;" width="720"></p>
+
+_Detection lists available clients before an explicit project-scoped MCP install._
+
+
+</details>
+
+<details>
+<summary><strong>Verify and diagnose</strong> — Check the complete path from project policy to the database, then inspect the effective PostgreSQL posture.</summary>
+
+
+#### `check`
+
+Test configuration, secrets, tunnels, sidecar and backend connectivity.
+
+```bash
+safeselect check
+```
+
+<p><img src="docs/recordings/cli/check.png" alt="Terminal capture for safeselect check [--environment &lt;env&gt;]" width="720"></p>
+
+_Checks follow convention and inspect every environment unless one is selected deliberately._
+
+
+#### `doctor`
+
+Print concise findings with stable diagnostic codes.
+
+```bash
+safeselect doctor
+```
+
+<p><img src="docs/recordings/cli/doctor.png" alt="Terminal capture for safeselect doctor [--environment &lt;env&gt;]" width="720"></p>
+
+_Doctor turns a failed connection into a short next action instead of a log wall._
+
+
+#### `posture`
+
+Inspect the effective PostgreSQL security posture.
+
+```bash
+safeselect posture --strict
+```
+
+<p><img src="docs/recordings/cli/posture.png" alt="Terminal capture for safeselect posture [--environment &lt;env&gt;]" width="720"></p>
+
+_Posture shows the effective read-only policy, limits and database posture before agent use._
+
+
+</details>
+
+<details>
+<summary><strong>Manage a connection</strong> — Start the local MCP server or exercise the temporary connection lifecycle directly.</summary>
+
+
+#### `serve`
+
+Start the local MCP server for a project environment.
+
+```bash
+safeselect serve
+```
+
+<p><img src="docs/recordings/cli/serve.png" alt="Terminal capture for safeselect serve [--environment &lt;env&gt;]" width="720"></p>
+
+_The server speaks local stdio: the MCP initialize response exposes SafeSelect capabilities, not a network listener._
+
+
+#### `connect`
+
+Test a temporary JDBC connection.
+
+```bash
+safeselect connect
+```
+
+<p><img src="docs/recordings/cli/connect.png" alt="Terminal capture for safeselect connect [--environment &lt;env&gt;]" width="720"></p>
+
+_Connect verifies the temporary JDBC sidecar against the live fixture without taking over an active MCP session._
+
+
+#### `disconnect`
+
+Close a temporary JDBC connection.
+
+```bash
+safeselect disconnect
+```
+
+<p><img src="docs/recordings/cli/disconnect.png" alt="Terminal capture for safeselect disconnect [--environment &lt;env&gt;]" width="720"></p>
+
+_Disconnect cleanly closes the temporary JDBC sidecar and reports the completed lifecycle step._
+
+
+#### `reconnect`
+
+Restart the sidecar and verify connectivity.
+
+```bash
+safeselect reconnect
+```
+
+<p><img src="docs/recordings/cli/reconnect.png" alt="Terminal capture for safeselect reconnect [--environment &lt;env&gt;]" width="720"></p>
+
+_Reconnect restarts the sidecar and verifies the live fixture instead of hiding a stale database._
+
+
+</details>
+
+
+<details>
+<summary><strong>Explore SQL: discover, inspect and diagnose</strong> — Use query when you already know the bounded SQL you want to inspect. Agents should normally discover schema first through MCP tools.</summary>
+
+
+#### `query`
+
+Execute one bounded read-only SQL statement and display its results.
+
+```bash
+safeselect query --sql "SELECT order_id, status, subtotal FROM public.demo_orders WHERE status = 'paid' LIMIT 3"
+```
+
+<p><img src="docs/recordings/cli/query.png" alt="Terminal capture for safeselect query --sql &lt;SQL&gt;" width="720"></p>
+
+_The bounded SQL request returns three synthetic fixture rows with row and byte counts; writes remain rejected._
+
+
+
+
+#### `list_tables` (MCP)
+
+Discover PostgreSQL tables through MCP.
+
+```text
+list_tables({"schema":"public"})
+```
+
+![Discover PostgreSQL tables through MCP.](docs/recordings/cli/list_tables.png)
+
+Real MCP response, formatted as a table: five synthetic relations in public. Discover exact names before inspecting columns.
+
+#### `describe_table` (MCP)
+
+Inspect column names, types and nullability through MCP.
+
+```text
+describe_table({"schema":"public","table":"demo_orders"})
+```
+
+![Inspect column names, types and nullability through MCP.](docs/recordings/cli/describe_table.png)
+
+Real MCP response, formatted as a table: eight columns including UUID, JSONB and a timestamp range. No data rows are queried.
+
+#### `get_maintenance_diagnostics` (MCP)
+
+Inspect ANALYZE and VACUUM signals without running maintenance.
+
+```text
+get_maintenance_diagnostics({"schema":"public"})
+```
+
+![Inspect ANALYZE and VACUUM signals without running maintenance.](docs/recordings/cli/get_maintenance_diagnostics.png)
+
+Real MCP response excerpt: all five fixture tables are below maintenance thresholds. This read-only diagnostic never executes ANALYZE or VACUUM; review the evidence with a DBA.
+
+</details>
+
+<details>
+<summary><strong>Explore NoSQL: discover, infer and read</strong> — Follow MongoDB discovery from databases to bounded documents, with sampled schema inference before reads.</summary>
+
+#### `list_databases` (MCP)
+
+Discover MongoDB databases through MCP.
+
+```text
+list_databases()
+```
+
+<p><img src="docs/recordings/cli/list_databases.png" alt="MongoDB list_databases response" width="720"></p>
+
+_Real MCP response: the isolated demo exposes one allowed database. Choose it before discovering collections._
+
+#### `list_collections` (MCP)
+
+Discover collections in an allowed MongoDB database.
+
+```text
+list_collections({"database":"safeselect_demo"})
+```
+
+<p><img src="docs/recordings/cli/list_collections.png" alt="MongoDB list_collections response" width="720"></p>
+
+_Real MCP response: four synthetic collections are listed without reading documents._
+
+#### `discover_document_schema` (MCP)
+
+Infer frequent fields and types from a bounded MongoDB sample.
+
+```text
+discover_document_schema({"database":"safeselect_demo","collection":"orders","sample_size":5})
+```
+
+<p><img src="docs/recordings/cli/discover_document_schema.png" alt="MongoDB sampled document schema" width="720"></p>
+
+_Real MCP response: sampled fields and observed types guide the next bounded read; inference is explicitly non-exhaustive._
+
+#### `find_documents` (MCP)
+
+Read bounded MongoDB documents with an explicit filter.
+
+```text
+find_documents({"database":"safeselect_demo","collection":"orders","filter":{"status":"paid"},"limit":3})
+```
+
+<p><img src="docs/recordings/cli/find_documents.png" alt="MongoDB bounded document read" width="720"></p>
+
+_Real MCP response: three paid orders, 994 bytes, returned in 7ms. The filter and limit keep the read bounded._
+
+</details>
 
 Use `safeselect --help` or a command-specific `--help` for the full CLI.
 
