@@ -129,21 +129,21 @@ fn effective_vacuum_insert_threshold(
     else {
         return None;
     };
-    if !raw.is_finite()
-        || !scale.is_finite()
-        || !reltuples.is_finite()
-        || !relpages.is_finite()
-        || !relallfrozen.is_finite()
-        || raw < 0.0
-        || scale < 0.0
-        || reltuples < 0.0
-        || relpages <= 0.0
-        || relallfrozen < 0.0
+    if ![raw, scale, reltuples, relpages, relallfrozen]
+        .iter()
+        .all(|v| v.is_finite())
     {
         return None;
     }
-    let not_frozen_fraction = (1.0 - relallfrozen / relpages).clamp(0.0, 1.0);
-    Some(raw + scale * reltuples * not_frozen_fraction)
+    if raw < 0.0 || scale < 0.0 {
+        return None;
+    }
+    let fraction = if relpages > 0.0 && relallfrozen > 0.0 {
+        1.0 - relallfrozen.min(relpages) / relpages
+    } else {
+        1.0
+    };
+    Some(raw + scale * reltuples.max(0.0) * fraction)
 }
 
 fn vacuum_metric(
@@ -229,7 +229,11 @@ pub fn diagnostics_from_query(result: &QueryResult) -> (Vec<MaintenanceDiagnosti
             .flatten();
         let inserts_since_vacuum = number(row, 18);
         let relpages = number(row, 19);
-        let relallfrozen = number(row, 20);
+        let relallfrozen = if server_version >= 180000 {
+            number(row, 20)
+        } else {
+            Some(0.0)
+        };
         let vacuum_insert_scale = number(row, 21);
         let vacuum_insert_base = number(row, 22);
         let analyze_threshold = reltuples
@@ -460,6 +464,89 @@ mod tests {
         let (items, _) = diagnostics_from_query(&result);
         assert_eq!(items[0].vacuum.status, "below_threshold");
         assert_eq!(items[0].vacuum.reason, "dead_tuples");
+    }
+
+    #[test]
+    fn insert_threshold_handles_new_and_frozen_tables() {
+        for (tuples, pages, frozen, expected) in [
+            (-1.0, 0.0, 0.0, 100.0),
+            (1000.0, 0.0, 0.0, 300.0),
+            (1000.0, 10.0, 5.0, 200.0),
+            (1000.0, 10.0, 10.0, 100.0),
+            (1000.0, 10.0, 20.0, 100.0),
+        ] {
+            assert_eq!(
+                effective_vacuum_insert_threshold(
+                    Some(100.0),
+                    Some(0.2),
+                    Some(tuples),
+                    Some(pages),
+                    Some(frozen)
+                ),
+                Some(expected)
+            );
+        }
+        assert_eq!(
+            effective_vacuum_insert_threshold(None, Some(0.2), Some(1.0), Some(1.0), Some(0.0)),
+            None
+        );
+        assert_eq!(
+            effective_vacuum_insert_threshold(
+                Some(f64::NAN),
+                Some(0.2),
+                Some(1.0),
+                Some(1.0),
+                Some(0.0)
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn insert_threshold_respects_server_version() {
+        for version in [150000, 160000, 170000, 180000] {
+            let mut values = row("r", Some(0.0), Some(0.0));
+            values[0] = serde_json::json!(version);
+            values[18] = serde_json::json!(250);
+            values[20] = if version >= 180000 {
+                serde_json::json!(5)
+            } else {
+                serde_json::Value::Null
+            };
+            let result = QueryResult {
+                columns: vec![],
+                rows: vec![values],
+                row_count: 1,
+                byte_count: 0,
+                elapsed_ms: 0,
+                elapsed: String::new(),
+            };
+            let (items, _) = diagnostics_from_query(&result);
+            assert_eq!(
+                items[0].vacuum.status,
+                if version >= 180000 {
+                    "threshold_exceeded"
+                } else {
+                    "below_threshold"
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn insert_metric_handles_equality_and_missing_statistics() {
+        assert_eq!(
+            vacuum_metric(Some(0.0), Some(250.0), Some(300.0), Some(300.0), false).status,
+            "below_threshold"
+        );
+        assert_eq!(
+            vacuum_metric(Some(0.0), Some(250.0), None, Some(300.0), false).status,
+            "unknown"
+        );
+        assert_eq!(
+            vacuum_metric(None, Some(250.0), Some(301.0), Some(300.0), false).status,
+            "threshold_exceeded"
+        );
     }
 
     #[test]

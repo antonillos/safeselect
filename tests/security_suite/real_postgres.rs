@@ -60,6 +60,13 @@ pub fn run() {
                 "ALTER TABLE public.aaa_maintenance_probe SET (autovacuum_vacuum_threshold=1000, autovacuum_vacuum_max_threshold=10)",
             );
         }
+        postgres::psql(
+            &postgres::test_db(),
+            &format!(
+                "DROP TABLE IF EXISTS public.aaa_insert_probe; CREATE TABLE public.aaa_insert_probe (id integer) WITH (autovacuum_enabled=false, autovacuum_vacuum_insert_threshold=10, autovacuum_vacuum_insert_scale_factor=0); INSERT INTO public.aaa_insert_probe SELECT generate_series(1, 100); ANALYZE public.aaa_insert_probe; GRANT SELECT ON public.aaa_insert_probe TO {}; SELECT pg_stat_force_next_flush();",
+                postgres::test_user()
+            ),
+        );
         let (diagnostics, stderr, success) = postgres::run_mcp_tool(
             &repo_root,
             &config_dir,
@@ -78,6 +85,16 @@ pub fn run() {
                     .find(|row| row["table"] == "aaa_maintenance_probe")
             })
             .unwrap_or_else(|| panic!("maintenance probe must be present in diagnostics: {value}"));
+        let insert_probe = value["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["table"] == "aaa_insert_probe")
+            .expect("insert probe must be present");
+        assert_eq!(insert_probe["vacuum"]["status"], "threshold_exceeded");
+        assert_eq!(insert_probe["vacuum"]["reason"], "inserts_since_vacuum");
+        assert_eq!(insert_probe["vacuum"]["threshold"], 10.0);
+        assert_eq!(insert_probe["dead_rows"], 0.0);
         assert_eq!(probe["analyze"]["status"], "threshold_exceeded");
         assert_eq!(probe["vacuum"]["status"], "threshold_exceeded");
         assert_eq!(
@@ -92,7 +109,7 @@ pub fn run() {
         assert!(!diagnostics.to_string().contains("VACUUM ANALYZE"));
         postgres::psql(
             &postgres::test_db(),
-            "DROP TABLE public.aaa_maintenance_probe;",
+            "DROP TABLE public.aaa_maintenance_probe, public.aaa_insert_probe;",
         );
 
         for case in manifest::implemented_for("postgresql") {
