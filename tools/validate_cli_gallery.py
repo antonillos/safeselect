@@ -51,7 +51,17 @@ def main() -> int:
         if f"docs/recordings/{item['image']}" not in readme:
             raise SystemExit(f"README is missing the shared capture for {item['id']}")
 
+    seen_images: set[str] = set()
     for item in commands:
+        image_name = Path(item["image"]).name
+        expected_image = f"{item['id']}.png"
+        if image_name != expected_image:
+            raise SystemExit(
+                f"capture mapping mismatch for {item['id']}: expected {expected_image}, got {item['image']}"
+            )
+        if item["image"] in seen_images:
+            raise SystemExit(f"duplicate capture mapping: {item['image']}")
+        seen_images.add(item["image"])
         image = ROOT / "docs" / "recordings" / item["image"]
         if not image.is_file():
             raise SystemExit(f"missing capture for {item['id']}: {image}")
