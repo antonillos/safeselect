@@ -15,7 +15,7 @@ export function Shell({ children }: { children: ReactNode }) {
         <a className="brand" href={sitePath("/")}>
           <img
             className="brand-mark"
-            src={sitePath("/icon-mark.svg")}
+            src={sitePath("/icon.svg")}
             width="36"
             height="36"
             alt=""
