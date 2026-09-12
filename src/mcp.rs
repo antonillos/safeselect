@@ -5348,6 +5348,7 @@ fn is_recoverable_connection_error(message: &str) -> bool {
         "08006",
         "08001",
         "57p01",
+        "database connection failed",
         "connection refused",
         "connection is closed",
         "broken pipe",
@@ -5471,7 +5472,7 @@ fn build_maintenance_diagnostics_sql(
         format!(" AND {}", denied.join(" AND "))
     };
     format!(
-        "SELECT current_setting('server_version_num')::integer, n.nspname, c.relname, c.relkind, c.reltuples, s.n_live_tup, s.n_dead_tup, s.n_mod_since_analyze, s.last_analyze::text, s.last_autoanalyze::text, s.last_vacuum::text, s.last_autovacuum::text, COALESCE(o.autovacuum_enabled, current_setting('autovacuum'))::boolean AS autovacuum_enabled, COALESCE(o.autovacuum_analyze_scale_factor, current_setting('autovacuum_analyze_scale_factor')::float8) AS analyze_scale_factor, COALESCE(o.autovacuum_analyze_threshold, current_setting('autovacuum_analyze_threshold')::float8) AS analyze_threshold, COALESCE(o.autovacuum_vacuum_scale_factor, current_setting('autovacuum_vacuum_scale_factor')::float8) AS vacuum_scale_factor, COALESCE(o.autovacuum_vacuum_threshold, current_setting('autovacuum_vacuum_threshold')::float8) AS vacuum_threshold, COALESCE(o.autovacuum_vacuum_max_threshold, current_setting('autovacuum_vacuum_max_threshold', true)::float8) AS vacuum_max_threshold, s.n_ins_since_vacuum, c.relpages, (to_jsonb(c) ->> 'relallfrozen')::float8, COALESCE(o.autovacuum_vacuum_insert_scale_factor, current_setting('autovacuum_vacuum_insert_scale_factor', true)::float8) AS vacuum_insert_scale_factor, COALESCE(o.autovacuum_vacuum_insert_threshold, current_setting('autovacuum_vacuum_insert_threshold', true)::float8) AS vacuum_insert_threshold, (c.relkind = 'p') AS is_partitioned, COUNT(*) OVER () AS total_relations, CASE WHEN c.relfrozenxid::text::bigint >= 3 THEN age(c.relfrozenxid) ELSE 0 END, CASE WHEN c.relminmxid::text::bigint >= 1 THEN mxid_age(c.relminmxid) ELSE 0 END, LEAST(o.autovacuum_freeze_max_age, current_setting('autovacuum_freeze_max_age')::float8), LEAST(o.autovacuum_multixact_freeze_max_age, current_setting('autovacuum_multixact_freeze_max_age')::float8) FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace LEFT JOIN pg_stat_user_tables AS s ON s.relid = c.oid LEFT JOIN LATERAL (SELECT max(option_value) FILTER (WHERE option_name = 'autovacuum_enabled') AS autovacuum_enabled, max(NULLIF(option_value, '')::float8) FILTER (WHERE option_name = 'autovacuum_analyze_scale_factor') AS autovacuum_analyze_scale_factor, max(NULLIF(option_value, '')::float8) FILTER (WHERE option_name = 'autovacuum_analyze_threshold') AS autovacuum_analyze_threshold, max(NULLIF(option_value, '')::float8) FILTER (WHERE option_name = 'autovacuum_vacuum_scale_factor') AS autovacuum_vacuum_scale_factor, max(NULLIF(option_value, '')::float8) FILTER (WHERE option_name = 'autovacuum_vacuum_threshold') AS autovacuum_vacuum_threshold, max(NULLIF(option_value, '')::float8) FILTER (WHERE option_name = 'autovacuum_vacuum_max_threshold') AS autovacuum_vacuum_max_threshold, max(NULLIF(option_value, '')::float8) FILTER (WHERE option_name = 'autovacuum_vacuum_insert_scale_factor') AS autovacuum_vacuum_insert_scale_factor, max(NULLIF(option_value, '')::float8) FILTER (WHERE option_name = 'autovacuum_vacuum_insert_threshold') AS autovacuum_vacuum_insert_threshold, max(NULLIF(option_value, '')::float8) FILTER (WHERE option_name = 'autovacuum_freeze_max_age') AS autovacuum_freeze_max_age, max(NULLIF(option_value, '')::float8) FILTER (WHERE option_name = 'autovacuum_multixact_freeze_max_age') AS autovacuum_multixact_freeze_max_age FROM pg_options_to_table(COALESCE(c.reloptions, ARRAY[]::text[]))) AS o ON true WHERE {schema_predicate}{denied_predicate} AND c.relkind IN ('r', 'p') ORDER BY n.nspname, c.relname LIMIT {limit}",
+        "SELECT current_setting('server_version_num')::integer, n.nspname, c.relname, c.relkind, c.reltuples, s.n_live_tup, s.n_dead_tup, s.n_mod_since_analyze, s.last_analyze::text, s.last_autoanalyze::text, s.last_vacuum::text, s.last_autovacuum::text, COALESCE(o.autovacuum_enabled, current_setting('autovacuum'))::boolean AS autovacuum_enabled, COALESCE(o.autovacuum_analyze_scale_factor, current_setting('autovacuum_analyze_scale_factor')::float8) AS analyze_scale_factor, COALESCE(o.autovacuum_analyze_threshold, current_setting('autovacuum_analyze_threshold')::float8) AS analyze_threshold, COALESCE(o.autovacuum_vacuum_scale_factor, current_setting('autovacuum_vacuum_scale_factor')::float8) AS vacuum_scale_factor, COALESCE(o.autovacuum_vacuum_threshold, current_setting('autovacuum_vacuum_threshold')::float8) AS vacuum_threshold, COALESCE(o.autovacuum_vacuum_max_threshold, current_setting('autovacuum_vacuum_max_threshold', true)::float8) AS vacuum_max_threshold, s.n_ins_since_vacuum, c.relpages, (to_jsonb(c) ->> 'relallfrozen')::float8, COALESCE(o.autovacuum_vacuum_insert_scale_factor, current_setting('autovacuum_vacuum_insert_scale_factor', true)::float8) AS vacuum_insert_scale_factor, COALESCE(o.autovacuum_vacuum_insert_threshold, current_setting('autovacuum_vacuum_insert_threshold', true)::float8) AS vacuum_insert_threshold, (c.relkind = 'p') AS is_partitioned, COUNT(*) OVER () AS total_relations, CASE WHEN c.relfrozenxid::text::bigint >= 3 THEN age(c.relfrozenxid) ELSE 0 END, CASE WHEN c.relminmxid::text::bigint >= 1 THEN mxid_age(c.relminmxid) ELSE 0 END, LEAST(o.autovacuum_freeze_max_age, current_setting('autovacuum_freeze_max_age')::float8), LEAST(o.autovacuum_multixact_freeze_max_age, current_setting('autovacuum_multixact_freeze_max_age')::float8) FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace LEFT JOIN pg_stat_user_tables AS s ON s.relid = c.oid LEFT JOIN LATERAL (SELECT max(option_value) FILTER (WHERE option_name = 'autovacuum_enabled') AS autovacuum_enabled, max(NULLIF(option_value, '')::float8) FILTER (WHERE option_name = 'autovacuum_analyze_scale_factor') AS autovacuum_analyze_scale_factor, max(NULLIF(option_value, '')::float8) FILTER (WHERE option_name = 'autovacuum_analyze_threshold') AS autovacuum_analyze_threshold, max(NULLIF(option_value, '')::float8) FILTER (WHERE option_name = 'autovacuum_vacuum_scale_factor') AS autovacuum_vacuum_scale_factor, max(NULLIF(option_value, '')::float8) FILTER (WHERE option_name = 'autovacuum_vacuum_threshold') AS autovacuum_vacuum_threshold, max(NULLIF(option_value, '')::float8) FILTER (WHERE option_name = 'autovacuum_vacuum_max_threshold') AS autovacuum_vacuum_max_threshold, max(NULLIF(option_value, '')::float8) FILTER (WHERE option_name = 'autovacuum_vacuum_insert_scale_factor') AS autovacuum_vacuum_insert_scale_factor, max(NULLIF(option_value, '')::float8) FILTER (WHERE option_name = 'autovacuum_vacuum_insert_threshold') AS autovacuum_vacuum_insert_threshold, max(NULLIF(option_value, '')::float8) FILTER (WHERE option_name = 'autovacuum_freeze_max_age') AS autovacuum_freeze_max_age, max(NULLIF(option_value, '')::float8) FILTER (WHERE option_name = 'autovacuum_multixact_freeze_max_age') AS autovacuum_multixact_freeze_max_age FROM pg_options_to_table(COALESCE(c.reloptions, ARRAY[]::text[]))) AS o ON true WHERE {schema_predicate}{denied_predicate} AND c.relkind IN ('r', 'p', 'm') ORDER BY n.nspname, c.relname LIMIT {limit}",
     )
 }
 
@@ -6593,6 +6594,17 @@ mod tests {
     }
 
     #[test]
+    fn redacted_database_failure_is_recoverable() {
+        assert!(is_recoverable_connection_error(
+            "database connection failed; details redacted"
+        ));
+        assert!(!is_recoverable_connection_error(
+            "request failed; details redacted"
+        ));
+        assert!(!is_recoverable_connection_error("operation timed out"));
+    }
+
+    #[test]
     fn maintenance_diagnostics_query_is_bounded_and_hides_denied_relations() {
         let sql = build_maintenance_diagnostics_sql(
             &["public".into()],
@@ -6604,6 +6616,7 @@ mod tests {
         assert!(sql.contains("pg_stat_user_tables"));
         assert!(sql.contains("pg_options_to_table"));
         assert!(sql.contains("n_ins_since_vacuum"));
+        assert!(sql.contains("c.relkind IN ('r', 'p', 'm')"));
         assert!(sql.contains("age(c.relfrozenxid)"));
         assert!(sql.contains("mxid_age(c.relminmxid)"));
         assert!(sql.contains("LEAST(o.autovacuum_freeze_max_age"));

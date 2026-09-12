@@ -39,6 +39,20 @@ class MainTest {
     }
 
     @Test
+    void preservesRedactedConnectionCategory() throws Exception {
+        String detail = "private-host-and-credentials";
+        for (Throwable cause : List.of(
+                new com.mongodb.MongoSocketException(detail, new com.mongodb.ServerAddress("localhost")),
+                new com.mongodb.MongoTimeoutException(detail))) {
+            Object message = invoke("requestFailureMessage", new Class<?>[]{Throwable.class}, new RuntimeException(detail, cause));
+            assertEquals("database connection failed; details redacted", message);
+            assertFalse(message.toString().contains(detail));
+        }
+        assertEquals("request failed; details redacted", invoke("requestFailureMessage", new Class<?>[]{Throwable.class}, new com.mongodb.MongoException(13, detail)));
+        assertEquals("operation timed out", invoke("requestFailureMessage", new Class<?>[]{Throwable.class}, new com.mongodb.MongoException(50, detail)));
+    }
+
+    @Test
     void rejectsServerSideJavaScriptOperatorsAtAnyDepth() {
         for (String operator : List.of("$where", "$function", "$accumulator")) {
             Object nested = Map.of("$and", List.of(Map.of("nested", Map.of(operator, Map.of("body", "never execute")))));

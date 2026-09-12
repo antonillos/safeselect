@@ -256,6 +256,12 @@ public class Main {
         if (isExecutionTimeout(throwable)) {
             return "operation timed out";
         }
+        for (Throwable current = throwable; current != null; current = current.getCause()) {
+            if (current instanceof com.mongodb.MongoSocketException
+                    || current instanceof com.mongodb.MongoTimeoutException) {
+                return "database connection failed; details redacted";
+            }
+        }
         return "request failed; details redacted";
     }
 

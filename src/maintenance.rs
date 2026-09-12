@@ -237,6 +237,8 @@ pub fn diagnostics_from_query(result: &QueryResult) -> (Vec<MaintenanceDiagnosti
         let relkind = row.get(3).and_then(|v| v.as_str()).unwrap_or("");
         let relation_type = if relkind == "p" {
             "partitioned_table"
+        } else if relkind == "m" {
+            "materialized_view"
         } else {
             "table"
         };
@@ -656,6 +658,22 @@ mod tests {
             include_freeze_triggers(metric(Some(0.0), Some(50.0), "dead_tuples"), &[]).status,
             "unknown"
         );
+    }
+
+    #[test]
+    fn materialized_views_have_maintenance_metrics() {
+        let result = QueryResult {
+            columns: vec![],
+            rows: vec![row("m", Some(151.0), Some(251.0))],
+            row_count: 1,
+            byte_count: 0,
+            elapsed_ms: 0,
+            elapsed: String::new(),
+        };
+        let (items, _) = diagnostics_from_query(&result);
+        assert_eq!(items[0].relation_type, "materialized_view");
+        assert_eq!(items[0].analyze.status, "threshold_exceeded");
+        assert_eq!(items[0].vacuum.status, "threshold_exceeded");
     }
 
     #[test]
