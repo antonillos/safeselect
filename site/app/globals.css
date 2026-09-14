@@ -579,19 +579,23 @@ footer p {
   }
 }
 
-/* One focused terminal at a time; the full reference remains below /commands. */
+/* CSS-only controls keep the public GitHub Pages export fully interactive. */
 .command-preview { display: block; }
 .command-preview > div:first-child { margin-bottom: 32px; }
 .showcase { border: 1px solid var(--line); border-radius: 16px; overflow: hidden; background: #fcfcf7; box-shadow: 0 20px 60px #152a2710; }
-.showcase button { cursor: pointer; font: 13px var(--mono); border: 0; }
-.showcase button:focus-visible { outline: 3px solid #b74c24; outline-offset: -3px; }
+.showcase-radio { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .showcase-tabs { display: flex; flex-wrap: wrap; border-bottom: 1px solid var(--line); background: #e9eddf; }
-.showcase-tabs button { flex: 1 1 150px; padding: 18px 12px; background: transparent; color: var(--muted); text-align: left; }
-.showcase-tabs button span { display: block; font-size: 10px; opacity: .7; margin-bottom: 5px; }
-.showcase-tabs button[aria-selected="true"] { background: var(--green); color: white; }
+.showcase-tab-option { flex: 1 1 150px; }
+.showcase-tab { display: block; cursor: pointer; padding: 18px 12px; background: transparent; color: var(--muted); text-align: left; font: 13px var(--mono); }
+.showcase-tab span { display: block; font-size: 10px; opacity: .7; margin-bottom: 5px; }
+.showcase-category-radio:checked + .showcase-tab { background: var(--green); color: white; }
+.showcase-radio:focus-visible + label { outline: 3px solid #b74c24; outline-offset: -3px; }
+.showcase-panel { display: none; }
 .showcase-commands { display: flex; gap: 8px; flex-wrap: wrap; padding: 22px 24px 0; }
-.showcase-commands button { border-radius: 6px; padding: 9px 13px; background: #e9eddf; color: var(--ink); }
-.showcase-commands button[aria-pressed="true"] { background: var(--ink); color: #d5ed93; }
+.showcase-command-option { display: block; }
+.showcase-command { display: block; cursor: pointer; border-radius: 6px; padding: 9px 13px; background: #e9eddf; color: var(--ink); font: 13px var(--mono); }
+.showcase-command-radio:checked + .showcase-command { background: var(--ink); color: #d5ed93; }
+.showcase-slide { display: none; }
 .showcase-stage { display: grid; grid-template-columns: minmax(0, .65fr) minmax(0, 1.6fr); gap: 26px; align-items: center; padding: 28px 24px; min-height: 410px; }
 .showcase-copy h3 { font: 600 clamp(22px, 2.4vw, 32px) var(--mono); overflow-wrap: anywhere; margin: 0 0 15px; }
 .showcase-copy .eyebrow { font-size: 10px; margin-bottom: 14px; }
@@ -601,10 +605,7 @@ footer p {
 .showcase-image img { width: 100%; height: auto; display: block; aspect-ratio: 1440 / 760; object-fit: contain; }
 .showcase-image span { display: block; padding: 10px 16px; text-align: right; color: #98b4a9; font: 11px var(--mono); }
 .showcase-controls { display: flex; justify-content: space-between; align-items: center; gap: 12px; border-top: 1px solid var(--line); padding: 14px 24px; color: var(--muted); font: 12px var(--mono); }
-.showcase-controls div { display: flex; gap: 8px; }
-.showcase-controls button { padding: 10px 16px; background: #e9eddf; color: var(--ink); border-radius: 5px; }
-.showcase-controls button:disabled { opacity: .4; cursor: default; }
-@media (max-width: 760px) { .showcase-stage { grid-template-columns: 1fr; min-height: 0; } .showcase-tabs button { flex-basis: 30%; font-size: 11px; } .showcase-controls { padding: 12px; } }
+@media (max-width: 760px) { .showcase-stage { grid-template-columns: 1fr; min-height: 0; } .showcase-tab { font-size: 11px; } .showcase-controls { padding: 12px; } }
 
 .cli-gallery:has(.showcase) { max-width: 1200px; }
 .cli-gallery > details { margin-top: 32px; }
