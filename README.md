@@ -38,6 +38,15 @@
 - **Connect your coding agent** — install a project/environment-pinned MCP entry.
 - **Keep control** — local stdio, project policy, external secrets and audit metadata.
 
+## Roadmap
+
+> [!NOTE]
+> **Coming soon: Snowflake support.**
+>
+> We’re planning a dedicated, read-only Snowflake backend with the same
+> fail-closed approach used for supported databases. Initial scope will focus on
+> bounded SQL reads and schema discovery; Snowflake is not supported yet.
+
 > [!IMPORTANT]
 > Read-only applies to SafeSelect's database tools, not to an agent's shell,
 > other MCP servers or direct credentials. Start with development data or a
