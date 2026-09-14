@@ -386,18 +386,19 @@ pub fn empty_payload(server_version_num: i64) -> Option<serde_json::Value> {
 fn recommendation_reason(metric: &MaintenanceMetric) -> String {
     match (metric.observed, metric.threshold) {
         (Some(observed), Some(threshold)) => {
-            format!("{}: {observed} > {threshold}", metric.reason)
+            let operator = if matches!(metric.reason, "transaction_age" | "multixact_age") {
+                ">="
+            } else {
+                ">"
+            };
+            format!("{}: {observed} {operator} {threshold}", metric.reason)
         }
         _ => metric.reason.into(),
     }
 }
 
-fn needs_manual_review(item: &MaintenanceDiagnostic, analyze_due: bool, vacuum_due: bool) -> bool {
-    !analyze_due
-        && !vacuum_due
-        && (item.analyze.status == "unknown"
-            || item.vacuum.status == "unknown"
-            || !item.warnings.is_empty())
+fn needs_manual_review(item: &MaintenanceDiagnostic) -> bool {
+    item.analyze.status == "unknown" || item.vacuum.status == "unknown" || !item.warnings.is_empty()
 }
 
 fn append_metric_recommendation(
@@ -431,7 +432,7 @@ fn append_manual_review(
 fn recommendation(item: &MaintenanceDiagnostic) -> Option<serde_json::Value> {
     let analyze_due = item.analyze.status == "threshold_exceeded";
     let vacuum_due = item.vacuum.status == "threshold_exceeded";
-    let manual_review = needs_manual_review(item, analyze_due, vacuum_due);
+    let manual_review = needs_manual_review(item);
     if !analyze_due && !vacuum_due && !manual_review {
         return None;
     }
@@ -925,6 +926,44 @@ mod tests {
             "MANUAL_REVIEW"
         );
         assert_eq!(payload["summary"]["no_action_required"], 1);
+    }
+
+    #[test]
+    fn payload_preserves_manual_review_with_other_actions() {
+        let mut values = row("r", Some(151.0), Some(251.0));
+        values[6] = serde_json::Value::Null;
+        values[12] = serde_json::json!(false);
+        let result = QueryResult {
+            columns: vec![],
+            rows: vec![values],
+            row_count: 1,
+            byte_count: 0,
+            elapsed_ms: 0,
+            elapsed: String::new(),
+        };
+
+        let payload = payload_from_query(&result).expect("supported PostgreSQL version");
+        assert_eq!(
+            payload["recommendations"][0]["recommendation"],
+            "ANALYZE, MANUAL_REVIEW"
+        );
+        let reason = payload["recommendations"][0]["reason"].as_str().unwrap();
+        assert!(reason.contains("VACUUM: statistics_unavailable"));
+        assert!(reason.contains("autovacuum_disabled"));
+    }
+
+    #[test]
+    fn recommendation_reason_uses_inclusive_age_operator() {
+        let metric = MaintenanceMetric {
+            status: "threshold_exceeded",
+            reason: "transaction_age",
+            observed: Some(100.0),
+            threshold: Some(100.0),
+        };
+        assert_eq!(
+            recommendation_reason(&metric),
+            "transaction_age: 100 >= 100"
+        );
     }
 
     #[test]

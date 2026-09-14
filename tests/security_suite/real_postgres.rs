@@ -101,7 +101,10 @@ pub fn run() {
         assert!(insert_probe["reason"]
             .as_str()
             .is_some_and(|reason| reason.contains("inserts_since_vacuum")));
-        assert_eq!(probe["recommendation"], "ANALYZE, VACUUM");
+        let recommendation = probe["recommendation"].as_str().unwrap();
+        assert!(recommendation.contains("ANALYZE"));
+        assert!(recommendation.contains("VACUUM"));
+        assert!(recommendation.contains("MANUAL_REVIEW"));
         assert!(
             value["summary"]["relations_evaluated"]
                 .as_u64()
