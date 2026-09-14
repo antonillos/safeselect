@@ -599,7 +599,7 @@ get_maintenance_diagnostics({"schema":"public"})
 
 ![Inspect ANALYZE and VACUUM signals without running maintenance.](docs/recordings/cli/get_maintenance_diagnostics.png)
 
-Real MCP response excerpt: all five fixture tables are below maintenance thresholds. This read-only diagnostic never executes ANALYZE or VACUUM; review the evidence with a DBA.
+Real MCP response: a compact table containing only relations with an ANALYZE, VACUUM, or manual-review recommendation, plus summary counts. This read-only diagnostic never executes maintenance.
 
 </details>
 
