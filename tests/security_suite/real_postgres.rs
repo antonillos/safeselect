@@ -78,7 +78,7 @@ pub fn run() {
             "maintenance diagnostics MCP server failed: {stderr}"
         );
         let value = &diagnostics["result"]["structuredContent"]["untrusted_data"]["value"];
-        let probe = value["diagnostics"]
+        let probe = value["recommendations"]
             .as_array()
             .and_then(|rows| {
                 rows.iter()
@@ -86,34 +86,28 @@ pub fn run() {
             })
             .unwrap_or_else(|| {
                 panic!(
-                    "maintenance probe must be present in diagnostics: {value}; raw={diagnostics}; stderr={stderr}"
+                    "maintenance probe must be present in recommendations: {value}; raw={diagnostics}; stderr={stderr}"
                 )
             });
-        let insert_probe = value["diagnostics"]
+        let insert_probe = value["recommendations"]
             .as_array()
             .unwrap()
             .iter()
             .find(|row| row["table"] == "aaa_insert_probe")
             .expect("insert probe must be present");
-        assert_eq!(insert_probe["vacuum"]["status"], "threshold_exceeded");
-        assert_eq!(insert_probe["vacuum"]["reason"], "inserts_since_vacuum");
-        assert_eq!(insert_probe["vacuum"]["threshold"], 10.0);
-        assert_eq!(insert_probe["dead_rows"], 0.0);
-        assert!(probe["xid_age"].as_f64().is_some());
-        assert!(probe["multixact_age"].as_f64().is_some());
-        assert!(probe["freeze_max_age"].as_f64().unwrap() > 0.0);
-        assert!(probe["multixact_freeze_max_age"].as_f64().unwrap() > 0.0);
-        assert_eq!(probe["analyze"]["status"], "threshold_exceeded");
-        assert_eq!(probe["vacuum"]["status"], "threshold_exceeded");
-        assert_eq!(
-            probe["vacuum"]["threshold"].as_f64(),
-            Some(if server_version_num >= 180000 {
-                10.0
-            } else {
-                70.0
-            })
+        assert!(insert_probe["recommendation"]
+            .as_str()
+            .is_some_and(|recommendation| recommendation.contains("VACUUM")));
+        assert!(insert_probe["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("inserts_since_vacuum")));
+        assert_eq!(probe["recommendation"], "ANALYZE, VACUUM");
+        assert!(
+            value["summary"]["relations_evaluated"]
+                .as_u64()
+                .unwrap_or(0)
+                >= 1
         );
-        assert!(value["summary"]["relations"].as_u64().unwrap_or(0) >= 1);
         assert!(!diagnostics.to_string().contains("VACUUM ANALYZE"));
         postgres::psql(
             &postgres::test_db(),

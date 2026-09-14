@@ -234,8 +234,9 @@ arbitrary SQL. After statistics, inspect the specific schema or indexes; do not
 start an unbounded data read solely because statistics are available.
 
 `get_maintenance_diagnostics` aggregates bounded PostgreSQL catalog statistics to
-flag possible ANALYZE or VACUUM threshold exceedances. It reports evidence and
-unknown states, never executes maintenance, and does not claim to measure bloat,
+flag possible ANALYZE or VACUUM threshold exceedances. It returns a compact
+recommendation table and counts, including manual-review cases for unknown states;
+it never executes maintenance and does not claim to measure bloat,
 locks, wraparound risk, or overall database health. The diagnostic supports
 PostgreSQL 15, 16, 17, and 18.
 

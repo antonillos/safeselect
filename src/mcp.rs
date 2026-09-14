@@ -758,7 +758,7 @@ impl McpServer {
         if self.backend.has(BackendCapability::MaintenanceDiagnostics) {
             tools.push(ToolDefinition {
                 name: "get_maintenance_diagnostics".into(),
-                description: self.tool_description("use whenever the user asks which PostgreSQL tables need ANALYZE or VACUUM (for example, ‘qué tablas necesitan analyze o vacuum?’), whether statistics are stale, or which relations need maintenance; diagnose from bounded catalog statistics; read-only and never executes maintenance; optionally restrict to one exact allowed schema"),
+                description: self.tool_description("use whenever the user asks which PostgreSQL tables need ANALYZE or VACUUM (for example, ‘qué tablas necesitan analyze o vacuum?’), whether statistics are stale, or which relations need maintenance; returns a compact recommendation table containing only actions or manual-review cases, plus counts; diagnose from bounded catalog statistics; read-only and never executes maintenance; optionally restrict to one exact allowed schema"),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {"schema": {"type": "string", "description": "Optional exact allowed schema name"}},
@@ -2712,7 +2712,7 @@ impl McpServer {
         self.write_response(&data_tool_response(
             id,
             &payload,
-            "Review the evidence with a DBA; this diagnostic never executes ANALYZE or VACUUM.",
+            "Report the compact recommendation table. Do not run EXPLAIN unless the user specifically asks to investigate query performance; this diagnostic never executes ANALYZE or VACUUM.",
         )?)
     }
 
