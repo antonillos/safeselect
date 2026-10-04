@@ -38,8 +38,9 @@ read next_request"#,
 #[test]
 fn startup_acknowledgement_has_a_deadline_and_kills_stalled_child() {
     let mut sidecar = mock_sidecar("read password; read request");
+    let password = uuid::Uuid::new_v4().to_string();
     let start = std::time::Instant::now();
-    let error = sidecar.send_password("synthetic", "jdbc").unwrap_err();
+    let error = sidecar.send_password(&password, "jdbc").unwrap_err();
     assert!(error.to_string().contains("deadline for 'startup'"));
     assert!(start.elapsed() < std::time::Duration::from_secs(2));
     assert!(sidecar.child.try_wait().unwrap().is_some());
@@ -53,7 +54,8 @@ printf '%s\n' 'ready' '{"id":0,"ok":"pong"}'
 read request
 read next_request"#,
     );
-    sidecar.send_password("synthetic", "jdbc").unwrap();
+    let password = uuid::Uuid::new_v4().to_string();
+    sidecar.send_password(&password, "jdbc").unwrap();
     sidecar.ping().unwrap();
 }
 
@@ -171,7 +173,8 @@ fn missing_or_rejected_startup_acknowledgement_terminates_child() {
         "read password; printf '%s\\n' 'rejected'; read request",
     ] {
         let mut sidecar = mock_sidecar(script);
-        assert!(sidecar.send_password("synthetic", "jdbc").is_err());
+        let password = uuid::Uuid::new_v4().to_string();
+        assert!(sidecar.send_password(&password, "jdbc").is_err());
         assert!(sidecar.child.try_wait().unwrap().is_some());
     }
 }
