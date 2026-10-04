@@ -762,7 +762,11 @@ fn read_sidecar_line(
     let fd = reader.get_ref().as_raw_fd();
     let mut line = Vec::new();
     loop {
-        let remaining = sidecar_deadline_remaining(deadline, operation)?;
+        // Already-buffered bytes require no new I/O, even if parsing the
+        // preceding notification crossed the deadline.
+        if reader.buffer().is_empty() {
+            sidecar_deadline_remaining(deadline, operation)?;
+        }
         match consume_sidecar_buffer(reader, &mut line) {
             Ok(SidecarRead::Complete) => {
                 return String::from_utf8(line).map_err(|_| {
@@ -771,7 +775,9 @@ fn read_sidecar_line(
             }
             Ok(SidecarRead::Partial) => {}
             Ok(SidecarRead::Eof) => return sidecar_eof_line(&line),
-            Err(error) => retry_sidecar_read(error, fd, remaining)?,
+            Err(error) => {
+                retry_sidecar_read(error, fd, sidecar_deadline_remaining(deadline, operation)?)?
+            }
         }
     }
 }

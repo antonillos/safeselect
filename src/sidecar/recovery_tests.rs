@@ -36,6 +36,30 @@ read next_request"#,
 }
 
 #[test]
+fn drains_buffered_reply_after_notification_even_when_deadline_expires() {
+    use std::io::BufRead;
+
+    let mut sidecar = mock_sidecar(
+        r#"printf '%s\n' '{"type":"idle_disconnect"}' '{"id":0,"ok":"pong"}'
+read request"#,
+    );
+    wait_for_sidecar_output(sidecar.reader.get_ref().as_raw_fd(), Duration::from_secs(2)).unwrap();
+    let buffered = sidecar.reader.fill_buf().unwrap();
+    assert_eq!(buffered.iter().filter(|byte| **byte == b'\n').count(), 2);
+    let deadline = Instant::now() - Duration::from_secs(1);
+    assert_eq!(
+        read_sidecar_line(&mut sidecar.reader, deadline, "ping").unwrap(),
+        "{\"type\":\"idle_disconnect\"}\n"
+    );
+    assert_eq!(
+        read_sidecar_line(&mut sidecar.reader, deadline, "ping").unwrap(),
+        "{\"id\":0,\"ok\":\"pong\"}\n"
+    );
+    assert!(read_sidecar_line(&mut sidecar.reader, deadline, "ping").is_err());
+    sidecar.force_kill_ref();
+}
+
+#[test]
 fn startup_acknowledgement_has_a_deadline_and_kills_stalled_child() {
     let mut sidecar = mock_sidecar("read password; read request");
     let password = uuid::Uuid::new_v4().to_string();
