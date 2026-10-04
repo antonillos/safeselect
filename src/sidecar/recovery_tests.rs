@@ -179,11 +179,15 @@ read next_request"#,
 
 #[test]
 fn handles_interrupted_reads_and_rejects_invalid_descriptors() {
-    assert!(retry_sidecar_read(std::io::ErrorKind::Interrupted.into(), -1, Duration::ZERO).is_ok());
+    let deadline = Instant::now() + Duration::from_secs(1);
+    assert!(
+        retry_sidecar_read(std::io::ErrorKind::Interrupted.into(), -1, deadline, "ping").is_ok()
+    );
     assert!(retry_sidecar_read(
         std::io::ErrorKind::PermissionDenied.into(),
         -1,
-        Duration::ZERO
+        deadline,
+        "ping"
     )
     .is_err());
     assert!(set_sidecar_nonblocking(-1).is_err());

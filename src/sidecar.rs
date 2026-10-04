@@ -762,11 +762,7 @@ fn read_sidecar_line(
     let fd = reader.get_ref().as_raw_fd();
     let mut line = Vec::new();
     loop {
-        // Already-buffered bytes require no new I/O, even if parsing the
-        // preceding notification crossed the deadline.
-        if reader.buffer().is_empty() {
-            sidecar_deadline_remaining(deadline, operation)?;
-        }
+        check_sidecar_read_deadline(reader, deadline, operation)?;
         match consume_sidecar_buffer(reader, &mut line) {
             Ok(SidecarRead::Complete) => {
                 return String::from_utf8(line).map_err(|_| {
@@ -775,11 +771,22 @@ fn read_sidecar_line(
             }
             Ok(SidecarRead::Partial) => {}
             Ok(SidecarRead::Eof) => return sidecar_eof_line(&line),
-            Err(error) => {
-                retry_sidecar_read(error, fd, sidecar_deadline_remaining(deadline, operation)?)?
-            }
+            Err(error) => retry_sidecar_read(error, fd, deadline, operation)?,
         }
     }
+}
+
+fn check_sidecar_read_deadline(
+    reader: &BufReader<ChildStdout>,
+    deadline: Instant,
+    operation: &str,
+) -> Result<()> {
+    // Already-buffered bytes require no new I/O, even if parsing the
+    // preceding notification crossed the deadline.
+    if reader.buffer().is_empty() {
+        sidecar_deadline_remaining(deadline, operation)?;
+    }
+    Ok(())
 }
 
 enum SidecarRead {
@@ -835,7 +842,13 @@ fn sidecar_eof_line(line: &[u8]) -> Result<String> {
     }
 }
 
-fn retry_sidecar_read(error: std::io::Error, fd: libc::c_int, remaining: Duration) -> Result<()> {
+fn retry_sidecar_read(
+    error: std::io::Error,
+    fd: libc::c_int,
+    deadline: Instant,
+    operation: &str,
+) -> Result<()> {
+    let remaining = sidecar_deadline_remaining(deadline, operation)?;
     match error.kind() {
         std::io::ErrorKind::Interrupted => Ok(()),
         std::io::ErrorKind::WouldBlock => wait_for_sidecar_output(fd, remaining),
