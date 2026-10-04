@@ -3325,14 +3325,8 @@ impl McpServer {
         }
     }
 
-    fn is_document_backend_ready(ssh: &crate::config::SshConfig, url: &str) -> bool {
-        let bastion_host = ssh.host.as_deref().unwrap_or("");
-        let bastion_port = ssh.port.unwrap_or(22);
-        crate::check_tcp_endpoint(
-            bastion_host,
-            bastion_port,
-            std::time::Duration::from_secs(3),
-        ) && crate::extract_tcp_host_port(url).is_some_and(|(host, port)| {
+    fn is_document_backend_ready(_ssh: &crate::config::SshConfig, url: &str) -> bool {
+        crate::extract_tcp_host_port(url).is_some_and(|(host, port)| {
             crate::check_tcp_endpoint(&host, port, std::time::Duration::from_secs(3))
         })
     }
@@ -4156,149 +4150,17 @@ impl McpServer {
             "Secret resolved",
         ));
 
-        if let Some(ref ssh) = resolved.environment.ssh {
-            if ssh.enabled {
-                let bastion_host = ssh.host.as_deref().unwrap_or("unknown");
-                let bastion_port = ssh.port.unwrap_or(22);
-                lines.push("  SSH bastion: configured (details redacted)".into());
-
-                if crate::check_tcp_endpoint(
-                    bastion_host,
-                    bastion_port,
-                    std::time::Duration::from_secs(3),
-                ) {
-                    lines.push(diagnostics::line(
-                        DiagnosticStatus::Ok,
-                        DiagnosticCode::SshBastionReachable,
-                        "SSH bastion reachable",
-                    ));
-                } else {
-                    lines.push(diagnostics::line(
-                        DiagnosticStatus::Fail,
-                        DiagnosticCode::SshBastionUnreachable,
-                        "SSH bastion unreachable (connect timed out after 3s)",
-                    ));
-                    if let Some(ref identity_file) = ssh.identity_file {
-                        if !std::path::Path::new(identity_file).exists() {
-                            lines.push(diagnostics::line(
-                                DiagnosticStatus::Fail,
-                                DiagnosticCode::SshIdentityMissing,
-                                "Configured SSH identity file not found",
-                            ));
-                        }
-                    }
-                    let resp = trusted_tool_response(id, "failed", lines.join("\n"), "Stop and report the failed check diagnostics to the user; fix the reported configuration or connectivity issue before retrying.");
-                    return self.write_response(&resp);
-                }
-
-                match resolved.environment.database.kind {
-                    crate::backend::BackendKind::Jdbc => {
-                        if let Some((host, port)) =
-                            crate::extract_host_port(&resolved.environment.database.url)
-                        {
-                            let postgres_reachable = crate::check_postgres_endpoint(&host, port);
-                            let postgres_reachable = if postgres_reachable {
-                                true
-                            } else {
-                                lines.push(diagnostics::line(
-                                    DiagnosticStatus::Info,
-                                    DiagnosticCode::SshTunnelAttempt,
-                                    "Establishing SSH tunnel...",
-                                ));
-                                if setup_ssh_tunnels(
-                                    &self.repo_root,
-                                    std::slice::from_ref(&self.env_name),
-                                )
-                                .is_err()
-                                {
-                                    lines.push(diagnostics::line(
-                                        DiagnosticStatus::Fail,
-                                        DiagnosticCode::SshTunnelFailed,
-                                        "SSH tunnel setup failed; configuration details redacted",
-                                    ));
-                                    let resp = trusted_tool_response(id, "failed", lines.join("\n"), "Stop and report the failed check diagnostics to the user; fix the reported configuration or connectivity issue before retrying.");
-                                    return self.write_response(&resp);
-                                }
-                                crate::check_postgres_endpoint(&host, port)
-                            };
-
-                            if postgres_reachable {
-                                lines.push(diagnostics::line(
-                                    DiagnosticStatus::Ok,
-                                    DiagnosticCode::PostgresReachable,
-                                    "PostgreSQL reachable",
-                                ));
-                            } else {
-                                lines.push(diagnostics::line(
-                                    DiagnosticStatus::Fail,
-                                    DiagnosticCode::PostgresUnreachable,
-                                    "PostgreSQL unreachable (read timed out after 2s)",
-                                ));
-                                let resp = trusted_tool_response(id, "failed", lines.join("\n"), "Stop and report the failed check diagnostics to the user; fix the reported configuration or connectivity issue before retrying.");
-                                return self.write_response(&resp);
-                            }
-                        }
-                    }
-                    crate::backend::BackendKind::Document => {
-                        let Some((host, port)) =
-                            crate::extract_tcp_host_port(&resolved.environment.database.url)
-                        else {
-                            lines.push(diagnostics::line(
-                                DiagnosticStatus::Fail,
-                                DiagnosticCode::SshTunnelFailed,
-                                "Cannot determine document database endpoint from URL",
-                            ));
-                            let resp = trusted_tool_response(id, "failed", lines.join("\n"), "Stop and report the failed check diagnostics to the user; fix the reported configuration or connectivity issue before retrying.");
-                            return self.write_response(&resp);
-                        };
-                        let document_reachable = crate::check_tcp_endpoint(
-                            &host,
-                            port,
-                            std::time::Duration::from_secs(3),
-                        );
-                        let document_reachable = if document_reachable {
-                            true
-                        } else {
-                            lines.push(diagnostics::line(
-                                DiagnosticStatus::Info,
-                                DiagnosticCode::SshTunnelAttempt,
-                                "Establishing SSH tunnel...",
-                            ));
-                            if setup_ssh_tunnels(
-                                &self.repo_root,
-                                std::slice::from_ref(&self.env_name),
-                            )
-                            .is_err()
-                            {
-                                lines.push(diagnostics::line(
-                                    DiagnosticStatus::Fail,
-                                    DiagnosticCode::SshTunnelFailed,
-                                    "SSH tunnel setup failed; configuration details redacted",
-                                ));
-                                let resp = trusted_tool_response(id, "failed", lines.join("\n"), "Stop and report the failed check diagnostics to the user; fix the reported configuration or connectivity issue before retrying.");
-                                return self.write_response(&resp);
-                            }
-                            crate::check_tcp_endpoint(
-                                &host,
-                                port,
-                                std::time::Duration::from_secs(3),
-                            )
-                        };
-                        if document_reachable {
-                            lines.push("  Document database reachable".into());
-                        } else {
-                            lines.push(diagnostics::line(
-                                DiagnosticStatus::Fail,
-                                DiagnosticCode::SshTunnelFailed,
-                                "Document database tunnel not reachable",
-                            ));
-                            let resp = trusted_tool_response(id, "failed", lines.join("\n"), "Stop and report the failed check diagnostics to the user; fix the reported configuration or connectivity issue before retrying.");
-                            return self.write_response(&resp);
-                        }
-                    }
-                }
-            }
+        if resolved
+            .environment
+            .ssh
+            .as_ref()
+            .is_some_and(|ssh| ssh.enabled)
+        {
+            lines.push("  SSH tunnel: configured (details redacted)".into());
         }
+        // Verify the actual MCP backend, not whether a new bastion connection
+        // can be opened. A live sidecar or an existing external tunnel may still
+        // be usable when the bastion preflight is unavailable.
 
         lines.push(diagnostics::line(
             DiagnosticStatus::Info,
@@ -4307,16 +4169,7 @@ impl McpServer {
         ));
 
         match self.ensure_sidecar() {
-            Ok(_) => {
-                lines.push(diagnostics::line(
-                    DiagnosticStatus::Ok,
-                    DiagnosticCode::SidecarBackendOk,
-                    match self.backend.kind {
-                        crate::backend::BackendKind::Jdbc => "Sidecar JDBC connection OK",
-                        crate::backend::BackendKind::Document => "Sidecar document connection OK",
-                    },
-                ));
-            }
+            Ok(_) => {}
             Err(_) => {
                 lines.push(diagnostics::line(
                     DiagnosticStatus::Fail,
@@ -4336,60 +4189,31 @@ impl McpServer {
             }
         }
 
-        match self.backend.kind {
-            crate::backend::BackendKind::Jdbc => match self
-                .sidecar
-                .as_mut()
-                .unwrap()
-                .execute("SELECT 1 AS connection_test")
-            {
-                Ok(result) => {
-                    lines.push(diagnostics::line(
-                        DiagnosticStatus::Ok,
-                        DiagnosticCode::BackendVerificationOk,
-                        format!(
-                            "Connection verified: SELECT 1 returned {} row(s)",
-                            result.row_count
-                        ),
-                    ));
-                }
-                Err(e) => {
-                    lines.push(diagnostics::line(
-                        DiagnosticStatus::Fail,
-                        DiagnosticCode::BackendVerificationFailed,
-                        format!("Verification query failed: {e}"),
-                    ));
-                    return self.send_backend_error(
-                        id,
-                        "Database verification failed.",
-                        &lines.join("\n"),
-                        "Stop and report the failed check; fix connectivity before retrying.",
-                    );
-                }
-            },
-            crate::backend::BackendKind::Document => {
-                match self.sidecar.as_mut().unwrap().verify_document_connection() {
-                    Ok(()) => {
-                        lines.push(diagnostics::line(
-                            DiagnosticStatus::Ok,
-                            DiagnosticCode::BackendVerificationOk,
-                            "Connection verified: MongoDB ping succeeded",
-                        ));
-                    }
-                    Err(e) => {
-                        lines.push(diagnostics::line(
-                            DiagnosticStatus::Fail,
-                            DiagnosticCode::BackendVerificationFailed,
-                            format!("Verification ping failed: {e}"),
-                        ));
-                        return self.send_backend_error(
-                            id,
-                            "Database verification failed.",
-                            &lines.join("\n"),
-                            "Stop and report the failed check; fix connectivity before retrying.",
-                        );
-                    }
-                }
+        match self.verify_sidecar_backend() {
+            Ok(detail) => {
+                lines.push(diagnostics::line(
+                    DiagnosticStatus::Ok,
+                    DiagnosticCode::SidecarBackendOk,
+                    "Sidecar backend connection OK",
+                ));
+                lines.push(diagnostics::line(
+                    DiagnosticStatus::Ok,
+                    DiagnosticCode::BackendVerificationOk,
+                    format!("Connection verified: {detail}"),
+                ));
+            }
+            Err(error) => {
+                lines.push(diagnostics::line(
+                    DiagnosticStatus::Fail,
+                    DiagnosticCode::BackendVerificationFailed,
+                    format!("Backend verification failed: {error}"),
+                ));
+                return self.send_backend_error(
+                    id,
+                    "Database verification failed.",
+                    &lines.join("\n"),
+                    "For a stale existing connection, call reconnect once; otherwise report the failure and fix connectivity before retrying.",
+                );
             }
         }
 
@@ -4403,31 +4227,36 @@ impl McpServer {
         self.write_response(&resp)
     }
 
+    fn verify_sidecar_backend(&mut self) -> Result<String> {
+        match self.backend.kind {
+            BackendKind::Jdbc => self.verify_jdbc_backend(),
+            BackendKind::Document => {
+                self.sidecar_mut()?.verify_document_connection()?;
+                Ok("MongoDB ping succeeded".into())
+            }
+        }
+    }
+
+    fn verify_jdbc_backend(&mut self) -> Result<String> {
+        let result = self.sidecar_mut()?.execute("SELECT 1 AS connection_test")?;
+        if result.row_count != 1 || result.rows != vec![vec![serde_json::json!(1)]] {
+            return Err(SafeselectError::Sidecar(
+                "backend returned an unexpected connection test result".into(),
+            ));
+        }
+        Ok("SELECT 1 returned 1 row".into())
+    }
+
     fn handle_reconnect(&mut self, id: Option<serde_json::Value>) -> Result<()> {
         let start = std::time::Instant::now();
         tracing::info!("Reconnect started");
 
-        // Load config to check if SSH tunnel needs to be established
-        let loader = ConfigLoader::new();
-        if let Ok(resolved) = loader.resolve_local(&self.repo_root, &self.env_name) {
-            if let Some(ref ssh) = resolved.environment.ssh {
-                if ssh.enabled {
-                    tracing::info!(
-                        "Preparing SSH tunnel before reconnect ({:?})",
-                        start.elapsed()
-                    );
-                    if setup_ssh_tunnels(&self.repo_root, std::slice::from_ref(&self.env_name))
-                        .is_err()
-                    {
-                        return self.send_error(
-                            id,
-                            -32000,
-                            "SSH tunnel setup failed; configuration details redacted.",
-                        );
-                    }
-                    tracing::info!("SSH tunnel established ({:?})", start.elapsed());
-                }
-            }
+        if self.ensure_ssh_ready_for_query().is_err() {
+            return self.send_error(
+                id,
+                -32000,
+                "Connection preparation failed; check configuration and connectivity.",
+            );
         }
 
         tracing::info!("Restarting sidecar ({:?})", start.elapsed());
@@ -4438,46 +4267,11 @@ impl McpServer {
             Err(_) => return self.send_error(id, -32000, "Reconnect failed."),
         }
 
-        let backend_kind = self.backend.kind;
-        let sidecar = match self.sidecar.as_mut() {
-            Some(s) => s,
-            None => return self.send_error(id, -32000, "Sidecar not available after restart"),
-        };
-
-        tracing::info!("Pinging sidecar ({:?})", start.elapsed());
-        if let Err(e) = sidecar.ping() {
-            return self.send_backend_error(
-                id,
-                "Sidecar ping failed.",
-                &e.to_string(),
-                "Stop and report the ping failure; do not repeat reconnect unchanged.",
-            );
-        }
-        tracing::info!("Ping OK ({:?})", start.elapsed());
-
-        tracing::info!("Executing verification query ({:?})", start.elapsed());
-        let verification = match backend_kind {
-            crate::backend::BackendKind::Jdbc => {
-                match sidecar.execute("SELECT 1 AS connection_test") {
-                    Ok(result) => {
-                        tracing::info!("Verification query completed ({:?})", start.elapsed());
-                        Ok(format!("SELECT 1 returned {} row(s)", result.row_count))
-                    }
-                    Err(e) => Err(format!("Verification query failed: {e}")),
-                }
-            }
-            crate::backend::BackendKind::Document => match sidecar.verify_document_connection() {
-                Ok(()) => {
-                    tracing::info!("Document verification completed ({:?})", start.elapsed());
-                    Ok("MongoDB ping succeeded".into())
-                }
-                Err(e) => Err(format!("Document verification failed: {e}")),
-            },
-        };
+        let verification = self.verify_sidecar_backend();
         match verification {
             Ok(detail) => {
                 let text = format!(
-                    "Reconnected and verified in {:?}.\n  ✓ Sidecar restarted\n  ✓ Ping OK\n  ✓ {detail}",
+                    "Reconnected and verified in {:?}.\n  ✓ Sidecar restarted\n  ✓ {detail}",
                     start.elapsed()
                 );
                 let resp = trusted_tool_response(id, "ok", text, "Call database_info to confirm backend capabilities before any discovery or query.");
@@ -4486,7 +4280,7 @@ impl McpServer {
             Err(e) => self.send_backend_error(
                 id,
                 "Reconnect verification failed.",
-                &e,
+                &e.to_string(),
                 "Stop and report the verification failure; do not query through an unverified connection.",
             ),
         }
@@ -5354,6 +5148,10 @@ fn is_recoverable_connection_error(message: &str) -> bool {
         "broken pipe",
         "eof",
         "sidecar process terminated",
+        "sidecar returned an incomplete response",
+        "sidecar returned invalid",
+        "sidecar returned a mismatched response id",
+        "sidecar response descriptor became unavailable",
         "not_connected",
         "database not connected",
     ]
@@ -6045,7 +5843,7 @@ mod tests {
         }
     }
 
-    fn test_server(repo_root: &Path) -> McpServer {
+    pub(super) fn test_server(repo_root: &Path) -> McpServer {
         let password = uuid::Uuid::new_v4().to_string();
         let project = crate::config::ProjectConfig {
             audit: crate::config::AuditConfig {
@@ -7436,3 +7234,7 @@ services:
         let _ = std::fs::remove_dir_all(root);
     }
 }
+
+#[cfg(test)]
+#[path = "mcp/recovery_tests.rs"]
+mod recovery_tests;
