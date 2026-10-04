@@ -275,6 +275,14 @@ Agents should use SafeSelect in this order:
 4. `select` / `explain`, or the bounded MongoDB read tool that matches the task
 5. `check`, `connect`, or `reconnect` when connectivity is stale
 
+MCP `check` verifies the backend used by the current session (`SELECT 1` for
+PostgreSQL, a database ping for MongoDB). An existing usable connection or tunnel
+does not require a separate successful bastion probe. Sidecar startup and response
+reads have deadlines; stalled or malformed responses invalidate the sidecar
+without closing the MCP session. For a stale connection, call `reconnect` once,
+then `check`, without reopening the client. A startup or configuration failure
+still requires fixing its cause before retrying; do not loop on reconnection.
+
 Agents must discover relation or collection structure before querying unfamiliar data and use each discovery response's `next_suggestion` instead of guessing column or field names. SQL descriptions are catalog metadata; MongoDB schemas are inferred from a bounded, non-exhaustive sample.
 
 MongoDB query documents must remain complete nested JSON values. Clients that

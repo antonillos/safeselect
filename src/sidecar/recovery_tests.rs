@@ -1,0 +1,119 @@
+use super::*;
+
+pub(crate) fn mock_sidecar(script: &str) -> SidecarProcess {
+    use std::io::{BufReader, BufWriter};
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new("sh")
+        .args(["-c", script])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    SidecarProcess {
+        writer: BufWriter::new(child.stdin.take().unwrap()),
+        reader: BufReader::new(child.stdout.take().unwrap()),
+        stderr: child.stderr.take(),
+        child,
+        next_id: 0,
+        statement_timeout_ms: 0,
+        request_timeout_ms: 100,
+        startup_timeout_ms: 100,
+    }
+}
+
+#[test]
+fn consumes_buffered_response_after_idle_notification() {
+    let mut sidecar = mock_sidecar(
+        r#"read request
+printf '%s\n' '{"type":"idle_disconnect"}' '{"id":0,"ok":"pong"}'
+read next_request"#,
+    );
+    sidecar.ping().unwrap();
+}
+
+#[test]
+fn startup_acknowledgement_has_a_deadline_and_kills_stalled_child() {
+    let mut sidecar = mock_sidecar("read password; read request");
+    let start = std::time::Instant::now();
+    let error = sidecar.send_password("synthetic", "jdbc").unwrap_err();
+    assert!(error.to_string().contains("deadline for 'startup'"));
+    assert!(start.elapsed() < std::time::Duration::from_secs(2));
+    assert!(sidecar.child.try_wait().unwrap().is_some());
+}
+
+#[test]
+fn accepts_startup_acknowledgement_and_response_buffered_together() {
+    let mut sidecar = mock_sidecar(
+        r#"read password
+printf '%s\n' 'ready' '{"id":0,"ok":"pong"}'
+read request
+read next_request"#,
+    );
+    sidecar.send_password("synthetic", "jdbc").unwrap();
+    sidecar.ping().unwrap();
+}
+
+#[test]
+fn partial_response_has_a_deadline_and_invalidates_channel() {
+    let mut sidecar = mock_sidecar(
+        r#"read request
+printf '%s' '{"id":0,"ok":'
+read next_request"#,
+    );
+    let start = std::time::Instant::now();
+    let error = sidecar.ping().unwrap_err();
+    assert!(error.to_string().contains("deadline for 'ping'"));
+    assert!(start.elapsed() < std::time::Duration::from_secs(2));
+    assert!(sidecar.child.try_wait().unwrap().is_some());
+    assert!(sidecar.ping().is_err());
+}
+
+#[test]
+fn notification_stream_does_not_extend_request_deadline() {
+    let mut sidecar = mock_sidecar(
+        r#"read request
+while :; do printf '%s\n' '{"type":"idle_disconnect"}'; done"#,
+    );
+    let start = std::time::Instant::now();
+    assert!(sidecar.ping().unwrap_err().to_string().contains("deadline"));
+    assert!(start.elapsed() < std::time::Duration::from_secs(2));
+    assert!(sidecar.child.try_wait().unwrap().is_some());
+}
+
+#[test]
+fn rejects_mismatched_response_id_and_invalidates_channel() {
+    let mut sidecar = mock_sidecar(
+        r#"read request
+printf '%s\n' '{"id":999,"ok":"pong"}'
+read next_request"#,
+    );
+    assert!(sidecar
+        .ping()
+        .unwrap_err()
+        .to_string()
+        .contains("mismatched response id"));
+    assert!(sidecar.child.try_wait().unwrap().is_some());
+}
+
+#[test]
+fn accepts_final_complete_response_when_child_exits() {
+    let mut sidecar = mock_sidecar(
+        r#"read request
+printf '%s\n' '{"id":0,"ok":"pong"}'"#,
+    );
+    sidecar.ping().unwrap();
+}
+
+#[test]
+fn rejects_truncated_response_at_eof_without_echoing_payload() {
+    let mut sidecar = mock_sidecar(
+        r#"read request
+printf '%s' '{"id":0,"ok":"synthetic-private-payload"}'"#,
+    );
+    let error = sidecar.ping().unwrap_err().to_string();
+    assert!(error.contains("incomplete response"));
+    assert!(!error.contains("synthetic-private-payload"));
+    assert!(sidecar.child.try_wait().unwrap().is_some());
+}
