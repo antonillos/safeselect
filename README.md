@@ -753,10 +753,15 @@ document a project-scoped MCP configuration.
 "$HOME/.local/bin/safeselect" --version
 ```
 
-Requirements: Rust 1.85+ and Java 17+. The bootstrap requires Homebrew or
-asdf; otherwise install `makevn` first. `sshpass` is optional for
+Requirements: Rust 1.85+, Java 17+, and makevn 0.1.14+. The bootstrap requires
+Homebrew or asdf; otherwise install `makevn` first. `sshpass` is optional for
 password-based SSH tunnels. Add `~/.local/bin` to your `PATH` before invoking
 `safeselect` without its full path.
+
+The installer runs `makevn doctor --compact`, then `makevn init --force` to
+refresh generated initialization while preserving local configuration, before
+`makevn test package`. A makevn failure stops the build without replacing the
+installed binary.
 
 ## Documentation
 
