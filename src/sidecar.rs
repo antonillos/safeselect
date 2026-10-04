@@ -258,6 +258,7 @@ impl SidecarProcess {
             },
         };
 
+        set_sidecar_nonblocking(proc.reader.get_ref().as_raw_fd())?;
         proc.send_password(password, backend)?;
         proc.ping()?;
         Ok(proc)
@@ -759,42 +760,80 @@ fn read_sidecar_line(
     operation: &str,
 ) -> Result<String> {
     let fd = reader.get_ref().as_raw_fd();
+    let mut line = Vec::new();
+    loop {
+        let remaining = sidecar_deadline_remaining(deadline, operation)?;
+        match consume_sidecar_buffer(reader, &mut line) {
+            Ok(SidecarRead::Complete) => {
+                return String::from_utf8(line).map_err(|_| {
+                    SafeselectError::Sidecar("sidecar returned invalid UTF-8 response".into())
+                });
+            }
+            Ok(SidecarRead::Partial) => {}
+            Ok(SidecarRead::Eof) => return sidecar_eof_line(&line),
+            Err(error) => retry_sidecar_read(error, fd, remaining)?,
+        }
+    }
+}
+
+enum SidecarRead {
+    Complete,
+    Partial,
+    Eof,
+}
+
+fn set_sidecar_nonblocking(fd: libc::c_int) -> Result<()> {
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
     if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
         return Err(std::io::Error::last_os_error().into());
     }
-    let mut line = Vec::new();
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Err(SafeselectError::Sidecar(format!(
-                "sidecar did not respond within the deadline for '{operation}'"
-            )));
-        }
-        match reader.fill_buf() {
-            Ok([]) if line.is_empty() => return Ok(String::new()),
-            Ok([]) => {
-                return Err(SafeselectError::Sidecar(
-                    "sidecar returned an incomplete response".into(),
-                ));
-            }
-            Ok(buffer) => {
-                let newline = buffer.iter().position(|byte| *byte == b'\n');
-                let consumed = newline.map_or(buffer.len(), |index| index + 1);
-                line.extend_from_slice(&buffer[..consumed]);
-                reader.consume(consumed);
-                if newline.is_some() {
-                    return String::from_utf8(line).map_err(|_| {
-                        SafeselectError::Sidecar("sidecar returned invalid UTF-8 response".into())
-                    });
-                }
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                wait_for_sidecar_output(fd, remaining)?;
-            }
-            Err(error) => return Err(error.into()),
-        }
+    Ok(())
+}
+
+fn sidecar_deadline_remaining(deadline: Instant, operation: &str) -> Result<Duration> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err(SafeselectError::Sidecar(format!(
+            "sidecar did not respond within the deadline for '{operation}'"
+        )));
+    }
+    Ok(remaining)
+}
+
+fn consume_sidecar_buffer(
+    reader: &mut BufReader<ChildStdout>,
+    line: &mut Vec<u8>,
+) -> std::io::Result<SidecarRead> {
+    let buffer = reader.fill_buf()?;
+    if buffer.is_empty() {
+        return Ok(SidecarRead::Eof);
+    }
+    let newline = buffer.iter().position(|byte| *byte == b'\n');
+    let consumed = newline.map_or(buffer.len(), |index| index + 1);
+    line.extend_from_slice(&buffer[..consumed]);
+    reader.consume(consumed);
+    Ok(if newline.is_some() {
+        SidecarRead::Complete
+    } else {
+        SidecarRead::Partial
+    })
+}
+
+fn sidecar_eof_line(line: &[u8]) -> Result<String> {
+    if line.is_empty() {
+        Ok(String::new())
+    } else {
+        Err(SafeselectError::Sidecar(
+            "sidecar returned an incomplete response".into(),
+        ))
+    }
+}
+
+fn retry_sidecar_read(error: std::io::Error, fd: libc::c_int, remaining: Duration) -> Result<()> {
+    match error.kind() {
+        std::io::ErrorKind::Interrupted => Ok(()),
+        std::io::ErrorKind::WouldBlock => wait_for_sidecar_output(fd, remaining),
+        _ => Err(error.into()),
     }
 }
 

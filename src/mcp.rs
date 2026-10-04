@@ -4229,20 +4229,22 @@ impl McpServer {
 
     fn verify_sidecar_backend(&mut self) -> Result<String> {
         match self.backend.kind {
-            BackendKind::Jdbc => {
-                let result = self.sidecar_mut()?.execute("SELECT 1 AS connection_test")?;
-                if result.row_count != 1 || result.rows != vec![vec![serde_json::json!(1)]] {
-                    return Err(SafeselectError::Sidecar(
-                        "backend returned an unexpected connection test result".into(),
-                    ));
-                }
-                Ok("SELECT 1 returned 1 row".into())
-            }
+            BackendKind::Jdbc => self.verify_jdbc_backend(),
             BackendKind::Document => {
                 self.sidecar_mut()?.verify_document_connection()?;
                 Ok("MongoDB ping succeeded".into())
             }
         }
+    }
+
+    fn verify_jdbc_backend(&mut self) -> Result<String> {
+        let result = self.sidecar_mut()?.execute("SELECT 1 AS connection_test")?;
+        if result.row_count != 1 || result.rows != vec![vec![serde_json::json!(1)]] {
+            return Err(SafeselectError::Sidecar(
+                "backend returned an unexpected connection test result".into(),
+            ));
+        }
+        Ok("SELECT 1 returned 1 row".into())
     }
 
     fn handle_reconnect(&mut self, id: Option<serde_json::Value>) -> Result<()> {

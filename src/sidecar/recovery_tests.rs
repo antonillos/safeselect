@@ -11,9 +11,11 @@ pub(crate) fn mock_sidecar(script: &str) -> SidecarProcess {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
+    let stdout = child.stdout.take().unwrap();
+    set_sidecar_nonblocking(stdout.as_raw_fd()).unwrap();
     SidecarProcess {
         writer: BufWriter::new(child.stdin.take().unwrap()),
-        reader: BufReader::new(child.stdout.take().unwrap()),
+        reader: BufReader::new(stdout),
         stderr: child.stderr.take(),
         child,
         next_id: 0,
@@ -116,4 +118,60 @@ printf '%s' '{"id":0,"ok":"synthetic-private-payload"}'"#,
     assert!(error.contains("incomplete response"));
     assert!(!error.contains("synthetic-private-payload"));
     assert!(sidecar.child.try_wait().unwrap().is_some());
+}
+
+#[test]
+fn malformed_json_or_utf8_invalidates_channel_without_echoing_payload() {
+    for output in [
+        "printf '%s\\n' 'synthetic-invalid-json'",
+        "printf '\\377\\n'",
+    ] {
+        let mut sidecar = mock_sidecar(&format!("read request\n{output}\nread next_request"));
+        let error = sidecar.ping().unwrap_err().to_string();
+        assert!(error.contains("sidecar returned invalid"));
+        assert!(!error.contains("synthetic-invalid-json"));
+        assert!(sidecar.child.try_wait().unwrap().is_some());
+    }
+}
+
+#[test]
+fn sql_error_keeps_valid_transport_available_for_next_request() {
+    let mut sidecar = mock_sidecar(
+        r#"read request
+printf '%s\n' '{"id":0,"error":{"code":"SQL_ERROR","message":"synthetic syntax error"}}'
+read ping
+printf '%s\n' '{"id":1,"ok":"pong"}'
+read next_request"#,
+    );
+    assert!(matches!(
+        sidecar.execute("SELECT invalid"),
+        Err(SafeselectError::SqlError(_))
+    ));
+    sidecar.ping().unwrap();
+    assert!(sidecar.child.try_wait().unwrap().is_none());
+}
+
+#[test]
+fn handles_interrupted_reads_and_rejects_invalid_descriptors() {
+    assert!(retry_sidecar_read(std::io::ErrorKind::Interrupted.into(), -1, Duration::ZERO).is_ok());
+    assert!(retry_sidecar_read(
+        std::io::ErrorKind::PermissionDenied.into(),
+        -1,
+        Duration::ZERO
+    )
+    .is_err());
+    assert!(set_sidecar_nonblocking(-1).is_err());
+    assert!(wait_for_sidecar_output(1_000_000, Duration::from_millis(1)).is_err());
+}
+
+#[test]
+fn missing_or_rejected_startup_acknowledgement_terminates_child() {
+    for script in [
+        "read password",
+        "read password; printf '%s\\n' 'rejected'; read request",
+    ] {
+        let mut sidecar = mock_sidecar(script);
+        assert!(sidecar.send_password("synthetic", "jdbc").is_err());
+        assert!(sidecar.child.try_wait().unwrap().is_some());
+    }
 }
