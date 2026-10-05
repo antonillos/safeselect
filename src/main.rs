@@ -3109,17 +3109,7 @@ where
 }
 
 fn database_environment_secret(env_name: &str) -> config::SecretConfig {
-    let variable = format!(
-        "SAFESELECT_PASSWORD_{}",
-        env_name
-            .chars()
-            .map(|ch| if ch.is_ascii_alphanumeric() {
-                ch.to_ascii_uppercase()
-            } else {
-                '_'
-            })
-            .collect::<String>()
-    );
+    let variable = compose::database_env_reference(env_name);
     println!("  Database password source: {variable}; export it in the shell that launches SafeSelect (password is not stored).");
     config::SecretConfig {
         source: "env".into(),
@@ -5871,7 +5861,7 @@ enabled = true
         assert_eq!(secret.source, "env");
         assert_eq!(
             secret.variable.as_deref(),
-            Some("SAFESELECT_PASSWORD_DEV_DB")
+            Some("SAFESELECT_PASSWORD_6465762D6462")
         );
         assert!(!toml::to_string(&secret)
             .unwrap()
@@ -6072,14 +6062,56 @@ enabled = true
     }
 
     #[test]
+    fn database_import_references_are_distinct_and_match_setup_guidance() {
+        let environments = [
+            "qa.eu",
+            "qa-eu",
+            "qa_eu",
+            "qa/eu",
+            "QA.EU",
+            "qa éu",
+            "qa_eu__7161",
+        ];
+        let mut references = std::collections::HashSet::new();
+        for environment in environments {
+            let secret = database_environment_secret(environment);
+            // Verify the reference as saved/read from TOML, not a separately generated hint.
+            let saved: config::SecretConfig =
+                toml::from_str(&toml::to_string(&secret).unwrap()).unwrap();
+            let variable = saved.variable.unwrap();
+            validate_ssh_password_variable(&variable).unwrap();
+            assert!(
+                references.insert(variable.clone()),
+                "aliased environment: {environment}"
+            );
+            let hint = compose::environment_secret_setup_hint(environment);
+            assert!(hint.contains(&format!("export {variable}=")));
+            assert!(hint.contains(&format!("variable = \"{variable}\"")));
+            assert!(hint.contains("\n  [database.secret]\n"));
+            #[cfg(not(target_os = "macos"))]
+            {
+                let guidance = compose::build_guidance_from_parts(
+                    "demo",
+                    &[environment.into()],
+                    &[environment.into()],
+                    false,
+                );
+                assert!(guidance.text.contains(&format!("export {variable}=")));
+            }
+            let encoded = variable.strip_prefix("SAFESELECT_PASSWORD_").unwrap();
+            assert_eq!(hex::decode(encoded).unwrap(), environment.as_bytes());
+        }
+    }
+
+    #[test]
     fn imported_database_variable_names_are_valid_shell_identifiers() {
         for (environment, expected) in [
-            ("dev-db", "SAFESELECT_PASSWORD_DEV_DB"),
-            ("qa.eu", "SAFESELECT_PASSWORD_QA_EU"),
-            ("qa eu/blue", "SAFESELECT_PASSWORD_QA_EU_BLUE"),
-            ("9_qa", "SAFESELECT_PASSWORD_9_QA"),
-            ("pré", "SAFESELECT_PASSWORD_PR_"),
-            ("qa;echo", "SAFESELECT_PASSWORD_QA_ECHO"),
+            ("dev-db", "SAFESELECT_PASSWORD_6465762D6462"),
+            ("qa.eu", "SAFESELECT_PASSWORD_71612E6575"),
+            ("qa eu/blue", "SAFESELECT_PASSWORD_71612065752F626C7565"),
+            ("9_qa", "SAFESELECT_PASSWORD_395F7161"),
+            ("pré", "SAFESELECT_PASSWORD_7072C3A9"),
+            ("qa;echo", "SAFESELECT_PASSWORD_71613B6563686F"),
         ] {
             let secret = database_environment_secret(environment);
             assert_eq!(secret.source, "env");
@@ -6100,7 +6132,7 @@ enabled = true
         assert_eq!(secret.source, "env");
         assert_eq!(
             secret.variable.as_deref(),
-            Some("SAFESELECT_PASSWORD_DEV_DB")
+            Some("SAFESELECT_PASSWORD_6465762D6462")
         );
         let serialized = toml::to_string(&secret).unwrap();
         assert!(!serialized.contains(&password));

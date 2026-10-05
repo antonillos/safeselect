@@ -3,10 +3,12 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
 
-fn secret_env_var(env_name: &str) -> String {
+/// A reversible UTF-8 encoding keeps distinct environment names from sharing a secret.
+/// Existing saved references are unchanged; only newly generated names use this scheme.
+pub fn database_env_reference(env_name: &str) -> String {
     format!(
         "SAFESELECT_PASSWORD_{}",
-        env_name.to_uppercase().replace('-', "_")
+        hex::encode(env_name.as_bytes()).to_uppercase()
     )
 }
 
@@ -20,12 +22,16 @@ pub fn secret_setup_hint(project_name: &str, env_name: &str) -> String {
             "security add-generic-password -a \"{project_name}/{env_name}\" -s \"safeselect\" -w \"<password>\""
         )
     } else {
-        let var = secret_env_var(env_name);
-        format!(
-            "export {var}=\"<password>\"  # then edit .safeselect/environments/{env_name}.toml:\n  \
-             [database.secret]\n  source = \"env\"\n  variable = \"{var}\""
-        )
+        environment_secret_setup_hint(env_name)
     }
+}
+
+pub fn environment_secret_setup_hint(env_name: &str) -> String {
+    let var = database_env_reference(env_name);
+    format!(
+        "export {var}=\"<password>\"  # then edit .safeselect/environments/{env_name}.toml:\n  \
+         [database.secret]\n  source = \"env\"\n  variable = \"{var}\""
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -456,7 +462,7 @@ fn write_config_files_with_warning<W: Write>(
                     source: "env".to_string(),
                     service: None,
                     account: None,
-                    variable: Some(secret_env_var(&conn.env_name)),
+                    variable: Some(database_env_reference(&conn.env_name)),
                 })
             }
         } else {
@@ -692,7 +698,10 @@ mod tests {
 
     #[test]
     fn builds_secret_environment_variable_name() {
-        assert_eq!(secret_env_var("local-db"), "SAFESELECT_PASSWORD_LOCAL_DB");
+        assert_eq!(
+            database_env_reference("local-db"),
+            "SAFESELECT_PASSWORD_6C6F63616C2D6462"
+        );
     }
 
     #[test]

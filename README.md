@@ -755,9 +755,11 @@ For an existing Linux/WSL environment, run `safeselect config set-ssh-password
 then export the variable it prints. The command cannot export into its parent
 shell. Restart a running MCP client after changing its environment.
 
-Imported database passwords likewise use `SAFESELECT_PASSWORD_<ENV>` on
-Linux/WSL (ASCII letters are uppercase; every character outside `A–Z`,
-`a–z`, and `0–9` becomes `_`). Export that variable
+Newly imported database passwords use `SAFESELECT_PASSWORD_<HEX>` on Linux/WSL,
+where `<HEX>` is the uppercase hexadecimal encoding of the environment name's
+UTF-8 bytes. This produces shell-valid, distinct references even for names like
+`qa.eu` and `qa-eu`. The printed setup guidance uses the exact generated reference;
+existing saved references are not renamed. Export that variable
 separately before checking the imported connection; credentials from the
 export are removed from the saved MongoDB URI rather than written to TOML.
 
