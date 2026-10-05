@@ -30,14 +30,24 @@ fn strip_ansi(s: &str) -> String {
 }
 
 fn run_with_config(args: &[&str], config_dir: &str) -> (String, String, bool) {
-    let output = Command::new(safeselect_bin())
+    run_with_config_and_env(args, config_dir, &[])
+}
+
+fn run_with_config_and_env(
+    args: &[&str],
+    config_dir: &str,
+    variables: &[(&str, &str)],
+) -> (String, String, bool) {
+    let mut command = Command::new(safeselect_bin());
+    command
         .args(args)
         .env("SAFESELECT_CONFIG_DIR", config_dir)
         .env("SAFESELECT_INT_TEST_PASSWORD", "testpass")
-        .env("SAFESELECT_PASSWORD_DB", "testpass")
-        .env("NO_COLOR", "1")
-        .output()
-        .expect("failed to run safeselect");
+        .env("NO_COLOR", "1");
+    for (name, value) in variables {
+        command.env(name, value);
+    }
+    let output = command.output().expect("failed to run safeselect");
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -230,15 +240,49 @@ services:
     );
     assert!(stdout.contains("Import Complete"));
     assert!(stdout.contains("Imported 1 connection(s): db"));
-    assert!(stdout.contains("Passwords were imported or are already configured."));
     assert!(stdout.contains("safeselect check --environment db"));
     assert!(stdout.contains("safeselect agent install opencode --environment db"));
-    assert!(stdout.contains("All checks passed"));
 
     let env_toml = std::fs::read_to_string(repo_root.join(".safeselect/environments/db.toml"))
         .expect("expected imported environment config");
     assert!(env_toml.contains("jdbc:postgresql://localhost:25432/testdb"));
     assert!(env_toml.contains("username = \"postgres\""));
+
+    let config: toml::Value = toml::from_str(&env_toml).unwrap();
+    let secret = &config["database"]["secret"];
+    if cfg!(target_os = "macos") {
+        assert_eq!(secret["source"].as_str(), Some("macos-keychain"));
+        assert!(stdout.contains("Passwords were imported or are already configured."));
+        assert!(stdout.contains("All checks passed"));
+    } else {
+        assert_eq!(secret["source"].as_str(), Some("env"));
+        let variable = secret["variable"]
+            .as_str()
+            .expect("expected secret reference");
+        assert!(stdout.contains("Configure missing passwords:"));
+        assert!(stdout.contains(&format!("export {variable}=\"<password>\"")));
+        assert!(stdout.contains("Verification deferred:"));
+        assert!(!stdout.contains("All checks passed"));
+        assert!(!env_toml.contains("testpass"));
+
+        // Export only to the check subprocess, as instructed after import.
+        let (check_stdout, check_stderr, checked) = run_with_config_and_env(
+            &[
+                "check",
+                "--project",
+                repo_root.to_str().unwrap(),
+                "--environment",
+                "db",
+            ],
+            tmp.to_str().unwrap(),
+            &[(variable, "testpass")],
+        );
+        assert!(
+            checked,
+            "check failed:\nstdout:\n{check_stdout}\nstderr:\n{check_stderr}"
+        );
+        assert!(check_stdout.contains("All checks passed"));
+    }
 
     cleanup_keychain_account(account);
     let _ = std::fs::remove_dir_all(&tmp);
