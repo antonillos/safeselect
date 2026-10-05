@@ -50,13 +50,38 @@ chmod +x target/release/safeselect
         log = self.root / "makevn.log"
         self.env["MAKEVN_LOG"] = str(log)
         self.executable("makevn", '''#!/bin/sh
-printf '%s\\n' "$*" > "$MAKEVN_LOG"
+[ "$1" = --version ] && exit 0
+printf '%s\\n' "$*" >> "$MAKEVN_LOG"
 mkdir -p sidecar/target
 : > sidecar/target/safeselect-sidecar-1.0.0.jar
 ''')
         result = self.run_installer()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(log.read_text().strip(), "doctor init test package")
+        self.assertEqual(log.read_text().splitlines(), ["doctor --compact", "init --force", "test package"])
+
+    def test_makevn_failure_stops_build_and_preserves_installed_binary(self):
+        self.add_build_stubs()
+        log = self.root / "makevn.log"
+        self.env["MAKEVN_LOG"] = str(log)
+        self.executable("makevn", '''#!/bin/sh
+[ "$1" = --version ] && exit 0
+printf '%s\\n' "$*" >> "$MAKEVN_LOG"
+[ "$*" = "$FAIL_MAKEVN_STAGE" ] && exit 23
+exit 0
+''')
+        installed = self.root / ".local/bin/safeselect"
+        installed.parent.mkdir(parents=True)
+        installed.write_text("previous installation\n")
+        stages = ["doctor --compact", "init --force", "test package"]
+        for index, stage in enumerate(stages):
+            with self.subTest(stage=stage):
+                log.write_text("")
+                self.env["FAIL_MAKEVN_STAGE"] = stage
+                result = self.run_installer()
+                self.assertEqual(result.returncode, 23, result.stderr)
+                self.assertEqual(log.read_text().splitlines(), stages[:index + 1])
+                self.assertFalse((self.root / "target/release/safeselect").exists())
+                self.assertEqual(installed.read_text(), "previous installation\n")
 
     def test_bootstrap_prefers_homebrew_and_rechecks_path(self):
         self.add_build_stubs()
@@ -112,7 +137,9 @@ esac
         self.assertIn("install makevn 1.0.0", calls)
         self.assertNotIn("set -u makevn", calls)
         self.assertIn("exec makevn --version", calls)
-        self.assertIn("exec makevn doctor init test package", calls)
+        self.assertIn("exec makevn doctor --compact", calls)
+        self.assertIn("exec makevn init --force", calls)
+        self.assertIn("exec makevn test package", calls)
 
     def test_bootstrap_replaces_unselected_asdf_shim(self):
         self.add_build_stubs()
@@ -145,7 +172,9 @@ esac
         self.assertIn("Installing makevn with asdf", result.stdout)
         calls = log.read_text()
         self.assertIn("exec makevn --version", calls)
-        self.assertIn("exec makevn doctor init test package", calls)
+        self.assertIn("exec makevn doctor --compact", calls)
+        self.assertIn("exec makevn init --force", calls)
+        self.assertIn("exec makevn test package", calls)
 
 
 if __name__ == "__main__":

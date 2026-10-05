@@ -369,13 +369,99 @@ pub fn empty_payload(server_version_num: i64) -> Option<serde_json::Value> {
     }
     Some(serde_json::json!({
         "server_version_num": server_version_num,
-        "diagnostics": [],
+        "recommendations": [],
         "summary": {
-            "relations": 0,
+            "relations_evaluated": 0,
+            "total_relations": 0,
             "truncated": false,
-            "analyze": {"threshold_exceeded": 0, "below_threshold": 0, "unknown": 0, "not_applicable": 0},
-            "vacuum": {"threshold_exceeded": 0, "below_threshold": 0, "unknown": 0, "not_applicable": 0}
+            "recommendations": 0,
+            "analyze_due": 0,
+            "vacuum_due": 0,
+            "manual_review": 0,
+            "no_action_required": 0
         }
+    }))
+}
+
+fn recommendation_reason(metric: &MaintenanceMetric) -> String {
+    match (metric.observed, metric.threshold) {
+        (Some(observed), Some(threshold)) => {
+            let operator = if matches!(metric.reason, "transaction_age" | "multixact_age") {
+                ">="
+            } else {
+                ">"
+            };
+            format!("{}: {observed} {operator} {threshold}", metric.reason)
+        }
+        _ => metric.reason.into(),
+    }
+}
+
+fn needs_manual_review(item: &MaintenanceDiagnostic) -> bool {
+    item.analyze.status == "unknown" || item.vacuum.status == "unknown" || !item.warnings.is_empty()
+}
+
+fn append_metric_recommendation(
+    actions: &mut Vec<&'static str>,
+    reasons: &mut Vec<String>,
+    due: bool,
+    action: &'static str,
+    metric: &MaintenanceMetric,
+) {
+    if due {
+        actions.push(action);
+        reasons.push(recommendation_reason(metric));
+    }
+}
+
+fn append_manual_review(
+    actions: &mut Vec<&'static str>,
+    reasons: &mut Vec<String>,
+    item: &MaintenanceDiagnostic,
+) {
+    actions.push("MANUAL_REVIEW");
+    if item.analyze.status == "unknown" {
+        reasons.push(format!("ANALYZE: {}", item.analyze.reason));
+    }
+    if item.vacuum.status == "unknown" {
+        reasons.push(format!("VACUUM: {}", item.vacuum.reason));
+    }
+    reasons.extend(item.warnings.iter().map(|warning| (*warning).into()));
+}
+
+fn recommendation(item: &MaintenanceDiagnostic) -> Option<serde_json::Value> {
+    let analyze_due = item.analyze.status == "threshold_exceeded";
+    let vacuum_due = item.vacuum.status == "threshold_exceeded";
+    let manual_review = needs_manual_review(item);
+    if !analyze_due && !vacuum_due && !manual_review {
+        return None;
+    }
+
+    let mut actions = Vec::new();
+    let mut reasons = Vec::new();
+    append_metric_recommendation(
+        &mut actions,
+        &mut reasons,
+        analyze_due,
+        "ANALYZE",
+        &item.analyze,
+    );
+    append_metric_recommendation(
+        &mut actions,
+        &mut reasons,
+        vacuum_due,
+        "VACUUM",
+        &item.vacuum,
+    );
+    if manual_review {
+        append_manual_review(&mut actions, &mut reasons, item);
+    }
+    Some(serde_json::json!({
+        "schema": item.schema,
+        "table": item.table,
+        "relation_type": item.relation_type,
+        "recommendation": actions.join(", "),
+        "reason": reasons.join("; ")
     }))
 }
 
@@ -389,28 +475,42 @@ pub fn payload_from_query(result: &QueryResult) -> Option<serde_json::Value> {
         return None;
     }
     let (items, truncated) = diagnostics_from_query(result);
-    let status_count = |metric: fn(&MaintenanceDiagnostic) -> &MaintenanceMetric, status: &str| {
-        items
-            .iter()
-            .filter(|item| metric(item).status == status)
-            .count()
-    };
-    let summary = |metric: fn(&MaintenanceDiagnostic) -> &MaintenanceMetric| {
-        serde_json::json!({
-            "threshold_exceeded": status_count(metric, "threshold_exceeded"),
-            "below_threshold": status_count(metric, "below_threshold"),
-            "unknown": status_count(metric, "unknown"),
-            "not_applicable": status_count(metric, "not_applicable")
+    let total_relations = result
+        .rows
+        .first()
+        .and_then(|row| number(row, 24))
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .map(|value| value as u64)
+        .unwrap_or(result.rows.len() as u64);
+    let analyze_due = items
+        .iter()
+        .filter(|item| item.analyze.status == "threshold_exceeded")
+        .count();
+    let vacuum_due = items
+        .iter()
+        .filter(|item| item.vacuum.status == "threshold_exceeded")
+        .count();
+    let recommendations: Vec<_> = items.iter().filter_map(recommendation).collect();
+    let manual_review = recommendations
+        .iter()
+        .filter(|item| {
+            item["recommendation"]
+                .as_str()
+                .is_some_and(|action| action.contains("MANUAL_REVIEW"))
         })
-    };
+        .count();
     Some(serde_json::json!({
         "server_version_num": version,
-        "diagnostics": items,
+        "recommendations": recommendations,
         "summary": {
-            "relations": result.rows.len(),
+            "relations_evaluated": result.rows.len(),
+            "total_relations": total_relations,
             "truncated": truncated,
-            "analyze": summary(|item| &item.analyze),
-            "vacuum": summary(|item| &item.vacuum)
+            "recommendations": recommendations.len(),
+            "analyze_due": analyze_due,
+            "vacuum_due": vacuum_due,
+            "manual_review": manual_review,
+            "no_action_required": items.len().saturating_sub(recommendations.len())
         }
     }))
 }
@@ -777,7 +877,7 @@ mod tests {
     }
 
     #[test]
-    fn payload_contains_diagnostics_and_summary_for_supported_version() {
+    fn payload_contains_compact_recommendations_and_summary_for_supported_version() {
         let result = QueryResult {
             columns: vec![],
             rows: vec![row("r", Some(151.0), Some(251.0))],
@@ -788,9 +888,82 @@ mod tests {
         };
         let payload = payload_from_query(&result).expect("supported PostgreSQL version");
         assert_eq!(payload["server_version_num"], 170000);
-        assert_eq!(payload["summary"]["relations"], 1);
-        assert_eq!(payload["summary"]["analyze"]["threshold_exceeded"], 1);
-        assert_eq!(payload["summary"]["vacuum"]["threshold_exceeded"], 1);
+        assert_eq!(payload["summary"]["relations_evaluated"], 1);
+        assert_eq!(payload["summary"]["total_relations"], 1);
+        assert_eq!(payload["summary"]["analyze_due"], 1);
+        assert_eq!(payload["summary"]["vacuum_due"], 1);
+        assert_eq!(
+            payload["recommendations"][0]["recommendation"],
+            "ANALYZE, VACUUM"
+        );
+        assert!(payload["recommendations"][0]["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("changes_since_analyze")));
+        assert!(payload["recommendations"][0].get("last_analyze").is_none());
+    }
+
+    #[test]
+    fn payload_omits_relations_without_an_actionable_recommendation() {
+        let mut healthy = row("r", Some(1.0), Some(1.0));
+        healthy[2] = serde_json::json!("healthy");
+        let mut needs_review = row("r", Some(1.0), Some(1.0));
+        needs_review[2] = serde_json::json!("autovacuum_off");
+        needs_review[12] = serde_json::json!(false);
+        let result = QueryResult {
+            columns: vec![],
+            rows: vec![healthy, needs_review],
+            row_count: 2,
+            byte_count: 0,
+            elapsed_ms: 0,
+            elapsed: String::new(),
+        };
+
+        let payload = payload_from_query(&result).expect("supported PostgreSQL version");
+        assert_eq!(payload["recommendations"].as_array().map(Vec::len), Some(1));
+        assert_eq!(payload["recommendations"][0]["table"], "autovacuum_off");
+        assert_eq!(
+            payload["recommendations"][0]["recommendation"],
+            "MANUAL_REVIEW"
+        );
+        assert_eq!(payload["summary"]["no_action_required"], 1);
+    }
+
+    #[test]
+    fn payload_preserves_manual_review_with_other_actions() {
+        let mut values = row("r", Some(151.0), Some(251.0));
+        values[6] = serde_json::Value::Null;
+        values[12] = serde_json::json!(false);
+        let result = QueryResult {
+            columns: vec![],
+            rows: vec![values],
+            row_count: 1,
+            byte_count: 0,
+            elapsed_ms: 0,
+            elapsed: String::new(),
+        };
+
+        let payload = payload_from_query(&result).expect("supported PostgreSQL version");
+        assert_eq!(
+            payload["recommendations"][0]["recommendation"],
+            "ANALYZE, MANUAL_REVIEW"
+        );
+        let reason = payload["recommendations"][0]["reason"].as_str().unwrap();
+        assert!(reason.contains("VACUUM: statistics_unavailable"));
+        assert!(reason.contains("autovacuum_disabled"));
+    }
+
+    #[test]
+    fn recommendation_reason_uses_inclusive_age_operator() {
+        let metric = MaintenanceMetric {
+            status: "threshold_exceeded",
+            reason: "transaction_age",
+            observed: Some(100.0),
+            threshold: Some(100.0),
+        };
+        assert_eq!(
+            recommendation_reason(&metric),
+            "transaction_age: 100 >= 100"
+        );
     }
 
     #[test]
@@ -815,6 +988,6 @@ mod tests {
     fn empty_supported_payload_preserves_server_version() {
         let payload = empty_payload(160000).expect("supported version");
         assert_eq!(payload["server_version_num"], 160000);
-        assert_eq!(payload["summary"]["relations"], 0);
+        assert_eq!(payload["summary"]["relations_evaluated"], 0);
     }
 }

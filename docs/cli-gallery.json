@@ -169,7 +169,7 @@
           "purpose": "Inspect ANALYZE and VACUUM signals without running maintenance.",
           "example": "get_maintenance_diagnostics({\"schema\":\"public\"})",
           "image": "cli/get_maintenance_diagnostics.png",
-          "caption": "Real MCP response excerpt: all five fixture tables are below maintenance thresholds. This read-only diagnostic never executes ANALYZE or VACUUM; review the evidence with a DBA."
+          "caption": "Real MCP response: a compact table containing only relations with an ANALYZE, VACUUM, or manual-review recommendation, plus summary counts. This read-only diagnostic never executes maintenance."
         }
       ]
     },

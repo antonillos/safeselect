@@ -1265,7 +1265,7 @@ fn check_gitignore(repo_root: &std::path::Path) {
         if let Ok(content) = std::fs::read_to_string(&gitignore) {
             if !content
                 .lines()
-                .any(|l| l.trim() == ".safeselect/" || l.trim() == ".safeselect")
+                .any(|l| matches!(l.trim(), ".safeselect/" | ".safeselect"))
             {
                 println!("  ⚠  .safeselect/ not found in .gitignore — consider adding it");
             }
@@ -3564,17 +3564,9 @@ pub(crate) fn check_postgres_endpoint(host: &str, port: u16) -> bool {
         .unwrap_or(false)
 }
 
-pub(crate) fn is_ssh_ready_for_query(ssh: &config::SshConfig, jdbc_url: &str) -> bool {
-    let bastion_host = ssh.host.as_deref().unwrap_or("");
-    let bastion_port = ssh.port.unwrap_or(22);
-    if !check_tcp_endpoint(
-        bastion_host,
-        bastion_port,
-        std::time::Duration::from_secs(3),
-    ) {
-        return false;
-    }
-
+pub(crate) fn is_ssh_ready_for_query(_ssh: &config::SshConfig, jdbc_url: &str) -> bool {
+    // Readiness is determined by the configured database route. Do not reject
+    // an existing tunnel just because a separate bastion TCP probe fails.
     extract_host_port(jdbc_url)
         .map(|(host, port)| check_postgres_endpoint(&host, port))
         .unwrap_or(false)

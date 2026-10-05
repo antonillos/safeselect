@@ -49,6 +49,19 @@ it. Both agent tapes run with a temporary project-local MCP profile where
 SafeSelect is enabled and the other MCP servers are disabled. Global agent
 configuration is not modified.
 
+### CLI command captures
+
+The README and website share the static command gallery in docs/cli-gallery.json.
+Its PNG captures live under docs/recordings/cli/ and use this disposable
+fixture's real command output, redacted configuration/driver output, and bounded SQL
+workflow output. They contain no real credentials, private paths or visitor
+data. Connectivity captures are generated while the disposable fixtures are running and show real lifecycle results; guardrails still fail closed when applicable.
+Validate coverage with:
+
+~~~bash
+python3 -B tools/validate_cli_gallery.py
+~~~
+
 | Scenario | Recording |
 |---|---|
 | Complete first-time onboarding: Homebrew, DBeaver SSH, Keychain and OpenCode | [Watch](../docs/recordings/onboarding-full-local.gif) |

@@ -9,8 +9,7 @@ use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[derive(Serialize)]
 struct Request {
@@ -45,6 +44,7 @@ pub struct SidecarProcess {
     next_id: u64,
     statement_timeout_ms: u64,
     request_timeout_ms: u64,
+    startup_timeout_ms: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -248,6 +248,7 @@ impl SidecarProcess {
             child,
             next_id: 0,
             statement_timeout_ms,
+            startup_timeout_ms: if backend == "mongodb" { 35_000 } else { 30_000 },
             request_timeout_ms: if statement_timeout_ms > 0 {
                 statement_timeout_ms + 1_000
             } else if backend == "mongodb" {
@@ -257,6 +258,7 @@ impl SidecarProcess {
             },
         };
 
+        set_sidecar_nonblocking(proc.reader.get_ref().as_raw_fd())?;
         proc.send_password(password, backend)?;
         proc.ping()?;
         Ok(proc)
@@ -265,12 +267,24 @@ impl SidecarProcess {
     fn send_password(&mut self, password: &str, backend: &str) -> Result<()> {
         writeln!(self.writer, "{password}")?;
         self.writer.flush()?;
-        let mut ack = String::new();
-        self.reader.read_line(&mut ack)?;
+        let result = read_sidecar_line(
+            &mut self.reader,
+            Instant::now() + Duration::from_millis(self.startup_timeout_ms),
+            "startup",
+        );
+        if result.is_err() {
+            self.force_kill_ref();
+        }
+        let ack = result?;
         if ack.is_empty() {
+            self.force_kill_ref();
             return Err(self.startup_connection_error(backend));
         }
-        validate_sidecar_ack(ack.trim())
+        let result = validate_sidecar_ack(ack.trim());
+        if result.is_err() {
+            self.force_kill_ref();
+        }
+        result
     }
 
     fn startup_connection_error(&mut self, backend: &str) -> SafeselectError {
@@ -461,12 +475,17 @@ impl SidecarProcess {
     }
 
     pub fn verify_document_connection(&mut self) -> Result<()> {
-        self.request_value::<serde_json::Value>(
+        let result = self.request_value::<serde_json::Value>(
             "verify_document_connection",
             None,
             "verify_document_connection",
-        )
-        .map(|_| ())
+        )?;
+        if result.get("ok").and_then(serde_json::Value::as_f64) != Some(1.0) {
+            return Err(SafeselectError::Sidecar(
+                "backend returned an unexpected document ping result".into(),
+            ));
+        }
+        Ok(())
     }
 
     pub fn list_collections(&mut self, database: &str) -> Result<Vec<String>> {
@@ -633,6 +652,20 @@ impl SidecarProcess {
         method: &str,
         params: Option<serde_json::Value>,
     ) -> Result<Response> {
+        let result = self.send_request_inner(method, params);
+        if result.is_err() {
+            // Never reuse a timed-out or malformed channel: a late response must
+            // not become the result of the next MCP tool call.
+            self.force_kill_ref();
+        }
+        result
+    }
+
+    fn send_request_inner(
+        &mut self,
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> Result<Response> {
         let id = self.next_id;
         self.next_id += 1;
 
@@ -646,83 +679,29 @@ impl SidecarProcess {
         writeln!(self.writer, "{line}")?;
         self.writer.flush()?;
 
-        let fd = self.reader.get_ref().as_raw_fd();
-        // Wait for statement timeout + 1s buffer, with a short minimum so broken
-        // tunnels fail fast instead of looking stuck to MCP clients.
-        // The 1s buffer allows PostgreSQL to cancel the query via statement_timeout
-        // before we kill the sidecar process
         let timeout_ms = if self.statement_timeout_ms > 0 {
-            let t = self.request_timeout_ms.max(5_000u64);
-            if t > i32::MAX as u64 {
-                i32::MAX
-            } else {
-                t as i32
-            }
+            self.request_timeout_ms.max(5_000)
         } else {
-            self.request_timeout_ms.min(i32::MAX as u64) as i32
-        };
-
+            self.request_timeout_ms
+        }
+        .min(i32::MAX as u64);
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
         loop {
-            let mut pollfd = libc::pollfd {
-                fd,
-                events: libc::POLLIN | libc::POLLERR | libc::POLLHUP,
-                revents: 0,
-            };
-            let ret = unsafe { libc::poll(&mut pollfd, 1, timeout_ms) };
-            match ret {
-                -1 => {
-                    let err = std::io::Error::last_os_error();
-                    // EINTR = interrupted by signal, retry
-                    if err.kind() == std::io::ErrorKind::Interrupted {
-                        continue;
-                    }
-                    return Err(SafeselectError::Sidecar(format!("poll error: {err}")));
-                }
-                0 => {
-                    return Err(SafeselectError::Sidecar(format!(
-                        "sidecar did not respond to '{method}' within {timeout_ms}ms — restarting"
-                    )));
-                }
-                _ => {}
-            }
-
-            if (pollfd.revents & (libc::POLLERR | libc::POLLHUP)) != 0 {
-                return Err(SafeselectError::Sidecar(
-                    "sidecar process became unavailable while waiting for a response".into(),
-                ));
-            }
-
-            let (tx, rx) = mpsc::channel();
-            let response_line = std::thread::scope(|scope| {
-                let reader = &mut self.reader;
-                scope.spawn(move || {
-                    let mut response_line = String::new();
-                    let result = reader.read_line(&mut response_line);
-                    let _ = tx.send((result, response_line));
-                });
-
-                match rx.recv_timeout(Duration::from_millis(timeout_ms as u64)) {
-                    Ok((Ok(_), response_line)) => Ok(response_line),
-                    Ok((Err(err), _)) => Err(SafeselectError::Io(err)),
-                    Err(mpsc::RecvTimeoutError::Timeout) => Err(SafeselectError::Sidecar(format!(
-                        "sidecar returned partial or stalled output for '{method}' for more than {timeout_ms}ms"
-                    ))),
-                    Err(mpsc::RecvTimeoutError::Disconnected) => Err(SafeselectError::Sidecar(
-                        "sidecar response reader stopped unexpectedly".into(),
-                    )),
-                }
-            })?;
-
+            let response_line = read_sidecar_line(&mut self.reader, deadline, method)?;
             if response_line.is_empty() {
                 return Err(SafeselectError::Sidecar(
                     "sidecar process terminated".into(),
                 ));
             }
-
             let resp = parse_response_line(&response_line)?;
-            // Skip async notifications (idle_disconnect, etc.) that have no id
+            // Notifications share the same deadline as the requested response.
             if resp.r#type.is_some() && resp.id.is_none() {
                 continue;
+            }
+            if resp.id != Some(serde_json::json!(id)) {
+                return Err(SafeselectError::Sidecar(
+                    "sidecar returned a mismatched response id".into(),
+                ));
             }
             return Ok(resp);
         }
@@ -770,6 +749,138 @@ impl SidecarProcess {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+/// Read a complete JSON-line (or startup acknowledgement) without a blocking
+/// reader thread. Drain BufReader before polling so coalesced notifications and
+/// responses cannot cause a false timeout.
+fn read_sidecar_line(
+    reader: &mut BufReader<ChildStdout>,
+    deadline: Instant,
+    operation: &str,
+) -> Result<String> {
+    let fd = reader.get_ref().as_raw_fd();
+    let mut line = Vec::new();
+    loop {
+        check_sidecar_read_deadline(reader, deadline, operation)?;
+        match consume_sidecar_buffer(reader, &mut line) {
+            Ok(SidecarRead::Complete) => {
+                return String::from_utf8(line).map_err(|_| {
+                    SafeselectError::Sidecar("sidecar returned invalid UTF-8 response".into())
+                });
+            }
+            Ok(SidecarRead::Partial) => {}
+            Ok(SidecarRead::Eof) => return sidecar_eof_line(&line),
+            Err(error) => retry_sidecar_read(error, fd, deadline, operation)?,
+        }
+    }
+}
+
+fn check_sidecar_read_deadline(
+    reader: &BufReader<ChildStdout>,
+    deadline: Instant,
+    operation: &str,
+) -> Result<()> {
+    // Already-buffered bytes require no new I/O, even if parsing the
+    // preceding notification crossed the deadline.
+    if reader.buffer().is_empty() {
+        sidecar_deadline_remaining(deadline, operation)?;
+    }
+    Ok(())
+}
+
+enum SidecarRead {
+    Complete,
+    Partial,
+    Eof,
+}
+
+fn set_sidecar_nonblocking(fd: libc::c_int) -> Result<()> {
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    Ok(())
+}
+
+fn sidecar_deadline_remaining(deadline: Instant, operation: &str) -> Result<Duration> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err(SafeselectError::Sidecar(format!(
+            "sidecar did not respond within the deadline for '{operation}'"
+        )));
+    }
+    Ok(remaining)
+}
+
+fn consume_sidecar_buffer(
+    reader: &mut BufReader<ChildStdout>,
+    line: &mut Vec<u8>,
+) -> std::io::Result<SidecarRead> {
+    let buffer = reader.fill_buf()?;
+    if buffer.is_empty() {
+        return Ok(SidecarRead::Eof);
+    }
+    let newline = buffer.iter().position(|byte| *byte == b'\n');
+    let consumed = newline.map_or(buffer.len(), |index| index + 1);
+    line.extend_from_slice(&buffer[..consumed]);
+    reader.consume(consumed);
+    Ok(if newline.is_some() {
+        SidecarRead::Complete
+    } else {
+        SidecarRead::Partial
+    })
+}
+
+fn sidecar_eof_line(line: &[u8]) -> Result<String> {
+    if line.is_empty() {
+        Ok(String::new())
+    } else {
+        Err(SafeselectError::Sidecar(
+            "sidecar returned an incomplete response".into(),
+        ))
+    }
+}
+
+fn retry_sidecar_read(
+    error: std::io::Error,
+    fd: libc::c_int,
+    deadline: Instant,
+    operation: &str,
+) -> Result<()> {
+    let remaining = sidecar_deadline_remaining(deadline, operation)?;
+    match error.kind() {
+        std::io::ErrorKind::Interrupted => Ok(()),
+        std::io::ErrorKind::WouldBlock => wait_for_sidecar_output(fd, remaining),
+        _ => Err(error.into()),
+    }
+}
+
+fn wait_for_sidecar_output(fd: libc::c_int, remaining: Duration) -> Result<()> {
+    let mut pollfd = libc::pollfd {
+        fd,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // Round up rather than busy-polling for the last fraction of a millisecond.
+    let timeout_ms = remaining
+        .as_millis()
+        .saturating_add(1)
+        .min(i32::MAX as u128) as i32;
+    let result = unsafe { libc::poll(&mut pollfd, 1, timeout_ms) };
+    if result < 0 {
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(error.into());
+        }
+    } else if pollfd.revents & libc::POLLNVAL != 0 {
+        return Err(SafeselectError::Sidecar(
+            "sidecar response descriptor became unavailable".into(),
+        ));
+    }
+    // POLLHUP may accompany the final response. Let fill_buf drain it or
+    // report EOF, instead of discarding a complete reply from an exiting child.
+    Ok(())
 }
 
 fn parse_response_line(line: &str) -> Result<Response> {
@@ -851,3 +962,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "sidecar/recovery_tests.rs"]
+pub(crate) mod recovery_tests;

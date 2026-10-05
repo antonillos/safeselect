@@ -38,6 +38,15 @@
 - **Connect your coding agent** — install a project/environment-pinned MCP entry.
 - **Keep control** — local stdio, project policy, external secrets and audit metadata.
 
+## Roadmap
+
+> [!NOTE]
+> **Coming soon: Snowflake support.**
+>
+> We’re planning a dedicated, read-only Snowflake backend with the same
+> fail-closed approach used for supported databases. Initial scope will focus on
+> bounded SQL reads and schema discovery; Snowflake is not supported yet.
+
 > [!IMPORTANT]
 > Read-only applies to SafeSelect's database tools, not to an agent's shell,
 > other MCP servers or direct credentials. Start with development data or a
@@ -265,6 +274,14 @@ Agents should use SafeSelect in this order:
 3. `list_databases`, `list_collections`, then `discover_document_schema` for NoSQL
 4. `select` / `explain`, or the bounded MongoDB read tool that matches the task
 5. `check`, `connect`, or `reconnect` when connectivity is stale
+
+MCP `check` verifies the backend used by the current session (`SELECT 1` for
+PostgreSQL, a database ping for MongoDB). An existing usable connection or tunnel
+does not require a separate successful bastion probe. Sidecar startup and response
+reads have deadlines; stalled or malformed responses invalidate the sidecar
+without closing the MCP session. For a stale connection, call `reconnect` once,
+then `check`, without reopening the client. A startup or configuration failure
+still requires fixing its cause before retrying; do not loop on reconnection.
 
 Agents must discover relation or collection structure before querying unfamiliar data and use each discovery response's `next_suggestion` instead of guessing column or field names. SQL descriptions are catalog metadata; MongoDB schemas are inferred from a bounded, non-exhaustive sample.
 
@@ -599,7 +616,7 @@ get_maintenance_diagnostics({"schema":"public"})
 
 ![Inspect ANALYZE and VACUUM signals without running maintenance.](docs/recordings/cli/get_maintenance_diagnostics.png)
 
-Real MCP response excerpt: all five fixture tables are below maintenance thresholds. This read-only diagnostic never executes ANALYZE or VACUUM; review the evidence with a DBA.
+Real MCP response: a compact table containing only relations with an ANALYZE, VACUUM, or manual-review recommendation, plus summary counts. This read-only diagnostic never executes maintenance.
 
 </details>
 
@@ -736,10 +753,15 @@ document a project-scoped MCP configuration.
 "$HOME/.local/bin/safeselect" --version
 ```
 
-Requirements: Rust 1.85+ and Java 17+. The bootstrap requires Homebrew or
-asdf; otherwise install `makevn` first. `sshpass` is optional for
+Requirements: Rust 1.85+, Java 17+, and makevn 0.1.14+. The bootstrap requires
+Homebrew or asdf; otherwise install `makevn` first. `sshpass` is optional for
 password-based SSH tunnels. Add `~/.local/bin` to your `PATH` before invoking
 `safeselect` without its full path.
+
+The installer runs `makevn doctor --compact`, then `makevn init --force` to
+refresh generated initialization while preserving local configuration, before
+`makevn test package`. A makevn failure stops the build without replacing the
+installed binary.
 
 ## Documentation
 
