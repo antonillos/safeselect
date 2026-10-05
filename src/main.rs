@@ -660,13 +660,8 @@ fn configure_ssh_password_environment(dir: &Path, environment: &str) -> Result<(
             "environment '{environment}' has no SSH configuration"
         ))
     })?;
-    let variable = match &ssh.secret_variable {
-        Some(variable) => variable.clone(),
-        None => ssh_password_variable(
-            dir,
-            &format!("{}/{environment}/ssh", project_display_name(dir)),
-        )?,
-    };
+    let variable =
+        configured_ssh_password_variable(dir, environment, ssh.secret_variable.as_deref())?;
     validate_ssh_password_variable(&variable)?;
     ssh.secret_variable = Some(variable.clone());
     ssh.secret_account = None;
@@ -677,6 +672,20 @@ fn configure_ssh_password_environment(dir: &Path, environment: &str) -> Result<(
     std::fs::write(env_file, content)?;
     print_ssh_password_environment_hint(&variable);
     Ok(())
+}
+
+fn configured_ssh_password_variable(
+    dir: &Path,
+    environment: &str,
+    existing: Option<&str>,
+) -> Result<String> {
+    match existing {
+        Some(variable) => Ok(variable.to_string()),
+        None => ssh_password_variable(
+            dir,
+            &format!("{}/{environment}/ssh", project_display_name(dir)),
+        ),
+    }
 }
 
 fn prompt_ssh_password_source(account: &str) -> Result<(Option<String>, Option<String>)> {
