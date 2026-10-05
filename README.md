@@ -729,8 +729,12 @@ The defaults differ by operation:
 
 SSH password imports use macOS Keychain only on macOS. On Linux/WSL, the
 Compass and DBeaver import prompts ask for an **environment variable name**,
-not the password. SafeSelect saves that reference as `secret_variable` in the
-SSH configuration (including shared bastions), never the password itself:
+not the password. The generated default uses `SAFESELECT_SSH_PASSWORD_<HEX>`,
+where `<HEX>` encodes the complete SSH account's UTF-8 bytes (project, environment
+and `/ssh`) without lossy normalization. Distinct account names therefore have
+distinct defaults; existing and explicitly selected references stay unchanged.
+SafeSelect saves that reference as `secret_variable` in the SSH configuration
+(including shared bastions), never the password itself:
 
 ```toml
 [ssh]

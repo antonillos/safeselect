@@ -625,17 +625,10 @@ fn set_ssh_password_for_environment(
 }
 
 fn ssh_password_variable(account: &str) -> String {
-    let suffix: String = account
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() {
-                c.to_ascii_uppercase()
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    format!("SAFESELECT_SSH_PASSWORD_{suffix}")
+    format!(
+        "SAFESELECT_SSH_PASSWORD_{}",
+        hex::encode(account.as_bytes()).to_uppercase()
+    )
 }
 
 fn validate_ssh_password_variable(variable: &str) -> Result<()> {
@@ -5920,7 +5913,7 @@ enabled = true
             false,
             || panic!("Linux must not request a password"),
             |default| {
-                assert_eq!(default, "SAFESELECT_SSH_PASSWORD_DEMO_DEV_SSH");
+                assert_eq!(default, "SAFESELECT_SSH_PASSWORD_64656D6F2F6465762F737368");
                 Ok(" CUSTOM_SSH_VARIABLE ".into())
             },
             |_, _| panic!("Linux must not invoke Keychain"),
@@ -5991,11 +5984,34 @@ enabled = true
     }
 
     #[test]
+    fn generated_ssh_references_are_distinct_and_reversible() {
+        let accounts = [
+            "demo/qa.eu/ssh",
+            "demo/qa-eu/ssh",
+            "demo/qa_eu/ssh",
+            "DEMO/qa.eu/ssh",
+            "demo/qa éu/ssh",
+            "demo/qa/eu/ssh",
+        ];
+        let mut references = std::collections::HashSet::new();
+        for account in accounts {
+            let variable = ssh_password_variable(account);
+            validate_ssh_password_variable(&variable).unwrap();
+            assert!(
+                references.insert(variable.clone()),
+                "aliased account: {account}"
+            );
+            let encoded = variable.strip_prefix("SAFESELECT_SSH_PASSWORD_").unwrap();
+            assert_eq!(hex::decode(encoded).unwrap(), account.as_bytes());
+        }
+    }
+
+    #[test]
     fn ssh_password_variable_names_are_safe_for_shell_hints() {
         let generated = ssh_password_variable("demo-project/dev env/ssh");
         assert_eq!(
             generated,
-            "SAFESELECT_SSH_PASSWORD_DEMO_PROJECT_DEV_ENV_SSH"
+            "SAFESELECT_SSH_PASSWORD_64656D6F2D70726F6A6563742F64657620656E762F737368"
         );
         assert!(validate_ssh_password_variable(&generated).is_ok());
         for name in [
