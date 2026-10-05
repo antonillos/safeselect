@@ -624,10 +624,13 @@ fn set_ssh_password_for_environment(
     )
 }
 
-fn ssh_password_variable(account: &str) -> String {
-    format!(
-        "SAFESELECT_SSH_PASSWORD_{}",
-        hex::encode(account.as_bytes()).to_uppercase()
+fn ssh_password_variable(repo_root: &Path, account: &str) -> Result<String> {
+    Ok(
+        compose::database_env_reference(repo_root, account)?.replacen(
+            "SAFESELECT_PASSWORD_",
+            "SAFESELECT_SSH_PASSWORD_",
+            1,
+        ),
     )
 }
 
@@ -657,9 +660,13 @@ fn configure_ssh_password_environment(dir: &Path, environment: &str) -> Result<(
             "environment '{environment}' has no SSH configuration"
         ))
     })?;
-    let variable = ssh.secret_variable.clone().unwrap_or_else(|| {
-        ssh_password_variable(&format!("{}/{environment}/ssh", project_display_name(dir)))
-    });
+    let variable = match &ssh.secret_variable {
+        Some(variable) => variable.clone(),
+        None => ssh_password_variable(
+            dir,
+            &format!("{}/{environment}/ssh", project_display_name(dir)),
+        )?,
+    };
     validate_ssh_password_variable(&variable)?;
     ssh.secret_variable = Some(variable.clone());
     ssh.secret_account = None;
@@ -674,6 +681,7 @@ fn configure_ssh_password_environment(dir: &Path, environment: &str) -> Result<(
 
 fn prompt_ssh_password_source(account: &str) -> Result<(Option<String>, Option<String>)> {
     prompt_ssh_password_source_with(
+        &std::env::current_dir()?,
         account,
         cfg!(target_os = "macos"),
         prompt_keychain_ssh_password,
@@ -697,6 +705,7 @@ fn prompt_ssh_environment_variable(default: &str) -> Result<String> {
 }
 
 fn prompt_ssh_password_source_with<P, V, S>(
+    repo_root: &Path,
     account: &str,
     is_macos: bool,
     prompt_password: P,
@@ -716,7 +725,7 @@ where
         }
         Ok((Some(account.to_string()), None))
     } else {
-        let variable = prompt_variable(&ssh_password_variable(account))?;
+        let variable = prompt_variable(&ssh_password_variable(repo_root, account)?)?;
         let variable = variable.trim().to_string();
         validate_ssh_password_variable(&variable)?;
         print_ssh_password_environment_hint(&variable);
@@ -6049,6 +6058,7 @@ enabled = true
     fn ssh_password_prompt_routes_sources_and_propagates_failures() {
         let password = uuid::Uuid::new_v4().to_string();
         let result = prompt_ssh_password_source_with(
+            Path::new("."),
             "demo/dev/ssh",
             true,
             || Ok(password.clone()),
@@ -6062,6 +6072,7 @@ enabled = true
         .unwrap();
         assert_eq!(result, (Some("demo/dev/ssh".into()), None));
         let result = prompt_ssh_password_source_with(
+            Path::new("."),
             "demo/dev/ssh",
             true,
             || Ok(String::new()),
@@ -6071,11 +6082,15 @@ enabled = true
         .unwrap();
         assert_eq!(result, (Some("demo/dev/ssh".into()), None));
         let result = prompt_ssh_password_source_with(
+            Path::new("."),
             "demo/dev/ssh",
             false,
             || panic!("Linux must not request a password"),
             |default| {
-                assert_eq!(default, "SAFESELECT_SSH_PASSWORD_64656D6F2F6465762F737368");
+                assert_eq!(
+                    default,
+                    ssh_password_variable(Path::new("."), "demo/dev/ssh").unwrap()
+                );
                 Ok(" CUSTOM_SSH_VARIABLE ".into())
             },
             |_, _| panic!("Linux must not invoke Keychain"),
@@ -6083,6 +6098,7 @@ enabled = true
         .unwrap();
         assert_eq!(result, (None, Some("CUSTOM_SSH_VARIABLE".into())));
         assert!(prompt_ssh_password_source_with(
+            Path::new("."),
             "demo",
             false,
             || panic!("unexpected password prompt"),
@@ -6091,6 +6107,7 @@ enabled = true
         )
         .is_err());
         assert!(prompt_ssh_password_source_with(
+            Path::new("."),
             "demo",
             true,
             || Err(SafeselectError::Other("cancelled".into())),
@@ -6099,6 +6116,7 @@ enabled = true
         )
         .is_err());
         assert!(prompt_ssh_password_source_with(
+            Path::new("."),
             "demo",
             false,
             || panic!("unexpected password prompt"),
@@ -6107,6 +6125,7 @@ enabled = true
         )
         .is_err());
         assert!(prompt_ssh_password_source_with(
+            Path::new("."),
             "demo",
             true,
             || Ok(password.clone()),
@@ -6181,6 +6200,54 @@ enabled = true
     }
 
     #[test]
+    fn ssh_references_separate_same_named_projects_and_preserve_explicit_sources() {
+        let root =
+            std::env::temp_dir().join(format!("safeselect-ssh-scope-{}", uuid::Uuid::new_v4()));
+        let mut generated = Vec::new();
+        for parent in ["one", "two"] {
+            let project = root.join(parent).join("demo");
+            let envs = project.join(".safeselect/environments");
+            std::fs::create_dir_all(&envs).unwrap();
+            std::fs::write(
+                project.join(".safeselect/project.toml"),
+                "version = 1\ndisplay_name = 'demo'\n",
+            )
+            .unwrap();
+            let path = envs.join("dev.toml");
+            std::fs::write(&path, "version = 1\n[database]\nurl = 'mongodb://localhost/demo'\n[ssh]\nenabled = true\n").unwrap();
+            configure_ssh_password_environment(&project, "dev").unwrap();
+            let saved: config::EnvironmentConfig =
+                toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            let variable = saved.ssh.unwrap().secret_variable.unwrap();
+            assert_eq!(
+                variable,
+                ssh_password_variable(&project.join("."), "demo/dev/ssh").unwrap()
+            );
+            let (_, prompted) = prompt_ssh_password_source_with(
+                &project,
+                "demo/dev/ssh",
+                false,
+                || panic!("no password"),
+                |default| Ok(default.to_string()),
+                |_, _| panic!("no store"),
+            )
+            .unwrap();
+            assert_eq!(prompted.as_deref(), Some(variable.as_str()));
+            generated.push(variable);
+            let content = std::fs::read_to_string(&path)
+                .unwrap()
+                .replace(&generated[generated.len() - 1], "EXPLICIT_SSH_PASSWORD");
+            std::fs::write(&path, content).unwrap();
+            configure_ssh_password_environment(&project, "dev").unwrap();
+            assert!(std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("EXPLICIT_SSH_PASSWORD"));
+        }
+        assert_ne!(generated[0], generated[1]);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn generated_ssh_references_are_distinct_and_reversible() {
         let accounts = [
             "demo/qa.eu/ssh",
@@ -6192,23 +6259,23 @@ enabled = true
         ];
         let mut references = std::collections::HashSet::new();
         for account in accounts {
-            let variable = ssh_password_variable(account);
+            let variable = ssh_password_variable(Path::new("."), account).unwrap();
             validate_ssh_password_variable(&variable).unwrap();
             assert!(
                 references.insert(variable.clone()),
                 "generated SSH references must be distinct"
             );
-            let encoded = variable.strip_prefix("SAFESELECT_SSH_PASSWORD_").unwrap();
+            let encoded = variable.rsplit('_').next().unwrap();
             assert_eq!(hex::decode(encoded).unwrap(), account.as_bytes());
         }
     }
 
     #[test]
     fn ssh_password_variable_names_are_safe_for_shell_hints() {
-        let generated = ssh_password_variable("demo-project/dev env/ssh");
+        let generated = ssh_password_variable(Path::new("."), "demo-project/dev env/ssh").unwrap();
         assert_eq!(
-            generated,
-            "SAFESELECT_SSH_PASSWORD_64656D6F2D70726F6A6563742F64657620656E762F737368"
+            generated.rsplit('_').next().unwrap(),
+            "64656D6F2D70726F6A6563742F64657620656E762F737368"
         );
         assert!(validate_ssh_password_variable(&generated).is_ok());
         for name in [

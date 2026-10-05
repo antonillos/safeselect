@@ -492,7 +492,9 @@ fn write_config_files_with_warning<W: Write>(
             .map_err(|e| crate::error::SafeselectError::TomlSer(e.to_string()))?;
         let env_file = env_dir.join(format!("{}.toml", conn.env_name));
         if !env_file.exists() {
-            if conn.password_var.is_none() && conn.password_literal.is_none() {
+            if conn.password_var.is_none()
+                && (conn.password_literal.is_none() || !cfg!(target_os = "macos"))
+            {
                 let account = format!("{}/{}", project_name, conn.env_name);
                 let _ = writeln!(warning_writer, "{MISSING_PASSWORD_WARNING}");
                 no_password.push((conn.env_name.clone(), account));
@@ -862,6 +864,40 @@ services:
         assert!(guidance
             .text
             .contains("safeselect agent install opencode --environment testing"));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn literal_compose_password_requires_exact_export_guidance() {
+        let root = std::env::temp_dir().join(format!(
+            "safeselect-compose-literal-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let password = uuid::Uuid::new_v4().to_string();
+        let connection = ComposeConnection {
+            name: "demo".into(),
+            env_name: "dev".into(),
+            service: "db".into(),
+            host: "localhost".into(),
+            port: 5432,
+            database: "app".into(),
+            username: "reader".into(),
+            password_literal: Some(password.clone()),
+            password_var: None,
+            compose_path: root.join("compose.yaml").display().to_string(),
+        };
+        let result = write_config_files(&root, &[connection], "demo").unwrap();
+        assert_eq!(result.no_password.len(), 1);
+        let reference = database_env_reference(&root, "dev").unwrap();
+        let saved =
+            std::fs::read_to_string(root.join(".safeselect/environments/dev.toml")).unwrap();
+        assert!(saved.contains(&reference));
+        assert!(!saved.contains(&password));
+        let guidance =
+            build_import_guidance(&root, "demo", &result, &["dev".into()], true).unwrap();
+        assert!(guidance.text.contains(&format!("export {reference}=")));
+        assert!(!guidance.text.contains(&password));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
