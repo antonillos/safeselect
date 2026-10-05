@@ -590,9 +590,9 @@ where
     Ok(())
 }
 
-fn resolve_password(password: Option<String>, account: &str) -> Result<String> {
+fn resolve_password(password: Option<String>, _account: &str) -> Result<String> {
     password.map(Ok).unwrap_or_else(|| {
-        inquire::Password::new(&format!("Password for '{account}'"))
+        inquire::Password::new("Database password")
             .without_confirmation()
             .prompt()
             .map_err(|e| SafeselectError::Other(format!("Failed to read password: {e}")))
@@ -607,6 +607,14 @@ fn set_ssh_password_for_environment(
 ) -> Result<()> {
     let dir = resolve_project_dir(loader, project.clone())?;
     let environment = resolve_single_environment(&dir, environment.as_deref())?;
+    if !cfg!(target_os = "macos") {
+        if password.is_some() {
+            return Err(SafeselectError::Secret(
+                "On Linux/WSL, export the SSH password in an environment variable instead of using --password; run config set-ssh-password without --password to configure its reference.".into(),
+            ));
+        }
+        return configure_ssh_password_environment(&dir, &environment);
+    }
     set_ssh_password_for_environment_with_store(
         loader,
         environment,
@@ -614,6 +622,172 @@ fn set_ssh_password_for_environment(
         project,
         compose::store_password_in_keychain,
     )
+}
+
+fn ssh_password_variable(repo_root: &Path, account: &str) -> Result<String> {
+    Ok(
+        compose::database_env_reference(repo_root, account)?.replacen(
+            "SAFESELECT_PASSWORD_",
+            "SAFESELECT_SSH_PASSWORD_",
+            1,
+        ),
+    )
+}
+
+fn validate_ssh_password_variable(variable: &str) -> Result<()> {
+    let mut chars = variable.chars();
+    let valid_start = chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_');
+    if !valid_start || !chars.all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return Err(SafeselectError::Secret(
+            "SSH password environment variable must be a non-empty shell variable name".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn print_ssh_password_environment_hint(variable: &str) {
+    println!("  SSH password source: environment variable {variable} (password is not stored).");
+    println!("  Set it in the shell that launches SafeSelect or your MCP client, before checking (Bash):");
+    println!("  read -rsp 'SSH password: ' {variable}; echo; export {variable}");
+}
+
+fn configure_ssh_password_environment(dir: &Path, environment: &str) -> Result<()> {
+    let (env_file, mut env_config) = load_ssh_environment_config(dir, environment)?;
+    let ssh = env_config.ssh.as_mut().ok_or_else(|| {
+        SafeselectError::Config(format!(
+            "environment '{environment}' has no SSH configuration"
+        ))
+    })?;
+    let variable =
+        configured_ssh_password_variable(dir, environment, ssh.secret_variable.as_deref())?;
+    validate_ssh_password_variable(&variable)?;
+    ssh.secret_variable = Some(variable.clone());
+    ssh.secret_account = None;
+    ssh.auth_type = Some("PASSWORD".into());
+    ssh.identity_file = None;
+    let content =
+        toml::to_string_pretty(&env_config).map_err(|e| SafeselectError::TomlSer(e.to_string()))?;
+    std::fs::write(env_file, content)?;
+    print_ssh_password_environment_hint(&variable);
+    Ok(())
+}
+
+fn configured_ssh_password_variable(
+    dir: &Path,
+    environment: &str,
+    existing: Option<&str>,
+) -> Result<String> {
+    match existing {
+        Some(variable) => Ok(variable.to_string()),
+        None => ssh_password_variable(
+            dir,
+            &format!("{}/{environment}/ssh", project_display_name(dir)),
+        ),
+    }
+}
+
+fn prompt_ssh_password_source(account: &str) -> Result<(Option<String>, Option<String>)> {
+    prompt_ssh_password_source_with(
+        &std::env::current_dir()?,
+        account,
+        cfg!(target_os = "macos"),
+        prompt_keychain_ssh_password,
+        prompt_ssh_environment_variable,
+        compose::store_password_in_keychain,
+    )
+}
+
+fn prompt_keychain_ssh_password() -> Result<String> {
+    inquire::Password::new("  SSH password:")
+        .without_confirmation()
+        .prompt()
+        .map_err(|e| SafeselectError::Other(format!("Failed to read SSH password: {e}")))
+}
+
+fn prompt_ssh_environment_variable(default: &str) -> Result<String> {
+    inquire::Text::new("  SSH password environment variable:")
+        .with_default(default)
+        .prompt()
+        .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))
+}
+
+fn prompt_ssh_password_source_with<P, V, S>(
+    repo_root: &Path,
+    account: &str,
+    is_macos: bool,
+    prompt_password: P,
+    prompt_variable: V,
+    store: S,
+) -> Result<(Option<String>, Option<String>)>
+where
+    P: FnOnce() -> Result<String>,
+    V: FnOnce(&str) -> Result<String>,
+    S: FnOnce(&str, &str) -> Result<()>,
+{
+    if is_macos {
+        let password = prompt_password()?;
+        if !password.is_empty() {
+            store(account, &password)?;
+            print_terminal_line("  ✓ SSH password stored in Keychain");
+        }
+        Ok((Some(account.to_string()), None))
+    } else {
+        let variable = prompt_variable(&ssh_password_variable(repo_root, account)?)?;
+        let variable = variable.trim().to_string();
+        validate_ssh_password_variable(&variable)?;
+        print_ssh_password_environment_hint(&variable);
+        Ok((None, Some(variable)))
+    }
+}
+
+fn ssh_password_secret_config(
+    ssh: &config::SshConfig,
+    fallback_account: &str,
+    is_macos: bool,
+) -> Result<config::SecretConfig> {
+    if let Some(variable) = &ssh.secret_variable {
+        if ssh.secret_account.is_some() {
+            return Err(SafeselectError::Secret(
+                "Configure only one SSH password source: secret_variable or secret_account".into(),
+            ));
+        }
+        validate_ssh_password_variable(variable)?;
+        return Ok(config::SecretConfig {
+            source: "env".into(),
+            variable: Some(variable.clone()),
+            service: None,
+            account: None,
+        });
+    }
+    if !is_macos {
+        return Err(SafeselectError::Secret(
+            "SSH Keychain passwords are only supported on macOS; configure ssh.secret_variable on Linux/WSL (or run config set-ssh-password).".into(),
+        ));
+    }
+    Ok(config::SecretConfig {
+        source: "macos-keychain".into(),
+        variable: None,
+        service: Some("safeselect".into()),
+        account: Some(
+            ssh.secret_account
+                .as_deref()
+                .unwrap_or(fallback_account)
+                .into(),
+        ),
+    })
+}
+
+fn resolve_tunnel_password(ssh: &config::SshConfig, fallback_account: &str) -> Result<String> {
+    let secret = ssh_password_secret_config(ssh, fallback_account, cfg!(target_os = "macos"))?;
+    let password = ConfigLoader::new().resolve_secret(&secret)?;
+    if password.is_empty() {
+        return Err(SafeselectError::Secret(
+            "SSH password source is empty".into(),
+        ));
+    }
+    Ok(password)
 }
 
 fn set_ssh_password_for_environment_with_store<F>(
@@ -641,6 +815,7 @@ where
 
     store_password(&account, &password)?;
     ssh.secret_account = Some(account.clone());
+    ssh.secret_variable = None;
     ssh.auth_type = Some("PASSWORD".to_string());
     ssh.identity_file = None;
     let env_toml =
@@ -669,9 +844,9 @@ fn load_ssh_environment_config(
     Ok((env_file, env_config))
 }
 
-fn resolve_ssh_password(password: Option<String>, account: &str) -> Result<String> {
+fn resolve_ssh_password(password: Option<String>, _account: &str) -> Result<String> {
     password.map(Ok).unwrap_or_else(|| {
-        inquire::Password::new(&format!("SSH password for '{account}'"))
+        inquire::Password::new("SSH password")
             .without_confirmation()
             .prompt()
             .map_err(|e| SafeselectError::Other(format!("Failed to read SSH password: {e}")))
@@ -737,10 +912,7 @@ fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
                         }
                     }
                     "env" => {
-                        let var = format!(
-                            "SAFESELECT_PASSWORD_{}",
-                            new.to_uppercase().replace('-', "_")
-                        );
+                        let var = compose::database_env_reference(&dir, &new)?;
                         secret.variable = Some(var.clone());
                         needs_rewrite = true;
                     }
@@ -1522,6 +1694,7 @@ fn prompt_ssh_config(
             port: conn.ssh_port,
             username: conn.ssh_user.clone(),
             secret_account: None,
+            secret_variable: None,
             identity_file: conn.ssh_key_file.clone(),
             known_hosts: None,
             local_host: conn
@@ -1580,31 +1753,22 @@ fn prompt_ssh_config(
                 Some("KEY".into()),
             )
         }
-        _ => {
-            let ssh_acct = format!("{project_name}/{env_name}/ssh");
-            let pw = inquire::Password::new("  SSH password:")
-                .without_confirmation()
-                .prompt()
-                .map_err(|e| SafeselectError::Other(format!("Failed to read SSH password: {e}")))?;
-            if !pw.is_empty() {
-                compose::store_password_in_keychain(&ssh_acct, &pw)?;
-                print_terminal_line("  ✓ SSH password stored in Keychain");
-            }
-            (None, Some("PASSWORD".into()))
-        }
+        _ => (None, Some("PASSWORD".into())),
     };
 
+    let (secret_account, secret_variable) = if auth_type.as_deref() == Some("PASSWORD") {
+        prompt_ssh_password_source(&format!("{project_name}/{env_name}/ssh"))?
+    } else {
+        (None, None)
+    };
     Ok(config::SshConfig {
         enabled: true,
         bastion: None,
         host: Some(host),
         port: Some(port),
         username: Some(user),
-        secret_account: if auth_type.as_deref() == Some("PASSWORD") {
-            Some(format!("{project_name}/{env_name}/ssh"))
-        } else {
-            None
-        },
+        secret_account,
+        secret_variable,
         identity_file: key_file,
         known_hosts: None,
         local_host: conn
@@ -1809,6 +1973,7 @@ fn project_ssh_bastion_from_env(ssh: &config::SshConfig) -> config::SharedSshCon
         port: ssh.port,
         username: ssh.username.clone(),
         secret_account: ssh.secret_account.clone(),
+        secret_variable: ssh.secret_variable.clone(),
         identity_file: ssh.identity_file.clone(),
         known_hosts: ssh.known_hosts.clone(),
         auth_type: ssh.auth_type.clone(),
@@ -1823,6 +1988,7 @@ fn environment_ssh_from_bastion(name: String, ssh: &config::SshConfig) -> config
         port: None,
         username: None,
         secret_account: None,
+        secret_variable: None,
         identity_file: None,
         known_hosts: None,
         local_host: ssh.local_host.clone(),
@@ -2009,16 +2175,9 @@ fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
 
         let (secret, has_secret) = if let Some(ref pw) = conn.password {
             if !pw.is_empty() {
-                let account = format!("{project_name}/{env_name}");
-                compose::store_password_in_keychain(&account, pw)?;
                 (
-                    Some(config::SecretConfig {
-                        source: "macos-keychain".to_string(),
-                        service: Some("safeselect".to_string()),
-                        account: Some(account),
-                        variable: None,
-                    }),
-                    true,
+                    Some(import_database_password(&cwd, &project_name, env_name, pw)?),
+                    cfg!(target_os = "macos"),
                 )
             } else {
                 (None, false)
@@ -2081,15 +2240,20 @@ fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
         println!("  ◉ All environments already exist.");
     }
 
-    let guidance =
-        compose::build_guidance_from_parts(&project_name, &env_names, &no_password_envs, true);
+    let guidance = compose::build_guidance_from_parts(
+        &cwd,
+        &project_name,
+        &env_names,
+        &no_password_envs,
+        true,
+    )?;
     println!();
     println!("{}", guidance.text);
 
     // Step 5: shared helpers (driver, passwords, verify)
     setup_driver_if_missing()?;
     setup_passwords_for_missing(&cwd, &env_names)?;
-    run_checks_for_environments(&cwd, &env_names, false, true, false)?;
+    verify_imported_environments(&cwd, &env_names)?;
     Ok(())
 }
 
@@ -2179,7 +2343,8 @@ fn cmd_import_compose(path: Option<PathBuf>, non_interactive: bool) -> Result<()
     let result = compose::write_config_files(dest_dir, &to_import, &project_name)?;
     update_generated_by(&dest_dir.join(".safeselect"))?;
     let imported_names: Vec<String> = to_import.iter().map(|c| c.env_name.clone()).collect();
-    let guidance = compose::build_import_guidance(&project_name, &result, &imported_names, true);
+    let guidance =
+        compose::build_import_guidance(dest_dir, &project_name, &result, &imported_names, true)?;
 
     if result.created > 0 {
         println!();
@@ -2197,7 +2362,7 @@ fn cmd_import_compose(path: Option<PathBuf>, non_interactive: bool) -> Result<()
     let env_names = guidance.imported_env_names;
     setup_driver_if_missing()?;
     setup_passwords_for_missing(dest_dir, &env_names)?;
-    run_checks_for_environments(dest_dir, &env_names, false, true, false)?;
+    verify_imported_environments(dest_dir, &env_names)?;
 
     Ok(())
 }
@@ -2208,7 +2373,7 @@ fn import_selected_connections(connections: &[compose::ComposeConnection]) -> Re
     let result = compose::write_config_files(&cwd, connections, &name)?;
     update_generated_by(&cwd.join(".safeselect"))?;
     let imported_names: Vec<String> = connections.iter().map(|c| c.env_name.clone()).collect();
-    let guidance = compose::build_import_guidance(&name, &result, &imported_names, true);
+    let guidance = compose::build_import_guidance(&cwd, &name, &result, &imported_names, true)?;
 
     if result.created > 0 {
         println!(
@@ -2226,7 +2391,7 @@ fn import_selected_connections(connections: &[compose::ComposeConnection]) -> Re
     let env_names = guidance.imported_env_names;
     setup_driver_if_missing()?;
     setup_passwords_for_missing(&cwd, &env_names)?;
-    run_checks_for_environments(&cwd, &env_names, false, true, false)?;
+    verify_imported_environments(&cwd, &env_names)?;
 
     Ok(())
 }
@@ -2359,9 +2524,12 @@ fn cmd_import_compass(path: Option<PathBuf>, non_interactive: bool) -> Result<()
             conn.url.clone()
         };
         let (mut url, username, mut secret) =
-            prepare_mongodb_url(&project_name, &env_name, &raw_url)?;
+            prepare_mongodb_url(&cwd, &project_name, &env_name, &raw_url)?;
         if secret.is_none() && !username.is_empty() {
-            if non_interactive {
+            if !cfg!(target_os = "macos") {
+                url = inject_mongodb_password_placeholder(&raw_url, &username);
+                secret = Some(database_environment_secret(&cwd, &env_name)?);
+            } else if non_interactive {
                 warnings.push(format!(
                     "{}: Compass did not export a database password; configure it with `safeselect config set-password --environment {}` after import.",
                     conn.name, env_name
@@ -2415,7 +2583,7 @@ fn cmd_import_compass(path: Option<PathBuf>, non_interactive: bool) -> Result<()
     if non_interactive {
         println!("Next: safeselect check --environment <name>");
     } else {
-        run_checks_for_environments(&cwd, &imported, false, true, false)?;
+        verify_imported_environments(&cwd, &imported)?;
     }
     Ok(())
 }
@@ -2472,7 +2640,7 @@ fn prompt_compass_ssh_config(
                     .with_starting_cursor(if default_auth == "PASSWORD" { 1 } else { 0 })
                     .prompt()
                     .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?;
-            let (key_file, auth_type, secret_account) = match auth_method {
+            let (key_file, auth_type, secret_account, secret_variable) = match auth_method {
                 "Key file" => {
                     let kf = inquire::Text::new("  SSH key file path:")
                         .with_default(default_key)
@@ -2484,21 +2652,13 @@ fn prompt_compass_ssh_config(
                         if kf.is_empty() { None } else { Some(kf) },
                         Some("KEY".into()),
                         None,
+                        None,
                     )
                 }
                 _ => {
-                    let ssh_acct = format!("{project_name}/{env_name}/ssh");
-                    let pw = inquire::Password::new("  SSH password:")
-                        .without_confirmation()
-                        .prompt()
-                        .map_err(|e| {
-                            SafeselectError::Other(format!("Failed to read SSH password: {e}"))
-                        })?;
-                    if !pw.is_empty() {
-                        compose::store_password_in_keychain(&ssh_acct, &pw)?;
-                        print_terminal_line("  ✓ SSH password stored in Keychain");
-                    }
-                    (None, Some("PASSWORD".into()), Some(ssh_acct))
+                    let (account, variable) =
+                        prompt_ssh_password_source(&format!("{project_name}/{env_name}/ssh"))?;
+                    (None, Some("PASSWORD".into()), account, variable)
                 }
             };
             return Ok(config::SshConfig {
@@ -2508,6 +2668,7 @@ fn prompt_compass_ssh_config(
                 port: Some(conn.ssh_port.unwrap_or(22)),
                 username: conn.ssh_user.clone(),
                 secret_account,
+                secret_variable,
                 identity_file: key_file,
                 known_hosts: None,
                 local_host: Some("localhost".to_string()),
@@ -2585,31 +2746,22 @@ fn prompt_compass_ssh_config(
                 Some("KEY".into()),
             )
         }
-        _ => {
-            let ssh_acct = format!("{project_name}/{env_name}/ssh");
-            let pw = inquire::Password::new("  SSH password:")
-                .without_confirmation()
-                .prompt()
-                .map_err(|e| SafeselectError::Other(format!("Failed to read SSH password: {e}")))?;
-            if !pw.is_empty() {
-                compose::store_password_in_keychain(&ssh_acct, &pw)?;
-                print_terminal_line("  ✓ SSH password stored in Keychain");
-            }
-            (None, Some("PASSWORD".into()))
-        }
+        _ => (None, Some("PASSWORD".into())),
     };
 
+    let (secret_account, secret_variable) = if auth_type.as_deref() == Some("PASSWORD") {
+        prompt_ssh_password_source(&format!("{project_name}/{env_name}/ssh"))?
+    } else {
+        (None, None)
+    };
     Ok(config::SshConfig {
         enabled: true,
         bastion: None,
         host: Some(host),
         port: Some(port),
         username: Some(user),
-        secret_account: if auth_type.as_deref() == Some("PASSWORD") {
-            Some(format!("{project_name}/{env_name}/ssh"))
-        } else {
-            None
-        },
+        secret_account,
+        secret_variable,
         identity_file: key_file,
         known_hosts: None,
         local_host: conn
@@ -2708,6 +2860,7 @@ fn compass_ssh_config(conn: &compass::CompassConnection) -> Option<config::SshCo
             port: Some(conn.ssh_port.unwrap_or(22)),
             username: conn.ssh_user.clone(),
             secret_account: None,
+            secret_variable: None,
             identity_file: conn.ssh_key_file.clone(),
             known_hosts: None,
             local_host: Some("localhost".to_string()),
@@ -2725,6 +2878,7 @@ fn compass_ssh_config(conn: &compass::CompassConnection) -> Option<config::SshCo
         port: Some(conn.ssh_port.unwrap_or(22)),
         username: conn.ssh_user.clone(),
         secret_account: None,
+        secret_variable: None,
         identity_file: conn.ssh_key_file.clone(),
         known_hosts: None,
         local_host: conn
@@ -2883,10 +3037,32 @@ fn unique_env_name(env_dir: &Path, base: &str) -> String {
 }
 
 fn prepare_mongodb_url(
+    repo_root: &Path,
     project_name: &str,
     env_name: &str,
     url: &str,
 ) -> Result<(String, String, Option<config::SecretConfig>)> {
+    prepare_mongodb_url_with_store(
+        repo_root,
+        project_name,
+        env_name,
+        url,
+        cfg!(target_os = "macos"),
+        compose::store_password_in_keychain,
+    )
+}
+
+fn prepare_mongodb_url_with_store<F>(
+    repo_root: &Path,
+    project_name: &str,
+    env_name: &str,
+    url: &str,
+    is_macos: bool,
+    store: F,
+) -> Result<(String, String, Option<config::SecretConfig>)>
+where
+    F: FnOnce(&str, &str) -> Result<()>,
+{
     let Some(scheme_end) = url.find("://") else {
         return Ok((url.to_string(), String::new(), None));
     };
@@ -2899,8 +3075,14 @@ fn prepare_mongodb_url(
     let Some((username, password)) = credentials.split_once(':') else {
         return Ok((url.to_string(), credentials.to_string(), None));
     };
-    let account = format!("{project_name}/{env_name}");
-    compose::store_password_in_keychain(&account, password)?;
+    let secret = import_database_password_with_store(
+        repo_root,
+        project_name,
+        env_name,
+        password,
+        is_macos,
+        store,
+    )?;
     let sanitized = format!(
         "{}{}:{}{}",
         &url[..authority_start],
@@ -2908,16 +3090,59 @@ fn prepare_mongodb_url(
         "__SAFESELECT_PASSWORD__",
         &url[at..]
     );
-    Ok((
-        sanitized,
-        username.to_string(),
-        Some(config::SecretConfig {
-            source: "macos-keychain".to_string(),
-            service: Some("safeselect".to_string()),
+    Ok((sanitized, username.to_string(), Some(secret)))
+}
+
+fn import_database_password(
+    repo_root: &Path,
+    project_name: &str,
+    env_name: &str,
+    password: &str,
+) -> Result<config::SecretConfig> {
+    import_database_password_with_store(
+        repo_root,
+        project_name,
+        env_name,
+        password,
+        cfg!(target_os = "macos"),
+        compose::store_password_in_keychain,
+    )
+}
+
+fn import_database_password_with_store<F>(
+    repo_root: &Path,
+    project_name: &str,
+    env_name: &str,
+    password: &str,
+    is_macos: bool,
+    store: F,
+) -> Result<config::SecretConfig>
+where
+    F: FnOnce(&str, &str) -> Result<()>,
+{
+    if is_macos {
+        let account = format!("{project_name}/{env_name}");
+        store(&account, password)?;
+        Ok(config::SecretConfig {
+            source: "macos-keychain".into(),
+            service: Some("safeselect".into()),
             account: Some(account),
             variable: None,
-        }),
-    ))
+        })
+    } else {
+        database_environment_secret(repo_root, env_name)
+    }
+}
+
+fn database_environment_secret(repo_root: &Path, env_name: &str) -> Result<config::SecretConfig> {
+    let variable = compose::database_env_reference(repo_root, env_name)?;
+    println!("  Database password source: {variable}; export it in the shell that launches SafeSelect (password is not stored).");
+    Ok(config::SecretConfig {
+        source: "env".into(),
+        service: None,
+        account: None,
+        variable: Some(variable),
+    })
 }
 
 fn inject_mongodb_password_placeholder(url: &str, username: &str) -> String {
@@ -2984,25 +3209,42 @@ fn setup_passwords_for_missing(repo_root: &std::path::Path, env_names: &[String]
             continue;
         }
         let content = std::fs::read_to_string(&env_file)?;
-        let config = match toml::from_str::<config::EnvironmentConfig>(&content) {
+        let mut config = match toml::from_str::<config::EnvironmentConfig>(&content) {
             Ok(c) => c,
             Err(_) => continue,
         };
 
+        if !cfg!(target_os = "macos") {
+            if config.database.secret.is_none() {
+                config.database.secret = Some(database_environment_secret(repo_root, env_name)?);
+                let updated = toml::to_string_pretty(&config)
+                    .map_err(|e| SafeselectError::TomlSer(e.to_string()))?;
+                std::fs::write(&env_file, updated)?;
+            }
+            let secret = config.database.secret.as_ref().ok_or_else(|| {
+                SafeselectError::Secret("Database password source is missing".into())
+            })?;
+            if secret.source != "env" {
+                return Err(SafeselectError::Secret(
+                    "On Linux/WSL, configure database.secret with source = 'env' and an exported variable; the existing source was not changed.".into(),
+                ));
+            }
+            let variable = secret.variable.as_deref().ok_or_else(|| {
+                SafeselectError::Secret("variable name required for env source".into())
+            })?;
+            println!("  Database password source for '{env_name}': {variable}; export it before checking.");
+            continue;
+        }
+
         let needs_password = match &config.database.secret {
             Some(secret) => {
-                if cfg!(target_os = "macos") {
-                    let account = secret.account.as_deref().unwrap_or("");
-                    let service = secret.service.as_deref().unwrap_or("");
-                    std::process::Command::new("security")
-                        .args(["find-generic-password", "-a", account, "-s", service, "-w"])
-                        .output()
-                        .map(|o| !o.status.success())
-                        .unwrap_or(true)
-                } else {
-                    let var = secret.variable.as_deref().unwrap_or("");
-                    std::env::var(var).is_err()
-                }
+                let account = secret.account.as_deref().unwrap_or("");
+                let service = secret.service.as_deref().unwrap_or("");
+                std::process::Command::new("security")
+                    .args(["find-generic-password", "-a", account, "-s", service, "-w"])
+                    .output()
+                    .map(|o| !o.status.success())
+                    .unwrap_or(true)
             }
             None => true,
         };
@@ -3066,6 +3308,79 @@ fn setup_passwords_for_missing(repo_root: &std::path::Path, env_names: &[String]
         print_terminal_line(&format!("  ✓ Updated {env_name}.toml"));
     }
     Ok(())
+}
+
+fn import_environment_variables(environment: &config::EnvironmentConfig) -> Result<Vec<String>> {
+    let mut variables = Vec::new();
+    variables.extend(import_database_environment_variable(
+        environment.database.secret.as_ref(),
+    )?);
+    if let Some(ssh) = environment.ssh.as_ref().filter(|ssh| ssh.enabled) {
+        if let Some(variable) = &ssh.secret_variable {
+            validate_ssh_password_variable(variable)?;
+            variables.push(variable.clone());
+        }
+    }
+    Ok(variables)
+}
+
+fn import_database_environment_variable(
+    secret: Option<&config::SecretConfig>,
+) -> Result<Option<String>> {
+    let Some(secret) = secret else {
+        return Ok(None);
+    };
+    match secret.source.as_str() {
+        "env" => {
+            let variable = secret.variable.as_deref().ok_or_else(|| {
+                SafeselectError::Secret("variable name required for env source".into())
+            })?;
+            validate_ssh_password_variable(variable)?;
+            Ok(Some(variable.to_string()))
+        }
+        "macos-keychain" => Ok(None),
+        _ => Err(SafeselectError::Secret(
+            "Unknown database secret source".into(),
+        )),
+    }
+}
+
+fn imported_environment_variables(repo_root: &Path, env_names: &[String]) -> Result<Vec<String>> {
+    let project = load_project_config(&repo_root.join(".safeselect"))?;
+    let mut variables = Vec::new();
+    for name in env_names {
+        let (_, mut environment) = load_ssh_environment_config(repo_root, name)?;
+        config::merge_project_ssh(&project, &mut environment)?;
+        variables.extend(import_environment_variables(&environment)?);
+    }
+    Ok(variables)
+}
+
+fn verify_imported_environments(repo_root: &Path, env_names: &[String]) -> Result<()> {
+    verify_imported_environments_with(
+        repo_root,
+        env_names,
+        |variable| std::env::var(variable).is_ok_and(|value| !value.is_empty()),
+        |root, names| run_checks_for_environments(root, names, false, true, false),
+    )
+}
+
+fn verify_imported_environments_with<P, C>(
+    repo_root: &Path,
+    env_names: &[String],
+    present: P,
+    check: C,
+) -> Result<()>
+where
+    P: Fn(&str) -> bool,
+    C: FnOnce(&Path, &[String]) -> Result<()>,
+{
+    let variables = imported_environment_variables(repo_root, env_names)?;
+    if !variables.iter().all(|variable| present(variable)) {
+        println!("Import saved. Verification deferred: export the configured database/SSH variables in the shell that launches SafeSelect, then run safeselect check --environment <name>.");
+        return Ok(());
+    }
+    check(repo_root, env_names)
 }
 
 fn ssh_uses_password(ssh: &config::SshConfig) -> bool {
@@ -3275,12 +3590,13 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
                 .secret_account
                 .clone()
                 .unwrap_or_else(|| format!("{}/{env_name}/ssh", project_display_name(repo_root)));
-            let pw = match compose::read_password_from_keychain(&ssh_acct) {
+            let pw = match resolve_tunnel_password(ssh, &ssh_acct) {
                 Ok(p) => p,
-                Err(_) => {
+                Err(error) => {
                     println!("NO PASSWORD");
+                    print_terminal_error_line(&redact_cli_error(&error));
                     print_manual_tunnel_hint();
-                    failures.push(format!("{env_name}: SSH password not found in Keychain"));
+                    failures.push(format!("{env_name}: SSH password unavailable"));
                     continue;
                 }
             };
@@ -4739,6 +5055,74 @@ pub(crate) fn uninstall_binary_paths() -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn import_checks_wait_for_exported_variables_without_changing_saved_config() {
+        let root = std::env::temp_dir().join(format!("safeselect-defer-{}", uuid::Uuid::new_v4()));
+        let environments = root.join(".safeselect/environments");
+        std::fs::create_dir_all(&environments).unwrap();
+        std::fs::write(
+            root.join(".safeselect/project.toml"),
+            "version = 1\nname = 'demo'\n",
+        )
+        .unwrap();
+        let path = environments.join("dev.toml");
+        let content = "version = 1\n[database]\nurl = 'mongodb://localhost/demo'\n[database.secret]\nsource = 'env'\nvariable = 'IMPORT_DB_PASSWORD'\n";
+        std::fs::write(&path, content).unwrap();
+        let names = vec!["dev".to_string()];
+        verify_imported_environments_with(&root, &names, |_| false, |_, _| panic!("must defer"))
+            .unwrap();
+        let checked = std::cell::Cell::new(false);
+        verify_imported_environments_with(
+            &root,
+            &names,
+            |variable| variable == "IMPORT_DB_PASSWORD",
+            |actual_root, actual_names| {
+                assert_eq!(actual_root, root);
+                assert_eq!(actual_names, names);
+                checked.set(true);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert!(checked.get());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), content);
+        std::fs::write(&path, content.replace("IMPORT_DB_PASSWORD", "invalid-name")).unwrap();
+        assert!(verify_imported_environments_with(
+            &root,
+            &names,
+            |_| false,
+            |_, _| panic!("invalid configuration must fail")
+        )
+        .is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn import_variable_collection_includes_ssh_and_preserves_non_env_checks() {
+        let mut environment: config::EnvironmentConfig = toml::from_str("version = 1\n[database]\nurl = 'mongodb://localhost/demo'\n[ssh]\nenabled = true\nsecret_variable = 'IMPORT_SSH_PASSWORD'\n").unwrap();
+        assert_eq!(
+            import_environment_variables(&environment).unwrap(),
+            vec!["IMPORT_SSH_PASSWORD"]
+        );
+        environment.ssh.as_mut().unwrap().enabled = false;
+        assert!(import_environment_variables(&environment)
+            .unwrap()
+            .is_empty());
+        environment.database.secret = Some(config::SecretConfig {
+            source: "macos-keychain".into(),
+            service: None,
+            account: None,
+            variable: None,
+        });
+        assert!(import_environment_variables(&environment)
+            .unwrap()
+            .is_empty());
+        environment.database.secret.as_mut().unwrap().source = "env".into();
+        assert!(import_environment_variables(&environment).is_err());
+        environment.database.secret.as_mut().unwrap().source = "unknown".into();
+        assert!(import_environment_variables(&environment).is_err());
+    }
+
+    #[test]
     fn terminal_checks_are_green_only_when_color_is_enabled() {
         let line = "  ✓ opencode: safe";
         assert_eq!(
@@ -5124,6 +5508,7 @@ mod tests {
             port: Some(22),
             username: Some("ssh".into()),
             secret_account: None,
+            secret_variable: None,
             identity_file: None,
             known_hosts: None,
             local_host: Some("127.0.0.1".into()),
@@ -5193,6 +5578,7 @@ mod tests {
             port: Some(2222),
             username: Some("tunnel".into()),
             secret_account: None,
+            secret_variable: None,
             identity_file: Some("/tmp/demo_ed25519".into()),
             known_hosts: Some("/tmp/known_hosts".into()),
             local_host: Some("127.0.0.1".into()),
@@ -5266,6 +5652,7 @@ mod tests {
             port: Some(22),
             username: Some("jump".into()),
             secret_account: None,
+            secret_variable: None,
             identity_file: None,
             known_hosts: None,
             auth_type: None,
@@ -5277,6 +5664,7 @@ mod tests {
             port: shared.port,
             username: shared.username.clone(),
             secret_account: None,
+            secret_variable: None,
             identity_file: None,
             known_hosts: None,
             local_host: None,
@@ -5572,6 +5960,514 @@ enabled = true
         assert!(ssh.contains("secret_account"));
 
         let _ = std::fs::remove_dir_all(repo_root);
+    }
+
+    #[test]
+    #[cfg(not(target_os = "macos"))]
+    fn linux_password_commands_and_compass_import_do_not_require_security() {
+        let root =
+            std::env::temp_dir().join(format!("safeselect-linux-secret-{}", uuid::Uuid::new_v4()));
+        let environments = root.join(".safeselect/environments");
+        std::fs::create_dir_all(&environments).unwrap();
+        let file = environments.join("dev.toml");
+        std::fs::write(
+            &file,
+            "version = 1\n[database]\nurl = 'mongodb://localhost/demo'\n[ssh]\nenabled = true\n",
+        )
+        .unwrap();
+        let loader = ConfigLoader::new();
+        set_ssh_password_for_environment(&loader, Some("dev".into()), None, Some(root.clone()))
+            .unwrap();
+        let saved = std::fs::read_to_string(&file).unwrap();
+        assert!(saved.contains("secret_variable"));
+        assert!(!saved.contains("secret_account"));
+        let error = set_ssh_password_for_environment(
+            &loader,
+            Some("dev".into()),
+            Some("synthetic-secret".into()),
+            Some(root.clone()),
+        )
+        .unwrap_err();
+        assert!(!error.to_string().contains("synthetic-secret"));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), saved);
+        let (url, _, secret) = prepare_mongodb_url(
+            Path::new("."),
+            "demo",
+            "dev",
+            "mongodb://demo:synthetic-secret@db.example/demo",
+        )
+        .unwrap();
+        assert!(!url.contains("synthetic-secret"));
+        assert_eq!(secret.unwrap().source, "env");
+        setup_passwords_for_missing(&root, &["dev".into()]).unwrap();
+        let saved = std::fs::read_to_string(&file).unwrap();
+        let config: config::EnvironmentConfig = toml::from_str(&saved).unwrap();
+        assert_eq!(config.database.secret.unwrap().source, "env");
+        let legacy = "version = 1\n[database]\nurl = 'mongodb://localhost/demo'\n[database.secret]\nsource = 'macos-keychain'\nservice = 'safeselect'\naccount = 'demo/dev'\n";
+        std::fs::write(&file, legacy).unwrap();
+        assert!(setup_passwords_for_missing(&root, &["dev".into()]).is_err());
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), legacy);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn mongodb_password_import_sanitizes_uri_on_linux_without_keychain() {
+        let (url, username, secret) = prepare_mongodb_url_with_store(
+            Path::new("."),
+            "demo",
+            "dev-db",
+            "mongodb+srv://demo:synthetic-secret@db.example/demo?retryWrites=true",
+            false,
+            |_, _| panic!("Linux must not invoke Keychain"),
+        )
+        .unwrap();
+        assert_eq!(
+            url,
+            "mongodb+srv://demo:__SAFESELECT_PASSWORD__@db.example/demo?retryWrites=true"
+        );
+        assert_eq!(username, "demo");
+        let secret = secret.unwrap();
+        assert_eq!(secret.source, "env");
+        assert_eq!(
+            secret.variable.as_deref(),
+            Some(
+                compose::database_env_reference(Path::new("."), "dev-db")
+                    .unwrap()
+                    .as_str()
+            )
+        );
+        assert!(!toml::to_string(&secret)
+            .unwrap()
+            .contains("synthetic-secret"));
+    }
+
+    #[test]
+    fn shared_ssh_password_variable_survives_import_factoring() {
+        let ssh: config::SshConfig = toml::from_str("enabled = true\nhost = 'bastion.example'\nauth_type = 'PASSWORD'\nsecret_variable = 'DEMO_SSH_PASSWORD'\n").unwrap();
+        let mut project = config::ProjectConfig::default();
+        project
+            .ssh_bastions
+            .insert("demo".into(), project_ssh_bastion_from_env(&ssh));
+        let mut environment: config::EnvironmentConfig =
+            toml::from_str("version = 1\n[database]\nurl = 'mongodb://localhost/demo'").unwrap();
+        environment.ssh = Some(environment_ssh_from_bastion("demo".into(), &ssh));
+        assert!(environment.ssh.as_ref().unwrap().secret_variable.is_none());
+        config::merge_project_ssh(&project, &mut environment).unwrap();
+        let ssh = environment.ssh.unwrap();
+        assert_eq!(ssh.secret_variable.as_deref(), Some("DEMO_SSH_PASSWORD"));
+        assert_eq!(
+            ssh_password_secret_config(&ssh, "unused", false)
+                .unwrap()
+                .source,
+            "env"
+        );
+    }
+
+    #[test]
+    fn ssh_password_prompt_routes_sources_and_propagates_failures() {
+        let password = uuid::Uuid::new_v4().to_string();
+        let result = prompt_ssh_password_source_with(
+            Path::new("."),
+            "demo/dev/ssh",
+            true,
+            || Ok(password.clone()),
+            |_| panic!("macOS must not request an environment reference"),
+            |account, value| {
+                assert_eq!(account, "demo/dev/ssh");
+                assert_eq!(value, password);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(result, (Some("demo/dev/ssh".into()), None));
+        let result = prompt_ssh_password_source_with(
+            Path::new("."),
+            "demo/dev/ssh",
+            true,
+            || Ok(String::new()),
+            |_| panic!("unexpected variable prompt"),
+            |_, _| panic!("empty input must not be stored"),
+        )
+        .unwrap();
+        assert_eq!(result, (Some("demo/dev/ssh".into()), None));
+        let result = prompt_ssh_password_source_with(
+            Path::new("."),
+            "demo/dev/ssh",
+            false,
+            || panic!("Linux must not request a password"),
+            |default| {
+                assert_eq!(
+                    default,
+                    ssh_password_variable(Path::new("."), "demo/dev/ssh").unwrap()
+                );
+                Ok(" CUSTOM_SSH_VARIABLE ".into())
+            },
+            |_, _| panic!("Linux must not invoke Keychain"),
+        )
+        .unwrap();
+        assert_eq!(result, (None, Some("CUSTOM_SSH_VARIABLE".into())));
+        assert!(prompt_ssh_password_source_with(
+            Path::new("."),
+            "demo",
+            false,
+            || panic!("unexpected password prompt"),
+            |_| Ok("INVALID;NAME".into()),
+            |_, _| panic!("unexpected store"),
+        )
+        .is_err());
+        assert!(prompt_ssh_password_source_with(
+            Path::new("."),
+            "demo",
+            true,
+            || Err(SafeselectError::Other("cancelled".into())),
+            |_| panic!("unexpected variable prompt"),
+            |_, _| panic!("unexpected store"),
+        )
+        .is_err());
+        assert!(prompt_ssh_password_source_with(
+            Path::new("."),
+            "demo",
+            false,
+            || panic!("unexpected password prompt"),
+            |_| Err(SafeselectError::Other("cancelled".into())),
+            |_, _| panic!("unexpected store"),
+        )
+        .is_err());
+        assert!(prompt_ssh_password_source_with(
+            Path::new("."),
+            "demo",
+            true,
+            || Ok(password.clone()),
+            |_| panic!("unexpected variable prompt"),
+            |_, _| Err(SafeselectError::Secret("store failed".into())),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn ssh_password_sources_are_platform_aware_and_fail_closed() {
+        let mut ssh: config::SshConfig = toml::from_str("enabled = true").unwrap();
+        let macos = ssh_password_secret_config(&ssh, "demo/dev/ssh", true).unwrap();
+        assert_eq!(macos.source, "macos-keychain");
+        assert_eq!(macos.account.as_deref(), Some("demo/dev/ssh"));
+        assert!(ssh_password_secret_config(&ssh, "demo/dev/ssh", false).is_err());
+
+        ssh.secret_account = Some("legacy-account".into());
+        assert_eq!(
+            ssh_password_secret_config(&ssh, "unused", true)
+                .unwrap()
+                .account
+                .as_deref(),
+            Some("legacy-account")
+        );
+        assert!(ssh_password_secret_config(&ssh, "unused", false).is_err());
+        ssh.secret_variable = Some("DEMO_SSH_PASSWORD".into());
+        assert!(ssh_password_secret_config(&ssh, "unused", true).is_err());
+        assert!(ssh_password_secret_config(&ssh, "unused", false).is_err());
+        ssh.secret_account = None;
+        for is_macos in [true, false] {
+            let secret = ssh_password_secret_config(&ssh, "unused", is_macos).unwrap();
+            assert_eq!(secret.source, "env");
+            assert_eq!(secret.variable.as_deref(), Some("DEMO_SSH_PASSWORD"));
+            assert!(secret.account.is_none());
+        }
+    }
+
+    #[test]
+    fn cli_rename_uses_collision_free_database_references() {
+        let root = std::env::temp_dir().join(format!("safeselect-rename-{}", uuid::Uuid::new_v4()));
+        let environments = root.join(".safeselect/environments");
+        std::fs::create_dir_all(&environments).unwrap();
+        let mut references = std::collections::HashSet::new();
+        for (index, new) in ["qa.eu", "qa-eu", "qa_eu"].iter().enumerate() {
+            let old = format!("old-{index}");
+            let variable = compose::database_env_reference(&root, &old).unwrap();
+            std::fs::write(environments.join(format!("{old}.toml")), format!("version = 1\n[database]\nurl = 'mongodb://localhost/demo'\n[database.secret]\nsource = 'env'\nvariable = '{variable}'\n")).unwrap();
+            cmd_config(
+                &ConfigLoader::new(),
+                ConfigAction::RenameEnvironment {
+                    old: old.clone(),
+                    new: (*new).into(),
+                    project: Some(root.clone()),
+                },
+            )
+            .unwrap();
+            assert!(!environments.join(format!("{old}.toml")).exists());
+            let content =
+                std::fs::read_to_string(environments.join(format!("{new}.toml"))).unwrap();
+            let config: config::EnvironmentConfig = toml::from_str(&content).unwrap();
+            let variable = config.database.secret.unwrap().variable.unwrap();
+            assert_eq!(
+                variable,
+                compose::database_env_reference(&root, new).unwrap()
+            );
+            validate_ssh_password_variable(&variable).unwrap();
+            assert!(references.insert(variable));
+            assert_eq!(config.database.url, "mongodb://localhost/demo");
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn ssh_references_separate_same_named_projects_and_preserve_explicit_sources() {
+        let root =
+            std::env::temp_dir().join(format!("safeselect-ssh-scope-{}", uuid::Uuid::new_v4()));
+        let mut generated = Vec::new();
+        for parent in ["one", "two"] {
+            let project = root.join(parent).join("demo");
+            let envs = project.join(".safeselect/environments");
+            std::fs::create_dir_all(&envs).unwrap();
+            std::fs::write(
+                project.join(".safeselect/project.toml"),
+                "version = 1\ndisplay_name = 'demo'\n",
+            )
+            .unwrap();
+            let path = envs.join("dev.toml");
+            std::fs::write(&path, "version = 1\n[database]\nurl = 'mongodb://localhost/demo'\n[ssh]\nenabled = true\n").unwrap();
+            configure_ssh_password_environment(&project, "dev").unwrap();
+            let saved: config::EnvironmentConfig =
+                toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            let variable = saved.ssh.unwrap().secret_variable.unwrap();
+            assert_eq!(
+                variable,
+                ssh_password_variable(&project.join("."), "demo/dev/ssh").unwrap()
+            );
+            let (_, prompted) = prompt_ssh_password_source_with(
+                &project,
+                "demo/dev/ssh",
+                false,
+                || panic!("no password"),
+                |default| Ok(default.to_string()),
+                |_, _| panic!("no store"),
+            )
+            .unwrap();
+            assert_eq!(prompted.as_deref(), Some(variable.as_str()));
+            generated.push(variable);
+            let content = std::fs::read_to_string(&path)
+                .unwrap()
+                .replace(&generated[generated.len() - 1], "EXPLICIT_SSH_PASSWORD");
+            std::fs::write(&path, content).unwrap();
+            configure_ssh_password_environment(&project, "dev").unwrap();
+            assert!(std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("EXPLICIT_SSH_PASSWORD"));
+        }
+        assert_ne!(generated[0], generated[1]);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn generated_ssh_references_are_distinct_and_reversible() {
+        let accounts = [
+            "demo/qa.eu/ssh",
+            "demo/qa-eu/ssh",
+            "demo/qa_eu/ssh",
+            "DEMO/qa.eu/ssh",
+            "demo/qa éu/ssh",
+            "demo/qa/eu/ssh",
+        ];
+        let mut references = std::collections::HashSet::new();
+        for account in accounts {
+            let variable = ssh_password_variable(Path::new("."), account).unwrap();
+            validate_ssh_password_variable(&variable).unwrap();
+            assert!(
+                references.insert(variable.clone()),
+                "generated SSH references must be distinct"
+            );
+            let encoded = variable.rsplit('_').next().unwrap();
+            assert_eq!(hex::decode(encoded).unwrap(), account.as_bytes());
+        }
+    }
+
+    #[test]
+    fn ssh_password_variable_names_are_safe_for_shell_hints() {
+        let generated = ssh_password_variable(Path::new("."), "demo-project/dev env/ssh").unwrap();
+        assert_eq!(
+            generated.rsplit('_').next().unwrap(),
+            "64656D6F2D70726F6A6563742F64657620656E762F737368"
+        );
+        assert!(validate_ssh_password_variable(&generated).is_ok());
+        for name in [
+            "",
+            "1SECRET",
+            "WITH-DASH",
+            "WITH SPACE",
+            "SECRET;echo",
+            "$(command)",
+            "SECRET\n",
+        ] {
+            assert!(
+                validate_ssh_password_variable(name).is_err(),
+                "accepted {name:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn ssh_password_environment_command_stores_only_reference() {
+        let root =
+            std::env::temp_dir().join(format!("safeselect-env-secret-{}", uuid::Uuid::new_v4()));
+        let environments = root.join(".safeselect/environments");
+        std::fs::create_dir_all(&environments).unwrap();
+        let file = environments.join("dev.toml");
+        std::fs::write(&file, "version = 1\n[database]\nurl = 'mongodb://localhost/demo'\n[ssh]\nenabled = true\nsecret_account = 'old-keychain'\nidentity_file = '/tmp/demo.key'\n").unwrap();
+        configure_ssh_password_environment(&root, "dev").unwrap();
+        let content = std::fs::read_to_string(&file).unwrap();
+        let config: config::EnvironmentConfig = toml::from_str(&content).unwrap();
+        let ssh = config.ssh.unwrap();
+        assert!(ssh.secret_account.is_none());
+        assert!(ssh.identity_file.is_none());
+        assert_eq!(ssh.auth_type.as_deref(), Some("PASSWORD"));
+        assert!(ssh.secret_variable.is_some());
+        assert!(!content.contains("old-keychain"));
+        assert_eq!(config.database.url, "mongodb://localhost/demo");
+        let previous = content.clone();
+        configure_ssh_password_environment(&root, "dev").unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), previous);
+        assert!(configure_ssh_password_environment(&root, "missing").is_err());
+        std::fs::write(&file, "version = 1\n[database]\nurl = 'mongodb://localhost/demo'\n[ssh]\nenabled = true\nsecret_variable = 'INVALID;NAME'\n").unwrap();
+        let previous = std::fs::read_to_string(&file).unwrap();
+        assert!(configure_ssh_password_environment(&root, "dev").is_err());
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), previous);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn ssh_password_environment_missing_and_empty_fail_closed() {
+        let variable = format!("SAFESELECT_TEST_{}", uuid::Uuid::new_v4().simple());
+        let mut ssh: config::SshConfig = toml::from_str("enabled = true").unwrap();
+        ssh.secret_variable = Some(variable.clone());
+        assert!(matches!(
+            resolve_tunnel_password(&ssh, "unused"),
+            Err(SafeselectError::EnvVarNotSet(_))
+        ));
+        // Unique variable: no other test or application configuration uses this name.
+        std::env::set_var(&variable, "");
+        assert!(resolve_tunnel_password(&ssh, "unused").is_err());
+        let password = uuid::Uuid::new_v4().to_string();
+        std::env::set_var(&variable, &password);
+        assert_eq!(resolve_tunnel_password(&ssh, "unused").unwrap(), password);
+        std::env::remove_var(&variable);
+    }
+
+    #[test]
+    fn database_import_references_are_distinct_and_match_setup_guidance() {
+        let environments = [
+            "qa.eu",
+            "qa-eu",
+            "qa_eu",
+            "qa/eu",
+            "QA.EU",
+            "qa éu",
+            "qa_eu__7161",
+        ];
+        let mut references = std::collections::HashSet::new();
+        for environment in environments {
+            let secret = database_environment_secret(Path::new("."), environment).unwrap();
+            // Verify the reference as saved/read from TOML, not a separately generated hint.
+            let saved: config::SecretConfig =
+                toml::from_str(&toml::to_string(&secret).unwrap()).unwrap();
+            let variable = saved.variable.unwrap();
+            validate_ssh_password_variable(&variable).unwrap();
+            assert!(
+                references.insert(variable.clone()),
+                "aliased environment: {environment}"
+            );
+            let hint = compose::environment_secret_setup_hint(Path::new("."), environment).unwrap();
+            assert!(hint.contains(&format!("export {variable}=")));
+            assert!(hint.contains(&format!("variable = \"{variable}\"")));
+            assert!(hint.contains("\n  [database.secret]\n"));
+            #[cfg(not(target_os = "macos"))]
+            {
+                let guidance = compose::build_guidance_from_parts(
+                    Path::new("."),
+                    "demo",
+                    &[environment.into()],
+                    &[environment.into()],
+                    false,
+                )
+                .unwrap();
+                assert!(guidance.text.contains(&format!("export {variable}=")));
+            }
+            let encoded = variable.rsplit('_').next().unwrap();
+            assert_eq!(hex::decode(encoded).unwrap(), environment.as_bytes());
+        }
+    }
+
+    #[test]
+    fn imported_database_variable_names_are_valid_shell_identifiers() {
+        for (environment, expected) in [
+            ("dev-db", "6465762D6462"),
+            ("qa.eu", "71612E6575"),
+            ("qa eu/blue", "71612065752F626C7565"),
+            ("9_qa", "395F7161"),
+            ("pré", "7072C3A9"),
+            ("qa;echo", "71613B6563686F"),
+        ] {
+            let secret = database_environment_secret(Path::new("."), environment).unwrap();
+            assert_eq!(secret.source, "env");
+            assert_eq!(
+                secret
+                    .variable
+                    .as_deref()
+                    .unwrap()
+                    .rsplit('_')
+                    .next()
+                    .unwrap(),
+                expected
+            );
+            validate_ssh_password_variable(secret.variable.as_deref().unwrap()).unwrap();
+            assert!(secret.account.is_none());
+        }
+    }
+
+    #[test]
+    fn database_password_import_does_not_invoke_keychain_on_linux() {
+        let password = uuid::Uuid::new_v4().to_string();
+        let secret = import_database_password_with_store(
+            Path::new("."),
+            "demo",
+            "dev-db",
+            &password,
+            false,
+            |_, _| panic!("Linux must not invoke Keychain"),
+        )
+        .unwrap();
+        assert_eq!(secret.source, "env");
+        assert_eq!(
+            secret.variable.as_deref(),
+            Some(
+                compose::database_env_reference(Path::new("."), "dev-db")
+                    .unwrap()
+                    .as_str()
+            )
+        );
+        let serialized = toml::to_string(&secret).unwrap();
+        assert!(!serialized.contains(&password));
+        assert!(secret.account.is_none());
+        let secret = import_database_password_with_store(
+            Path::new("."),
+            "demo",
+            "dev-db",
+            &password,
+            true,
+            |account, stored_password| {
+                assert_eq!(account, "demo/dev-db");
+                assert_eq!(stored_password, password);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(secret.source, "macos-keychain");
+        assert!(import_database_password_with_store(
+            Path::new("."),
+            "demo",
+            "dev",
+            &password,
+            true,
+            |_, _| Err(SafeselectError::Secret("store failed".into()))
+        )
+        .is_err());
     }
 
     #[test]
@@ -5871,6 +6767,7 @@ username = "usr_app"
                 port: Some(2222),
                 username: Some("jumpboxdev".to_string()),
                 secret_account: Some("mic-icifqaproc/pre-usr/ssh".to_string()),
+                secret_variable: None,
                 identity_file: None,
                 known_hosts: None,
                 local_host: Some("localhost".to_string()),
@@ -5904,6 +6801,7 @@ username = "usr_app"
                 port: Some(2222),
                 username: Some("jumpboxdev".to_string()),
                 secret_account: Some("mic-icifqaproc/pre-int/ssh".to_string()),
+                secret_variable: None,
                 identity_file: None,
                 known_hosts: None,
                 auth_type: Some("PASSWORD".to_string()),
@@ -5928,6 +6826,7 @@ username = "usr_app"
                 port: None,
                 username: None,
                 secret_account: None,
+                secret_variable: None,
                 identity_file: None,
                 known_hosts: None,
                 local_host: Some("localhost".to_string()),
@@ -5962,6 +6861,7 @@ username = "usr_app"
             port: Some(2222),
             username: Some("jumpboxdev".to_string()),
             secret_account: Some("mic-icifqaproc/pre-int/ssh".to_string()),
+            secret_variable: None,
             identity_file: Some("/tmp/id_ed25519".to_string()),
             known_hosts: Some("/tmp/known_hosts".to_string()),
             local_host: Some("localhost".to_string()),
@@ -6000,6 +6900,7 @@ username = "usr_app"
             port: Some(2222),
             username: Some("jumpboxdev".to_string()),
             secret_account: None,
+            secret_variable: None,
             identity_file: None,
             known_hosts: None,
             local_host: None,

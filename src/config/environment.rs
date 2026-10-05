@@ -67,6 +67,9 @@ pub struct SshConfig {
     pub username: Option<String>,
     #[serde(default)]
     pub secret_account: Option<String>,
+    /// Environment variable containing the SSH password (never the password itself).
+    #[serde(default)]
+    pub secret_variable: Option<String>,
     pub identity_file: Option<String>,
     pub known_hosts: Option<String>,
     #[serde(default)]

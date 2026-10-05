@@ -3,29 +3,39 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
 
-fn secret_env_var(env_name: &str) -> String {
-    format!(
-        "SAFESELECT_PASSWORD_{}",
-        env_name.to_uppercase().replace('-', "_")
-    )
+/// Hash the canonical project root and encode the environment UTF-8 bytes.
+/// Separate projects and distinct environment names must not share generated secrets.
+/// Existing saved references are unchanged; only newly generated names use this scheme.
+pub fn database_env_reference(repo_root: &Path, env_name: &str) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    let root = std::fs::canonicalize(repo_root)?;
+    let project = hex::encode(Sha256::digest(root.as_os_str().as_encoded_bytes())).to_uppercase();
+    Ok(format!(
+        "SAFESELECT_PASSWORD_{project}_{}",
+        hex::encode(env_name.as_bytes()).to_uppercase()
+    ))
 }
 
 const MISSING_PASSWORD_WARNING: &str =
     "WARN: No password configured. Configure the missing database secret before connecting.";
 
 /// Returns a platform-appropriate hint for configuring a database secret.
-pub fn secret_setup_hint(project_name: &str, env_name: &str) -> String {
+pub fn secret_setup_hint(repo_root: &Path, project_name: &str, env_name: &str) -> Result<String> {
     if cfg!(target_os = "macos") {
-        format!(
+        Ok(format!(
             "security add-generic-password -a \"{project_name}/{env_name}\" -s \"safeselect\" -w \"<password>\""
-        )
+        ))
     } else {
-        let var = secret_env_var(env_name);
-        format!(
-            "export {var}=\"<password>\"  # then edit .safeselect/environments/{env_name}.toml:\n  \
-             [database.secret]\n  source = \"env\"\n  variable = \"{var}\""
-        )
+        environment_secret_setup_hint(repo_root, env_name)
     }
+}
+
+pub fn environment_secret_setup_hint(repo_root: &Path, env_name: &str) -> Result<String> {
+    let var = database_env_reference(repo_root, env_name)?;
+    Ok(format!(
+        "export {var}=\"<password>\"  # then edit .safeselect/environments/{env_name}.toml:\n  \
+         [database.secret]\n  source = \"env\"\n  variable = \"{var}\""
+    ))
 }
 
 #[derive(Debug, Clone)]
@@ -456,7 +466,7 @@ fn write_config_files_with_warning<W: Write>(
                     source: "env".to_string(),
                     service: None,
                     account: None,
-                    variable: Some(secret_env_var(&conn.env_name)),
+                    variable: Some(database_env_reference(repo_root, &conn.env_name)?),
                 })
             }
         } else {
@@ -482,7 +492,9 @@ fn write_config_files_with_warning<W: Write>(
             .map_err(|e| crate::error::SafeselectError::TomlSer(e.to_string()))?;
         let env_file = env_dir.join(format!("{}.toml", conn.env_name));
         if !env_file.exists() {
-            if conn.password_var.is_none() && conn.password_literal.is_none() {
+            if conn.password_var.is_none()
+                && (conn.password_literal.is_none() || !cfg!(target_os = "macos"))
+            {
                 let account = format!("{}/{}", project_name, conn.env_name);
                 let _ = writeln!(warning_writer, "{MISSING_PASSWORD_WARNING}");
                 no_password.push((conn.env_name.clone(), account));
@@ -501,11 +513,12 @@ fn write_config_files_with_warning<W: Write>(
 }
 
 pub fn build_import_guidance(
+    repo_root: &Path,
     project_name: &str,
     result: &ImportResult,
     imported_names: &[String],
     include_agent_step: bool,
-) -> ImportGuidance {
+) -> Result<ImportGuidance> {
     let env_names = if result.env_names.is_empty() {
         imported_names.to_vec()
     } else {
@@ -515,6 +528,7 @@ pub fn build_import_guidance(
         result.no_password.iter().map(|(n, _)| n.clone()).collect();
 
     build_guidance_from_parts(
+        repo_root,
         project_name,
         &env_names,
         &no_password_names,
@@ -523,11 +537,12 @@ pub fn build_import_guidance(
 }
 
 pub fn build_guidance_from_parts(
+    repo_root: &Path,
     project_name: &str,
     env_names: &[String],
     no_password_envs: &[String],
     include_agent_step: bool,
-) -> ImportGuidance {
+) -> Result<ImportGuidance> {
     let mut parts = vec![];
     append_import_summary(&mut parts, env_names);
 
@@ -535,14 +550,14 @@ pub fn build_guidance_from_parts(
     parts.push("Next steps:".to_string());
     parts.push("1. Ensure the PostgreSQL JDBC driver is available: safeselect driver download --vendor postgresql".to_string());
 
-    append_password_summary(&mut parts, project_name, no_password_envs);
+    append_password_summary(&mut parts, repo_root, project_name, no_password_envs)?;
     append_connectivity_summary(&mut parts, env_names);
     append_agent_summary(&mut parts, env_names, include_agent_step);
 
-    ImportGuidance {
+    Ok(ImportGuidance {
         text: parts.join("\n"),
         imported_env_names: env_names.to_vec(),
-    }
+    })
 }
 
 fn append_import_summary(parts: &mut Vec<String>, env_names: &[String]) {
@@ -557,7 +572,12 @@ fn append_import_summary(parts: &mut Vec<String>, env_names: &[String]) {
     }
 }
 
-fn append_password_summary(parts: &mut Vec<String>, project_name: &str, env_names: &[String]) {
+fn append_password_summary(
+    parts: &mut Vec<String>,
+    repo_root: &Path,
+    project_name: &str,
+    env_names: &[String],
+) -> Result<()> {
     if env_names.is_empty() {
         parts.push("2. Passwords were imported or are already configured.".to_string());
     } else {
@@ -565,10 +585,11 @@ fn append_password_summary(parts: &mut Vec<String>, project_name: &str, env_name
         for env_name in env_names {
             parts.push(format!(
                 "   - {}",
-                secret_setup_hint(project_name, env_name)
+                secret_setup_hint(repo_root, project_name, env_name)?
             ));
         }
     }
+    Ok(())
 }
 
 fn append_connectivity_summary(parts: &mut Vec<String>, env_names: &[String]) {
@@ -691,8 +712,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn database_references_are_project_scoped_and_path_alias_stable() {
+        let root = std::env::temp_dir().join(format!("safeselect-scope-{}", uuid::Uuid::new_v4()));
+        let first = root.join("one/demo");
+        let second = root.join("two/demo");
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+        let reference = database_env_reference(&first, "dev").unwrap();
+        assert_ne!(reference, database_env_reference(&second, "dev").unwrap());
+        assert_eq!(
+            reference,
+            database_env_reference(&first.join("."), "dev").unwrap()
+        );
+        assert!(environment_secret_setup_hint(&first, "dev")
+            .unwrap()
+            .contains(&reference));
+        assert!(database_env_reference(&root.join("missing"), "dev").is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn builds_secret_environment_variable_name() {
-        assert_eq!(secret_env_var("local-db"), "SAFESELECT_PASSWORD_LOCAL_DB");
+        assert_eq!(
+            database_env_reference(Path::new("."), "local-db")
+                .unwrap()
+                .rsplit('_')
+                .next()
+                .unwrap(),
+            "6C6F63616C2D6462"
+        );
     }
 
     #[test]
@@ -800,7 +848,14 @@ services:
             no_password: vec![("testing".to_string(), "project/testing".to_string())],
         };
 
-        let guidance = build_import_guidance("project", &result, &["testing".to_string()], true);
+        let guidance = build_import_guidance(
+            Path::new("."),
+            "project",
+            &result,
+            &["testing".to_string()],
+            true,
+        )
+        .unwrap();
 
         assert!(guidance.text.contains("Next steps:"));
         assert!(guidance
@@ -809,6 +864,40 @@ services:
         assert!(guidance
             .text
             .contains("safeselect agent install opencode --environment testing"));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn literal_compose_password_requires_exact_export_guidance() {
+        let root = std::env::temp_dir().join(format!(
+            "safeselect-compose-literal-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let password = uuid::Uuid::new_v4().to_string();
+        let connection = ComposeConnection {
+            name: "demo".into(),
+            env_name: "dev".into(),
+            service: "db".into(),
+            host: "localhost".into(),
+            port: 5432,
+            database: "app".into(),
+            username: "reader".into(),
+            password_literal: Some(password.clone()),
+            password_var: None,
+            compose_path: root.join("compose.yaml").display().to_string(),
+        };
+        let result = write_config_files(&root, &[connection], "demo").unwrap();
+        assert_eq!(result.no_password.len(), 1);
+        let reference = database_env_reference(&root, "dev").unwrap();
+        let saved =
+            std::fs::read_to_string(root.join(".safeselect/environments/dev.toml")).unwrap();
+        assert!(saved.contains(&reference));
+        assert!(!saved.contains(&password));
+        let guidance =
+            build_import_guidance(&root, "demo", &result, &["dev".into()], true).unwrap();
+        assert!(guidance.text.contains(&format!("export {reference}=")));
+        assert!(!guidance.text.contains(&password));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -859,7 +948,8 @@ services:
 
     #[test]
     fn explains_empty_import_without_agent_step() {
-        let guidance = build_guidance_from_parts("project", &[], &[], false);
+        let guidance =
+            build_guidance_from_parts(Path::new("."), "project", &[], &[], false).unwrap();
 
         assert!(guidance
             .text
