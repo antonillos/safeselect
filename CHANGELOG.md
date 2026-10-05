@@ -2,6 +2,43 @@
 
 All notable changes to this project are documented in this file.
 
+## [v0.7.10] - 2026-10-05
+
+### Added
+
+- feat(mcp): return compact maintenance recommendations (#257)
+
+### Fixed
+
+- fix(site): make command showcase work without JavaScript (#258)
+- fix(deps): update rustls security patch (#264)
+- fix(deps): patch vulnerable site dependencies (#272)
+- fix(mcp): bound sidecar checks and preserve session recovery (#273)
+- fix(secrets): support Linux and WSL password imports (#275)
+
+### Documentation
+
+- docs: announce Snowflake support roadmap (#259)
+
+### Build And CI
+
+- ci: validate CLI gallery coverage (#255)
+- chore: ignore local SafeSelect state and Python caches (#256)
+- chore(deps-dev): bump fast-uri from 3.1.6 to 3.1.8 in /site in the npm_and_yarn group across 1 directory (#268)
+- test(integration): align compose import with Linux secret setup
+
+### Dependencies
+
+- chore(deps): bump toml from 1.1.5+spec-1.1.0 to 1.1.6+spec-1.1.0 (#263)
+- chore(deps): bump toml_edit from 0.25.13+spec-1.1.0 to 0.25.15+spec-1.1.0 (#260)
+- chore(deps): bump reqwest from 0.13.4 to 0.13.5 (#261)
+- chore(deps): bump uuid from 1.26.0 to 1.26.1 (#262)
+- chore(deps): bump clap from 4.6.6 to 4.6.7 (#265)
+- chore(deps): bump sqlparser from 0.62.0 to 0.63.0 (#266)
+- chore(deps): bump tools.jackson.core:jackson-databind from 3.1.5 to 3.1.6 in /sidecar in the maven group across 1 directory (#267)
+- chore(deps): bump tools.jackson.core:jackson-databind from 3.1.6 to 3.1.7 in /sidecar in the maven group across 1 directory (#270)
+- chore(deps): bump thiserror from 2.0.20 to 2.0.21 (#269)
+
 ## [v0.7.9] - 2026-09-12
 
 ### Added
