@@ -3294,23 +3294,9 @@ fn setup_passwords_for_missing(repo_root: &std::path::Path, env_names: &[String]
 
 fn import_environment_variables(environment: &config::EnvironmentConfig) -> Result<Vec<String>> {
     let mut variables = Vec::new();
-    if let Some(secret) = &environment.database.secret {
-        match secret.source.as_str() {
-            "env" => {
-                let variable = secret.variable.as_deref().ok_or_else(|| {
-                    SafeselectError::Secret("variable name required for env source".into())
-                })?;
-                validate_ssh_password_variable(variable)?;
-                variables.push(variable.to_string());
-            }
-            "macos-keychain" => {}
-            _ => {
-                return Err(SafeselectError::Secret(
-                    "Unknown database secret source".into(),
-                ))
-            }
-        }
-    }
+    variables.extend(import_database_environment_variable(
+        environment.database.secret.as_ref(),
+    )?);
     if let Some(ssh) = environment.ssh.as_ref().filter(|ssh| ssh.enabled) {
         if let Some(variable) = &ssh.secret_variable {
             validate_ssh_password_variable(variable)?;
@@ -3318,6 +3304,27 @@ fn import_environment_variables(environment: &config::EnvironmentConfig) -> Resu
         }
     }
     Ok(variables)
+}
+
+fn import_database_environment_variable(
+    secret: Option<&config::SecretConfig>,
+) -> Result<Option<String>> {
+    let Some(secret) = secret else {
+        return Ok(None);
+    };
+    match secret.source.as_str() {
+        "env" => {
+            let variable = secret.variable.as_deref().ok_or_else(|| {
+                SafeselectError::Secret("variable name required for env source".into())
+            })?;
+            validate_ssh_password_variable(variable)?;
+            Ok(Some(variable.to_string()))
+        }
+        "macos-keychain" => Ok(None),
+        _ => Err(SafeselectError::Secret(
+            "Unknown database secret source".into(),
+        )),
+    }
 }
 
 fn imported_environment_variables(repo_root: &Path, env_names: &[String]) -> Result<Vec<String>> {
