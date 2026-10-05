@@ -756,7 +756,8 @@ then export the variable it prints. The command cannot export into its parent
 shell. Restart a running MCP client after changing its environment.
 
 Imported database passwords likewise use `SAFESELECT_PASSWORD_<ENV>` on
-Linux/WSL (`-` becomes `_`, letters are uppercase). Export that variable
+Linux/WSL (ASCII letters are uppercase; every character outside `A–Z`,
+`a–z`, and `0–9` becomes `_`). Export that variable
 separately before checking the imported connection; credentials from the
 export are removed from the saved MongoDB URI rather than written to TOML.
 

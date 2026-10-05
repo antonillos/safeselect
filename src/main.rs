@@ -3111,7 +3111,14 @@ where
 fn database_environment_secret(env_name: &str) -> config::SecretConfig {
     let variable = format!(
         "SAFESELECT_PASSWORD_{}",
-        env_name.to_uppercase().replace('-', "_")
+        env_name
+            .chars()
+            .map(|ch| if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_uppercase()
+            } else {
+                '_'
+            })
+            .collect::<String>()
     );
     println!("  Database password source: {variable}; export it in the shell that launches SafeSelect (password is not stored).");
     config::SecretConfig {
@@ -6062,6 +6069,24 @@ enabled = true
         std::env::set_var(&variable, &password);
         assert_eq!(resolve_tunnel_password(&ssh, "unused").unwrap(), password);
         std::env::remove_var(&variable);
+    }
+
+    #[test]
+    fn imported_database_variable_names_are_valid_shell_identifiers() {
+        for (environment, expected) in [
+            ("dev-db", "SAFESELECT_PASSWORD_DEV_DB"),
+            ("qa.eu", "SAFESELECT_PASSWORD_QA_EU"),
+            ("qa eu/blue", "SAFESELECT_PASSWORD_QA_EU_BLUE"),
+            ("9_qa", "SAFESELECT_PASSWORD_9_QA"),
+            ("pré", "SAFESELECT_PASSWORD_PR_"),
+            ("qa;echo", "SAFESELECT_PASSWORD_QA_ECHO"),
+        ] {
+            let secret = database_environment_secret(environment);
+            assert_eq!(secret.source, "env");
+            assert_eq!(secret.variable.as_deref(), Some(expected));
+            validate_ssh_password_variable(secret.variable.as_deref().unwrap()).unwrap();
+            assert!(secret.account.is_none());
+        }
     }
 
     #[test]
