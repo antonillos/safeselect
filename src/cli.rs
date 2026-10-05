@@ -208,12 +208,12 @@ pub enum ConfigAction {
         #[arg(long)]
         project: Option<PathBuf>,
     },
-    /// Store an SSH password in the Keychain and update the environment SSH config
+    /// Configure an SSH password: Keychain on macOS, environment reference on Linux/WSL
     SetSshPassword {
         /// Environment whose SSH password is stored (inferred when the project has exactly one)
         #[arg(long)]
         environment: Option<String>,
-        /// SSH password value (prompts securely if omitted)
+        /// SSH password value (macOS only; other systems use an exported environment variable)
         #[arg(long)]
         password: Option<String>,
         /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)

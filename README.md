@@ -725,6 +725,52 @@ The defaults differ by operation:
   password itself. `config set-ssh-password` switches SSH authentication to
   password and clears the configured identity-file reference.
 
+### SSH passwords on Linux and WSL
+
+SSH password imports use macOS Keychain only on macOS. On Linux/WSL, the
+Compass and DBeaver import prompts ask for an **environment variable name**,
+not the password. The generated default uses `SAFESELECT_SSH_PASSWORD_<PROJECT_SHA256>_<HEX>`,
+where `<PROJECT_SHA256>` namespaces the canonical project directory and
+`<HEX>` encodes the complete SSH account's UTF-8 bytes (project, environment
+and `/ssh`) without lossy normalization. Distinct account names therefore have
+distinct defaults; existing and explicitly selected references stay unchanged.
+SafeSelect saves that reference as `secret_variable` in the SSH configuration
+(including shared bastions), never the password itself:
+
+```toml
+[ssh]
+enabled = true
+auth_type = "PASSWORD"
+secret_variable = "SAFESELECT_SSH_PASSWORD_DEMO"
+```
+
+Export the password in the shell that launches SafeSelect or the MCP client.
+For Bash in WSL, this avoids putting the password in shell history:
+
+```bash
+read -rsp 'SSH password: ' SAFESELECT_SSH_PASSWORD_DEMO; echo
+export SAFESELECT_SSH_PASSWORD_DEMO
+```
+
+Password-based tunnels also require `sshpass`. Missing or empty secrets fail
+closed; SafeSelect does not fall back to a different secret source. Do not set
+both `secret_account` (macOS Keychain) and `secret_variable`.
+For an existing Linux/WSL environment, run `safeselect config set-ssh-password
+--environment <env>` without `--password` to configure an environment reference,
+then export the variable it prints. The command cannot export into its parent
+shell. Restart a running MCP client after changing its environment.
+
+Newly imported database passwords use
+`SAFESELECT_PASSWORD_<PROJECT_SHA256>_<ENV_HEX>` on Linux/WSL. The project component
+is the SHA-256 of the canonical project directory (without exposing its path);
+the environment component encodes the environment name's UTF-8 bytes. This produces shell-valid, distinct references even for names like
+`qa.eu` and `qa-eu`. The printed setup guidance uses the exact generated reference;
+existing saved references are not renamed, including when moving a checkout.
+Imports defer automatic verification while a required database or SSH variable
+is unset or empty. Export that variable
+separately before checking the imported connection; credentials from the
+export are removed from the saved MongoDB URI rather than written to TOML.
+
 Generated MCP entries deliberately pin both project and environment. Keep those
 arguments in client configuration and unattended scripts: inference is a CLI
 convenience, not a persistent default environment.

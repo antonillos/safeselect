@@ -3561,10 +3561,7 @@ impl McpServer {
                     }
                 }
                 "env" => {
-                    let var = format!(
-                        "SAFESELECT_PASSWORD_{}",
-                        new_name.to_uppercase().replace('-', "_")
-                    );
+                    let var = compose::database_env_reference(&self.repo_root, new_name)?;
                     secret.variable = Some(var);
                     needs_rewrite = true;
                 }
@@ -4596,7 +4593,7 @@ fn import_compose_guidance_text(
     let import = compose::write_config_files(scan_path, all_connections, project_name)?;
     update_generated_by(&scan_path.join(".safeselect"))?;
     let names: Vec<String> = all_connections.iter().map(|c| c.env_name.clone()).collect();
-    Ok(compose::build_import_guidance(project_name, &import, &names, true).text)
+    Ok(compose::build_import_guidance(scan_path, project_name, &import, &names, true)?.text)
 }
 
 fn project_environment_names(repo_root: &Path) -> Result<Vec<String>> {
@@ -5047,10 +5044,9 @@ fn run_setup_server_with_io<R: BufRead, W: Write>(
                                         Some(env)
                                     }
                                     "env" => {
-                                        let var = format!(
-                                            "SAFESELECT_PASSWORD_{}",
-                                            new_name.to_uppercase().replace('-', "_")
-                                        );
+                                        let var =
+                                            compose::database_env_reference(repo_root, new_name)
+                                                .ok()?;
                                         secret.variable = Some(var);
                                         Some(env)
                                     }
@@ -5882,6 +5878,55 @@ mod tests {
             &repo_root.join(".safeselect"),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn mcp_rename_routes_use_collision_free_database_references() {
+        for setup_mode in [false, true] {
+            let root = std::env::temp_dir()
+                .join(format!("safeselect-mcp-rename-{}", uuid::Uuid::new_v4()));
+            let environments = root.join(".safeselect/environments");
+            std::fs::create_dir_all(&environments).unwrap();
+            let mut server = test_server(&root);
+            let mut references = std::collections::HashSet::new();
+            for (index, new) in ["qa.eu", "qa-eu", "qa_eu"].iter().enumerate() {
+                let old = format!("old-{index}");
+                let variable = compose::database_env_reference(&root, &old).unwrap();
+                std::fs::write(environments.join(format!("{old}.toml")), format!("version = 1\n[database]\nurl = 'mongodb://localhost/demo'\n[database.secret]\nsource = 'env'\nvariable = '{variable}'\n")).unwrap();
+                let arguments = serde_json::json!({"old_name": old, "new_name": new});
+                if setup_mode {
+                    let input = format!(
+                        "{}\n",
+                        serde_json::json!({"jsonrpc":"2.0", "id":1, "method":"tools/call", "params":{"name":"rename_environment", "arguments":arguments}})
+                    );
+                    let mut output = Vec::new();
+                    run_setup_server_with_io(
+                        &root,
+                        std::io::Cursor::new(input.as_bytes()),
+                        &mut output,
+                    )
+                    .unwrap();
+                    assert!(String::from_utf8(output).unwrap().contains("Renamed"));
+                } else {
+                    server
+                        .handle_config_rename_environment(Some(serde_json::json!(1)), &arguments)
+                        .unwrap();
+                }
+                assert!(!environments.join(format!("{old}.toml")).exists());
+                let content =
+                    std::fs::read_to_string(environments.join(format!("{new}.toml"))).unwrap();
+                let config: EnvironmentConfig = toml::from_str(&content).unwrap();
+                let variable = config.database.secret.unwrap().variable.unwrap();
+                assert_eq!(
+                    variable,
+                    compose::database_env_reference(&root, new).unwrap()
+                );
+                crate::validate_ssh_password_variable(&variable).unwrap();
+                assert!(references.insert(variable));
+                assert_eq!(config.database.url, "mongodb://localhost/demo");
+            }
+            std::fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[test]
