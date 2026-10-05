@@ -894,10 +894,7 @@ fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
                         }
                     }
                     "env" => {
-                        let var = format!(
-                            "SAFESELECT_PASSWORD_{}",
-                            new.to_uppercase().replace('-', "_")
-                        );
+                        let var = compose::database_env_reference(&new);
                         secret.variable = Some(var.clone());
                         needs_rewrite = true;
                     }
@@ -5984,6 +5981,38 @@ enabled = true
     }
 
     #[test]
+    fn cli_rename_uses_collision_free_database_references() {
+        let root = std::env::temp_dir().join(format!("safeselect-rename-{}", uuid::Uuid::new_v4()));
+        let environments = root.join(".safeselect/environments");
+        std::fs::create_dir_all(&environments).unwrap();
+        let mut references = std::collections::HashSet::new();
+        for (index, new) in ["qa.eu", "qa-eu", "qa_eu"].iter().enumerate() {
+            let old = format!("old-{index}");
+            let variable = compose::database_env_reference(&old);
+            std::fs::write(environments.join(format!("{old}.toml")), format!("version = 1\n[database]\nurl = 'mongodb://localhost/demo'\n[database.secret]\nsource = 'env'\nvariable = '{variable}'\n")).unwrap();
+            cmd_config(
+                &ConfigLoader::new(),
+                ConfigAction::RenameEnvironment {
+                    old: old.clone(),
+                    new: (*new).into(),
+                    project: Some(root.clone()),
+                },
+            )
+            .unwrap();
+            assert!(!environments.join(format!("{old}.toml")).exists());
+            let content =
+                std::fs::read_to_string(environments.join(format!("{new}.toml"))).unwrap();
+            let config: config::EnvironmentConfig = toml::from_str(&content).unwrap();
+            let variable = config.database.secret.unwrap().variable.unwrap();
+            assert_eq!(variable, compose::database_env_reference(new));
+            validate_ssh_password_variable(&variable).unwrap();
+            assert!(references.insert(variable));
+            assert_eq!(config.database.url, "mongodb://localhost/demo");
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn generated_ssh_references_are_distinct_and_reversible() {
         let accounts = [
             "demo/qa.eu/ssh",
@@ -5999,7 +6028,7 @@ enabled = true
             validate_ssh_password_variable(&variable).unwrap();
             assert!(
                 references.insert(variable.clone()),
-                "aliased account: {account}"
+                "generated SSH references must be distinct"
             );
             let encoded = variable.strip_prefix("SAFESELECT_SSH_PASSWORD_").unwrap();
             assert_eq!(hex::decode(encoded).unwrap(), account.as_bytes());
