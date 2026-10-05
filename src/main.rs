@@ -590,9 +590,9 @@ where
     Ok(())
 }
 
-fn resolve_password(password: Option<String>, account: &str) -> Result<String> {
+fn resolve_password(password: Option<String>, _account: &str) -> Result<String> {
     password.map(Ok).unwrap_or_else(|| {
-        inquire::Password::new(&format!("Password for '{account}'"))
+        inquire::Password::new("Database password")
             .without_confirmation()
             .prompt()
             .map_err(|e| SafeselectError::Other(format!("Failed to read password: {e}")))
@@ -826,9 +826,9 @@ fn load_ssh_environment_config(
     Ok((env_file, env_config))
 }
 
-fn resolve_ssh_password(password: Option<String>, account: &str) -> Result<String> {
+fn resolve_ssh_password(password: Option<String>, _account: &str) -> Result<String> {
     password.map(Ok).unwrap_or_else(|| {
-        inquire::Password::new(&format!("SSH password for '{account}'"))
+        inquire::Password::new("SSH password")
             .without_confirmation()
             .prompt()
             .map_err(|e| SafeselectError::Other(format!("Failed to read SSH password: {e}")))
