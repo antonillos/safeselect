@@ -894,7 +894,7 @@ fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
                         }
                     }
                     "env" => {
-                        let var = compose::database_env_reference(&new);
+                        let var = compose::database_env_reference(&dir, &new)?;
                         secret.variable = Some(var.clone());
                         needs_rewrite = true;
                     }
@@ -2158,7 +2158,7 @@ fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
         let (secret, has_secret) = if let Some(ref pw) = conn.password {
             if !pw.is_empty() {
                 (
-                    Some(import_database_password(&project_name, env_name, pw)?),
+                    Some(import_database_password(&cwd, &project_name, env_name, pw)?),
                     cfg!(target_os = "macos"),
                 )
             } else {
@@ -2222,15 +2222,20 @@ fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
         println!("  ◉ All environments already exist.");
     }
 
-    let guidance =
-        compose::build_guidance_from_parts(&project_name, &env_names, &no_password_envs, true);
+    let guidance = compose::build_guidance_from_parts(
+        &cwd,
+        &project_name,
+        &env_names,
+        &no_password_envs,
+        true,
+    )?;
     println!();
     println!("{}", guidance.text);
 
     // Step 5: shared helpers (driver, passwords, verify)
     setup_driver_if_missing()?;
     setup_passwords_for_missing(&cwd, &env_names)?;
-    run_checks_for_environments(&cwd, &env_names, false, true, false)?;
+    verify_imported_environments(&cwd, &env_names)?;
     Ok(())
 }
 
@@ -2320,7 +2325,8 @@ fn cmd_import_compose(path: Option<PathBuf>, non_interactive: bool) -> Result<()
     let result = compose::write_config_files(dest_dir, &to_import, &project_name)?;
     update_generated_by(&dest_dir.join(".safeselect"))?;
     let imported_names: Vec<String> = to_import.iter().map(|c| c.env_name.clone()).collect();
-    let guidance = compose::build_import_guidance(&project_name, &result, &imported_names, true);
+    let guidance =
+        compose::build_import_guidance(dest_dir, &project_name, &result, &imported_names, true)?;
 
     if result.created > 0 {
         println!();
@@ -2338,7 +2344,7 @@ fn cmd_import_compose(path: Option<PathBuf>, non_interactive: bool) -> Result<()
     let env_names = guidance.imported_env_names;
     setup_driver_if_missing()?;
     setup_passwords_for_missing(dest_dir, &env_names)?;
-    run_checks_for_environments(dest_dir, &env_names, false, true, false)?;
+    verify_imported_environments(dest_dir, &env_names)?;
 
     Ok(())
 }
@@ -2349,7 +2355,7 @@ fn import_selected_connections(connections: &[compose::ComposeConnection]) -> Re
     let result = compose::write_config_files(&cwd, connections, &name)?;
     update_generated_by(&cwd.join(".safeselect"))?;
     let imported_names: Vec<String> = connections.iter().map(|c| c.env_name.clone()).collect();
-    let guidance = compose::build_import_guidance(&name, &result, &imported_names, true);
+    let guidance = compose::build_import_guidance(&cwd, &name, &result, &imported_names, true)?;
 
     if result.created > 0 {
         println!(
@@ -2367,7 +2373,7 @@ fn import_selected_connections(connections: &[compose::ComposeConnection]) -> Re
     let env_names = guidance.imported_env_names;
     setup_driver_if_missing()?;
     setup_passwords_for_missing(&cwd, &env_names)?;
-    run_checks_for_environments(&cwd, &env_names, false, true, false)?;
+    verify_imported_environments(&cwd, &env_names)?;
 
     Ok(())
 }
@@ -2500,11 +2506,11 @@ fn cmd_import_compass(path: Option<PathBuf>, non_interactive: bool) -> Result<()
             conn.url.clone()
         };
         let (mut url, username, mut secret) =
-            prepare_mongodb_url(&project_name, &env_name, &raw_url)?;
+            prepare_mongodb_url(&cwd, &project_name, &env_name, &raw_url)?;
         if secret.is_none() && !username.is_empty() {
             if !cfg!(target_os = "macos") {
                 url = inject_mongodb_password_placeholder(&raw_url, &username);
-                secret = Some(database_environment_secret(&env_name));
+                secret = Some(database_environment_secret(&cwd, &env_name)?);
             } else if non_interactive {
                 warnings.push(format!(
                     "{}: Compass did not export a database password; configure it with `safeselect config set-password --environment {}` after import.",
@@ -2559,7 +2565,7 @@ fn cmd_import_compass(path: Option<PathBuf>, non_interactive: bool) -> Result<()
     if non_interactive {
         println!("Next: safeselect check --environment <name>");
     } else {
-        run_checks_for_environments(&cwd, &imported, false, true, false)?;
+        verify_imported_environments(&cwd, &imported)?;
     }
     Ok(())
 }
@@ -3013,11 +3019,13 @@ fn unique_env_name(env_dir: &Path, base: &str) -> String {
 }
 
 fn prepare_mongodb_url(
+    repo_root: &Path,
     project_name: &str,
     env_name: &str,
     url: &str,
 ) -> Result<(String, String, Option<config::SecretConfig>)> {
     prepare_mongodb_url_with_store(
+        repo_root,
         project_name,
         env_name,
         url,
@@ -3027,6 +3035,7 @@ fn prepare_mongodb_url(
 }
 
 fn prepare_mongodb_url_with_store<F>(
+    repo_root: &Path,
     project_name: &str,
     env_name: &str,
     url: &str,
@@ -3048,8 +3057,14 @@ where
     let Some((username, password)) = credentials.split_once(':') else {
         return Ok((url.to_string(), credentials.to_string(), None));
     };
-    let secret =
-        import_database_password_with_store(project_name, env_name, password, is_macos, store)?;
+    let secret = import_database_password_with_store(
+        repo_root,
+        project_name,
+        env_name,
+        password,
+        is_macos,
+        store,
+    )?;
     let sanitized = format!(
         "{}{}:{}{}",
         &url[..authority_start],
@@ -3061,11 +3076,13 @@ where
 }
 
 fn import_database_password(
+    repo_root: &Path,
     project_name: &str,
     env_name: &str,
     password: &str,
 ) -> Result<config::SecretConfig> {
     import_database_password_with_store(
+        repo_root,
         project_name,
         env_name,
         password,
@@ -3075,6 +3092,7 @@ fn import_database_password(
 }
 
 fn import_database_password_with_store<F>(
+    repo_root: &Path,
     project_name: &str,
     env_name: &str,
     password: &str,
@@ -3094,19 +3112,19 @@ where
             variable: None,
         })
     } else {
-        Ok(database_environment_secret(env_name))
+        database_environment_secret(repo_root, env_name)
     }
 }
 
-fn database_environment_secret(env_name: &str) -> config::SecretConfig {
-    let variable = compose::database_env_reference(env_name);
+fn database_environment_secret(repo_root: &Path, env_name: &str) -> Result<config::SecretConfig> {
+    let variable = compose::database_env_reference(repo_root, env_name)?;
     println!("  Database password source: {variable}; export it in the shell that launches SafeSelect (password is not stored).");
-    config::SecretConfig {
+    Ok(config::SecretConfig {
         source: "env".into(),
         service: None,
         account: None,
         variable: Some(variable),
-    }
+    })
 }
 
 fn inject_mongodb_password_placeholder(url: &str, username: &str) -> String {
@@ -3180,7 +3198,7 @@ fn setup_passwords_for_missing(repo_root: &std::path::Path, env_names: &[String]
 
         if !cfg!(target_os = "macos") {
             if config.database.secret.is_none() {
-                config.database.secret = Some(database_environment_secret(env_name));
+                config.database.secret = Some(database_environment_secret(repo_root, env_name)?);
                 let updated = toml::to_string_pretty(&config)
                     .map_err(|e| SafeselectError::TomlSer(e.to_string()))?;
                 std::fs::write(&env_file, updated)?;
@@ -3272,6 +3290,72 @@ fn setup_passwords_for_missing(repo_root: &std::path::Path, env_names: &[String]
         print_terminal_line(&format!("  ✓ Updated {env_name}.toml"));
     }
     Ok(())
+}
+
+fn import_environment_variables(environment: &config::EnvironmentConfig) -> Result<Vec<String>> {
+    let mut variables = Vec::new();
+    if let Some(secret) = &environment.database.secret {
+        match secret.source.as_str() {
+            "env" => {
+                let variable = secret.variable.as_deref().ok_or_else(|| {
+                    SafeselectError::Secret("variable name required for env source".into())
+                })?;
+                validate_ssh_password_variable(variable)?;
+                variables.push(variable.to_string());
+            }
+            "macos-keychain" => {}
+            _ => {
+                return Err(SafeselectError::Secret(
+                    "Unknown database secret source".into(),
+                ))
+            }
+        }
+    }
+    if let Some(ssh) = environment.ssh.as_ref().filter(|ssh| ssh.enabled) {
+        if let Some(variable) = &ssh.secret_variable {
+            validate_ssh_password_variable(variable)?;
+            variables.push(variable.clone());
+        }
+    }
+    Ok(variables)
+}
+
+fn imported_environment_variables(repo_root: &Path, env_names: &[String]) -> Result<Vec<String>> {
+    let project = load_project_config(&repo_root.join(".safeselect"))?;
+    let mut variables = Vec::new();
+    for name in env_names {
+        let (_, mut environment) = load_ssh_environment_config(repo_root, name)?;
+        config::merge_project_ssh(&project, &mut environment)?;
+        variables.extend(import_environment_variables(&environment)?);
+    }
+    Ok(variables)
+}
+
+fn verify_imported_environments(repo_root: &Path, env_names: &[String]) -> Result<()> {
+    verify_imported_environments_with(
+        repo_root,
+        env_names,
+        |variable| std::env::var(variable).is_ok_and(|value| !value.is_empty()),
+        |root, names| run_checks_for_environments(root, names, false, true, false),
+    )
+}
+
+fn verify_imported_environments_with<P, C>(
+    repo_root: &Path,
+    env_names: &[String],
+    present: P,
+    check: C,
+) -> Result<()>
+where
+    P: Fn(&str) -> bool,
+    C: FnOnce(&Path, &[String]) -> Result<()>,
+{
+    let variables = imported_environment_variables(repo_root, env_names)?;
+    if !variables.iter().all(|variable| present(variable)) {
+        println!("Import saved. Verification deferred: export the configured database/SSH variables in the shell that launches SafeSelect, then run safeselect check --environment <name>.");
+        return Ok(());
+    }
+    check(repo_root, env_names)
 }
 
 fn ssh_uses_password(ssh: &config::SshConfig) -> bool {
@@ -4946,6 +5030,74 @@ pub(crate) fn uninstall_binary_paths() -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn import_checks_wait_for_exported_variables_without_changing_saved_config() {
+        let root = std::env::temp_dir().join(format!("safeselect-defer-{}", uuid::Uuid::new_v4()));
+        let environments = root.join(".safeselect/environments");
+        std::fs::create_dir_all(&environments).unwrap();
+        std::fs::write(
+            root.join(".safeselect/project.toml"),
+            "version = 1\nname = 'demo'\n",
+        )
+        .unwrap();
+        let path = environments.join("dev.toml");
+        let content = "version = 1\n[database]\nurl = 'mongodb://localhost/demo'\n[database.secret]\nsource = 'env'\nvariable = 'IMPORT_DB_PASSWORD'\n";
+        std::fs::write(&path, content).unwrap();
+        let names = vec!["dev".to_string()];
+        verify_imported_environments_with(&root, &names, |_| false, |_, _| panic!("must defer"))
+            .unwrap();
+        let checked = std::cell::Cell::new(false);
+        verify_imported_environments_with(
+            &root,
+            &names,
+            |variable| variable == "IMPORT_DB_PASSWORD",
+            |actual_root, actual_names| {
+                assert_eq!(actual_root, root);
+                assert_eq!(actual_names, names);
+                checked.set(true);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert!(checked.get());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), content);
+        std::fs::write(&path, content.replace("IMPORT_DB_PASSWORD", "invalid-name")).unwrap();
+        assert!(verify_imported_environments_with(
+            &root,
+            &names,
+            |_| false,
+            |_, _| panic!("invalid configuration must fail")
+        )
+        .is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn import_variable_collection_includes_ssh_and_preserves_non_env_checks() {
+        let mut environment: config::EnvironmentConfig = toml::from_str("version = 1\n[database]\nurl = 'mongodb://localhost/demo'\n[ssh]\nenabled = true\nsecret_variable = 'IMPORT_SSH_PASSWORD'\n").unwrap();
+        assert_eq!(
+            import_environment_variables(&environment).unwrap(),
+            vec!["IMPORT_SSH_PASSWORD"]
+        );
+        environment.ssh.as_mut().unwrap().enabled = false;
+        assert!(import_environment_variables(&environment)
+            .unwrap()
+            .is_empty());
+        environment.database.secret = Some(config::SecretConfig {
+            source: "macos-keychain".into(),
+            service: None,
+            account: None,
+            variable: None,
+        });
+        assert!(import_environment_variables(&environment)
+            .unwrap()
+            .is_empty());
+        environment.database.secret.as_mut().unwrap().source = "env".into();
+        assert!(import_environment_variables(&environment).is_err());
+        environment.database.secret.as_mut().unwrap().source = "unknown".into();
+        assert!(import_environment_variables(&environment).is_err());
+    }
+
+    #[test]
     fn terminal_checks_are_green_only_when_color_is_enabled() {
         let line = "  ✓ opencode: safe";
         assert_eq!(
@@ -5814,6 +5966,7 @@ enabled = true
         assert!(!error.to_string().contains("synthetic-secret"));
         assert_eq!(std::fs::read_to_string(&file).unwrap(), saved);
         let (url, _, secret) = prepare_mongodb_url(
+            Path::new("."),
             "demo",
             "dev",
             "mongodb://demo:synthetic-secret@db.example/demo",
@@ -5835,6 +5988,7 @@ enabled = true
     #[test]
     fn mongodb_password_import_sanitizes_uri_on_linux_without_keychain() {
         let (url, username, secret) = prepare_mongodb_url_with_store(
+            Path::new("."),
             "demo",
             "dev-db",
             "mongodb+srv://demo:synthetic-secret@db.example/demo?retryWrites=true",
@@ -5851,7 +6005,11 @@ enabled = true
         assert_eq!(secret.source, "env");
         assert_eq!(
             secret.variable.as_deref(),
-            Some("SAFESELECT_PASSWORD_6465762D6462")
+            Some(
+                compose::database_env_reference(Path::new("."), "dev-db")
+                    .unwrap()
+                    .as_str()
+            )
         );
         assert!(!toml::to_string(&secret)
             .unwrap()
@@ -5988,7 +6146,7 @@ enabled = true
         let mut references = std::collections::HashSet::new();
         for (index, new) in ["qa.eu", "qa-eu", "qa_eu"].iter().enumerate() {
             let old = format!("old-{index}");
-            let variable = compose::database_env_reference(&old);
+            let variable = compose::database_env_reference(&root, &old).unwrap();
             std::fs::write(environments.join(format!("{old}.toml")), format!("version = 1\n[database]\nurl = 'mongodb://localhost/demo'\n[database.secret]\nsource = 'env'\nvariable = '{variable}'\n")).unwrap();
             cmd_config(
                 &ConfigLoader::new(),
@@ -6004,7 +6162,10 @@ enabled = true
                 std::fs::read_to_string(environments.join(format!("{new}.toml"))).unwrap();
             let config: config::EnvironmentConfig = toml::from_str(&content).unwrap();
             let variable = config.database.secret.unwrap().variable.unwrap();
-            assert_eq!(variable, compose::database_env_reference(new));
+            assert_eq!(
+                variable,
+                compose::database_env_reference(&root, new).unwrap()
+            );
             validate_ssh_password_variable(&variable).unwrap();
             assert!(references.insert(variable));
             assert_eq!(config.database.url, "mongodb://localhost/demo");
@@ -6119,7 +6280,7 @@ enabled = true
         ];
         let mut references = std::collections::HashSet::new();
         for environment in environments {
-            let secret = database_environment_secret(environment);
+            let secret = database_environment_secret(Path::new("."), environment).unwrap();
             // Verify the reference as saved/read from TOML, not a separately generated hint.
             let saved: config::SecretConfig =
                 toml::from_str(&toml::to_string(&secret).unwrap()).unwrap();
@@ -6129,21 +6290,23 @@ enabled = true
                 references.insert(variable.clone()),
                 "aliased environment: {environment}"
             );
-            let hint = compose::environment_secret_setup_hint(environment);
+            let hint = compose::environment_secret_setup_hint(Path::new("."), environment).unwrap();
             assert!(hint.contains(&format!("export {variable}=")));
             assert!(hint.contains(&format!("variable = \"{variable}\"")));
             assert!(hint.contains("\n  [database.secret]\n"));
             #[cfg(not(target_os = "macos"))]
             {
                 let guidance = compose::build_guidance_from_parts(
+                    Path::new("."),
                     "demo",
                     &[environment.into()],
                     &[environment.into()],
                     false,
-                );
+                )
+                .unwrap();
                 assert!(guidance.text.contains(&format!("export {variable}=")));
             }
-            let encoded = variable.strip_prefix("SAFESELECT_PASSWORD_").unwrap();
+            let encoded = variable.rsplit('_').next().unwrap();
             assert_eq!(hex::decode(encoded).unwrap(), environment.as_bytes());
         }
     }
@@ -6151,16 +6314,25 @@ enabled = true
     #[test]
     fn imported_database_variable_names_are_valid_shell_identifiers() {
         for (environment, expected) in [
-            ("dev-db", "SAFESELECT_PASSWORD_6465762D6462"),
-            ("qa.eu", "SAFESELECT_PASSWORD_71612E6575"),
-            ("qa eu/blue", "SAFESELECT_PASSWORD_71612065752F626C7565"),
-            ("9_qa", "SAFESELECT_PASSWORD_395F7161"),
-            ("pré", "SAFESELECT_PASSWORD_7072C3A9"),
-            ("qa;echo", "SAFESELECT_PASSWORD_71613B6563686F"),
+            ("dev-db", "6465762D6462"),
+            ("qa.eu", "71612E6575"),
+            ("qa eu/blue", "71612065752F626C7565"),
+            ("9_qa", "395F7161"),
+            ("pré", "7072C3A9"),
+            ("qa;echo", "71613B6563686F"),
         ] {
-            let secret = database_environment_secret(environment);
+            let secret = database_environment_secret(Path::new("."), environment).unwrap();
             assert_eq!(secret.source, "env");
-            assert_eq!(secret.variable.as_deref(), Some(expected));
+            assert_eq!(
+                secret
+                    .variable
+                    .as_deref()
+                    .unwrap()
+                    .rsplit('_')
+                    .next()
+                    .unwrap(),
+                expected
+            );
             validate_ssh_password_variable(secret.variable.as_deref().unwrap()).unwrap();
             assert!(secret.account.is_none());
         }
@@ -6169,20 +6341,29 @@ enabled = true
     #[test]
     fn database_password_import_does_not_invoke_keychain_on_linux() {
         let password = uuid::Uuid::new_v4().to_string();
-        let secret =
-            import_database_password_with_store("demo", "dev-db", &password, false, |_, _| {
-                panic!("Linux must not invoke Keychain")
-            })
-            .unwrap();
+        let secret = import_database_password_with_store(
+            Path::new("."),
+            "demo",
+            "dev-db",
+            &password,
+            false,
+            |_, _| panic!("Linux must not invoke Keychain"),
+        )
+        .unwrap();
         assert_eq!(secret.source, "env");
         assert_eq!(
             secret.variable.as_deref(),
-            Some("SAFESELECT_PASSWORD_6465762D6462")
+            Some(
+                compose::database_env_reference(Path::new("."), "dev-db")
+                    .unwrap()
+                    .as_str()
+            )
         );
         let serialized = toml::to_string(&secret).unwrap();
         assert!(!serialized.contains(&password));
         assert!(secret.account.is_none());
         let secret = import_database_password_with_store(
+            Path::new("."),
             "demo",
             "dev-db",
             &password,
@@ -6195,12 +6376,15 @@ enabled = true
         )
         .unwrap();
         assert_eq!(secret.source, "macos-keychain");
-        assert!(
-            import_database_password_with_store("demo", "dev", &password, true, |_, _| Err(
-                SafeselectError::Secret("store failed".into())
-            ))
-            .is_err()
-        );
+        assert!(import_database_password_with_store(
+            Path::new("."),
+            "demo",
+            "dev",
+            &password,
+            true,
+            |_, _| Err(SafeselectError::Secret("store failed".into()))
+        )
+        .is_err());
     }
 
     #[test]
