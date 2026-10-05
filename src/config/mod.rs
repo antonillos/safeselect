@@ -262,8 +262,10 @@ fn merge_shared_ssh_fields(ssh: &mut SshConfig, shared: &SharedSshConfig) {
     if ssh.username.is_none() {
         ssh.username = shared.username.clone();
     }
-    if ssh.secret_account.is_none() {
+    // A local secret source overrides the shared source as a unit.
+    if ssh.secret_account.is_none() && ssh.secret_variable.is_none() {
         ssh.secret_account = shared.secret_account.clone();
+        ssh.secret_variable = shared.secret_variable.clone();
     }
     if ssh.identity_file.is_none() {
         ssh.identity_file = shared.identity_file.clone();
@@ -401,6 +403,42 @@ bastion = "dev"
     }
 
     #[test]
+    fn shared_ssh_password_variable_is_inherited_without_overriding_local_sources() {
+        let project: ProjectConfig = toml::from_str(
+            "version = 1\n[ssh_bastions.demo]\nhost = 'bastion.example'\nsecret_variable = 'SHARED_SSH_PASSWORD'\nauth_type = 'PASSWORD'\n",
+        ).unwrap();
+        let mut environment: EnvironmentConfig = toml::from_str(
+            "version = 1\n[database]\nurl = 'mongodb://localhost/demo'\n[ssh]\nenabled = true\nbastion = 'demo'\n",
+        ).unwrap();
+        merge_project_ssh(&project, &mut environment).unwrap();
+        let ssh = environment.ssh.as_mut().unwrap();
+        assert_eq!(ssh.secret_variable.as_deref(), Some("SHARED_SSH_PASSWORD"));
+        assert!(ssh.secret_account.is_none());
+
+        ssh.secret_variable = None;
+        ssh.secret_account = Some("local-keychain".into());
+        merge_project_ssh(&project, &mut environment).unwrap();
+        let ssh = environment.ssh.unwrap();
+        assert_eq!(ssh.secret_account.as_deref(), Some("local-keychain"));
+        assert!(ssh.secret_variable.is_none());
+    }
+
+    #[test]
+    fn local_ssh_password_variable_overrides_shared_keychain_account() {
+        let project: ProjectConfig = toml::from_str(
+            "version = 1\n[ssh_bastions.demo]\nsecret_account = 'shared-keychain'\n",
+        )
+        .unwrap();
+        let mut environment: EnvironmentConfig = toml::from_str(
+            "version = 1\n[database]\nurl = 'mongodb://localhost/demo'\n[ssh]\nenabled = true\nbastion = 'demo'\nsecret_variable = 'LOCAL_SSH_PASSWORD'\n",
+        ).unwrap();
+        merge_project_ssh(&project, &mut environment).unwrap();
+        let ssh = environment.ssh.unwrap();
+        assert_eq!(ssh.secret_variable.as_deref(), Some("LOCAL_SSH_PASSWORD"));
+        assert!(ssh.secret_account.is_none());
+    }
+
+    #[test]
     fn lists_only_toml_driver_files() {
         let root = std::env::temp_dir().join(format!("safeselect-drivers-{}", std::process::id()));
         let drivers = root.join("drivers");
@@ -458,6 +496,7 @@ url = "jdbc:postgresql://db/app"
             port: None,
             username: None,
             secret_account: None,
+            secret_variable: None,
             identity_file: None,
             known_hosts: None,
             local_host: None,
