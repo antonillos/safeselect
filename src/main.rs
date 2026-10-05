@@ -680,21 +680,50 @@ fn configure_ssh_password_environment(dir: &Path, environment: &str) -> Result<(
 }
 
 fn prompt_ssh_password_source(account: &str) -> Result<(Option<String>, Option<String>)> {
-    if cfg!(target_os = "macos") {
-        let password = inquire::Password::new("  SSH password:")
-            .without_confirmation()
-            .prompt()
-            .map_err(|e| SafeselectError::Other(format!("Failed to read SSH password: {e}")))?;
+    prompt_ssh_password_source_with(
+        account,
+        cfg!(target_os = "macos"),
+        prompt_keychain_ssh_password,
+        prompt_ssh_environment_variable,
+        compose::store_password_in_keychain,
+    )
+}
+
+fn prompt_keychain_ssh_password() -> Result<String> {
+    inquire::Password::new("  SSH password:")
+        .without_confirmation()
+        .prompt()
+        .map_err(|e| SafeselectError::Other(format!("Failed to read SSH password: {e}")))
+}
+
+fn prompt_ssh_environment_variable(default: &str) -> Result<String> {
+    inquire::Text::new("  SSH password environment variable:")
+        .with_default(default)
+        .prompt()
+        .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))
+}
+
+fn prompt_ssh_password_source_with<P, V, S>(
+    account: &str,
+    is_macos: bool,
+    prompt_password: P,
+    prompt_variable: V,
+    store: S,
+) -> Result<(Option<String>, Option<String>)>
+where
+    P: FnOnce() -> Result<String>,
+    V: FnOnce(&str) -> Result<String>,
+    S: FnOnce(&str, &str) -> Result<()>,
+{
+    if is_macos {
+        let password = prompt_password()?;
         if !password.is_empty() {
-            compose::store_password_in_keychain(account, &password)?;
+            store(account, &password)?;
             print_terminal_line("  ✓ SSH password stored in Keychain");
         }
         Ok((Some(account.to_string()), None))
     } else {
-        let variable = inquire::Text::new("  SSH password environment variable:")
-            .with_default(&ssh_password_variable(account))
-            .prompt()
-            .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?;
+        let variable = prompt_variable(&ssh_password_variable(account))?;
         let variable = variable.trim().to_string();
         validate_ssh_password_variable(&variable)?;
         print_ssh_password_environment_hint(&variable);
@@ -2485,7 +2514,7 @@ fn cmd_import_compass(path: Option<PathBuf>, non_interactive: bool) -> Result<()
         if secret.is_none() && !username.is_empty() {
             if !cfg!(target_os = "macos") {
                 url = inject_mongodb_password_placeholder(&raw_url, &username);
-                secret = Some(import_database_password(&project_name, &env_name, "")?);
+                secret = Some(database_environment_secret(&env_name));
             } else if non_interactive {
                 warnings.push(format!(
                     "{}: Compass did not export a database password; configure it with `safeselect config set-password --environment {}` after import.",
@@ -3075,17 +3104,21 @@ where
             variable: None,
         })
     } else {
-        let variable = format!(
-            "SAFESELECT_PASSWORD_{}",
-            env_name.to_uppercase().replace('-', "_")
-        );
-        println!("  Database password source: {variable}; export it in the shell that launches SafeSelect (password is not stored).");
-        Ok(config::SecretConfig {
-            source: "env".into(),
-            service: None,
-            account: None,
-            variable: Some(variable),
-        })
+        Ok(database_environment_secret(env_name))
+    }
+}
+
+fn database_environment_secret(env_name: &str) -> config::SecretConfig {
+    let variable = format!(
+        "SAFESELECT_PASSWORD_{}",
+        env_name.to_uppercase().replace('-', "_")
+    );
+    println!("  Database password source: {variable}; export it in the shell that launches SafeSelect (password is not stored).");
+    config::SecretConfig {
+        source: "env".into(),
+        service: None,
+        account: None,
+        variable: Some(variable),
     }
 }
 
@@ -3160,11 +3193,7 @@ fn setup_passwords_for_missing(repo_root: &std::path::Path, env_names: &[String]
 
         if !cfg!(target_os = "macos") {
             if config.database.secret.is_none() {
-                config.database.secret = Some(import_database_password(
-                    &project_display_name(repo_root),
-                    env_name,
-                    "",
-                )?);
+                config.database.secret = Some(database_environment_secret(env_name));
                 let updated = toml::to_string_pretty(&config)
                     .map_err(|e| SafeselectError::TomlSer(e.to_string()))?;
                 std::fs::write(&env_file, updated)?;
@@ -5865,6 +5894,77 @@ enabled = true
     }
 
     #[test]
+    fn ssh_password_prompt_routes_sources_and_propagates_failures() {
+        let password = uuid::Uuid::new_v4().to_string();
+        let result = prompt_ssh_password_source_with(
+            "demo/dev/ssh",
+            true,
+            || Ok(password.clone()),
+            |_| panic!("macOS must not request an environment reference"),
+            |account, value| {
+                assert_eq!(account, "demo/dev/ssh");
+                assert_eq!(value, password);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(result, (Some("demo/dev/ssh".into()), None));
+        let result = prompt_ssh_password_source_with(
+            "demo/dev/ssh",
+            true,
+            || Ok(String::new()),
+            |_| panic!("unexpected variable prompt"),
+            |_, _| panic!("empty input must not be stored"),
+        )
+        .unwrap();
+        assert_eq!(result, (Some("demo/dev/ssh".into()), None));
+        let result = prompt_ssh_password_source_with(
+            "demo/dev/ssh",
+            false,
+            || panic!("Linux must not request a password"),
+            |default| {
+                assert_eq!(default, "SAFESELECT_SSH_PASSWORD_DEMO_DEV_SSH");
+                Ok(" CUSTOM_SSH_VARIABLE ".into())
+            },
+            |_, _| panic!("Linux must not invoke Keychain"),
+        )
+        .unwrap();
+        assert_eq!(result, (None, Some("CUSTOM_SSH_VARIABLE".into())));
+        assert!(prompt_ssh_password_source_with(
+            "demo",
+            false,
+            || panic!("unexpected password prompt"),
+            |_| Ok("INVALID;NAME".into()),
+            |_, _| panic!("unexpected store"),
+        )
+        .is_err());
+        assert!(prompt_ssh_password_source_with(
+            "demo",
+            true,
+            || Err(SafeselectError::Other("cancelled".into())),
+            |_| panic!("unexpected variable prompt"),
+            |_, _| panic!("unexpected store"),
+        )
+        .is_err());
+        assert!(prompt_ssh_password_source_with(
+            "demo",
+            false,
+            || panic!("unexpected password prompt"),
+            |_| Err(SafeselectError::Other("cancelled".into())),
+            |_, _| panic!("unexpected store"),
+        )
+        .is_err());
+        assert!(prompt_ssh_password_source_with(
+            "demo",
+            true,
+            || Ok(password.clone()),
+            |_| panic!("unexpected variable prompt"),
+            |_, _| Err(SafeselectError::Secret("store failed".into())),
+        )
+        .is_err());
+    }
+
+    #[test]
     fn ssh_password_sources_are_platform_aware_and_fail_closed() {
         let mut ssh: config::SshConfig = toml::from_str("enabled = true").unwrap();
         let macos = ssh_password_secret_config(&ssh, "demo/dev/ssh", true).unwrap();
@@ -5966,43 +6066,39 @@ enabled = true
 
     #[test]
     fn database_password_import_does_not_invoke_keychain_on_linux() {
-        let secret = import_database_password_with_store(
-            "demo",
-            "dev-db",
-            "synthetic-secret",
-            false,
-            |_, _| panic!("Linux must not invoke Keychain"),
-        )
-        .unwrap();
+        let password = uuid::Uuid::new_v4().to_string();
+        let secret =
+            import_database_password_with_store("demo", "dev-db", &password, false, |_, _| {
+                panic!("Linux must not invoke Keychain")
+            })
+            .unwrap();
         assert_eq!(secret.source, "env");
         assert_eq!(
             secret.variable.as_deref(),
             Some("SAFESELECT_PASSWORD_DEV_DB")
         );
         let serialized = toml::to_string(&secret).unwrap();
-        assert!(!serialized.contains("synthetic-secret"));
+        assert!(!serialized.contains(&password));
         assert!(secret.account.is_none());
         let secret = import_database_password_with_store(
             "demo",
             "dev-db",
-            "synthetic-secret",
+            &password,
             true,
-            |account, password| {
+            |account, stored_password| {
                 assert_eq!(account, "demo/dev-db");
-                assert_eq!(password, "synthetic-secret");
+                assert_eq!(stored_password, password);
                 Ok(())
             },
         )
         .unwrap();
         assert_eq!(secret.source, "macos-keychain");
-        assert!(import_database_password_with_store(
-            "demo",
-            "dev",
-            "synthetic-secret",
-            true,
-            |_, _| Err(SafeselectError::Secret("store failed".into()))
-        )
-        .is_err());
+        assert!(
+            import_database_password_with_store("demo", "dev", &password, true, |_, _| Err(
+                SafeselectError::Secret("store failed".into())
+            ))
+            .is_err()
+        );
     }
 
     #[test]

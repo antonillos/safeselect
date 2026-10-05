@@ -263,7 +263,7 @@ fn merge_shared_ssh_fields(ssh: &mut SshConfig, shared: &SharedSshConfig) {
         ssh.username = shared.username.clone();
     }
     // A local secret source overrides the shared source as a unit.
-    if ssh.secret_account.is_none() && ssh.secret_variable.is_none() {
+    if let (None, None) = (&ssh.secret_account, &ssh.secret_variable) {
         ssh.secret_account = shared.secret_account.clone();
         ssh.secret_variable = shared.secret_variable.clone();
     }
