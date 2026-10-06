@@ -1225,7 +1225,7 @@ impl McpServer {
             ToolDefinition {
                 name: "config_set_password".into(),
                 description: self.tool_description(
-                    "store a database password in the macOS Keychain for an environment",
+                    "configure a database password using {env:NAME} on any platform or Keychain on macOS; prefer a reference, never send a raw secret through an agent",
                 ),
                 input_schema: serde_json::json!({
                     "type": "object",
@@ -1236,7 +1236,11 @@ impl McpServer {
                         },
                         "password": {
                             "type": "string",
-                            "description": "Database password"
+                            "description": "Prefer {env:NAME}; a literal password is supported only on macOS"
+                        },
+                        "literal_password": {
+                            "type": "boolean",
+                            "description": "Treat password as literal even if it matches {env:NAME} (macOS only)"
                         }
                     },
                     "required": ["environment", "password"]
@@ -3352,33 +3356,20 @@ impl McpServer {
             max_rows: self.security.limits().max_rows,
             max_result_bytes: self.security.limits().max_result_bytes,
         };
-        let resolved = ConfigLoader::new()
-            .resolve_local(&self.repo_root, &self.env_name)
-            .ok();
-        let backend = resolved
-            .as_ref()
-            .map(|resolved| resolved.environment.database.backend())
-            .unwrap_or_else(|| self.backend.clone());
-        let db_url = resolved
-            .as_ref()
-            .map(|resolved| resolved.environment.database.url.as_str())
-            .unwrap_or(&self.db_url);
-        let db_username = resolved
-            .as_ref()
-            .map(|resolved| resolved.environment.database.username.as_str())
-            .unwrap_or(&self.db_username);
-        let db_password = resolved
-            .as_ref()
-            .map(|resolved| resolved.password.as_str())
-            .unwrap_or(&self.db_password);
+        // A changed reference must never fall back to a cached credential.
+        let resolved = ConfigLoader::new().resolve_local(&self.repo_root, &self.env_name)?;
+        let backend = resolved.environment.database.backend();
+        let db_url = resolved.environment.database.url.as_str();
+        let db_username = resolved.environment.database.username.as_str();
+        let db_password = resolved.password.as_str();
         let driver_path = resolved
+            .driver
             .as_ref()
-            .and_then(|resolved| resolved.driver.as_ref())
             .map(|driver| driver.path.as_str())
             .unwrap_or(&self.driver_path);
         let driver_class = resolved
+            .driver
             .as_ref()
-            .and_then(|resolved| resolved.driver.as_ref())
             .map(|driver| driver.class.as_str())
             .unwrap_or(&self.driver_class);
 
@@ -3560,7 +3551,12 @@ impl McpServer {
                         needs_rewrite = true;
                     }
                 }
-                "env" => {
+                "env"
+                    if secret.variable.as_deref()
+                        == Some(
+                            compose::database_env_reference(&self.repo_root, old_name)?.as_str(),
+                        ) =>
+                {
                     let var = compose::database_env_reference(&self.repo_root, new_name)?;
                     secret.variable = Some(var);
                     needs_rewrite = true;
@@ -3667,6 +3663,38 @@ impl McpServer {
                 );
             }
         };
+        let input = if args
+            .get("literal_password")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            crate::config::password::PasswordInput::literal(password.to_string())
+        } else {
+            crate::config::password::PasswordInput::parse(password.to_string())
+        };
+        let input = match input {
+            Ok(input) => input,
+            Err(e) => return self.send_error(id, -32602, e.to_string()),
+        };
+        if let crate::config::password::PasswordInput::Environment(variable) = &input {
+            if let Err(e) = crate::config::write_environment_secret_to_env_file(&env_file, variable)
+            {
+                return self.send_error(
+                    id,
+                    -32000,
+                    format!("Failed to configure password reference: {e}"),
+                );
+            }
+            let resp = trusted_tool_response(id, "ok", "Environment password reference saved; password was not read or stored.".into(), "Export the referenced variable in the process that launches SafeSelect, then check this environment.");
+            return self.write_response(&resp);
+        }
+        if !cfg!(target_os = "macos") {
+            return self.send_error(
+                id,
+                -32602,
+                "Use {env:NAME} on Linux/WSL; literal passwords are not stored",
+            );
+        }
         let account =
             crate::config::preferred_keychain_account(&self.repo_root, environment, &env_config);
 
@@ -5043,7 +5071,16 @@ fn run_setup_server_with_io<R: BufRead, W: Write>(
                                         secret.account = Some(new_account);
                                         Some(env)
                                     }
-                                    "env" => {
+                                    "env"
+                                        if secret.variable.as_deref()
+                                            == Some(
+                                                compose::database_env_reference(
+                                                    repo_root, old_name,
+                                                )
+                                                .ok()?
+                                                .as_str(),
+                                            ) =>
+                                    {
                                         let var =
                                             compose::database_env_reference(repo_root, new_name)
                                                 .ok()?;
@@ -5627,6 +5664,9 @@ fn build_explain_sql(sql: &str, args: &serde_json::Value) -> std::result::Result
 
 #[cfg(test)]
 mod tests {
+    #[path = "password_references.rs"]
+    mod password_reference_tests;
+
     use std::io::Cursor;
 
     #[test]
