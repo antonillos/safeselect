@@ -78,7 +78,7 @@ fn mcp_document_reference_inserts_password_placeholder_without_reading_value() {
     let mut server = test_server(&root);
     let variable = format!("SAFESELECT_TEST_{}", uuid::Uuid::new_v4().simple());
     for scheme in ["mongodb", "mongodb+srv"] {
-        std::fs::write(&file, format!("version=1\n[database]\nkind='document'\nvendor='mongodb'\nusername='demo'\nurl='{scheme}://demo@localhost/demo?authSource=admin'\n")).unwrap();
+        std::fs::write(&file, format!("version=1\n[database]\nkind='document'\nvendor='mongodb'\nusername='demo'\nurl='{scheme}://localhost/demo?authSource=admin'\n")).unwrap();
         server
             .handle_config_set_password(
                 Some(serde_json::json!(1)),

@@ -49,3 +49,29 @@ fn rejects_invalid_references_without_echoing_input() {
         assert!(validate_variable(value).is_err());
     }
 }
+
+#[test]
+fn mongodb_placeholder_adds_missing_userinfo_and_preserves_authority_and_suffix() {
+    for scheme in ["mongodb", "mongodb+srv"] {
+        for authority in ["host", "host:27017,other:27018", "[::1]:27017"] {
+            let suffix = "/db?authSource=admin&appName=demo@example";
+            for userinfo in ["", "demo@", "demo:old-placeholder@"] {
+                assert_eq!(
+                    inject_mongodb_password_placeholder(
+                        &format!("{scheme}://{userinfo}{authority}{suffix}"),
+                        "demo"
+                    ),
+                    format!("{scheme}://demo:__SAFESELECT_PASSWORD__@{authority}{suffix}")
+                );
+            }
+        }
+        assert_eq!(
+            inject_mongodb_password_placeholder(&format!("{scheme}://host"), "demo"),
+            format!("{scheme}://demo:__SAFESELECT_PASSWORD__@host")
+        );
+    }
+    assert_eq!(
+        inject_mongodb_password_placeholder("invalid", "demo"),
+        "invalid"
+    );
+}

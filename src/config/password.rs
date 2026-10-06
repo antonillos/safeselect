@@ -64,16 +64,18 @@ pub fn inject_mongodb_password_placeholder(url: &str, username: &str) -> String 
         return url.to_string();
     };
     let authority_start = scheme_end + 3;
-    let Some(relative_at) = url[authority_start..].find('@') else {
-        return url.to_string();
-    };
-    let at = authority_start + relative_at;
+    let tail = &url[authority_start..];
+    let authority_end = tail.find(['/', '?', '#']).unwrap_or(tail.len());
+    let authority = &tail[..authority_end];
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
     format!(
-        "{}{}:{}{}",
+        "{}{}:__SAFESELECT_PASSWORD__@{}{}",
         &url[..authority_start],
         username,
-        "__SAFESELECT_PASSWORD__",
-        &url[at..]
+        host,
+        &tail[authority_end..]
     )
 }
 
