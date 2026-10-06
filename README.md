@@ -725,6 +725,54 @@ The defaults differ by operation:
   password itself. `config set-ssh-password` switches SSH authentication to
   password and clears the configured identity-file reference.
 
+### Password references on all platforms
+
+Use OpenCode-style **`{env:NAME}`** references for database and SSH passwords on
+macOS, Linux and WSL. These commands save only the variable name; they do not
+read its value or store the password:
+
+```bash
+safeselect config set-password --environment staging --password '{env:DB_PASSWORD}'
+safeselect config set-ssh-password --environment staging --password '{env:BASTION_PASSWORD}'
+```
+
+Enter the values without putting passwords in shell history (Bash):
+
+```bash
+read -rsp 'Database password: ' DB_PASSWORD; echo; export DB_PASSWORD
+read -rsp 'Bastion password: ' BASTION_PASSWORD; echo; export BASTION_PASSWORD
+safeselect check --environment staging
+```
+
+The variables must be exported in the process that launches SafeSelect or the
+MCP client. A missing or empty required variable fails closed. No Python helper,
+`.env` auto-loading, shell evaluation, `{file:...}` reading or general TOML
+interpolation is performed. Password-based SSH tunnels still require `sshpass` and do not fall back to
+SSH-agent/key authentication.
+The saved configuration uses the existing `database.secret.source = "env"`
+and `variable` fields, and SSH `secret_variable`; no new password field is needed.
+
+On macOS, secure password prompts also accept `{env:NAME}`; ordinary passwords
+continue to use Keychain. Linux/WSL SSH import prompts accept either `NAME` or
+`{env:NAME}`. Use `config set-password` after import to select a short database
+variable name instead of the generated default. `config_set_password` through
+MCP accepts the same reference; prefer references rather than sending raw
+passwords through an agent.
+
+References must occupy the entire input and use a valid shell variable name.
+Imported credentials are opaque passwords, not expressions. If a literal macOS
+password happens to look like a reference, use the secure literal prompt:
+
+```bash
+safeselect config set-password --environment staging --literal-password
+# or: safeselect config set-ssh-password --environment staging --literal-password
+```
+
+Avoid supplying real literal passwords with `--password`: command arguments can
+appear in shell history and process listings. Existing Keychain and environment
+references remain valid. Custom variable names are preserved when renaming an
+environment; changing a source does not delete the old Keychain entry.
+
 ### SSH passwords on Linux and WSL
 
 SSH password imports use macOS Keychain only on macOS. On Linux/WSL, the

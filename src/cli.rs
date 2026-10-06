@@ -196,26 +196,32 @@ pub enum ConfigAction {
         #[arg(long)]
         project: Option<PathBuf>,
     },
-    /// Store a password in the Keychain and update the environment config
+    /// Configure a database password: {env:NAME} on any platform or Keychain on macOS
     SetPassword {
         /// Environment whose password is stored (inferred when the project has exactly one)
         #[arg(long)]
         environment: Option<String>,
-        /// Password value (prompts securely if omitted)
+        /// Password or {env:NAME} reference (prompts securely if omitted)
         #[arg(long)]
         password: Option<String>,
+        /// Treat password input as literal, including the secure prompt (macOS only)
+        #[arg(long)]
+        literal_password: bool,
         /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
         #[arg(long)]
         project: Option<PathBuf>,
     },
-    /// Configure an SSH password: Keychain on macOS, environment reference on Linux/WSL
+    /// Configure an SSH password: {env:NAME} on any platform or Keychain on macOS
     SetSshPassword {
         /// Environment whose SSH password is stored (inferred when the project has exactly one)
         #[arg(long)]
         environment: Option<String>,
-        /// SSH password value (macOS only; other systems use an exported environment variable)
+        /// SSH password or {env:NAME} reference (literal storage is macOS-only)
         #[arg(long)]
         password: Option<String>,
+        /// Treat password input as literal, including the secure prompt (macOS only)
+        #[arg(long)]
+        literal_password: bool,
         /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
         #[arg(long)]
         project: Option<PathBuf>,
@@ -308,6 +314,32 @@ pub enum AgentAction {
 mod tests {
     use super::{Cli, Command};
     use clap::Parser;
+
+    #[test]
+    fn password_reference_flags_and_literal_escape() {
+        for action in ["set-password", "set-ssh-password"] {
+            assert!(Cli::try_parse_from([
+                "safeselect",
+                "config",
+                action,
+                "--password",
+                "{env:DEMO_PASSWORD}"
+            ])
+            .is_ok());
+            assert!(Cli::try_parse_from([
+                "safeselect",
+                "config",
+                action,
+                "--password",
+                "{env:LITERAL}",
+                "--literal-password"
+            ])
+            .is_ok());
+            assert!(
+                Cli::try_parse_from(["safeselect", "config", action, "--literal-password"]).is_ok()
+            );
+        }
+    }
 
     #[test]
     fn doctor_and_posture_default_to_all_environments() {

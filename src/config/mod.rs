@@ -1,5 +1,6 @@
 mod driver;
 mod environment;
+pub mod password;
 mod project;
 
 pub use driver::DriverConfig;
@@ -85,7 +86,15 @@ impl ConfigLoader {
                 let var = secret.variable.as_deref().ok_or_else(|| {
                     SafeselectError::Secret("variable name required for env source".into())
                 })?;
-                std::env::var(var).map_err(|_| SafeselectError::EnvVarNotSet(var.to_string()))
+                password::validate_variable(var)?;
+                let value = std::env::var(var)
+                    .map_err(|_| SafeselectError::EnvVarNotSet(var.to_string()))?;
+                if value.is_empty() {
+                    return Err(SafeselectError::Secret(
+                        "Password environment variable is empty".into(),
+                    ));
+                }
+                Ok(value)
             }
             other => Err(SafeselectError::Secret(format!(
                 "unknown secret source: {other}"
@@ -322,17 +331,35 @@ pub fn preferred_keychain_account(
 }
 
 pub fn write_keychain_secret_to_env_file(env_file: &Path, account: &str) -> Result<()> {
+    write_password_secret_to_env_file(
+        env_file,
+        SecretConfig {
+            source: "macos-keychain".into(),
+            service: Some("safeselect".into()),
+            account: Some(account.to_string()),
+            variable: None,
+        },
+    )
+}
+
+pub fn write_environment_secret_to_env_file(env_file: &Path, variable: &str) -> Result<()> {
+    password::validate_variable(variable)?;
+    write_password_secret_to_env_file(
+        env_file,
+        SecretConfig {
+            source: "env".into(),
+            service: None,
+            account: None,
+            variable: Some(variable.to_string()),
+        },
+    )
+}
+
+fn write_password_secret_to_env_file(env_file: &Path, secret: SecretConfig) -> Result<()> {
     let content = std::fs::read_to_string(env_file)?;
     let mut environment: EnvironmentConfig = toml::from_str(&content)
         .map_err(|e| SafeselectError::Config(format!("invalid {}: {e}", env_file.display())))?;
-
-    environment.database.secret = Some(SecretConfig {
-        source: "macos-keychain".to_string(),
-        service: Some("safeselect".to_string()),
-        account: Some(account.to_string()),
-        variable: None,
-    });
-
+    environment.database.secret = Some(secret);
     let updated = toml::to_string_pretty(&environment)
         .map_err(|e| SafeselectError::TomlSer(e.to_string()))?;
     std::fs::write(env_file, updated)?;
@@ -361,6 +388,38 @@ fn resolve_keychain(service: &str, account: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn required_environment_passwords_fail_closed_without_disclosing_values() {
+        let variable = format!("SAFESELECT_TEST_{}", uuid::Uuid::new_v4().simple());
+        let loader = ConfigLoader::new();
+        let mut secret = SecretConfig {
+            source: "env".into(),
+            service: None,
+            account: None,
+            variable: Some(variable.clone()),
+        };
+        assert!(matches!(
+            loader.resolve_secret(&secret),
+            Err(SafeselectError::EnvVarNotSet(_))
+        ));
+        std::env::set_var(&variable, "");
+        assert!(loader.resolve_secret(&secret).is_err());
+        std::env::set_var(&variable, " synthetic password ");
+        assert_eq!(
+            loader.resolve_secret(&secret).unwrap(),
+            " synthetic password "
+        );
+        std::env::remove_var(&variable);
+        secret.variable = Some("INVALID;private-value".into());
+        assert!(!loader
+            .resolve_secret(&secret)
+            .unwrap_err()
+            .to_string()
+            .contains("private-value"));
+        secret.variable = None;
+        assert!(loader.resolve_secret(&secret).is_err());
+    }
 
     #[test]
     fn merges_shared_ssh_settings_into_environment() {
