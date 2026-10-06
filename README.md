@@ -66,6 +66,9 @@ keep the password in macOS Keychain, install the OpenCode integration, and see
 the agent read a paid order while its `DELETE` attempt is rejected. Focused
 agent and backend clips remain in the [complete demo gallery](demo/README.md).
 
+**Linux onboarding:** [Watch asdf → Compass → password-authenticated bastion → check](demo/README.md#linux-onboarding-with-environment-password-references),
+using environment references for both passwords, with hidden input and no secrets stored in TOML.
+
 ## Quick Start
 
 Run setup from your repository root. You will need a PostgreSQL or MongoDB
