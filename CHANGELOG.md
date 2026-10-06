@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented in this file.
 
+## [v0.7.11] - 2026-10-06
+
+### Added
+
+- feat(secrets): support explicit environment password references (#279)
+
+### Dependencies
+
+- chore(deps): bump source-map-js from 1.2.1 to 1.2.2 in /site in the npm_and_yarn group across 1 directory (#281)
+
 ## [v0.7.10] - 2026-10-05
 
 ### Added
