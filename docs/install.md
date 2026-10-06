@@ -127,6 +127,27 @@ For MongoDB Compass imports, SafeSelect also supports SSH-tunneled
 rewrites the local MongoDB endpoint with TLS, hostname-validation relaxation,
 and direct-connection options required by the forwarded connection.
 
+## Password environment references
+
+Configure either password using a whole-input `{env:NAME}` reference, on macOS,
+Linux or WSL. SafeSelect saves the reference without reading or storing its value:
+
+```bash
+safeselect config set-password --environment staging --password '{env:DB_PASSWORD}'
+safeselect config set-ssh-password --environment staging --password '{env:BASTION_PASSWORD}'
+read -rsp 'Database password: ' DB_PASSWORD; echo; export DB_PASSWORD
+read -rsp 'Bastion password: ' BASTION_PASSWORD; echo; export BASTION_PASSWORD
+safeselect check --environment staging
+```
+
+The input commands above target Bash. Export the variables in the shell that
+launches SafeSelect or the MCP client. Missing or empty required variables fail
+closed. SSH password authentication requires `sshpass`. `{file:...}` and general
+configuration interpolation are not supported. On macOS, ordinary password input
+still uses Keychain; `--literal-password` opens a secure literal prompt even for
+passwords that resemble references. Never put real literal passwords in command
+arguments. See [password sources](../README.md#password-references-on-all-platforms).
+
 ## Uninstall
 
 ```bash

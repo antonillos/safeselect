@@ -1,5 +1,6 @@
 mod driver;
 mod environment;
+pub mod password;
 mod project;
 
 pub use driver::DriverConfig;
@@ -85,7 +86,15 @@ impl ConfigLoader {
                 let var = secret.variable.as_deref().ok_or_else(|| {
                     SafeselectError::Secret("variable name required for env source".into())
                 })?;
-                std::env::var(var).map_err(|_| SafeselectError::EnvVarNotSet(var.to_string()))
+                password::validate_variable(var)?;
+                let value = std::env::var(var)
+                    .map_err(|_| SafeselectError::EnvVarNotSet(var.to_string()))?;
+                if value.is_empty() {
+                    return Err(SafeselectError::Secret(
+                        "Password environment variable is empty".into(),
+                    ));
+                }
+                Ok(value)
             }
             other => Err(SafeselectError::Secret(format!(
                 "unknown secret source: {other}"
@@ -322,17 +331,43 @@ pub fn preferred_keychain_account(
 }
 
 pub fn write_keychain_secret_to_env_file(env_file: &Path, account: &str) -> Result<()> {
+    write_password_secret_to_env_file(
+        env_file,
+        SecretConfig {
+            source: "macos-keychain".into(),
+            service: Some("safeselect".into()),
+            account: Some(account.to_string()),
+            variable: None,
+        },
+    )
+}
+
+pub fn write_environment_secret_to_env_file(env_file: &Path, variable: &str) -> Result<()> {
+    password::validate_variable(variable)?;
+    write_password_secret_to_env_file(
+        env_file,
+        SecretConfig {
+            source: "env".into(),
+            service: None,
+            account: None,
+            variable: Some(variable.to_string()),
+        },
+    )
+}
+
+fn write_password_secret_to_env_file(env_file: &Path, secret: SecretConfig) -> Result<()> {
     let content = std::fs::read_to_string(env_file)?;
     let mut environment: EnvironmentConfig = toml::from_str(&content)
         .map_err(|e| SafeselectError::Config(format!("invalid {}: {e}", env_file.display())))?;
-
-    environment.database.secret = Some(SecretConfig {
-        source: "macos-keychain".to_string(),
-        service: Some("safeselect".to_string()),
-        account: Some(account.to_string()),
-        variable: None,
-    });
-
+    environment.database.secret = Some(secret);
+    if environment.database.kind == crate::backend::BackendKind::Document
+        && !environment.database.username.is_empty()
+    {
+        environment.database.url = password::inject_mongodb_password_placeholder(
+            &environment.database.url,
+            &environment.database.username,
+        );
+    }
     let updated = toml::to_string_pretty(&environment)
         .map_err(|e| SafeselectError::TomlSer(e.to_string()))?;
     std::fs::write(env_file, updated)?;
@@ -360,6 +395,9 @@ fn resolve_keychain(service: &str, account: &str) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    #[path = "password_references.rs"]
+    mod password_reference_tests;
+
     use super::*;
 
     #[test]
