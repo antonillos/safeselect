@@ -67,16 +67,36 @@ pub fn inject_mongodb_password_placeholder(url: &str, username: &str) -> String 
     let tail = &url[authority_start..];
     let authority_end = tail.find(['/', '?', '#']).unwrap_or(tail.len());
     let authority = &tail[..authority_end];
-    let host = authority
-        .rsplit_once('@')
-        .map_or(authority, |(_, host)| host);
+    let (encoded_username, host) = match authority.rsplit_once('@') {
+        Some((userinfo, host)) => (
+            userinfo
+                .split_once(':')
+                .map_or(userinfo, |(name, _)| name)
+                .to_string(),
+            host,
+        ),
+        None => (encode_mongodb_username(username), authority),
+    };
     format!(
         "{}{}:__SAFESELECT_PASSWORD__@{}{}",
         &url[..authority_start],
-        username,
+        encoded_username,
         host,
         &tail[authority_end..]
     )
+}
+
+fn encode_mongodb_username(username: &str) -> String {
+    username
+        .bytes()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+                (byte as char).to_string()
+            } else {
+                format!("%{byte:02X}")
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]

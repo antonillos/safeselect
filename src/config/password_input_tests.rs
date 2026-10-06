@@ -75,3 +75,34 @@ fn mongodb_placeholder_adds_missing_userinfo_and_preserves_authority_and_suffix(
         "invalid"
     );
 }
+
+#[test]
+fn mongodb_usernames_are_encoded_once_when_inserted() {
+    for scheme in ["mongodb", "mongodb+srv"] {
+        let url = format!("{scheme}://host/db?authSource=admin");
+        let configured = "user@:/?#% café";
+        let encoded = "user%40%3A%2F%3F%23%25%20caf%C3%A9";
+        let expected =
+            format!("{scheme}://{encoded}:__SAFESELECT_PASSWORD__@host/db?authSource=admin");
+        assert_eq!(
+            inject_mongodb_password_placeholder(&url, configured),
+            expected
+        );
+        assert_eq!(
+            inject_mongodb_password_placeholder(&expected, configured),
+            expected
+        );
+        let existing = format!("{scheme}://{encoded}:old@host/db?authSource=admin");
+        assert_eq!(
+            inject_mongodb_password_placeholder(&existing, configured),
+            expected
+        );
+        assert_eq!(
+            inject_mongodb_password_placeholder(
+                &format!("{scheme}://user-._~09@host/db"),
+                "unused"
+            ),
+            format!("{scheme}://user-._~09:__SAFESELECT_PASSWORD__@host/db")
+        );
+    }
+}
