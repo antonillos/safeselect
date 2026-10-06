@@ -360,6 +360,14 @@ fn write_password_secret_to_env_file(env_file: &Path, secret: SecretConfig) -> R
     let mut environment: EnvironmentConfig = toml::from_str(&content)
         .map_err(|e| SafeselectError::Config(format!("invalid {}: {e}", env_file.display())))?;
     environment.database.secret = Some(secret);
+    if environment.database.kind == crate::backend::BackendKind::Document
+        && !environment.database.username.is_empty()
+    {
+        environment.database.url = password::inject_mongodb_password_placeholder(
+            &environment.database.url,
+            &environment.database.username,
+        );
+    }
     let updated = toml::to_string_pretty(&environment)
         .map_err(|e| SafeselectError::TomlSer(e.to_string()))?;
     std::fs::write(env_file, updated)?;

@@ -18,6 +18,7 @@ mod sidecar;
 
 use clap::Parser;
 use cli::{AgentAction, Cli, Command, ConfigAction, DriverAction};
+use config::password::inject_mongodb_password_placeholder;
 use config::ConfigLoader;
 use diagnostics::{DiagnosticCode, DiagnosticStatus};
 use error::{Result, SafeselectError};
@@ -3413,24 +3414,6 @@ fn database_environment_secret(repo_root: &Path, env_name: &str) -> Result<confi
         account: None,
         variable: Some(variable),
     })
-}
-
-fn inject_mongodb_password_placeholder(url: &str, username: &str) -> String {
-    let Some(scheme_end) = url.find("://") else {
-        return url.to_string();
-    };
-    let authority_start = scheme_end + 3;
-    let Some(relative_at) = url[authority_start..].find('@') else {
-        return url.to_string();
-    };
-    let at = authority_start + relative_at;
-    format!(
-        "{}{}:{}{}",
-        &url[..authority_start],
-        username,
-        "__SAFESELECT_PASSWORD__",
-        &url[at..]
-    )
 }
 
 fn display_database_target(url: &str) -> String {

@@ -59,6 +59,24 @@ pub fn variable_input(value: &str) -> Result<String> {
     Ok(variable)
 }
 
+pub fn inject_mongodb_password_placeholder(url: &str, username: &str) -> String {
+    let Some(scheme_end) = url.find("://") else {
+        return url.to_string();
+    };
+    let authority_start = scheme_end + 3;
+    let Some(relative_at) = url[authority_start..].find('@') else {
+        return url.to_string();
+    };
+    let at = authority_start + relative_at;
+    format!(
+        "{}{}:{}{}",
+        &url[..authority_start],
+        username,
+        "__SAFESELECT_PASSWORD__",
+        &url[at..]
+    )
+}
+
 #[cfg(test)]
 #[path = "password_input_tests.rs"]
 mod tests;

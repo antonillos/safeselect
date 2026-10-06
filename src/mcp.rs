@@ -3356,33 +3356,20 @@ impl McpServer {
             max_rows: self.security.limits().max_rows,
             max_result_bytes: self.security.limits().max_result_bytes,
         };
-        let resolved = ConfigLoader::new()
-            .resolve_local(&self.repo_root, &self.env_name)
-            .ok();
-        let backend = resolved
-            .as_ref()
-            .map(|resolved| resolved.environment.database.backend())
-            .unwrap_or_else(|| self.backend.clone());
-        let db_url = resolved
-            .as_ref()
-            .map(|resolved| resolved.environment.database.url.as_str())
-            .unwrap_or(&self.db_url);
-        let db_username = resolved
-            .as_ref()
-            .map(|resolved| resolved.environment.database.username.as_str())
-            .unwrap_or(&self.db_username);
-        let db_password = resolved
-            .as_ref()
-            .map(|resolved| resolved.password.as_str())
-            .unwrap_or(&self.db_password);
+        // A changed reference must never fall back to a cached credential.
+        let resolved = ConfigLoader::new().resolve_local(&self.repo_root, &self.env_name)?;
+        let backend = resolved.environment.database.backend();
+        let db_url = resolved.environment.database.url.as_str();
+        let db_username = resolved.environment.database.username.as_str();
+        let db_password = resolved.password.as_str();
         let driver_path = resolved
+            .driver
             .as_ref()
-            .and_then(|resolved| resolved.driver.as_ref())
             .map(|driver| driver.path.as_str())
             .unwrap_or(&self.driver_path);
         let driver_class = resolved
+            .driver
             .as_ref()
-            .and_then(|resolved| resolved.driver.as_ref())
             .map(|driver| driver.class.as_str())
             .unwrap_or(&self.driver_class);
 
