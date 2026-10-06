@@ -557,64 +557,26 @@ fn configure_password_input(
     literal: bool,
     ssh: bool,
 ) -> Result<()> {
-    if literal && !cfg!(target_os = "macos") {
-        return Err(SafeselectError::Secret(
-            "Literal password storage requires macOS Keychain; use {env:NAME} on Linux/WSL".into(),
-        ));
-    }
-    let dir = resolve_project_dir(loader, project)?;
-    let environment = resolve_single_environment(&dir, environment.as_deref())?;
-    // Validate the target before prompting or accessing any secret store.
-    let (_, config) = load_ssh_environment_config(&dir, &environment)?;
-    if ssh && config.ssh.is_none() {
-        return Err(SafeselectError::Config(
-            "Environment has no SSH configuration".into(),
-        ));
-    }
-    let input = match password {
-        Some(value) if literal => config::password::PasswordInput::literal(value)?,
-        Some(value) => config::password::PasswordInput::parse(value)?,
-        None if !cfg!(target_os = "macos") => {
-            let default = if ssh {
-                configured_ssh_password_variable(
-                    &dir,
-                    &environment,
-                    config
-                        .ssh
-                        .as_ref()
-                        .and_then(|s| s.secret_variable.as_deref()),
-                )?
+    validate_literal_password_platform(literal)?;
+    let (dir, environment, config) =
+        password_configuration_target(loader, project, environment, ssh)?;
+    let input = read_configured_password_with(
+        password,
+        literal,
+        cfg!(target_os = "macos"),
+        || {
+            let default = default_password_variable(&dir, &environment, &config, ssh)?;
+            prompt_password_environment_variable(&default)
+        },
+        || {
+            if ssh {
+                resolve_ssh_password(None, "")
             } else {
-                config
-                    .database
-                    .secret
-                    .as_ref()
-                    .filter(|s| s.source == "env")
-                    .and_then(|s| s.variable.clone())
-                    .unwrap_or(compose::database_env_reference(&dir, &environment)?)
-            };
-            let value = inquire::Text::new("Password environment variable (NAME or {env:NAME}):")
-                .with_default(&default)
-                .prompt()
-                .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?;
-            config::password::PasswordInput::Environment(config::password::variable_input(&value)?)
-        }
-        None => {
-            let value = if ssh {
-                resolve_ssh_password(None, "")?
-            } else {
-                resolve_password(None, "")?
-            };
-            if literal {
-                config::password::PasswordInput::literal(value)?
-            } else {
-                config::password::PasswordInput::parse(value)?
+                resolve_password(None, "")
             }
-        }
-    };
-    if !cfg!(target_os = "macos") && matches!(input, config::password::PasswordInput::Literal(_)) {
-        return Err(SafeselectError::Secret("On Linux/WSL use --password '{env:NAME}' or configure an environment reference interactively; literal passwords are not stored".into()));
-    }
+        },
+    )?;
+    validate_password_storage_platform(&input)?;
     save_password_input(
         &dir,
         &environment,
@@ -622,6 +584,108 @@ fn configure_password_input(
         ssh,
         compose::store_password_in_keychain,
     )
+}
+
+fn password_configuration_target(
+    loader: &ConfigLoader,
+    project: Option<PathBuf>,
+    environment: Option<String>,
+    ssh: bool,
+) -> Result<(PathBuf, String, config::EnvironmentConfig)> {
+    let dir = resolve_project_dir(loader, project)?;
+    let environment = resolve_single_environment(&dir, environment.as_deref())?;
+    // Validate the target before prompting or accessing any secret store.
+    let (_, config) = load_ssh_environment_config(&dir, &environment)?;
+    validate_password_target(&config, ssh)?;
+    Ok((dir, environment, config))
+}
+
+fn validate_literal_password_platform(literal: bool) -> Result<()> {
+    if literal && !cfg!(target_os = "macos") {
+        return Err(SafeselectError::Secret(
+            "Literal password storage requires macOS Keychain; use {env:NAME} on Linux/WSL".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_password_target(config: &config::EnvironmentConfig, ssh: bool) -> Result<()> {
+    if ssh && config.ssh.is_none() {
+        return Err(SafeselectError::Config(
+            "Environment has no SSH configuration".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_password_storage_platform(input: &config::password::PasswordInput) -> Result<()> {
+    if !cfg!(target_os = "macos") && matches!(input, config::password::PasswordInput::Literal(_)) {
+        return Err(SafeselectError::Secret("On Linux/WSL use --password '{env:NAME}' or configure an environment reference interactively; literal passwords are not stored".into()));
+    }
+    Ok(())
+}
+
+fn parse_configured_password(
+    value: String,
+    literal: bool,
+) -> Result<config::password::PasswordInput> {
+    if literal {
+        config::password::PasswordInput::literal(value)
+    } else {
+        config::password::PasswordInput::parse(value)
+    }
+}
+
+fn read_configured_password_with<V, P>(
+    password: Option<String>,
+    literal: bool,
+    is_macos: bool,
+    prompt_reference: V,
+    prompt_password: P,
+) -> Result<config::password::PasswordInput>
+where
+    V: FnOnce() -> Result<String>,
+    P: FnOnce() -> Result<String>,
+{
+    match password {
+        Some(value) => parse_configured_password(value, literal),
+        None if !is_macos => Ok(config::password::PasswordInput::Environment(
+            config::password::variable_input(&prompt_reference()?)?,
+        )),
+        None => parse_configured_password(prompt_password()?, literal),
+    }
+}
+
+fn default_password_variable(
+    dir: &Path,
+    environment: &str,
+    config: &config::EnvironmentConfig,
+    ssh: bool,
+) -> Result<String> {
+    if ssh {
+        return configured_ssh_password_variable(
+            dir,
+            environment,
+            config
+                .ssh
+                .as_ref()
+                .and_then(|s| s.secret_variable.as_deref()),
+        );
+    }
+    Ok(config
+        .database
+        .secret
+        .as_ref()
+        .filter(|s| s.source == "env")
+        .and_then(|s| s.variable.clone())
+        .unwrap_or(compose::database_env_reference(dir, environment)?))
+}
+
+fn prompt_password_environment_variable(default: &str) -> Result<String> {
+    inquire::Text::new("Password environment variable (NAME or {env:NAME}):")
+        .with_default(default)
+        .prompt()
+        .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))
 }
 
 #[cfg(test)]
@@ -654,57 +718,9 @@ where
 {
     let (env_file, mut environment_config) = load_ssh_environment_config(dir, environment)?;
     if ssh_password {
-        let ssh = environment_config.ssh.as_mut().ok_or_else(|| {
-            SafeselectError::Config("Environment has no SSH configuration".into())
-        })?;
-        match input {
-            config::password::PasswordInput::Environment(variable) => {
-                config::password::validate_variable(&variable)?;
-                print_ssh_password_environment_hint(&variable);
-                ssh.secret_variable = Some(variable);
-                ssh.secret_account = None;
-            }
-            config::password::PasswordInput::Literal(password) => {
-                let account = ssh
-                    .secret_account
-                    .clone()
-                    .unwrap_or_else(|| format!("{}/{environment}/ssh", project_display_name(dir)));
-                store(&account, &password)?;
-                ssh.secret_account = Some(account);
-                ssh.secret_variable = None;
-                print_terminal_line("  ✓ SSH password stored in Keychain");
-            }
-        }
-        ssh.auth_type = Some("PASSWORD".into());
-        ssh.identity_file = None;
+        save_ssh_password_input(dir, environment, &mut environment_config, input, store)?;
     } else {
-        environment_config.database.secret = Some(match input {
-            config::password::PasswordInput::Environment(variable) => {
-                config::password::validate_variable(&variable)?;
-                print_database_password_environment_hint(&variable);
-                environment_password_secret(variable)
-            }
-            config::password::PasswordInput::Literal(password) => {
-                let account =
-                    config::preferred_keychain_account(dir, environment, &environment_config);
-                store(&account, &password)?;
-                print_terminal_line("  ✓ Password stored in Keychain");
-                config::SecretConfig {
-                    source: "macos-keychain".into(),
-                    service: Some("safeselect".into()),
-                    account: Some(account),
-                    variable: None,
-                }
-            }
-        });
-        if environment_config.database.kind == crate::backend::BackendKind::Document
-            && !environment_config.database.username.is_empty()
-        {
-            environment_config.database.url = inject_mongodb_password_placeholder(
-                &environment_config.database.url,
-                &environment_config.database.username,
-            );
-        }
+        save_database_password_input(dir, environment, &mut environment_config, input, store)?;
     }
     let content = toml::to_string_pretty(&environment_config)
         .map_err(|e| SafeselectError::TomlSer(e.to_string()))?;
@@ -712,6 +728,86 @@ where
     print_terminal_line(&format!("  ✓ Updated {}", env_file.display()));
     println!("\nDone. Run: safeselect check --environment {environment}");
     Ok(())
+}
+
+fn save_ssh_password_input<F>(
+    dir: &Path,
+    environment: &str,
+    environment_config: &mut config::EnvironmentConfig,
+    input: config::password::PasswordInput,
+    store: F,
+) -> Result<()>
+where
+    F: FnOnce(&str, &str) -> Result<()>,
+{
+    let ssh = environment_config
+        .ssh
+        .as_mut()
+        .ok_or_else(|| SafeselectError::Config("Environment has no SSH configuration".into()))?;
+    match input {
+        config::password::PasswordInput::Environment(variable) => {
+            config::password::validate_variable(&variable)?;
+            print_ssh_password_environment_hint(&variable);
+            ssh.secret_variable = Some(variable);
+            ssh.secret_account = None;
+        }
+        config::password::PasswordInput::Literal(password) => {
+            let account = ssh
+                .secret_account
+                .clone()
+                .unwrap_or_else(|| format!("{}/{environment}/ssh", project_display_name(dir)));
+            store(&account, &password)?;
+            ssh.secret_account = Some(account);
+            ssh.secret_variable = None;
+            print_terminal_line("  ✓ SSH password stored in Keychain");
+        }
+    }
+    ssh.auth_type = Some("PASSWORD".into());
+    ssh.identity_file = None;
+    Ok(())
+}
+
+fn save_database_password_input<F>(
+    dir: &Path,
+    environment: &str,
+    environment_config: &mut config::EnvironmentConfig,
+    input: config::password::PasswordInput,
+    store: F,
+) -> Result<()>
+where
+    F: FnOnce(&str, &str) -> Result<()>,
+{
+    environment_config.database.secret = Some(match input {
+        config::password::PasswordInput::Environment(variable) => {
+            config::password::validate_variable(&variable)?;
+            print_database_password_environment_hint(&variable);
+            environment_password_secret(variable)
+        }
+        config::password::PasswordInput::Literal(password) => {
+            let account = config::preferred_keychain_account(dir, environment, environment_config);
+            store(&account, &password)?;
+            print_terminal_line("  ✓ Password stored in Keychain");
+            config::SecretConfig {
+                source: "macos-keychain".into(),
+                service: Some("safeselect".into()),
+                account: Some(account),
+                variable: None,
+            }
+        }
+    });
+    inject_configured_database_password(environment_config);
+    Ok(())
+}
+
+fn inject_configured_database_password(environment_config: &mut config::EnvironmentConfig) {
+    if environment_config.database.kind == crate::backend::BackendKind::Document
+        && !environment_config.database.username.is_empty()
+    {
+        environment_config.database.url = inject_mongodb_password_placeholder(
+            &environment_config.database.url,
+            &environment_config.database.username,
+        );
+    }
 }
 
 fn environment_password_secret(variable: String) -> config::SecretConfig {
@@ -849,25 +945,36 @@ where
     S: FnOnce(&str, &str) -> Result<()>,
 {
     if is_macos {
-        let password = prompt_password()?;
-        if let config::password::PasswordInput::Environment(variable) = if password.is_empty() {
-            config::password::PasswordInput::Literal(password.clone())
-        } else {
-            config::password::PasswordInput::parse(password.clone())?
-        } {
+        return select_keychain_ssh_password_source(account, prompt_password()?, store);
+    }
+    let variable = prompt_variable(&ssh_password_variable(repo_root, account)?)?;
+    let variable = config::password::variable_input(&variable)?;
+    print_ssh_password_environment_hint(&variable);
+    Ok((None, Some(variable)))
+}
+
+fn select_keychain_ssh_password_source<S>(
+    account: &str,
+    password: String,
+    store: S,
+) -> Result<(Option<String>, Option<String>)>
+where
+    S: FnOnce(&str, &str) -> Result<()>,
+{
+    // Empty import input retains the existing deferred Keychain source.
+    if password.is_empty() {
+        return Ok((Some(account.to_string()), None));
+    }
+    match config::password::PasswordInput::parse(password)? {
+        config::password::PasswordInput::Environment(variable) => {
             print_ssh_password_environment_hint(&variable);
-            return Ok((None, Some(variable)));
+            Ok((None, Some(variable)))
         }
-        if !password.is_empty() {
+        config::password::PasswordInput::Literal(password) => {
             store(account, &password)?;
             print_terminal_line("  ✓ SSH password stored in Keychain");
+            Ok((Some(account.to_string()), None))
         }
-        Ok((Some(account.to_string()), None))
-    } else {
-        let variable = prompt_variable(&ssh_password_variable(repo_root, account)?)?;
-        let variable = config::password::variable_input(&variable)?;
-        print_ssh_password_environment_hint(&variable);
-        Ok((None, Some(variable)))
     }
 }
 

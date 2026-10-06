@@ -117,3 +117,109 @@ fn interactive_password_sources_accept_references_without_keychain() {
     .unwrap();
     assert_eq!(secret.source, "macos-keychain");
 }
+
+#[test]
+fn password_input_selection_covers_platforms_and_preserves_literals() {
+    use config::password::PasswordInput;
+    for macos in [false, true] {
+        let input = read_configured_password_with(
+            Some("{env:DB_PASSWORD}".into()),
+            false,
+            macos,
+            || panic!("explicit input must not prompt"),
+            || panic!("explicit input must not prompt"),
+        )
+        .unwrap();
+        assert!(matches!(input, PasswordInput::Environment(v) if v == "DB_PASSWORD"));
+    }
+    assert!(matches!(read_configured_password_with(None, false, false,
+        || Ok("{env:DB_PASSWORD}".into()), || panic!("Linux must request a reference")).unwrap(),
+        PasswordInput::Environment(v) if v == "DB_PASSWORD"));
+    assert!(read_configured_password_with(
+        None,
+        false,
+        false,
+        || Ok("BAD;private-value".into()),
+        || panic!("must not prompt password")
+    )
+    .is_err());
+    assert!(matches!(read_configured_password_with(None, true, true,
+        || panic!("macOS requests a password"), || Ok("{env:LITERAL}".into())).unwrap(),
+        PasswordInput::Literal(v) if v == "{env:LITERAL}"));
+    assert!(read_configured_password_with(
+        None,
+        false,
+        true,
+        || panic!("must not prompt reference"),
+        || Err(SafeselectError::Other("cancelled".into()))
+    )
+    .is_err());
+    assert!(validate_literal_password_platform(false).is_ok());
+    assert_eq!(
+        validate_literal_password_platform(true).is_ok(),
+        cfg!(target_os = "macos")
+    );
+    assert!(
+        validate_password_storage_platform(&PasswordInput::Environment("DB_PASSWORD".into()))
+            .is_ok()
+    );
+    assert_eq!(
+        validate_password_storage_platform(&PasswordInput::Literal("synthetic".into())).is_ok(),
+        cfg!(target_os = "macos")
+    );
+}
+
+#[test]
+fn default_password_names_and_keychain_selection_preserve_existing_sources() {
+    let root = std::env::temp_dir().join(format!("safeselect-source-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let mut cfg: config::EnvironmentConfig =
+        toml::from_str("version=1\n[database]\nurl='mongodb://localhost/demo'\n").unwrap();
+    assert!(validate_password_target(&cfg, false).is_ok());
+    assert!(validate_password_target(&cfg, true).is_err());
+    assert_eq!(
+        default_password_variable(&root, "dev", &cfg, false).unwrap(),
+        compose::database_env_reference(&root, "dev").unwrap()
+    );
+    cfg.database.secret = Some(environment_password_secret("CUSTOM_DB".into()));
+    assert_eq!(
+        default_password_variable(&root, "dev", &cfg, false).unwrap(),
+        "CUSTOM_DB"
+    );
+    cfg.ssh = Some(toml::from_str("enabled=true\nsecret_variable='CUSTOM_SSH'").unwrap());
+    assert!(validate_password_target(&cfg, true).is_ok());
+    assert_eq!(
+        default_password_variable(&root, "dev", &cfg, true).unwrap(),
+        "CUSTOM_SSH"
+    );
+    assert_eq!(
+        select_keychain_ssh_password_source("demo/dev/ssh", String::new(), |_, _| panic!(
+            "empty input must not store"
+        ))
+        .unwrap(),
+        (Some("demo/dev/ssh".into()), None)
+    );
+    let literal = uuid::Uuid::new_v4().to_string();
+    assert_eq!(
+        select_keychain_ssh_password_source("demo/dev/ssh", literal.clone(), |account, value| {
+            assert_eq!(account, "demo/dev/ssh");
+            assert_eq!(value, literal);
+            Ok(())
+        })
+        .unwrap(),
+        (Some("demo/dev/ssh".into()), None)
+    );
+    assert!(
+        select_keychain_ssh_password_source("demo/dev/ssh", literal, |_, _| Err(
+            SafeselectError::Other("store failed".into())
+        ))
+        .is_err()
+    );
+    assert!(select_keychain_ssh_password_source(
+        "demo/dev/ssh",
+        "{env:BAD;private-value}".into(),
+        |_, _| panic!("invalid input must not store")
+    )
+    .is_err());
+    std::fs::remove_dir_all(root).unwrap();
+}
