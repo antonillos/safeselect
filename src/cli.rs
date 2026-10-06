@@ -312,34 +312,11 @@ pub enum AgentAction {
 
 #[cfg(test)]
 mod tests {
+    #[path = "password_references.rs"]
+    mod password_reference_tests;
+
     use super::{Cli, Command};
     use clap::Parser;
-
-    #[test]
-    fn password_reference_flags_and_literal_escape() {
-        for action in ["set-password", "set-ssh-password"] {
-            assert!(Cli::try_parse_from([
-                "safeselect",
-                "config",
-                action,
-                "--password",
-                "{env:DEMO_PASSWORD}"
-            ])
-            .is_ok());
-            assert!(Cli::try_parse_from([
-                "safeselect",
-                "config",
-                action,
-                "--password",
-                "{env:LITERAL}",
-                "--literal-password"
-            ])
-            .is_ok());
-            assert!(
-                Cli::try_parse_from(["safeselect", "config", action, "--literal-password"]).is_ok()
-            );
-        }
-    }
 
     #[test]
     fn doctor_and_posture_default_to_all_environments() {
