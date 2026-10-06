@@ -340,15 +340,19 @@
       }
     },
     {
-      "description": "store a database password in the macOS Keychain for an environment. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+      "description": "configure a database password using {env:NAME} on any platform or Keychain on macOS; prefer a reference, never send a raw secret through an agent. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
       "inputSchema": {
         "properties": {
           "environment": {
             "description": "Environment name",
             "type": "string"
           },
+          "literal_password": {
+            "description": "Treat password as literal even if it matches {env:NAME} (macOS only)",
+            "type": "boolean"
+          },
           "password": {
-            "description": "Database password",
+            "description": "Prefer {env:NAME}; a literal password is supported only on macOS",
             "type": "string"
           }
         },
