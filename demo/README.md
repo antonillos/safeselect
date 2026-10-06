@@ -64,7 +64,7 @@ python3 -B tools/validate_cli_gallery.py
 
 | Scenario | Recording |
 |---|---|
-| Linux: asdf → Compass + database/SSH passwords → check | [Setup](linux-onboarding/README.md) · recording pending a release containing PR #279 |
+| Linux: asdf → Compass + database/SSH passwords → check | [Watch](../docs/recordings/linux-onboarding-envrefs.gif) · [MP4](../docs/recordings/linux-onboarding-envrefs.mp4) · [Reproduce](linux-onboarding/README.md) |
 | Complete first-time onboarding: Homebrew, DBeaver SSH, Keychain and OpenCode | [Watch](../docs/recordings/onboarding-full-local.gif) |
 | OpenCode discovers a PostgreSQL database | [Watch](../docs/recordings/safeselect-opencode.gif) |
 | Codex discovers the same PostgreSQL database | [Watch](../docs/recordings/safeselect-codex.gif) |
@@ -78,6 +78,20 @@ python3 -B tools/validate_cli_gallery.py
 ./demo/setup.sh
 safeselect agent install opencode --project "$PWD/demo" --environment postgres --local
 ```
+
+### Linux onboarding with environment password references
+
+![Linux onboarding: asdf, Compass, password-authenticated SSH bastion and successful check](../docs/recordings/linux-onboarding-envrefs.gif)
+
+[Watch the MP4](../docs/recordings/linux-onboarding-envrefs.mp4) · [Reproduce the recording](linux-onboarding/README.md)
+
+Recorded on Linux with the public **v0.7.11** release installed through asdf.
+The synthetic Compass export is imported interactively; SSH uses password authentication
+with public-key authentication disabled. Database and bastion passwords are entered
+without echo and referenced as `{env:DB_PASSWORD}` and `{env:BASTION_PASSWORD}`.
+No Python helpers or password values appear in the terminal, and the final
+`safeselect check --environment staging` succeeds with exit status **0**.
+This clip verifies connectivity, not a write-rejection scenario.
 
 ### Agent discovery
 

@@ -1,8 +1,10 @@
 # Linux onboarding recording
 
-Reproducible Linux CLI demo using a public SafeSelect release that includes
-[PR #279](https://github.com/antonillos/safeselect/pull/279). **Version 0.7.10 does
-not support this tape; wait for the feature release before recording.**
+Reproducible Linux CLI demo recorded with public SafeSelect **v0.7.11**, which includes
+[PR #279](https://github.com/antonillos/safeselect/pull/279). Version 0.7.10 does
+not support this tape.
+
+[Watch GIF](../../docs/recordings/linux-onboarding-envrefs.gif) · [Watch MP4](../../docs/recordings/linux-onboarding-envrefs.mp4)
 
 1. Install SafeSelect through the public asdf plugin (archive SHA-256 verified).
 2. Interactively import a synthetic MongoDB Compass export with a password-authenticated SSH bastion.
