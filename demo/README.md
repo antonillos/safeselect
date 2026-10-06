@@ -64,6 +64,7 @@ python3 -B tools/validate_cli_gallery.py
 
 | Scenario | Recording |
 |---|---|
+| Linux: asdf → Compass + database/SSH passwords → check | [Setup](linux-onboarding/README.md) · recording pending a release containing PR #279 |
 | Complete first-time onboarding: Homebrew, DBeaver SSH, Keychain and OpenCode | [Watch](../docs/recordings/onboarding-full-local.gif) |
 | OpenCode discovers a PostgreSQL database | [Watch](../docs/recordings/safeselect-opencode.gif) |
 | Codex discovers the same PostgreSQL database | [Watch](../docs/recordings/safeselect-codex.gif) |

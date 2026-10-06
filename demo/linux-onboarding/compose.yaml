@@ -1,0 +1,26 @@
+name: safeselect-linux-onboarding
+services:
+  mongodb:
+    image: mongo:8@sha256:49f1d7b87c2ddf918372be5defe7edff8c46703d0b2a56023a3f825e32e1250c
+    command: [mongod, --tlsMode, requireTLS, --tlsCertificateKeyFile, /tls/server.pem, --tlsCAFile, /tls/ca.crt, --tlsAllowConnectionsWithoutCertificates]
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: demo
+      MONGO_INITDB_ROOT_PASSWORD: demo-password
+    volumes:
+      - ../.runtime/linux-onboarding/tls:/tls:ro
+      - ../fixtures/mongodb/init.js:/docker-entrypoint-initdb.d/01-init.js:ro
+    healthcheck:
+      test: [CMD-SHELL, "mongosh --quiet --tls --tlsCAFile /tls/ca.crt --host mongodb --username demo --password demo-password --authenticationDatabase admin --eval 'db.runCommand({ping:1}).ok' | grep 1"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+  bastion:
+    build: ../ssh
+    command: [/usr/sbin/sshd, -D, -e, -o, PasswordAuthentication=yes, -o, PubkeyAuthentication=no]
+    depends_on:
+      mongodb:
+        condition: service_healthy
+  terminal:
+    build: .
+    container_name: safeselect-linux-onboarding-terminal
+    depends_on: [bastion]
