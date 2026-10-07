@@ -3817,6 +3817,7 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
                 }
             }
             print_manual_tunnel_hint();
+            print_ssh_connectivity_hint(bastion_host, bastion_port);
             failures.push(format!(
                 "{env_name}: SSH endpoint {bastion_host}:{bastion_port} unreachable and no active database tunnel"
             ));
@@ -4247,6 +4248,25 @@ fn print_manual_tunnel_hint() {
     print_terminal_error_line("  Establish the tunnel manually using the configured SSH settings.");
 }
 
+fn ssh_connectivity_hint(host: &str, port: u16) -> String {
+    // Pass configuration as a quoted positional argument, never as Bash code.
+    let quoted_host = format!("'{}'", host.replace('\'', "'\"'\"'"));
+    format!(
+        "  Test TCP from the same terminal (Linux/WSL; requires Bash and timeout):\n\
+         \x20   timeout 5 bash -c 'exec 3<>\"/dev/tcp/$1/$2\"' -- {quoted_host} {port}\n\
+         \x20 If using Azure Bastion:\n\
+         \x20   - Keep the Azure CLI tunnel open.\n\
+         \x20   - Run it in the same WSL distribution as SafeSelect.\n\
+         \x20   - If it runs on Windows, verify that its listener is accessible from WSL.\n\
+         \x20 TCP success does not validate SSH credentials or database access."
+    )
+}
+
+fn print_ssh_connectivity_hint(host: &str, port: u16) {
+    // Preserve stdout for commands that return machine-readable output.
+    eprintln!("{}", ssh_connectivity_hint(host, port));
+}
+
 fn print_check_verbose(resolved: &config::ResolvedConfig, environment: &str) {
     println!("  · environment={environment}");
     println!("  · database=configured (details redacted)");
@@ -4356,6 +4376,7 @@ fn cmd_check(
                             }
                         }
                         print_manual_tunnel_hint();
+                        print_ssh_connectivity_hint(bastion_host, bastion_port);
                         return Err(SafeselectError::Other(message));
                     }
                 }
@@ -7239,6 +7260,24 @@ username = "usr_app"
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         assert!(probe_tcp_endpoint("127.0.0.1", port, std::time::Duration::from_secs(1)).is_ok());
+    }
+
+    #[test]
+    fn ssh_connectivity_hint_uses_configured_endpoint_and_explains_wsl() {
+        let hint = ssh_connectivity_hint("127.0.0.1", 2222);
+        assert!(hint.contains("timeout 5 bash -c 'exec 3<>\"/dev/tcp/$1/$2\"' -- '127.0.0.1' 2222"));
+        assert!(hint.contains("same WSL distribution as SafeSelect"));
+        assert!(hint.contains("Keep the Azure CLI tunnel open"));
+        assert!(hint.contains("TCP success does not validate SSH credentials or database access"));
+    }
+
+    #[test]
+    fn ssh_connectivity_hint_quotes_untrusted_host_as_one_argument() {
+        let host = "host'; echo $(id); #";
+        let hint = ssh_connectivity_hint(host, 2200);
+        assert!(hint.contains("-- 'host'\"'\"'; echo $(id); #' 2200"));
+        assert!(hint.contains("/dev/tcp/$1/$2"));
+        assert!(!hint.contains(&format!("/dev/tcp/{host}")));
     }
 
     #[test]
