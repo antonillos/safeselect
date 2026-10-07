@@ -348,9 +348,10 @@ pub fn selection_render_config(
     prompt: &str,
     answer_length: usize,
 ) -> inquire::ui::RenderConfig<'static> {
-    let mut render = inquire::ui::RenderConfig::default();
-    render.answer_from_new_line = prompt.chars().count() + answer_length > 80;
-    render
+    inquire::ui::RenderConfig {
+        answer_from_new_line: prompt.chars().count() + answer_length > 80,
+        ..inquire::ui::RenderConfig::default()
+    }
 }
 
 fn select(prompt: &str, options: Vec<&str>) -> Result<String> {
