@@ -3160,7 +3160,16 @@ fn select_reusable_compass_ssh_config(
         })
         .collect();
 
+    let answer_length = options
+        .iter()
+        .map(|option| option.chars().count())
+        .max()
+        .unwrap_or(0);
     let selected = inquire::Select::new("  Reuse bastion:", options)
+        .with_render_config(compass_import::selection_render_config(
+            "  Reuse bastion:",
+            answer_length,
+        ))
         .prompt()
         .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?;
     let selected_index = reusable
