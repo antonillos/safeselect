@@ -3817,6 +3817,7 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
                 }
             }
             print_manual_tunnel_hint();
+            print_ssh_connectivity_hint(bastion_host, bastion_port);
             failures.push(format!(
                 "{env_name}: SSH endpoint {bastion_host}:{bastion_port} unreachable and no active database tunnel"
             ));
@@ -3977,6 +3978,9 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
             println!("    - Database is not running or not accepting connections");
             println!("    - SSH tunnel failed to forward (check bastion logs)");
             print_manual_tunnel_hint();
+            if !bastion_up {
+                print_ssh_connectivity_hint(bastion_host, bastion_port);
+            }
             failures.push(format!(
                 "{env_name}: database not reachable through SSH tunnel after {}s",
                 tunnel_wait.as_secs()
@@ -4247,6 +4251,25 @@ fn print_manual_tunnel_hint() {
     print_terminal_error_line("  Establish the tunnel manually using the configured SSH settings.");
 }
 
+fn ssh_connectivity_hint(host: &str, port: u16) -> String {
+    // Pass configuration as a quoted positional argument, never as Bash code.
+    let quoted_host = format!("'{}'", host.replace('\'', "'\"'\"'"));
+    format!(
+        "  Test TCP from the same terminal (Linux/WSL; requires Bash and timeout):\n\
+         \x20   timeout 5 bash -c 'exec 3<>\"/dev/tcp/$1/$2\"' -- {quoted_host} {port}\n\
+         \x20 If using Azure Bastion:\n\
+         \x20   - Keep the Azure CLI tunnel open.\n\
+         \x20   - Run it in the same WSL distribution as SafeSelect.\n\
+         \x20   - If it runs on Windows, verify that its listener is accessible from WSL.\n\
+         \x20 TCP success does not validate SSH credentials or database access."
+    )
+}
+
+fn print_ssh_connectivity_hint(host: &str, port: u16) {
+    // Preserve stdout for commands that return machine-readable output.
+    eprintln!("{}", ssh_connectivity_hint(host, port));
+}
+
 fn print_check_verbose(resolved: &config::ResolvedConfig, environment: &str) {
     println!("  · environment={environment}");
     println!("  · database=configured (details redacted)");
@@ -4356,6 +4379,7 @@ fn cmd_check(
                             }
                         }
                         print_manual_tunnel_hint();
+                        print_ssh_connectivity_hint(bastion_host, bastion_port);
                         return Err(SafeselectError::Other(message));
                     }
                 }
@@ -5365,6 +5389,9 @@ pub(crate) fn uninstall_binary_paths() -> Vec<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    #[path = "ssh_connectivity_hint.rs"]
+    mod ssh_connectivity_hint_tests;
+
     #[path = "password_references.rs"]
     mod password_reference_tests;
 
