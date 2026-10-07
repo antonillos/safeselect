@@ -13,8 +13,10 @@ this Linux connectivity scenario.
 3. Choose exported literal passwords and explicitly accept process-local storage for both.
 4. Read and export `WORKSPACE_STAGING_DB_PASSWORD` and `WORKSPACE_STAGING_SSH_PASSWORD`
    silently in the launching shell: import-process values do not survive its exit.
-5. Show password-free configuration, update the same connection without duplication,
-   skip another reimport, and run `safeselect check --environment staging`.
+5. Show password-free configuration and run `safeselect check --environment staging`.
+
+This main demo imports once. Update/create/skip are covered by the separate
+[reimport demo](../compass-import-ux/README.md), not repeated in this clip.
 
 Run from the repository root with Docker, VHS, OpenSSL and the embedded sidecar JAR available:
 

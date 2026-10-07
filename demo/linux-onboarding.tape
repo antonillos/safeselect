@@ -87,32 +87,6 @@ Sleep 3s
 Type "sed -n '/^\[ssh_bastions/,/^\[security/p' .safeselect/project.toml"
 Enter
 Sleep 3s
-Type "safeselect import-compass --path /home/demo/compass.json"
-Enter
-Sleep 1s
-Space
-Enter
-Sleep 1s
-Enter
-Sleep 1s
-Type "y"
-Enter
-Sleep 1s
-Enter
-Sleep 1s
-Enter
-Sleep 1s
-Enter
-Sleep 2s
-Type "safeselect import-compass --path /home/demo/compass.json"
-Enter
-Sleep 1s
-Space
-Enter
-Sleep 1s
-Down 2
-Enter
-Sleep 2s
 Type `safeselect check --environment staging; printf '\nCheck exit status: %s\n' "$?"`
 Enter
 Sleep 20s

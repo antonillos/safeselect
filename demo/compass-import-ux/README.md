@@ -3,11 +3,27 @@
 Synthetic, offline **macOS source-build** recording. It is not the older
 Linux public-release onboarding demo and does not claim database connectivity.
 
-The tape imports both passwords from a Compass-shaped fixture into process-local
-variables (`ATLAS_STAGING_DB_PASSWORD` and `ATLAS_STAGING_SSH_PASSWORD`),
-explicitly declines Keychain storage and connectivity checks, updates the same
-environment without duplicating it, creates a separate environment with hidden
-direct password entry, and demonstrates skipping a repeated import.
+The primary tape performs **one import**, reusing both passwords from a
+Compass-shaped fixture into process-local variables (`ATLAS_STAGING_DB_PASSWORD`
+and `ATLAS_STAGING_SSH_PASSWORD`). It explicitly declines Keychain storage and
+connectivity checks, then shows the password-free configuration.
+
+A separate [reimport recording](../../docs/recordings/compass-reimport.gif)
+([MP4](../../docs/recordings/compass-reimport.mp4)) starts with a seeded synthetic
+import. It demonstrates update/create/skip, retaining existing sources and
+hidden direct password entry when creating a copy. Reproduce it independently:
+
+```bash
+./demo/compass-import-ux/prepare-reimport.sh
+vhs validate demo/compass-reimport.tape
+vhs demo/compass-reimport.tape
+cp demo/recordings/compass-reimport.gif docs/recordings/compass-reimport.gif
+cp demo/recordings/compass-reimport.mp4 docs/recordings/compass-reimport.mp4
+```
+
+Its isolated runtime is `/tmp/safeselect-compass-reimport`, separate from the
+main tape, so neither recording depends on running the other.
+
 No password is displayed or written to the generated TOML. Process-local values
 expire when each import exits; they are not exported to the parent terminal.
 
