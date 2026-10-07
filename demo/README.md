@@ -64,7 +64,8 @@ python3 -B tools/validate_cli_gallery.py
 
 | Scenario | Recording |
 |---|---|
-| Linux: asdf → Compass + database/SSH passwords → check | [Watch](../docs/recordings/linux-onboarding-envrefs.gif) · [MP4](../docs/recordings/linux-onboarding-envrefs.mp4) · [Reproduce](linux-onboarding/README.md) |
+| Compass current source: credential choices → update/create/skip | [Watch](../docs/recordings/compass-import-ux.gif) · [MP4](../docs/recordings/compass-import-ux.mp4) · [Reproduce](compass-import-ux/README.md) |
+| Linux current source: Compass credentials → reimport → check | [Watch](../docs/recordings/linux-onboarding-envrefs.gif) · [MP4](../docs/recordings/linux-onboarding-envrefs.mp4) · [Reproduce](linux-onboarding/README.md) |
 | Complete first-time onboarding: Homebrew, DBeaver SSH, Keychain and OpenCode | [Watch](../docs/recordings/onboarding-full-local.gif) |
 | OpenCode discovers a PostgreSQL database | [Watch](../docs/recordings/safeselect-opencode.gif) |
 | Codex discovers the same PostgreSQL database | [Watch](../docs/recordings/safeselect-codex.gif) |
@@ -79,19 +80,31 @@ python3 -B tools/validate_cli_gallery.py
 safeselect agent install opencode --project "$PWD/demo" --environment postgres --local
 ```
 
+### Current Compass import and reimport UX
+
+![Compass import: readable answers, credential choices and update/create/skip](../docs/recordings/compass-import-ux.gif)
+
+[Watch MP4](../docs/recordings/compass-import-ux.mp4) · [Reproduce](compass-import-ux/README.md)
+
+Recorded from the current **macOS source build**, not the public release.
+Questions are white, selected answers cyan; long connection and bastion answers
+appear below their questions. Short confirmations stay inline. The synthetic,
+offline fixture covers exported/hidden passwords and update/create/skip.
+It does not write to Keychain or connect to a database.
+
 ### Linux onboarding with environment password references
 
 ![Linux onboarding: asdf, Compass, password-authenticated SSH bastion and successful check](../docs/recordings/linux-onboarding-envrefs.gif)
 
 [Watch the MP4](../docs/recordings/linux-onboarding-envrefs.mp4) · [Reproduce the recording](linux-onboarding/README.md)
 
-Recorded on Linux with the public **v0.7.11** release installed through asdf.
-The synthetic Compass export is imported interactively; SSH uses password authentication
-with public-key authentication disabled. Database and bastion passwords are entered
-without echo and referenced as `{env:DB_PASSWORD}` and `{env:BASTION_PASSWORD}`.
-No Python helpers or password values appear in the terminal, and the final
-`safeselect check --environment staging` succeeds with exit status **0**.
-This clip verifies connectivity, not a write-rejection scenario.
+Recorded on Linux with the **current source build**, with its revision shown.
+The synthetic Compass export includes disposable database/SSH passwords; both
+use the same source and storage questions, with readable project-prefixed names.
+Session-only import values expire on exit, so both passwords are silently
+exported in the launching shell before connectivity is checked. The clip also
+updates and skips reimports without creating duplicates. It is not an asdf
+installation demo or evidence of the public release's UX.
 
 ### Agent discovery
 

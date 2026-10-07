@@ -25,13 +25,20 @@ Use VHS 0.11.0 if the installed 0.12.0 cannot render, as described in the
 Verify the GIF and MP4 are nonempty and visually inspect the final frames. VHS
 also writes snapshots to `demo/.runtime/compass-import-ux-screen.txt`, but that
 text output may omit later interactions; the rendered video is the visual evidence.
-Generated files are ignored by Git.
+Working recordings under `demo/recordings` are ignored by Git. After visual
+inspection, publish the gallery copies explicitly:
+
+```bash
+cp demo/recordings/compass-import-ux.gif docs/recordings/compass-import-ux.gif
+cp demo/recordings/compass-import-ux.mp4 docs/recordings/compass-import-ux.mp4
+```
 
 The tape explicitly removes inherited `NO_COLOR` and enables a color-capable
 terminal. Questions remain light text; selected options and confirmed answers
 are cyan, with distinct `?` (active) and `>` (answered) prefixes. An introductory
 Spanish legend explains the contrast. Larger text and one-second interaction
-pauses make both stages easier to follow. Password entry remains hidden.
+pauses make both stages easier to follow. Long selected answers appear below
+their questions; short confirmations stay inline. Password entry remains hidden.
 
 Runtime is isolated at `/tmp/safeselect-compass-ux`; preparation resets only that
 fixed directory. The fixture uses `.invalid` endpoints and synthetic credentials.
