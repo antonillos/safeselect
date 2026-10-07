@@ -148,40 +148,8 @@ impl ImportIndex {
             .get(&fingerprint(conn))
             .cloned()
             .unwrap_or_default();
-        if !names.iter().any(|name| name == default) {
-            names.push(default.into());
-        }
-        // Recognize pre-index imports, including custom names. Compare sanitized
-        // URLs using the saved tunnel endpoint, without resolving DNS or secrets.
-        if let Ok(entries) = std::fs::read_dir(dir) {
-            let project = dir
-                .parent()
-                .and_then(|root| crate::load_project_config(root).ok());
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|s| s.to_str()) != Some("toml") {
-                    continue;
-                }
-                let Some(name) = path.file_stem().and_then(|s| s.to_str()) else {
-                    continue;
-                };
-                let Ok(content) = std::fs::read_to_string(&path) else {
-                    continue;
-                };
-                let Ok(mut existing) = toml::from_str::<crate::config::EnvironmentConfig>(&content)
-                else {
-                    continue;
-                };
-                if let Some(project) = &project {
-                    if crate::config::merge_project_ssh(project, &mut existing).is_err() {
-                        continue;
-                    }
-                }
-                if legacy_match(conn, &existing) {
-                    names.push(name.into());
-                }
-            }
-        }
+        names.push(default.into());
+        names.extend(legacy_candidates(dir, conn));
         names.retain(|name| {
             valid_environment_name(name) && dir.join(format!("{name}.toml")).exists()
         });
@@ -242,66 +210,101 @@ pub fn select_environment(
     non_interactive: bool,
 ) -> Result<Option<String>> {
     if non_interactive {
-        if !candidates.is_empty() {
-            println!(
-                "Skipping existing Compass connection (non-interactive import never overwrites)."
-            );
-            return Ok(None);
-        }
-        if dir.join(format!("{default}.toml")).exists() {
-            return Ok(None);
-        }
-        return Ok(Some(default.into()));
+        return Ok(unattended_environment(dir, candidates, default));
     }
+    select_environment_with(dir, candidates, default, &mut TerminalInteraction)
+}
+
+fn unattended_environment(dir: &Path, candidates: &[String], default: &str) -> Option<String> {
     if !candidates.is_empty() {
-        let action = select(
-            "This connection already has an environment:",
-            vec![
-                "Update existing environment",
-                "Create a new environment",
-                "Skip this connection",
-            ],
-        )?;
-        match action.as_str() {
-            "Update existing environment" => {
-                let selected = if candidates.len() == 1 {
-                    candidates[0].clone()
-                } else {
-                    inquire::Select::new("Environment to update:", candidates.to_vec())
-                        .prompt()
-                        .map_err(cancelled)?
-                };
-                let message = format!("Update '{selected}'? Existing password sources, TLS and limits are kept unless explicitly changed.");
-                if inquire::Confirm::new(&message)
-                    .with_default(false)
-                    .prompt()
-                    .map_err(cancelled)?
-                {
-                    return Ok(Some(selected));
-                }
-                return Ok(None);
-            }
-            "Skip this connection" => return Ok(None),
-            _ => {}
-        }
+        println!("Skipping existing Compass connection (non-interactive import never overwrites).");
+        return None;
     }
+    (!dir.join(format!("{default}.toml")).exists()).then(|| default.into())
+}
+
+trait EnvironmentInteraction: CredentialInteraction {
+    fn environment_name(&mut self, default: &str) -> Result<String>;
+}
+
+fn select_environment_with(
+    dir: &Path,
+    candidates: &[String],
+    default: &str,
+    ui: &mut impl EnvironmentInteraction,
+) -> Result<Option<String>> {
+    if candidates.is_empty() {
+        return new_environment(dir, default, ui).map(Some);
+    }
+    let action = ui.select(
+        "This connection already has an environment:",
+        vec![
+            "Update existing environment",
+            "Create a new environment",
+            "Skip this connection",
+        ],
+    )?;
+    match action.as_str() {
+        "Update existing environment" => update_environment(candidates, ui),
+        "Create a new environment" => new_environment(dir, default, ui).map(Some),
+        "Skip this connection" => Ok(None),
+        _ => Err(invalid_selection()),
+    }
+}
+
+fn update_environment(
+    candidates: &[String],
+    ui: &mut impl EnvironmentInteraction,
+) -> Result<Option<String>> {
+    let selected = environment_to_update(candidates, ui)?;
+    let message = format!("Update '{selected}'? Existing password sources, TLS and limits are kept unless explicitly changed.");
+    Ok(ui.confirm(&message)?.then_some(selected))
+}
+
+fn environment_to_update(
+    candidates: &[String],
+    ui: &mut impl EnvironmentInteraction,
+) -> Result<String> {
+    if candidates.len() == 1 {
+        return Ok(candidates[0].clone());
+    }
+    let options = candidates.iter().map(String::as_str).collect();
+    let selected = ui.select("Environment to update:", options)?;
+    if !candidates.contains(&selected) {
+        return Err(invalid_selection());
+    }
+    Ok(selected)
+}
+
+fn new_environment(
+    dir: &Path,
+    default: &str,
+    ui: &mut impl EnvironmentInteraction,
+) -> Result<String> {
     let suggested = crate::unique_env_name(dir, default);
     loop {
-        let requested = inquire::Text::new("Environment name:")
-            .with_default(&suggested)
-            .prompt()
-            .map_err(cancelled)?;
+        let requested = ui.environment_name(&suggested)?;
         let name = crate::slug_env_name(&requested);
-        if name.is_empty() {
-            println!("Choose a non-empty environment name.");
-            continue;
+        if available_environment_name(dir, &name) {
+            return Ok(name);
         }
-        if dir.join(format!("{name}.toml")).exists() {
-            println!("That environment already exists; choose a new name.");
-            continue;
-        }
-        return Ok(Some(name));
     }
+}
+
+fn available_environment_name(dir: &Path, name: &str) -> bool {
+    if name.is_empty() {
+        println!("Choose a non-empty environment name.");
+        return false;
+    }
+    if dir.join(format!("{name}.toml")).exists() {
+        println!("That environment already exists; choose a new name.");
+        return false;
+    }
+    true
+}
+
+fn invalid_selection() -> SafeselectError {
+    SafeselectError::Other("Invalid import selection".into())
 }
 
 fn cancelled(_: inquire::InquireError) -> SafeselectError {
@@ -365,11 +368,20 @@ pub fn env_secret(variable: String) -> SecretConfig {
 }
 
 fn prompt_variable(default: &str) -> Result<String> {
-    loop {
-        let value = inquire::Text::new("Password environment variable:")
+    prompt_variable_with(default, |default| {
+        inquire::Text::new("Password environment variable:")
             .with_default(default)
             .prompt()
-            .map_err(cancelled)?;
+            .map_err(cancelled)
+    })
+}
+
+fn prompt_variable_with(
+    default: &str,
+    mut read: impl FnMut(&str) -> Result<String>,
+) -> Result<String> {
+    loop {
+        let value = read(default)?;
         match password::variable_input(&value) {
             Ok(variable) => return Ok(variable),
             Err(_) => println!("Use a shell variable name, for example MYAPP_STAGING_DB_PASSWORD."),
@@ -414,6 +426,15 @@ impl CredentialInteraction for TerminalInteraction {
     }
 }
 
+impl EnvironmentInteraction for TerminalInteraction {
+    fn environment_name(&mut self, default: &str) -> Result<String> {
+        inquire::Text::new("Environment name:")
+            .with_default(default)
+            .prompt()
+            .map_err(cancelled)
+    }
+}
+
 trait CredentialStorage {
     fn is_macos(&self) -> bool;
     fn variable_present(&self, variable: &str) -> bool;
@@ -448,8 +469,24 @@ impl CredentialPrompt<'_> {
         ui: &mut impl CredentialInteraction,
         storage: &mut impl CredentialStorage,
     ) -> Result<Option<SecretConfig>> {
+        self.print_header();
+        loop {
+            let choice = ui.select(
+                "How do you want to provide this password?",
+                self.source_choices(),
+            )?;
+            if let Some(secret) = self.select_source(&choice, ui, storage)? {
+                return Ok(Some(secret));
+            }
+        }
+    }
+
+    fn print_header(&self) {
         let kind = if self.ssh { "Bastion" } else { "Database" };
         println!("\n── {kind} password ({}) ──", self.environment);
+    }
+
+    fn source_choices(&self) -> Vec<&str> {
         let mut choices = vec![];
         if self.existing.is_some() {
             choices.push("Keep existing password source");
@@ -462,31 +499,36 @@ impl CredentialPrompt<'_> {
             "Use an exported environment variable",
             "Configure later",
         ]);
-        loop {
-            let choice = ui.select("How do you want to provide this password?", choices.clone())?;
-            match choice.as_str() {
-                "Keep existing password source" => return Ok(self.existing.cloned()),
-                "Configure later" => {
-                    let variable = ui.variable(&self.default_variable())?;
-                    shell_hint(&variable);
-                    return Ok(Some(env_secret(variable)));
-                }
-                "Use an exported environment variable" => {
-                    let variable = ui.variable(&self.default_variable())?;
-                    shell_hint(&variable);
-                    return Ok(Some(env_secret(variable)));
-                }
-                _ => {
-                    if let Some(secret) = self.prompt_literal(
-                        choice == "Use password from Compass export",
-                        ui,
-                        storage,
-                    )? {
-                        return Ok(Some(secret));
-                    }
-                }
+        choices
+    }
+
+    fn select_source(
+        &self,
+        choice: &str,
+        ui: &mut impl CredentialInteraction,
+        storage: &mut impl CredentialStorage,
+    ) -> Result<Option<SecretConfig>> {
+        match choice {
+            "Keep existing password source" => Ok(self.existing.cloned()),
+            "Configure later" | "Use an exported environment variable" => {
+                self.reference_source(ui).map(Some)
             }
+            "Use password from Compass export" => self.prompt_literal(true, ui, storage),
+            "Enter password (hidden)" => self.prompt_literal(false, ui, storage),
+            _ => Err(invalid_selection()),
         }
+    }
+
+    fn variable_name(&self, ui: &mut impl CredentialInteraction) -> Result<String> {
+        let variable = ui.variable(&self.default_variable())?;
+        password::validate_variable(&variable)?;
+        Ok(variable)
+    }
+
+    fn reference_source(&self, ui: &mut impl CredentialInteraction) -> Result<SecretConfig> {
+        let variable = self.variable_name(ui)?;
+        shell_hint(&variable);
+        Ok(env_secret(variable))
     }
 
     fn default_variable(&self) -> String {
@@ -501,62 +543,108 @@ impl CredentialPrompt<'_> {
         ui: &mut impl CredentialInteraction,
         storage: &mut impl CredentialStorage,
     ) -> Result<Option<SecretConfig>> {
+        let Some(destination) = self.select_destination(ui, storage)? else {
+            return Ok(None);
+        };
+        let value = self.literal_value(imported, ui)?;
+        let secret = store_destination(value, destination, storage)?;
+        announce_storage(&secret);
+        Ok(Some(secret))
+    }
+
+    fn select_destination(
+        &self,
+        ui: &mut impl CredentialInteraction,
+        storage: &impl CredentialStorage,
+    ) -> Result<Option<Destination>> {
         let mut choices = vec![];
         if storage.is_macos() {
             choices.push("macOS Keychain (recommended)");
         }
         choices.push("Environment variable (this import session only)");
         let destination = ui.select("Where do you want to keep this password?", choices)?;
-        let destination = if destination.starts_with("macOS") {
-            // A distinct account avoids changing another environment's existing/shared credential.
-            let suffix = if self.ssh { "/ssh" } else { "" };
-            Destination::Keychain(format!(
-                "{}/{}/compass-{}{suffix}",
-                self.project,
-                self.environment,
-                uuid::Uuid::new_v4()
-            ))
-        } else {
-            println!("The password will be held only by this SafeSelect process, not saved or exported to your terminal. Future commands require the variable in their launching shell.");
-            if !ui.confirm("Use the password only for this import session?")? {
-                return Ok(None);
+        match destination.as_str() {
+            "macOS Keychain (recommended)" => Ok(Some(self.keychain_destination())),
+            "Environment variable (this import session only)" => {
+                self.session_destination(ui, storage)
             }
-            let variable = ui.variable(&self.default_variable())?;
-            if storage.variable_present(&variable)
-                && !ui.confirm(
-                    "This variable already exists. Replace it for this import session only?",
-                )?
-            {
-                return Ok(None);
-            }
-            Destination::Session(variable)
-        };
-        let value = if imported {
-            self.imported.unwrap_or_default().to_string()
-        } else {
-            ui.password()?
-        };
-        let secret = match destination {
-            Destination::Keychain(account) => store_literal(
-                value,
-                Destination::Keychain(account),
-                |account, value| storage.keychain(account, value),
-                |_, _| unreachable!(),
-            )?,
-            Destination::Session(variable) => store_literal(
-                value,
-                Destination::Session(variable),
-                |_, _| unreachable!(),
-                |variable, value| storage.session(variable, value),
-            )?,
-        };
-        if let Some(variable) = &secret.variable {
-            println!("✓ Password available for this import session only: {variable}");
-            shell_hint(variable);
-        } else {
-            println!("✓ Password saved in macOS Keychain");
+            _ => Err(invalid_selection()),
         }
-        Ok(Some(secret))
+    }
+
+    fn keychain_destination(&self) -> Destination {
+        // Never mutate another environment's existing/shared credential.
+        let suffix = if self.ssh { "/ssh" } else { "" };
+        Destination::Keychain(format!(
+            "{}/{}/compass-{}{suffix}",
+            self.project,
+            self.environment,
+            uuid::Uuid::new_v4()
+        ))
+    }
+
+    fn session_destination(
+        &self,
+        ui: &mut impl CredentialInteraction,
+        storage: &impl CredentialStorage,
+    ) -> Result<Option<Destination>> {
+        println!("The password will be held only by this SafeSelect process, not saved or exported to your terminal. Future commands require the variable in their launching shell.");
+        if !ui.confirm("Use the password only for this import session?")? {
+            return Ok(None);
+        }
+        let variable = self.variable_name(ui)?;
+        if !confirm_session_replacement(&variable, ui, storage)? {
+            return Ok(None);
+        }
+        Ok(Some(Destination::Session(variable)))
+    }
+
+    fn literal_value(&self, imported: bool, ui: &mut impl CredentialInteraction) -> Result<String> {
+        if imported {
+            return Ok(self.imported.unwrap_or_default().to_string());
+        }
+        ui.password()
+    }
+}
+
+fn confirm_session_replacement(
+    variable: &str,
+    ui: &mut impl CredentialInteraction,
+    storage: &impl CredentialStorage,
+) -> Result<bool> {
+    if !storage.variable_present(variable) {
+        return Ok(true);
+    }
+    ui.confirm("This variable already exists. Replace it for this import session only?")
+}
+
+fn store_destination(
+    value: String,
+    destination: Destination,
+    storage: &mut impl CredentialStorage,
+) -> Result<SecretConfig> {
+    match destination {
+        Destination::Keychain(account) => store_literal(
+            value,
+            Destination::Keychain(account),
+            |account, value| storage.keychain(account, value),
+            |_, _| unreachable!(),
+        ),
+        Destination::Session(variable) => store_literal(
+            value,
+            Destination::Session(variable),
+            |_, _| unreachable!(),
+            |variable, value| storage.session(variable, value),
+        ),
+    }
+}
+
+fn announce_storage(secret: &SecretConfig) {
+    if let Some(variable) = &secret.variable {
+        println!("✓ Password available for this import session only: {variable}");
+        shell_hint(variable);
+    } else {
+        println!("✓ Password saved in macOS Keychain");
     }
 }
 
@@ -601,6 +689,44 @@ pub fn register_bastion(
     name
 }
 
+fn legacy_candidates(dir: &Path, conn: &crate::compass::CompassConnection) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return vec![];
+    };
+    let project = dir
+        .parent()
+        .and_then(|root| crate::load_project_config(root).ok());
+    entries
+        .flatten()
+        .filter_map(|entry| legacy_candidate(&entry.path(), conn, project.as_ref()))
+        .collect()
+}
+
+fn legacy_candidate(
+    path: &Path,
+    conn: &crate::compass::CompassConnection,
+    project: Option<&crate::config::ProjectConfig>,
+) -> Option<String> {
+    if path.extension()?.to_str()? != "toml" {
+        return None;
+    }
+    let name = path.file_stem()?.to_str()?;
+    let existing = load_legacy_environment(path, project)?;
+    legacy_match(conn, &existing).then(|| name.into())
+}
+
+fn load_legacy_environment(
+    path: &Path,
+    project: Option<&crate::config::ProjectConfig>,
+) -> Option<crate::config::EnvironmentConfig> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let mut existing = toml::from_str(&content).ok()?;
+    if let Some(project) = project {
+        crate::config::merge_project_ssh(project, &mut existing).ok()?;
+    }
+    Some(existing)
+}
+
 fn legacy_match(
     conn: &crate::compass::CompassConnection,
     existing: &crate::config::EnvironmentConfig,
@@ -608,42 +734,69 @@ fn legacy_match(
     if existing.database.kind != crate::backend::BackendKind::Document {
         return false;
     }
-    let url = if let Some(ssh) = existing.ssh.as_ref().filter(|s| s.enabled) {
-        if conn.ssh_host != ssh.host
-            || conn.ssh_user != ssh.username
-            || Some(conn.ssh_port.unwrap_or(22)) != ssh.port
-        {
-            return false;
-        }
-        if let Some((host, port)) = crate::extract_tcp_host_port(&conn.url) {
-            if ssh.forward_host.as_deref() != Some(host.as_str()) || ssh.forward_port != Some(port)
-            {
-                return false;
-            }
-        } else {
-            return false;
-        } // SRV origins without provenance remain ambiguous.
+    let Some(url) = legacy_candidate_url(conn, existing) else {
+        return false;
+    };
+    let candidate = database_identity(&url);
+    let stored = database_identity(&existing.database.url)
+        .map(|(url, _)| (url, existing.database.username.clone()));
+    candidate.is_some() && candidate == stored
+}
+
+fn database_identity(url: &str) -> Option<(String, String)> {
+    split_database_url(url)
+        .ok()
+        .map(|(url, user, _)| (url, user))
+}
+
+fn legacy_candidate_url(
+    conn: &crate::compass::CompassConnection,
+    existing: &crate::config::EnvironmentConfig,
+) -> Option<String> {
+    match existing.ssh.as_ref().filter(|s| s.enabled) {
+        Some(ssh) => legacy_tunnel_url(conn, ssh),
+        None if conn.ssh_host.is_none() => Some(conn.url.clone()),
+        None => None,
+    }
+}
+
+fn legacy_tunnel_url(
+    conn: &crate::compass::CompassConnection,
+    ssh: &crate::config::SshConfig,
+) -> Option<String> {
+    if !same_legacy_bastion(conn, ssh) {
+        return None;
+    }
+    if !same_legacy_forward_target(conn, ssh) {
+        return None;
+    }
+    Some(
         crate::rewrite_mongodb_url_for_local_endpoint(
             &conn.url,
             ssh.local_host.as_deref().unwrap_or("localhost"),
             ssh.local_port.unwrap_or(crate::DEFAULT_SSH_LOCAL_PORT),
         )
-        .unwrap_or_else(|| conn.url.clone())
-    } else {
-        if conn.ssh_host.is_some() {
-            return false;
-        }
-        conn.url.clone()
-    };
-    match (
-        split_database_url(&url),
-        split_database_url(&existing.database.url),
-    ) {
-        (Ok((left, user, _)), Ok((right, _, _))) => {
-            left == right && user == existing.database.username
-        }
-        _ => false,
-    }
+        .unwrap_or_else(|| conn.url.clone()),
+    )
+}
+
+fn same_legacy_bastion(
+    conn: &crate::compass::CompassConnection,
+    ssh: &crate::config::SshConfig,
+) -> bool {
+    conn.ssh_host == ssh.host
+        && conn.ssh_user == ssh.username
+        && Some(conn.ssh_port.unwrap_or(22)) == ssh.port
+}
+
+fn same_legacy_forward_target(
+    conn: &crate::compass::CompassConnection,
+    ssh: &crate::config::SshConfig,
+) -> bool {
+    // SRV origins without provenance remain ambiguous; do not resolve DNS here.
+    crate::extract_tcp_host_port(&conn.url).is_some_and(|(host, port)| {
+        ssh.forward_host.as_deref() == Some(host.as_str()) && ssh.forward_port == Some(port)
+    })
 }
 
 /// Show only selected sources, never resolved values or Keychain account identifiers.
