@@ -2693,21 +2693,21 @@ fn cmd_import_compass(path: Option<PathBuf>, non_interactive: bool) -> Result<()
             .map(|(i, conn)| {
                 ConnLabel(
                     i,
-                    format!(
-                        "{:<30}  {}",
-                        conn.name,
-                        compass_import::display_url(&conn.url)
-                    ),
+                    format!("{} — {}", conn.name, compass_import::display_url(&conn.url)),
                 )
             })
             .collect();
-        let selected = inquire::MultiSelect::new(
-            "Select MongoDB Compass connections to import (Space to toggle, Enter to confirm):",
-            options,
-        )
-        .with_page_size(20)
-        .prompt()
-        .map_err(|e| SafeselectError::Other(format!("Selection cancelled: {e}")))?;
+        let answer_length = options.iter().map(|option| option.1.chars().count()).sum();
+        let prompt =
+            "Select MongoDB Compass connections to import (Space to toggle, Enter to confirm):";
+        let selected = inquire::MultiSelect::new(prompt, options)
+            .with_page_size(20)
+            .with_render_config(compass_import::selection_render_config(
+                prompt,
+                answer_length,
+            ))
+            .prompt()
+            .map_err(|e| SafeselectError::Other(format!("Selection cancelled: {e}")))?;
         selected.iter().map(|l| l.0).collect()
     };
 

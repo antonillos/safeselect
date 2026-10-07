@@ -969,3 +969,13 @@ fn database_urls_preserve_noncredential_query_options() {
     assert!(!url.contains("fixture"));
     assert!(url.ends_with("?authSource=admin&tls=true"));
 }
+
+#[test]
+fn long_selection_answers_start_below_the_question() {
+    assert!(!selection_render_config("Environment:", 7).answer_from_new_line);
+    assert!(selection_render_config("Connection:", 100).answer_from_new_line);
+    assert!(
+        selection_render_config("Where do you want to keep this password?", 45)
+            .answer_from_new_line
+    );
+}

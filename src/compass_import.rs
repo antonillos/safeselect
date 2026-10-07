@@ -338,8 +338,23 @@ fn invalid_selection() -> SafeselectError {
 fn cancelled(_: inquire::InquireError) -> SafeselectError {
     SafeselectError::Other("Import cancelled".into())
 }
+/// Keep short selections inline; avoid joining long answers to their question.
+pub fn selection_render_config(
+    prompt: &str,
+    answer_length: usize,
+) -> inquire::ui::RenderConfig<'static> {
+    let mut render = inquire::ui::RenderConfig::default();
+    render.answer_from_new_line = prompt.chars().count() + answer_length > 80;
+    render
+}
+
 fn select(prompt: &str, options: Vec<&str>) -> Result<String> {
+    let render = selection_render_config(
+        prompt,
+        options.iter().map(|s| s.chars().count()).max().unwrap_or(0),
+    );
     inquire::Select::new(prompt, options)
+        .with_render_config(render)
         .prompt()
         .map(str::to_string)
         .map_err(cancelled)
