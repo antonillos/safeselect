@@ -414,6 +414,32 @@ safeselect import-compass --path ~/.config/MongoDB Compass
 
 _Compass imports preserve MongoDB connection details without exposing credentials._
 
+Interactive import uses the same password choices for the database and SSH
+bastion: keep the existing source, use a password present in the export, enter a
+password with hidden input, reference an exported variable, or configure it later.
+Imported passwords are always literal values, never interpreted as references.
+Before accepting a literal password, SafeSelect asks where to keep it: macOS
+Keychain or an environment variable available **only during that import process**.
+Session-only passwords are not saved and cannot be exported to the parent shell;
+future CLI/MCP commands need the variable exported by their launching shell.
+No plaintext password is written to TOML, logs or terminal commands.
+
+Suggested variables include the project, environment and purpose, for example
+`MYAPP_STAGING_DB_PASSWORD` and `MYAPP_STAGING_SSH_PASSWORD`. They are editable;
+existing references are not renamed. Projects with identical or normalized names
+should choose distinct prefixes when sharing a launching shell.
+
+Reimporting offers **update existing**, **create new**, or **skip**. Updates retain
+password sources by default, preserve TLS and limits, and do not silently mutate
+shared bastions. A local `.safeselect/compass-imports.toml` index recognizes custom
+names from previous imports using password-independent connection fingerprints.
+Non-interactive import skips existing connections and configures environment
+references without automatically storing exported passwords. Connectivity checks
+require confirmation after interactive import.
+
+See the [synthetic Compass UX VHS](demo/compass-import-ux/README.md).
+
+
 
 </details>
 

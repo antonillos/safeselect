@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented in this file.
 
+## Unreleased
+
+### Changed
+
+- Compass import now offers consistent database and SSH password choices, explicit
+  Keychain/session-only storage, hidden literal entry, and readable project-prefixed
+  environment references. Imported credentials stay literal and selection labels
+  redact authentication details.
+- Repeated Compass imports offer update/create/skip instead of silent duplicates;
+  unattended imports skip existing environments. Updates preserve TLS, limits and
+  existing password sources by default, without mutating shared bastion credentials.
+
 ## [v0.7.11] - 2026-10-06
 
 ### Added
