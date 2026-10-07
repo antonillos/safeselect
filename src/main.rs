@@ -2716,6 +2716,11 @@ fn cmd_import_compass(path: Option<PathBuf>, non_interactive: bool) -> Result<()
         return Ok(());
     }
 
+    // Validate every selected URL before prompting or persisting any credentials.
+    for &idx in &selected_indices {
+        compass_import::split_database_url(&connections[idx].url)?;
+    }
+
     let safeselect_dir = cwd.join(".safeselect");
     let env_dir = safeselect_dir.join("environments");
     std::fs::create_dir_all(&env_dir)?;

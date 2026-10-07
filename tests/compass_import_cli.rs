@@ -92,3 +92,25 @@ fn distinct_same_named_connections_are_imported_without_overwriting() {
     );
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn invalid_database_query_is_rejected_before_import_writes() {
+    let root = std::env::temp_dir().join(format!("compass-validation-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let export = root.join("connections.json");
+    std::fs::write(&export, r#"{"connections":[{"name":"valid","connectionString":"mongodb://db.example/app"},{"name":"invalid","connectionOptions":{"connectionString":"mongodb://db.example/app?proxyPassword=synthetic-query-value","sshTunnel":{"host":"bastion.example","username":"demo","authenticationMethod":"password","password":"synthetic-ssh-value"}}}]}"#).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_safeselect"))
+        .args(["import-compass", "--non-interactive", "--path"])
+        .arg(&export)
+        .current_dir(&root)
+        .env("SAFESELECT_CONFIG_DIR", root.join("global"))
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(!root.join(".safeselect").exists());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.contains("unsupported credential-bearing query options"));
+    assert!(!error.contains("synthetic-query-value"));
+    assert!(!error.contains("synthetic-ssh-value"));
+    std::fs::remove_dir_all(root).unwrap();
+}
