@@ -3978,6 +3978,9 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
             println!("    - Database is not running or not accepting connections");
             println!("    - SSH tunnel failed to forward (check bastion logs)");
             print_manual_tunnel_hint();
+            if !bastion_up {
+                print_ssh_connectivity_hint(bastion_host, bastion_port);
+            }
             failures.push(format!(
                 "{env_name}: database not reachable through SSH tunnel after {}s",
                 tunnel_wait.as_secs()
