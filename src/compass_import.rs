@@ -164,14 +164,13 @@ impl ImportIndex {
         &self,
         dir: &Path,
         conn: &crate::compass::CompassConnection,
-        default: &str,
+        _default: &str,
     ) -> Vec<String> {
         let mut names = self
             .connections
             .get(&fingerprint(conn))
             .cloned()
             .unwrap_or_default();
-        names.push(default.into());
         names.extend(legacy_candidates(dir, conn));
         names.retain(|name| {
             valid_environment_name(name) && dir.join(format!("{name}.toml")).exists()
@@ -243,7 +242,13 @@ fn unattended_environment(dir: &Path, candidates: &[String], default: &str) -> O
         println!("Skipping existing Compass connection (non-interactive import never overwrites).");
         return None;
     }
-    (!dir.join(format!("{default}.toml")).exists()).then(|| default.into())
+    let mut name = default.to_string();
+    let mut suffix = 2;
+    while dir.join(format!("{name}.toml")).exists() {
+        name = format!("{default}-{suffix}");
+        suffix += 1;
+    }
+    Some(name)
 }
 
 trait EnvironmentInteraction: CredentialInteraction {

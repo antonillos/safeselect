@@ -161,7 +161,10 @@ fn unattended_duplicate_import_never_selects_an_overwrite() {
         select_environment(&root, &["dev".into()], "dev", true).unwrap(),
         None
     );
-    assert_eq!(select_environment(&root, &[], "dev", true).unwrap(), None);
+    assert_eq!(
+        select_environment(&root, &[], "dev", true).unwrap(),
+        Some("dev-2".into())
+    );
     assert_eq!(
         select_environment(&root, &[], "staging", true).unwrap(),
         Some("staging".into())

@@ -56,3 +56,39 @@ fn compass_reimport_is_idempotent_and_never_persists_exported_passwords() {
     }
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn distinct_same_named_connections_are_imported_without_overwriting() {
+    let root = std::env::temp_dir().join(format!("compass-collision-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let export = root.join("connections.json");
+    std::fs::write(&export, r#"{"connections":[{"name":"staging","connectionString":"mongodb://one.example/app"},{"name":"staging","connectionString":"mongodb://two.example/app"}]}"#).unwrap();
+    let run = || {
+        Command::new(env!("CARGO_BIN_EXE_safeselect"))
+            .args(["import-compass", "--non-interactive", "--path"])
+            .arg(&export)
+            .current_dir(&root)
+            .env("SAFESELECT_CONFIG_DIR", root.join("global"))
+            .output()
+            .unwrap()
+    };
+    let first = run();
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let dir = root.join(".safeselect/environments");
+    let original = std::fs::read_to_string(dir.join("staging.toml")).unwrap();
+    assert!(original.contains("one.example"));
+    assert!(std::fs::read_to_string(dir.join("staging-2.toml"))
+        .unwrap()
+        .contains("two.example"));
+    assert!(run().status.success());
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
+    assert_eq!(
+        std::fs::read_to_string(dir.join("staging.toml")).unwrap(),
+        original
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
