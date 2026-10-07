@@ -1209,6 +1209,27 @@ fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
     }
 }
 
+fn shared_ssh_keychain_accounts(
+    project: &config::ProjectConfig,
+    project_name: &str,
+) -> Vec<String> {
+    project
+        .ssh_bastions
+        .iter()
+        .filter_map(|(name, ssh)| {
+            if ssh.secret_variable.is_some() {
+                return None;
+            }
+            ssh.secret_account.clone().or_else(|| {
+                (ssh.auth_type.as_deref() == Some("PASSWORD"))
+                    .then(|| format!("{project_name}/{name}/ssh"))
+            })
+        })
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
 fn clear_project_config(repo_root: &Path, delete_dir: bool) -> Result<()> {
     let safeselect_dir = repo_root.join(".safeselect");
     let env_dir = safeselect_dir.join("environments");
@@ -1234,6 +1255,13 @@ fn clear_project_config(repo_root: &Path, delete_dir: bool) -> Result<()> {
     if !ans {
         println!("Cancelled.");
         return Ok(());
+    }
+
+    if cfg!(target_os = "macos") && has_project_file {
+        let project = load_project_config(&safeselect_dir)?;
+        for account in shared_ssh_keychain_accounts(&project, &project_name) {
+            compose::delete_password_from_keychain(&account)?;
+        }
     }
 
     let mut removed = 0u32;
@@ -5471,6 +5499,32 @@ pub(crate) fn uninstall_binary_paths() -> Vec<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn shared_ssh_cleanup_uses_saved_accounts_and_preserves_env_sources() {
+        let project: super::config::ProjectConfig = toml::from_str(
+            r#"
+version=1
+[ssh_bastions.imported]
+auth_type="PASSWORD"
+secret_account="demo/staging/compass-synthetic/ssh"
+[ssh_bastions.duplicate]
+secret_account="demo/staging/compass-synthetic/ssh"
+[ssh_bastions.legacy]
+auth_type="PASSWORD"
+[ssh_bastions.exported]
+auth_type="PASSWORD"
+secret_variable="DEMO_SSH_PASSWORD"
+[ssh_bastions.key]
+auth_type="KEY"
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            super::shared_ssh_keychain_accounts(&project, "demo"),
+            vec!["demo/legacy/ssh", "demo/staging/compass-synthetic/ssh",]
+        );
+    }
+
     #[path = "ssh_connectivity_hint.rs"]
     mod ssh_connectivity_hint_tests;
 
