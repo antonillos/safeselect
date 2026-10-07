@@ -3,130 +3,133 @@ Output "demo/recordings/compass-import-ux.gif"
 Output "demo/recordings/compass-import-ux.mp4"
 Output "demo/.runtime/compass-import-ux-screen.txt"
 Set Shell "bash"
-Set FontSize 17
-Set Width 1440
-Set Height 1000
+Set FontSize 19
+Set Width 1600
+Set Height 1100
 Set Padding 20
-Set Theme "GitHub Dark"
+Set Theme "Dracula"
 Set TypingSpeed 15ms
 Set WindowBar "Colorful"
 Set Framerate 15
 Hide
-Type "cd /tmp/safeselect-compass-ux/atlas; export SAFESELECT_CONFIG_DIR=/tmp/safeselect-compass-ux/global; export PATH=/tmp/safeselect-compass-ux/bin:$PATH; export PS1='demo $ '; clear"
+Type "cd /tmp/safeselect-compass-ux/atlas; export SAFESELECT_CONFIG_DIR=/tmp/safeselect-compass-ux/global; export PATH=/tmp/safeselect-compass-ux/bin:$PATH; unset NO_COLOR; export TERM=xterm-256color CLICOLOR=1 CLICOLOR_FORCE=1; export PS1='demo $ '; clear"
 Enter
 Sleep 1s
+Type "clear; printf '\033[1;37m? PREGUNTA\033[0m   |   \033[1;36mRESPUESTA / seleccion\033[0m\nDemo offline: passwords ocultas, sin conexiones ni Keychain.\n\n'"
+Enter
 Show
-Type "safeselect import-compass --path ../compass.json"
-Enter
-Sleep 1s
-Space
-Enter
-Sleep 500ms
-Enter
-Sleep 500ms
-Enter
-Sleep 500ms
-Enter
-Sleep 500ms
-Enter
-Sleep 500ms
-Enter
-Sleep 500ms
-Enter
-Sleep 500ms
-Enter
-Sleep 500ms
-Enter
-Sleep 500ms
-Enter
-Sleep 500ms
-Down
-Enter
-Sleep 500ms
-Type "y"
-Enter
-Sleep 500ms
-Enter
-Sleep 500ms
-Enter
-Sleep 500ms
-Down
-Enter
-Sleep 500ms
-Type "y"
-Enter
-Sleep 500ms
-Enter
-Sleep 500ms
-Enter
-Sleep 500ms
-Sleep 2s
-Type "cat .safeselect/environments/staging.toml"
-Enter
-Sleep 500ms
 Sleep 3s
 Type "safeselect import-compass --path ../compass.json"
 Enter
-Sleep 500ms
+Sleep 1s
 Space
 Enter
-Sleep 500ms
+Sleep 1s
 Enter
-Sleep 500ms
+Sleep 1s
+Enter
+Sleep 1s
+Enter
+Sleep 1s
+Enter
+Sleep 1s
+Enter
+Sleep 1s
+Enter
+Sleep 1s
+Enter
+Sleep 1s
+Enter
+Sleep 1s
+Enter
+Sleep 1s
+Down
+Enter
+Sleep 1s
 Type "y"
 Enter
-Sleep 500ms
+Sleep 1s
 Enter
-Sleep 500ms
+Sleep 1s
 Enter
-Sleep 500ms
+Sleep 1s
+Down
 Enter
-Sleep 500ms
+Sleep 1s
+Type "y"
+Enter
+Sleep 1s
+Enter
+Sleep 1s
+Enter
+Sleep 1s
+Sleep 2s
+Type "cat .safeselect/environments/staging.toml"
+Enter
+Sleep 1s
+Sleep 3s
+Type "safeselect import-compass --path ../compass.json"
+Enter
+Sleep 1s
+Space
+Enter
+Sleep 1s
+Enter
+Sleep 1s
+Type "y"
+Enter
+Sleep 1s
+Enter
+Sleep 1s
+Enter
+Sleep 1s
+Enter
+Sleep 1s
 Sleep 2s
 Type "safeselect import-compass --path ../compass.json"
 Enter
-Sleep 500ms
+Sleep 1s
 Space
 Enter
-Sleep 500ms
+Sleep 1s
 Down
 Enter
-Sleep 500ms
+Sleep 1s
 Type "staging-copy"
 Enter
-Sleep 500ms
+Sleep 1s
 Enter
-Sleep 500ms
+Sleep 1s
 Enter
-Sleep 500ms
+Sleep 1s
 Down
 Enter
-Sleep 500ms
+Sleep 1s
 Down
 Enter
-Sleep 500ms
+Sleep 1s
 Type "y"
 Enter
-Sleep 500ms
+Sleep 1s
 Enter
-Sleep 500ms
+Sleep 1s
 Type "synthetic-hidden-password"
 Enter
-Sleep 500ms
+Sleep 1s
 Enter
-Sleep 500ms
+Sleep 1s
 Sleep 2s
 Type "safeselect import-compass --path ../compass.json"
 Enter
-Sleep 500ms
+Sleep 1s
 Space
 Enter
-Sleep 500ms
+Sleep 1s
 Down 2
 Enter
-Sleep 500ms
+Sleep 1s
 Sleep 2s
 Type "ls .safeselect/environments"
 Enter
-Sleep 500ms
+Sleep 1s
 Sleep 4s
