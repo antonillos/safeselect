@@ -3756,7 +3756,8 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
         let bastion_port = ssh.port.unwrap_or(22);
 
         // Step 1: Check if the SSH bastion is reachable
-        let bastion_up = check_tcp_endpoint(bastion_host, bastion_port, Duration::from_secs(3));
+        let bastion_probe = probe_tcp_endpoint(bastion_host, bastion_port, Duration::from_secs(3));
+        let bastion_up = bastion_probe.is_ok();
 
         let tunnel_local_host = ssh.local_host.as_deref().unwrap_or("localhost");
         let tunnel_local_port = ssh.local_port.unwrap_or(15432);
@@ -3802,8 +3803,11 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
         };
 
         if !can_establish && !bastion_up {
-            // Can't establish and no existing tunnel — inform user with timeout details
-            println!("  ⚠  SSH bastion unreachable (connect timed out after 3s)");
+            // Can't establish and no existing tunnel — report the connection failure
+            println!(
+                "  ⚠  SSH endpoint {bastion_host}:{bastion_port} unreachable: {}",
+                bastion_probe.unwrap_err()
+            );
             if !use_password && ssh.identity_file.is_none() {
                 println!("  ⚠  No SSH key or password configured");
             }
@@ -3814,7 +3818,7 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
             }
             print_manual_tunnel_hint();
             failures.push(format!(
-                "{env_name}: SSH bastion unreachable and no active PostgreSQL tunnel"
+                "{env_name}: SSH endpoint {bastion_host}:{bastion_port} unreachable and no active database tunnel"
             ));
             continue;
         }
@@ -4148,15 +4152,25 @@ fn parse_mongodb_tcp_host_port(url: &str) -> Option<(String, u16)> {
     }
 }
 
-pub(crate) fn check_tcp_endpoint(host: &str, port: u16, timeout: std::time::Duration) -> bool {
+fn probe_tcp_endpoint(host: &str, port: u16, timeout: std::time::Duration) -> std::io::Result<()> {
     use std::net::ToSocketAddrs;
 
-    format!("{host}:{port}")
-        .to_socket_addrs()
-        .map(|mut addrs| {
-            addrs.any(|addr| std::net::TcpStream::connect_timeout(&addr, timeout).is_ok())
-        })
-        .unwrap_or(false)
+    let addrs = (host, port).to_socket_addrs()?;
+    let mut last_error = std::io::Error::new(
+        std::io::ErrorKind::AddrNotAvailable,
+        "hostname resolved to no addresses",
+    );
+    for addr in addrs {
+        match std::net::TcpStream::connect_timeout(&addr, timeout) {
+            Ok(_) => return Ok(()),
+            Err(error) => last_error = error,
+        }
+    }
+    Err(last_error)
+}
+
+pub(crate) fn check_tcp_endpoint(host: &str, port: u16, timeout: std::time::Duration) -> bool {
+    probe_tcp_endpoint(host, port, timeout).is_ok()
 }
 
 pub(crate) fn check_postgres_endpoint(host: &str, port: u16) -> bool {
@@ -4303,38 +4317,47 @@ fn cmd_check(
                 }
             }
 
-            // If the local PostgreSQL endpoint is already reachable, an external
-            // tunnel (for example DBeaver) is active and that is good enough.
-            if !postgres_reachable {
-                if check_tcp_endpoint(
+            let document_reachable = resolved.environment.database.kind
+                == crate::backend::BackendKind::Document
+                && extract_tcp_host_port(&resolved.environment.database.url)
+                    .map(|(host, port)| {
+                        check_tcp_endpoint(&host, port, std::time::Duration::from_secs(3))
+                    })
+                    .unwrap_or(false);
+
+            // An existing database route still requires the sidecar backend check below.
+            if !postgres_reachable && !document_reachable {
+                match probe_tcp_endpoint(
                     bastion_host,
                     bastion_port,
                     std::time::Duration::from_secs(3),
                 ) {
-                    diagnostics::print(
+                    Ok(()) => diagnostics::print(
                         DiagnosticStatus::Ok,
                         DiagnosticCode::SshBastionReachable,
-                        "SSH bastion reachable",
-                    );
-                } else {
-                    diagnostics::print(
-                        DiagnosticStatus::Fail,
-                        DiagnosticCode::SshBastionUnreachable,
-                        "SSH bastion unreachable (connect timed out after 3s)",
-                    );
-                    if let Some(ref identity_file) = ssh.identity_file {
-                        if !std::path::Path::new(identity_file).exists() {
-                            diagnostics::print(
-                                DiagnosticStatus::Fail,
-                                DiagnosticCode::SshIdentityMissing,
-                                "SSH identity file not found",
-                            );
+                        format!("SSH endpoint {bastion_host}:{bastion_port} reachable (TCP)"),
+                    ),
+                    Err(error) => {
+                        let message = format!(
+                            "SSH endpoint {bastion_host}:{bastion_port} unreachable: {error}"
+                        );
+                        diagnostics::print(
+                            DiagnosticStatus::Fail,
+                            DiagnosticCode::SshBastionUnreachable,
+                            &message,
+                        );
+                        if let Some(ref identity_file) = ssh.identity_file {
+                            if !std::path::Path::new(identity_file).exists() {
+                                diagnostics::print(
+                                    DiagnosticStatus::Fail,
+                                    DiagnosticCode::SshIdentityMissing,
+                                    "SSH identity file not found",
+                                );
+                            }
                         }
+                        print_manual_tunnel_hint();
+                        return Err(SafeselectError::Other(message));
                     }
-                    print_manual_tunnel_hint();
-                    return Err(SafeselectError::Other(
-                        "SSH bastion not reachable (connect timed out after 3s).".into(),
-                    ));
                 }
             }
 
@@ -7209,6 +7232,30 @@ username = "usr_app"
         };
 
         assert_eq!(default_bastion_name(&ssh), "jumpboxdev-2222");
+    }
+
+    #[test]
+    fn tcp_probe_accepts_local_bastion_tunnel_endpoint() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert!(probe_tcp_endpoint("127.0.0.1", port, std::time::Duration::from_secs(1)).is_ok());
+    }
+
+    #[test]
+    fn tcp_probe_preserves_connection_refused() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let error =
+            probe_tcp_endpoint("127.0.0.1", port, std::time::Duration::from_secs(1)).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::ConnectionRefused);
+    }
+
+    #[test]
+    fn tcp_probe_preserves_resolution_error() {
+        let error = probe_tcp_endpoint("invalid host", 2222, std::time::Duration::from_secs(1))
+            .unwrap_err();
+        assert_ne!(error.kind(), std::io::ErrorKind::TimedOut);
     }
 
     #[test]
