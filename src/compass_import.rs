@@ -78,7 +78,30 @@ fn percent_decode(value: &str) -> Result<String> {
         .map_err(|_| SafeselectError::Secret("Invalid encoded Compass credential".into()))
 }
 
+fn reject_query_credentials(url: &str) -> Result<()> {
+    let Some((_, query)) = url.split_once('?') else {
+        return Ok(());
+    };
+    for option in query.split('#').next().unwrap_or("").split('&') {
+        let key = percent_decode(option.split('=').next().unwrap_or(""))?.to_ascii_lowercase();
+        if key.contains("password")
+            || key.contains("secret")
+            || key.contains("token")
+            || matches!(
+                key.as_str(),
+                "authmechanismproperties" | "username" | "proxyusername"
+            )
+        {
+            return Err(SafeselectError::Secret(
+                "Compass URL contains unsupported credential-bearing query options; remove them before importing".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub fn split_database_url(url: &str) -> Result<(String, String, Option<String>)> {
+    reject_query_credentials(url)?;
     let Some((start, end)) = authority(url) else {
         return Ok((url.into(), String::new(), None));
     };

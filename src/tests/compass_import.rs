@@ -928,3 +928,41 @@ fn legacy_discovery_merges_shared_bastions_without_changing_the_project() {
         original
     );
 }
+
+#[test]
+fn database_urls_reject_query_credentials_without_echoing_values() {
+    for option in [
+        "password",
+        "tlsCertificateKeyFilePassword",
+        "proxyPassword",
+        "authMechanismProperties",
+        "PASSWORD",
+        "pass%77ord",
+        "accessToken",
+        "clientSecret",
+        "username",
+        "proxyUsername",
+    ] {
+        for authority in ["db", "demo:fixture@db"] {
+            let url = format!("mongodb://{authority}/app?{option}=sensitive-fixture");
+            let error = split_database_url(&url).unwrap_err().to_string();
+            assert!(!error.contains("sensitive-fixture"));
+            assert!(error.contains("unsupported credential-bearing query options"));
+        }
+    }
+    assert!(split_database_url("mongodb://db/app?pass%ZZword=value").is_err());
+}
+
+#[test]
+fn database_urls_preserve_noncredential_query_options() {
+    for url in [
+        "mongodb://db/app?authSource=admin&tls=true&replicaSet=rs0",
+        "mongodb+srv://db/app?retryWrites=true&w=majority",
+    ] {
+        assert_eq!(split_database_url(url).unwrap().0, url);
+    }
+    let (url, _, _) =
+        split_database_url("mongodb://demo:fixture@db/app?authSource=admin&tls=true").unwrap();
+    assert!(!url.contains("fixture"));
+    assert!(url.ends_with("?authSource=admin&tls=true"));
+}
