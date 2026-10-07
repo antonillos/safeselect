@@ -5386,6 +5386,9 @@ pub(crate) fn uninstall_binary_paths() -> Vec<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    #[path = "ssh_connectivity_hint.rs"]
+    mod ssh_connectivity_hint_tests;
+
     #[path = "password_references.rs"]
     mod password_reference_tests;
 
@@ -7260,24 +7263,6 @@ username = "usr_app"
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         assert!(probe_tcp_endpoint("127.0.0.1", port, std::time::Duration::from_secs(1)).is_ok());
-    }
-
-    #[test]
-    fn ssh_connectivity_hint_uses_configured_endpoint_and_explains_wsl() {
-        let hint = ssh_connectivity_hint("127.0.0.1", 2222);
-        assert!(hint.contains("timeout 5 bash -c 'exec 3<>\"/dev/tcp/$1/$2\"' -- '127.0.0.1' 2222"));
-        assert!(hint.contains("same WSL distribution as SafeSelect"));
-        assert!(hint.contains("Keep the Azure CLI tunnel open"));
-        assert!(hint.contains("TCP success does not validate SSH credentials or database access"));
-    }
-
-    #[test]
-    fn ssh_connectivity_hint_quotes_untrusted_host_as_one_argument() {
-        let host = "host'; echo $(id); #";
-        let hint = ssh_connectivity_hint(host, 2200);
-        assert!(hint.contains("-- 'host'\"'\"'; echo $(id); #' 2200"));
-        assert!(hint.contains("/dev/tcp/$1/$2"));
-        assert!(!hint.contains(&format!("/dev/tcp/{host}")));
     }
 
     #[test]
