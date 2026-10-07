@@ -79,6 +79,11 @@ fn percent_decode(value: &str) -> Result<String> {
 }
 
 fn reject_query_credentials(url: &str) -> Result<()> {
+    if url.contains('#') {
+        return Err(SafeselectError::Secret(
+            "Compass URLs must not contain fragments".into(),
+        ));
+    }
     let Some((_, query)) = url.split_once('?') else {
         return Ok(());
     };

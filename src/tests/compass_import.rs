@@ -979,3 +979,18 @@ fn long_selection_answers_start_below_the_question() {
             .answer_from_new_line
     );
 }
+
+#[test]
+fn imported_urls_reject_fragments_without_echoing_them() {
+    for url in [
+        "mongodb://db/app#password=synthetic-value",
+        "mongodb://db/app?authSource=admin#token=synthetic-value",
+        "mongodb://demo:fixture@db/app#synthetic-value",
+        "mongodb+srv://db/app#",
+    ] {
+        let error = split_database_url(url).unwrap_err().to_string();
+        assert!(error.contains("must not contain fragments"));
+        assert!(!error.contains("synthetic-value"));
+    }
+    assert!(split_database_url("mongodb://demo:encoded%23password@db/app").is_ok());
+}
