@@ -35,8 +35,7 @@ cp demo/recordings/compass-import-ux.mp4 docs/recordings/compass-import-ux.mp4
 
 The tape explicitly removes inherited `NO_COLOR` and enables a color-capable
 terminal. Questions remain light text; selected options and confirmed answers
-are cyan, with distinct `?` (active) and `>` (answered) prefixes. An introductory
-Spanish legend explains the contrast. Larger text and one-second interaction
+are cyan, with distinct `?` (active) and `>` (answered) prefixes. Larger text and one-second interaction
 pauses make both stages easier to follow. Long selected answers appear below
 their questions; short confirmations stay inline. Password entry remains hidden.
 

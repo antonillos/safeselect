@@ -15,10 +15,7 @@ Hide
 Type "cd /tmp/safeselect-compass-ux/atlas; export SAFESELECT_CONFIG_DIR=/tmp/safeselect-compass-ux/global; export PATH=/tmp/safeselect-compass-ux/bin:$PATH; unset NO_COLOR; export TERM=xterm-256color CLICOLOR=1 CLICOLOR_FORCE=1; export PS1='demo $ '; clear"
 Enter
 Sleep 1s
-Type "clear; printf '\033[1;37m? PREGUNTA\033[0m   |   \033[1;36mRESPUESTA / seleccion\033[0m\nDemo offline: passwords ocultas, sin conexiones ni Keychain.\n\n'"
-Enter
 Show
-Sleep 3s
 Type "safeselect import-compass --path ../compass.json"
 Enter
 Sleep 1s
