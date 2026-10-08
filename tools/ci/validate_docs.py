@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -12,16 +13,17 @@ LINK = re.compile(r"(?<!!)\[[^\]]*\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
 
 
 def markdown_files() -> list[Path]:
-    # Website dependencies/builds are not repository documentation. Prune them
-    # before traversal, rather than validating thousands of third-party READMEs.
-    import os
-
-    excluded = {".git", "node_modules", ".next", ".vinext", ".wrangler", ".build", "target", "out", "dist"}
-    files = []
-    for directory, children, names in os.walk(ROOT):
-        children[:] = [name for name in children if name not in excluded]
-        files.extend(Path(directory) / name for name in names if name.endswith(".md"))
-    return sorted(files)
+    # Use the Git index, not the working-tree directory inventory: generated
+    # caches and untracked dependencies are not repository documentation.
+    # -z preserves filenames containing whitespace or newlines.
+    tracked = subprocess.check_output(
+        ["git", "ls-files", "--cached", "-z"], cwd=ROOT
+    )
+    return sorted({
+        ROOT / filename.decode("utf-8", errors="surrogateescape")
+        for filename in tracked.split(b"\0")
+        if filename.endswith(b".md")
+    })
 
 
 def local_target(source: Path, raw: str) -> Path | None:
