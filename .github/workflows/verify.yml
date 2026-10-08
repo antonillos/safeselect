@@ -275,7 +275,8 @@ jobs:
     if: >-
       always() && inputs.badge_only != true &&
       needs.classify.outputs.mongodb == 'true' && needs.unit.result == 'success'
-    runs-on: ubuntu-26.04
+    # Temporary MongoDB/kernel compatibility exception.
+    runs-on: ubuntu-24.04
     services:
       mongodb:
         image: mongo:8

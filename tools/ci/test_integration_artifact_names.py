@@ -17,6 +17,15 @@ class IntegrationArtifactNamesTest(unittest.TestCase):
         self.assertLess(workflow.index("Diagnose integration startup failure"),
                         workflow.index("Stop integration services"))
 
+    def test_mongodb_jobs_use_temporary_compatible_runner(self):
+        root = Path(__file__).resolve().parents[2]
+        integration = (root / ".github/workflows/integration-tests.yml").read_text()
+        verify = (root / ".github/workflows/verify.yml").read_text()
+        mongo = verify.split("  integration-mongodb:", 1)[1].split("  security:", 1)[0]
+        self.assertIn("runs-on: ubuntu-24.04", integration)
+        self.assertIn("runs-on: ubuntu-24.04", mongo)
+        self.assertEqual(verify.count("runs-on: ubuntu-24.04"), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
