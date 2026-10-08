@@ -87,9 +87,13 @@ class WorkflowTests(unittest.TestCase):
             self.assertIn("ref: ${{ github.sha }}", text)
             self.assertIn("path: .ci-tools", text)
 
-    def test_smart_merge_release_dispatch_matches_release_inputs(self):
+    def test_smart_merge_uses_app_push_instead_of_release_dispatch(self):
         smart_merge = (ROOT / ".github/workflows/smart-merge.yml").read_text()
-        self.assertIn('workflow_id: "release.yml"', smart_merge)
+        self.assertNotIn('workflow_id: "release.yml"', smart_merge)
+        self.assertIn("mergeGithub.request", smart_merge)
+        self.assertIn("sha: pull.head.sha", smart_merge)
+        self.assertNotIn("expected_head_sha: pull.head.sha", smart_merge)
+        self.assertIn("commit_id: target.head.sha", smart_merge)
         self.assertNotIn('target_ref: "main"', smart_merge)
 
     def test_package_manager_recovery_has_same_verification_and_no_silent_skips(self):

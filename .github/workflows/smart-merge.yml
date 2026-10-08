@@ -20,11 +20,25 @@ jobs:
     if: >-
       github.event.issue.pull_request &&
       startsWith(github.event.comment.body, '/merge')
+    concurrency:
+      group: smart-merge-${{ github.repository }}-pr-${{ github.event.issue.number }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 65
     steps:
+      - name: Generate release app token for merge
+        id: merge-app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-workflows: write
       - name: Analyze and merge pull request
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          MERGE_APP_TOKEN: ${{ steps.merge-app-token.outputs.token }}
         with:
           github-token: ${{ github.token }}
           script: |
@@ -165,9 +179,7 @@ jobs:
               }
             }
 
-            // Verify is the stable branch-protection gate. It evaluates the
-            // path-selected jobs for this exact head SHA, including the real
-            // Docker integration suite when the policy requires it.
+            // Verify enforces the path-selected SafeSelect checks for this SHA.
             const requiredChecks = ["Verify"];
             const deadline = Date.now() + 30 * 60 * 1000;
 
@@ -293,54 +305,12 @@ jobs:
             // Wait until GitHub reports that every branch requirement is
             // satisfied instead of attempting the merge while checks are still
             // shown as expected.
-            let readyPull = null;
-            while (Date.now() < deadline) {
-              readyPull = (await github.rest.pulls.get({
-                owner,
-                repo,
-                pull_number: pullNumber,
-              })).data;
-              if (readyPull.head.sha !== pull.head.sha) {
-                await comment("⛔ The PR head changed during validation. Run `/merge` again.");
-                core.setFailed("Pull request head changed during validation.");
-                return;
-              }
-              if (readyPull.mergeable === false) {
-                await comment("⛔ This pull request developed merge conflicts during validation.");
-                core.setFailed("Pull request has merge conflicts.");
-                return;
-              }
-              if (readyPull.mergeable_state === "clean") break;
-              await sleep(15000);
-            }
-
-            if (!readyPull || readyPull.mergeable_state !== "clean") {
-              await comment(
-                "⏳ Timed out waiting for GitHub branch requirements to become mergeable."
-              );
-              core.setFailed("Branch requirements did not become mergeable.");
-              return;
-            }
-
+            // A bot approval can be required for protected branches. The
+            // reviewer identity is github-actions[bot], not the user who wrote
+            // /merge, so it can approve that user's PR. Only skip a PR authored
+            // by the workflow identity itself.
+            const workflowBot = "github-actions[bot]";
             for (const target of targetPulls) {
-              const current = target.number === pullNumber
-                ? readyPull
-                : (await github.rest.pulls.get({
-                    owner,
-                    repo,
-                    pull_number: target.number,
-                  })).data;
-              if (current.head.sha !== target.head.sha ||
-                  current.base.ref !== target.base.ref ||
-                  current.mergeable_state !== "clean") {
-                await comment(
-                  `⛔ Stack PR #${target.number} changed or is no longer mergeable. ` +
-                  "Resolve it, then run `/merge` again."
-                );
-                core.setFailed(`Stack PR #${target.number} is no longer ready.`);
-                return;
-              }
-
               const commits = await github.paginate(github.rest.pulls.listCommits, {
                 owner,
                 repo,
@@ -359,13 +329,91 @@ jobs:
                 core.setFailed(`Stack PR #${target.number} contains unverified commits.`);
                 return;
               }
+
+              const targetAuthor = target.user.login.toLowerCase();
+              const targetAuthorIsWorkflowBot = targetAuthor === workflowBot;
+              if (targetAuthorIsWorkflowBot) {
+                core.info(
+                  `Skipping bot approval for PR #${target.number} because @${targetAuthor} is the workflow identity.`
+                );
+                continue;
+              }
+
+
+
+              try {
+                await github.rest.pulls.createReview({
+                  owner,
+                  repo,
+                  pull_number: target.number,
+                  commit_id: target.head.sha,
+                  event: "APPROVE",
+                  body: `Approved by the smart merge command requested by @${actor}.`,
+                });
+              } catch (error) {
+                core.setFailed(`Could not submit bot approval for PR #${target.number}: ${error.message}`);
+                return;
+              }
             }
 
-            const base = stack?.base.ref || pull.base.ref;
-            const head = pull.head.ref;
-            const author = pull.user.login.toLowerCase();
-            const workflowBot = "github-actions[bot]";
-            const authorIsWorkflowBot = author === workflowBot;
+            const readyPulls = new Map();
+            let allPullsReady = false;
+            while (Date.now() < deadline) {
+              allPullsReady = true;
+              for (const target of targetPulls) {
+                const current = (await github.rest.pulls.get({
+                  owner,
+                  repo,
+                  pull_number: target.number,
+                })).data;
+                readyPulls.set(target.number, current);
+                if (current.head.sha !== target.head.sha) {
+                  await comment(
+                    target.number === pullNumber
+                      ? "⛔ The PR head changed during validation. Run `/merge` again."
+                      : `⛔ Stack PR #${target.number} changed during validation. ` +
+                        "Run `/merge` again."
+                  );
+                  core.setFailed(`Stack PR #${target.number} head changed during validation.`);
+                  return;
+                }
+                if (current.mergeable === false) {
+                  await comment(
+                    `⛔ Stack PR #${target.number} developed merge conflicts during validation.`
+                  );
+                  core.setFailed(`Stack PR #${target.number} has merge conflicts.`);
+                  return;
+                }
+                if (current.mergeable_state !== "clean") allPullsReady = false;
+              }
+              if (allPullsReady) break;
+              await sleep(15000);
+            }
+
+            if (!allPullsReady) {
+              await comment(
+                "⏳ Timed out waiting for GitHub branch requirements to become mergeable."
+              );
+              core.setFailed("Branch requirements did not become mergeable.");
+              return;
+            }
+
+            for (const target of targetPulls) {
+              const current = readyPulls.get(target.number);
+              if (current.head.sha !== target.head.sha ||
+                  current.base.ref !== target.base.ref ||
+                  current.mergeable_state !== "clean") {
+                await comment(
+                  `⛔ Stack PR #${target.number} changed or is no longer mergeable. ` +
+                  "Resolve it, then run `/merge` again."
+                );
+                core.setFailed(`Stack PR #${target.number} is no longer ready.`);
+                return;
+              }
+
+
+            }
+
             const policies = targetPulls.map((target) => {
               const targetTitle = target.title.toLowerCase();
               const targetAuthor = target.user.login.toLowerCase();
@@ -422,31 +470,6 @@ jobs:
               reason = `explicit override requested by @${actor}`;
             }
 
-            // A bot approval lets the authorized command satisfy repositories
-            // that require a review. Never attempt to approve the actor's own
-            // pull request because GitHub rejects self-approvals. The token
-            // used here authenticates as github-actions[bot], so also skip PRs
-            // authored by that exact workflow identity, but not other bots.
-            if (actor !== author && !authorIsWorkflowBot) {
-              try {
-                await github.rest.pulls.createReview({
-                  owner,
-                  repo,
-                  pull_number: pullNumber,
-                  event: "APPROVE",
-                  body: `Approved by the smart merge command requested by @${actor}.`,
-                });
-              } catch (error) {
-                core.warning(`Could not submit bot approval: ${error.message}`);
-              }
-            } else {
-              core.info(
-                authorIsWorkflowBot
-                  ? `Skipping bot approval because @${author} is the workflow identity.`
-                  : `Skipping bot approval because @${actor} authored the pull request.`
-              );
-            }
-
             // Refresh immediately before merging to avoid merging a stale head.
             const refreshed = (await github.rest.pulls.get({
               owner,
@@ -489,12 +512,16 @@ jobs:
               ...githubApiRequest,
             };
             if (method === "squash") {
-              mergeOptions.commit_title = `${pull.title} (#${pullNumber})`;
+              mergeOptions.commit_title = pull.title;
             }
 
             let mergeRequest;
             try {
-              mergeRequest = await github.request(
+              // Keep validation and bot approval on GITHUB_TOKEN, but perform
+              // the merge with the release App so its push starts Verify,
+              // Release, and main-to-develop sync workflows normally.
+              const mergeGithub = getOctokit(process.env.MERGE_APP_TOKEN);
+              mergeRequest = await mergeGithub.request(
                 "PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge-async",
                 mergeOptions
               );
@@ -582,76 +609,6 @@ jobs:
             });
             const verification = resultCommit.data.commit.verification;
 
-            // Pushes performed with GITHUB_TOKEN do not trigger downstream
-            // push workflows. Explicitly dispatch Release for release PRs so
-            // publishing does not depend on a manual workflow run.
-            const releaseMatch = head.match(/^release\/(v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?)$/i);
-            if (base === "main" && releaseMatch) {
-              const version = releaseMatch[1];
-              try {
-                await github.rest.actions.createWorkflowDispatch({
-                  owner,
-                  repo,
-                  workflow_id: "release.yml",
-                  ref: "main",
-                  inputs: {
-                    version,
-                    prerelease: version.includes("-") ? "true" : "false",
-                    draft: "false",
-                  },
-                });
-                await comment(`🚀 Release workflow dispatched for \`${version}\`.`);
-              } catch (error) {
-                core.warning(`Could not dispatch Release for ${version}: ${error.message}`);
-                await comment(
-                  `⚠️ Merge completed, but Release could not be dispatched for \`${version}\`. ` +
-                  "Run the Release workflow manually."
-                );
-              }
-
-              // A Release dispatched with GITHUB_TOKEN does not reliably emit
-              // workflow_run for the sync workflow. Dispatch it explicitly so
-              // main is always synchronized back into develop after release.
-              try {
-                await github.rest.actions.createWorkflowDispatch({
-                  owner,
-                  repo,
-                  workflow_id: "sync-main-to-develop.yml",
-                  ref: "develop",
-                  request: githubApiRequest,
-                });
-                await comment("🔄 Main-to-develop sync dispatched after the release.");
-              } catch (error) {
-                core.warning(`Could not dispatch Main To Develop sync: ${error.message}`);
-                await comment(
-                  "⚠️ Release was dispatched, but Main To Develop sync could not be dispatched; " +
-                  "run the sync workflow manually."
-                );
-              }
-            }
-
-            // GITHUB_TOKEN merges do not trigger downstream push workflows.
-            // Refresh only the CRAP badge instead of repeating the full verification suite.
-            if (base === "develop") {
-              try {
-                await github.rest.actions.createWorkflowDispatch({
-                  owner,
-                  repo,
-                  workflow_id: "verify.yml",
-                  ref: "develop",
-                  inputs: { badge_only: "true" },
-                  request: githubApiRequest,
-                });
-                await comment("📊 CRAP badge refresh dispatched on `develop`.");
-              } catch (error) {
-                core.warning(`Could not dispatch CRAP badge refresh on develop: ${error.message}`);
-                await comment(
-                  "⚠️ Merge completed, but the CRAP badge refresh could not be dispatched on `develop`; " +
-                  "run Verify manually with the badge_only input."
-                );
-              }
-            }
-
             for (const target of targetPulls) {
               const targetHead = target.head.ref;
               const disposable =
@@ -665,7 +622,13 @@ jobs:
                     ref: `heads/${targetHead}`,
                   });
                 } catch (error) {
-                  core.warning(`Could not delete ${targetHead}: ${error.message}`);
+                  // GitHub may have already removed the head branch when
+                  // delete_branch_on_merge is enabled. Cleanup is idempotent.
+                  const alreadyDeleted = [404, 422].includes(error.status) &&
+                    /Reference does not exist/i.test(error.message);
+                  if (!alreadyDeleted) {
+                    core.warning(`Could not delete ${targetHead}: ${error.message}`);
+                  }
                 }
               }
             }
