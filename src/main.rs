@@ -5,6 +5,7 @@ mod audit;
 mod backend;
 mod cli;
 mod compass;
+mod compass_import;
 mod compose;
 mod config;
 mod dbeaver;
@@ -664,14 +665,13 @@ fn default_password_variable(
     ssh: bool,
 ) -> Result<String> {
     if ssh {
-        return configured_ssh_password_variable(
-            dir,
-            environment,
-            config
-                .ssh
-                .as_ref()
-                .and_then(|s| s.secret_variable.as_deref()),
-        );
+        return Ok(config
+            .ssh
+            .as_ref()
+            .and_then(|s| s.secret_variable.clone())
+            .unwrap_or_else(|| {
+                compass_import::friendly_variable(&project_display_name(dir), environment, true)
+            }));
     }
     Ok(config
         .database
@@ -679,7 +679,9 @@ fn default_password_variable(
         .as_ref()
         .filter(|s| s.source == "env")
         .and_then(|s| s.variable.clone())
-        .unwrap_or(compose::database_env_reference(dir, environment)?))
+        .unwrap_or_else(|| {
+            compass_import::friendly_variable(&project_display_name(dir), environment, false)
+        }))
 }
 
 fn prompt_password_environment_variable(default: &str) -> Result<String> {
@@ -1207,6 +1209,27 @@ fn cmd_config(loader: &ConfigLoader, action: ConfigAction) -> Result<()> {
     }
 }
 
+fn shared_ssh_keychain_accounts(
+    project: &config::ProjectConfig,
+    project_name: &str,
+) -> Vec<String> {
+    project
+        .ssh_bastions
+        .iter()
+        .filter_map(|(name, ssh)| {
+            if ssh.secret_variable.is_some() {
+                return None;
+            }
+            ssh.secret_account.clone().or_else(|| {
+                (ssh.auth_type.as_deref() == Some("PASSWORD"))
+                    .then(|| format!("{project_name}/{name}/ssh"))
+            })
+        })
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
 fn clear_project_config(repo_root: &Path, delete_dir: bool) -> Result<()> {
     let safeselect_dir = repo_root.join(".safeselect");
     let env_dir = safeselect_dir.join("environments");
@@ -1232,6 +1255,13 @@ fn clear_project_config(repo_root: &Path, delete_dir: bool) -> Result<()> {
     if !ans {
         println!("Cancelled.");
         return Ok(());
+    }
+
+    if cfg!(target_os = "macos") && has_project_file {
+        let project = load_project_config(&safeselect_dir)?;
+        for account in shared_ssh_keychain_accounts(&project, &project_name) {
+            compose::delete_password_from_keychain(&account)?;
+        }
     }
 
     let mut removed = 0u32;
@@ -2116,6 +2146,13 @@ fn ssh_local_port_from_config(config: &config::EnvironmentConfig) -> Option<u16>
 }
 
 fn collect_used_ssh_local_ports(repo_root: &Path) -> std::collections::HashSet<u16> {
+    collect_used_ssh_local_ports_except(repo_root, None)
+}
+
+fn collect_used_ssh_local_ports_except(
+    repo_root: &Path,
+    excluded: Option<&str>,
+) -> std::collections::HashSet<u16> {
     let mut used = std::collections::HashSet::new();
     let env_dir = repo_root.join(".safeselect").join("environments");
     let entries = match std::fs::read_dir(env_dir) {
@@ -2125,6 +2162,9 @@ fn collect_used_ssh_local_ports(repo_root: &Path) -> std::collections::HashSet<u
 
     for entry in entries.flatten() {
         let path = entry.path();
+        if excluded.is_some_and(|name| path.file_stem().and_then(|s| s.to_str()) == Some(name)) {
+            continue;
+        }
         if path.extension().and_then(|ext| ext.to_str()) != Some("toml") {
             continue;
         }
@@ -2678,21 +2718,35 @@ fn cmd_import_compass(path: Option<PathBuf>, non_interactive: bool) -> Result<()
         let options: Vec<ConnLabel> = connections
             .iter()
             .enumerate()
-            .map(|(i, conn)| ConnLabel(i, format!("{:<30}  {}", conn.name, conn.url)))
+            .map(|(i, conn)| {
+                ConnLabel(
+                    i,
+                    format!("{} — {}", conn.name, compass_import::display_url(&conn.url)),
+                )
+            })
             .collect();
-        let selected = inquire::MultiSelect::new(
-            "Select MongoDB Compass connections to import (Space to toggle, Enter to confirm):",
-            options,
-        )
-        .with_page_size(20)
-        .prompt()
-        .map_err(|e| SafeselectError::Other(format!("Selection cancelled: {e}")))?;
+        let answer_length = options.iter().map(|option| option.1.chars().count()).sum();
+        let prompt =
+            "Select MongoDB Compass connections to import (Space to toggle, Enter to confirm):";
+        let selected = inquire::MultiSelect::new(prompt, options)
+            .with_page_size(20)
+            .with_render_config(compass_import::selection_render_config(
+                prompt,
+                answer_length,
+            ))
+            .prompt()
+            .map_err(|e| SafeselectError::Other(format!("Selection cancelled: {e}")))?;
         selected.iter().map(|l| l.0).collect()
     };
 
     if selected_indices.is_empty() {
         println!("No connections selected. Nothing to import.");
         return Ok(());
+    }
+
+    // Validate every selected URL before prompting or persisting any credentials.
+    for &idx in &selected_indices {
+        compass_import::split_database_url(&connections[idx].url)?;
     }
 
     let safeselect_dir = cwd.join(".safeselect");
@@ -2702,22 +2756,34 @@ fn cmd_import_compass(path: Option<PathBuf>, non_interactive: bool) -> Result<()
     let mut project_config = load_project_config(&safeselect_dir)?;
 
     let project_name = project_display_name(&cwd);
+    let mut import_index = compass_import::ImportIndex::load(&safeselect_dir)?;
     let mut imported = vec![];
-    let mut used_ssh_local_ports = collect_used_ssh_local_ports(&cwd);
     let mut reusable_ssh_configs: Vec<(String, config::SshConfig)> = Vec::new();
     let mut warnings = vec![];
     for idx in selected_indices {
         let conn = &connections[idx];
         let default_env = slug_env_name(&conn.name);
-        let env_name = if non_interactive {
-            unique_env_name(&env_dir, &default_env)
+        let default_env = if default_env.is_empty() {
+            "mongodb".to_string()
         } else {
-            let prompt = format!("Environment name for '{}':", conn.name);
-            let requested = inquire::Text::new(&prompt)
-                .with_default(&default_env)
-                .prompt()
-                .map_err(|e| SafeselectError::Other(format!("Input cancelled: {e}")))?;
-            unique_env_name(&env_dir, &slug_env_name(&requested))
+            default_env
+        };
+        let candidates = import_index.candidates(&env_dir, conn, &default_env);
+        let Some(env_name) = compass_import::select_environment(
+            &env_dir,
+            &candidates,
+            &default_env,
+            non_interactive,
+        )?
+        else {
+            continue;
+        };
+        let existing = if env_dir.join(format!("{env_name}.toml")).exists() {
+            let (_, mut existing) = load_ssh_environment_config(&cwd, &env_name)?;
+            config::merge_project_ssh(&project_config, &mut existing)?;
+            Some(existing)
+        } else {
+            None
         };
 
         let ssh = if non_interactive {
@@ -2732,11 +2798,22 @@ fn cmd_import_compass(path: Option<PathBuf>, non_interactive: bool) -> Result<()
                 &env_name,
                 &cwd,
                 &reusable_ssh_configs,
+                existing.as_ref().and_then(|c| c.ssh.as_ref()),
             )?)
         } else {
             None
         };
         let ssh = if let Some(mut ssh) = ssh {
+            let mut used_ssh_local_ports =
+                collect_used_ssh_local_ports_except(&cwd, Some(&env_name));
+            if non_interactive && ssh.auth_type.as_deref() == Some("PASSWORD") {
+                ssh.secret_variable = Some(compass_import::friendly_variable(
+                    &project_name,
+                    &env_name,
+                    true,
+                ));
+                warnings.push(format!("{env_name}: SSH password was not stored; export the configured variable before connecting."));
+            }
             let local_port = ssh
                 .local_port
                 .filter(|port| !used_ssh_local_ports.contains(port))
@@ -2746,19 +2823,14 @@ fn cmd_import_compass(path: Option<PathBuf>, non_interactive: bool) -> Result<()
                 ssh.local_host = Some("localhost".to_string());
             }
             used_ssh_local_ports.insert(local_port);
-            let bastion_name = find_matching_bastion_name(&project_config, &ssh)
-                .or_else(|| ssh.bastion.clone())
-                .unwrap_or_else(|| default_bastion_name(&ssh));
-            project_config
-                .ssh_bastions
-                .insert(bastion_name.clone(), project_ssh_bastion_from_env(&ssh));
+            let bastion_name = compass_import::register_bastion(&mut project_config, &ssh);
             let env_ssh = environment_ssh_from_bastion(bastion_name.clone(), &ssh);
-            let mut reusable_ssh = ssh.clone();
+            let mut reusable_ssh = ssh;
             reusable_ssh.bastion = Some(bastion_name.clone());
             reusable_ssh_configs.push((bastion_name, reusable_ssh));
             Some(env_ssh)
         } else {
-            None
+            existing.as_ref().and_then(|c| c.ssh.clone())
         };
 
         let raw_url = if let Some(ref ssh) = ssh {
@@ -2771,36 +2843,25 @@ fn cmd_import_compass(path: Option<PathBuf>, non_interactive: bool) -> Result<()
         } else {
             conn.url.clone()
         };
-        let (mut url, username, mut secret) =
-            prepare_mongodb_url(&cwd, &project_name, &env_name, &raw_url)?;
-        if secret.is_none() && !username.is_empty() {
-            if !cfg!(target_os = "macos") {
-                url = inject_mongodb_password_placeholder(&raw_url, &username);
-                secret = Some(database_environment_secret(&cwd, &env_name)?);
-            } else if non_interactive {
-                warnings.push(format!(
-                    "{}: Compass did not export a database password; configure it with `safeselect config set-password --environment {}` after import.",
-                    conn.name, env_name
-                ));
-            } else {
-                println!();
-                println!("── Database Password ({env_name}) ──────────────────");
-                println!();
-                let account = format!("{project_name}/{env_name}");
-                let pw = rpassword::prompt_password(
-                    "  Database password or {env:NAME} (leave empty to skip): ",
-                )?;
-                let pw = pw.trim().to_string();
-                if !pw.is_empty() {
-                    secret = Some(database_password_input_with_store(
-                        &pw,
-                        &account,
-                        compose::store_password_in_keychain,
-                    )?);
-                    url = inject_mongodb_password_placeholder(&raw_url, &username);
-                }
+        let (url, username, imported_password) = compass_import::split_database_url(&raw_url)?;
+        let existing_secret = existing.as_ref().and_then(|c| c.database.secret.as_ref());
+        let secret = if username.is_empty() {
+            existing_secret.cloned()
+        } else if non_interactive {
+            warnings.push(format!("{env_name}: database password was not stored; export the configured variable before connecting."));
+            Some(compass_import::env_secret(
+                compass_import::friendly_variable(&project_name, &env_name, false),
+            ))
+        } else {
+            compass_import::CredentialPrompt {
+                project: &project_name,
+                environment: &env_name,
+                ssh: false,
+                imported: imported_password.as_deref(),
+                existing: existing_secret,
             }
-        }
+            .run()?
+        };
         let env_config = config::EnvironmentConfig {
             version: 1,
             database: config::DatabaseConfig {
@@ -2811,24 +2872,40 @@ fn cmd_import_compass(path: Option<PathBuf>, non_interactive: bool) -> Result<()
                 username,
                 secret,
             },
-            tls: None,
+            tls: existing.as_ref().and_then(|c| c.tls.clone()),
             ssh,
-            limits: config::LimitsOverride::default(),
+            limits: existing
+                .as_ref()
+                .map(|c| c.limits.clone())
+                .unwrap_or_default(),
         };
+        compass_import::print_summary(&project_config, &env_config)?;
         let env_toml = toml::to_string_pretty(&env_config)
             .map_err(|e| SafeselectError::TomlSer(e.to_string()))?;
-        std::fs::write(env_dir.join(format!("{env_name}.toml")), env_toml)?;
+        save_project_config(&safeselect_dir, &project_config)?;
+        compass_import::write_atomic(&env_dir.join(format!("{env_name}.toml")), &env_toml)?;
+        import_index.record(conn, &env_name);
+        import_index.save(&safeselect_dir)?;
         imported.push(env_name);
     }
     save_project_config(&safeselect_dir, &project_config)?;
 
-    println!("Imported MongoDB environments: {}", imported.join(", "));
+    if imported.is_empty() {
+        println!("No environments imported. Existing environments were left unchanged.");
+    } else {
+        println!("Imported MongoDB environments: {}", imported.join(", "));
+    }
     for warning in warnings {
         println!("Warning: {warning}");
     }
     if non_interactive {
         println!("Next: safeselect check --environment <name>");
-    } else {
+    } else if !imported.is_empty()
+        && inquire::Confirm::new("Check the imported connections now?")
+            .with_default(false)
+            .prompt()
+            .map_err(|_| SafeselectError::Other("Import cancelled".into()))?
+    {
         verify_imported_environments(&cwd, &imported)?;
     }
     Ok(())
@@ -2840,12 +2917,17 @@ fn prompt_compass_ssh_config(
     env_name: &str,
     repo_root: &Path,
     current_batch: &[(String, config::SshConfig)],
+    existing: Option<&config::SshConfig>,
 ) -> Result<config::SshConfig> {
     let placeholder_warning = compass_shared_tunnel_warning(conn);
     let default_host = conn.ssh_host.as_deref().unwrap_or("");
     let default_user = conn.ssh_user.as_deref().unwrap_or("");
     let default_key = conn.ssh_key_file.as_deref().unwrap_or("");
-    let default_auth = conn.ssh_auth_type.as_deref().unwrap_or("KEY");
+    let default_auth = conn
+        .ssh_auth_type
+        .as_deref()
+        .map(normalize_ssh_auth_type)
+        .unwrap_or_else(|| "KEY".into());
 
     println!();
     println!("── SSH Configuration ({env_name}) ───────────────────");
@@ -2853,6 +2935,16 @@ fn prompt_compass_ssh_config(
     if let Some(warning) = placeholder_warning.as_deref() {
         println!("  ⚠ {warning}");
         println!();
+    }
+
+    if let Some(existing) = existing {
+        if inquire::Confirm::new("Keep the existing SSH tunnel configuration and password source?")
+            .with_default(true)
+            .prompt()
+            .map_err(|_| SafeselectError::Other("Import cancelled".into()))?
+        {
+            return Ok(existing.clone());
+        }
     }
 
     if let Some(ssh) = select_reusable_compass_ssh_config(repo_root, env_name, conn, current_batch)?
@@ -2903,7 +2995,7 @@ fn prompt_compass_ssh_config(
                 }
                 _ => {
                     let (account, variable) =
-                        prompt_ssh_password_source(&format!("{project_name}/{env_name}/ssh"))?;
+                        prompt_compass_password_source(conn, project_name, env_name, existing)?;
                     (None, Some("PASSWORD".into()), account, variable)
                 }
             };
@@ -2996,7 +3088,7 @@ fn prompt_compass_ssh_config(
     };
 
     let (secret_account, secret_variable) = if auth_type.as_deref() == Some("PASSWORD") {
-        prompt_ssh_password_source(&format!("{project_name}/{env_name}/ssh"))?
+        prompt_compass_password_source(conn, project_name, env_name, existing)?
     } else {
         (None, None)
     };
@@ -3019,6 +3111,24 @@ fn prompt_compass_ssh_config(
         forward_port: Some(forward_port),
         auth_type,
     })
+}
+
+fn prompt_compass_password_source(
+    conn: &compass::CompassConnection,
+    project: &str,
+    environment: &str,
+    existing: Option<&config::SshConfig>,
+) -> Result<(Option<String>, Option<String>)> {
+    let existing = existing.and_then(compass_import::ssh_secret);
+    let secret = compass_import::CredentialPrompt {
+        project,
+        environment,
+        ssh: true,
+        imported: conn.ssh_password.as_deref(),
+        existing: existing.as_ref(),
+    }
+    .run()?;
+    Ok(secret.map(|s| (s.account, s.variable)).unwrap_or_default())
 }
 
 fn select_reusable_compass_ssh_config(
@@ -3050,7 +3160,16 @@ fn select_reusable_compass_ssh_config(
         })
         .collect();
 
+    let answer_length = options
+        .iter()
+        .map(|option| option.chars().count())
+        .max()
+        .unwrap_or(0);
     let selected = inquire::Select::new("  Reuse bastion:", options)
+        .with_render_config(compass_import::selection_render_config(
+            "  Reuse bastion:",
+            answer_length,
+        ))
         .prompt()
         .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?;
     let selected_index = reusable
@@ -3756,7 +3875,8 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
         let bastion_port = ssh.port.unwrap_or(22);
 
         // Step 1: Check if the SSH bastion is reachable
-        let bastion_up = check_tcp_endpoint(bastion_host, bastion_port, Duration::from_secs(3));
+        let bastion_probe = probe_tcp_endpoint(bastion_host, bastion_port, Duration::from_secs(3));
+        let bastion_up = bastion_probe.is_ok();
 
         let tunnel_local_host = ssh.local_host.as_deref().unwrap_or("localhost");
         let tunnel_local_port = ssh.local_port.unwrap_or(15432);
@@ -3802,8 +3922,11 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
         };
 
         if !can_establish && !bastion_up {
-            // Can't establish and no existing tunnel — inform user with timeout details
-            println!("  ⚠  SSH bastion unreachable (connect timed out after 3s)");
+            // Can't establish and no existing tunnel — report the connection failure
+            println!(
+                "  ⚠  SSH endpoint {bastion_host}:{bastion_port} unreachable: {}",
+                bastion_probe.unwrap_err()
+            );
             if !use_password && ssh.identity_file.is_none() {
                 println!("  ⚠  No SSH key or password configured");
             }
@@ -3813,8 +3936,9 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
                 }
             }
             print_manual_tunnel_hint();
+            print_ssh_connectivity_hint(bastion_host, bastion_port);
             failures.push(format!(
-                "{env_name}: SSH bastion unreachable and no active PostgreSQL tunnel"
+                "{env_name}: SSH endpoint {bastion_host}:{bastion_port} unreachable and no active database tunnel"
             ));
             continue;
         }
@@ -3973,6 +4097,9 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
             println!("    - Database is not running or not accepting connections");
             println!("    - SSH tunnel failed to forward (check bastion logs)");
             print_manual_tunnel_hint();
+            if !bastion_up {
+                print_ssh_connectivity_hint(bastion_host, bastion_port);
+            }
             failures.push(format!(
                 "{env_name}: database not reachable through SSH tunnel after {}s",
                 tunnel_wait.as_secs()
@@ -4148,15 +4275,25 @@ fn parse_mongodb_tcp_host_port(url: &str) -> Option<(String, u16)> {
     }
 }
 
-pub(crate) fn check_tcp_endpoint(host: &str, port: u16, timeout: std::time::Duration) -> bool {
+fn probe_tcp_endpoint(host: &str, port: u16, timeout: std::time::Duration) -> std::io::Result<()> {
     use std::net::ToSocketAddrs;
 
-    format!("{host}:{port}")
-        .to_socket_addrs()
-        .map(|mut addrs| {
-            addrs.any(|addr| std::net::TcpStream::connect_timeout(&addr, timeout).is_ok())
-        })
-        .unwrap_or(false)
+    let addrs = (host, port).to_socket_addrs()?;
+    let mut last_error = std::io::Error::new(
+        std::io::ErrorKind::AddrNotAvailable,
+        "hostname resolved to no addresses",
+    );
+    for addr in addrs {
+        match std::net::TcpStream::connect_timeout(&addr, timeout) {
+            Ok(_) => return Ok(()),
+            Err(error) => last_error = error,
+        }
+    }
+    Err(last_error)
+}
+
+pub(crate) fn check_tcp_endpoint(host: &str, port: u16, timeout: std::time::Duration) -> bool {
+    probe_tcp_endpoint(host, port, timeout).is_ok()
 }
 
 pub(crate) fn check_postgres_endpoint(host: &str, port: u16) -> bool {
@@ -4233,6 +4370,25 @@ fn print_manual_tunnel_hint() {
     print_terminal_error_line("  Establish the tunnel manually using the configured SSH settings.");
 }
 
+fn ssh_connectivity_hint(host: &str, port: u16) -> String {
+    // Pass configuration as a quoted positional argument, never as Bash code.
+    let quoted_host = format!("'{}'", host.replace('\'', "'\"'\"'"));
+    format!(
+        "  Test TCP from the same terminal (Linux/WSL; requires Bash and timeout):\n\
+         \x20   timeout 5 bash -c 'exec 3<>\"/dev/tcp/$1/$2\"' -- {quoted_host} {port}\n\
+         \x20 If using Azure Bastion:\n\
+         \x20   - Keep the Azure CLI tunnel open.\n\
+         \x20   - Run it in the same WSL distribution as SafeSelect.\n\
+         \x20   - If it runs on Windows, verify that its listener is accessible from WSL.\n\
+         \x20 TCP success does not validate SSH credentials or database access."
+    )
+}
+
+fn print_ssh_connectivity_hint(host: &str, port: u16) {
+    // Preserve stdout for commands that return machine-readable output.
+    eprintln!("{}", ssh_connectivity_hint(host, port));
+}
+
 fn print_check_verbose(resolved: &config::ResolvedConfig, environment: &str) {
     println!("  · environment={environment}");
     println!("  · database=configured (details redacted)");
@@ -4303,38 +4459,48 @@ fn cmd_check(
                 }
             }
 
-            // If the local PostgreSQL endpoint is already reachable, an external
-            // tunnel (for example DBeaver) is active and that is good enough.
-            if !postgres_reachable {
-                if check_tcp_endpoint(
+            let document_reachable = resolved.environment.database.kind
+                == crate::backend::BackendKind::Document
+                && extract_tcp_host_port(&resolved.environment.database.url)
+                    .map(|(host, port)| {
+                        check_tcp_endpoint(&host, port, std::time::Duration::from_secs(3))
+                    })
+                    .unwrap_or(false);
+
+            // An existing database route still requires the sidecar backend check below.
+            if !postgres_reachable && !document_reachable {
+                match probe_tcp_endpoint(
                     bastion_host,
                     bastion_port,
                     std::time::Duration::from_secs(3),
                 ) {
-                    diagnostics::print(
+                    Ok(()) => diagnostics::print(
                         DiagnosticStatus::Ok,
                         DiagnosticCode::SshBastionReachable,
-                        "SSH bastion reachable",
-                    );
-                } else {
-                    diagnostics::print(
-                        DiagnosticStatus::Fail,
-                        DiagnosticCode::SshBastionUnreachable,
-                        "SSH bastion unreachable (connect timed out after 3s)",
-                    );
-                    if let Some(ref identity_file) = ssh.identity_file {
-                        if !std::path::Path::new(identity_file).exists() {
-                            diagnostics::print(
-                                DiagnosticStatus::Fail,
-                                DiagnosticCode::SshIdentityMissing,
-                                "SSH identity file not found",
-                            );
+                        format!("SSH endpoint {bastion_host}:{bastion_port} reachable (TCP)"),
+                    ),
+                    Err(error) => {
+                        let message = format!(
+                            "SSH endpoint {bastion_host}:{bastion_port} unreachable: {error}"
+                        );
+                        diagnostics::print(
+                            DiagnosticStatus::Fail,
+                            DiagnosticCode::SshBastionUnreachable,
+                            &message,
+                        );
+                        if let Some(ref identity_file) = ssh.identity_file {
+                            if !std::path::Path::new(identity_file).exists() {
+                                diagnostics::print(
+                                    DiagnosticStatus::Fail,
+                                    DiagnosticCode::SshIdentityMissing,
+                                    "SSH identity file not found",
+                                );
+                            }
                         }
+                        print_manual_tunnel_hint();
+                        print_ssh_connectivity_hint(bastion_host, bastion_port);
+                        return Err(SafeselectError::Other(message));
                     }
-                    print_manual_tunnel_hint();
-                    return Err(SafeselectError::Other(
-                        "SSH bastion not reachable (connect timed out after 3s).".into(),
-                    ));
                 }
             }
 
@@ -5342,6 +5508,35 @@ pub(crate) fn uninstall_binary_paths() -> Vec<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn shared_ssh_cleanup_uses_saved_accounts_and_preserves_env_sources() {
+        let project: super::config::ProjectConfig = toml::from_str(
+            r#"
+version=1
+[ssh_bastions.imported]
+auth_type="PASSWORD"
+secret_account="demo/staging/compass-synthetic/ssh"
+[ssh_bastions.duplicate]
+secret_account="demo/staging/compass-synthetic/ssh"
+[ssh_bastions.legacy]
+auth_type="PASSWORD"
+[ssh_bastions.exported]
+auth_type="PASSWORD"
+secret_variable="DEMO_SSH_PASSWORD"
+[ssh_bastions.key]
+auth_type="KEY"
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            super::shared_ssh_keychain_accounts(&project, "demo"),
+            vec!["demo/legacy/ssh", "demo/staging/compass-synthetic/ssh",]
+        );
+    }
+
+    #[path = "ssh_connectivity_hint.rs"]
+    mod ssh_connectivity_hint_tests;
+
     #[path = "password_references.rs"]
     mod password_reference_tests;
 
@@ -7212,6 +7407,30 @@ username = "usr_app"
     }
 
     #[test]
+    fn tcp_probe_accepts_local_bastion_tunnel_endpoint() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert!(probe_tcp_endpoint("127.0.0.1", port, std::time::Duration::from_secs(1)).is_ok());
+    }
+
+    #[test]
+    fn tcp_probe_preserves_connection_refused() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let error =
+            probe_tcp_endpoint("127.0.0.1", port, std::time::Duration::from_secs(1)).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::ConnectionRefused);
+    }
+
+    #[test]
+    fn tcp_probe_preserves_resolution_error() {
+        let error = probe_tcp_endpoint("invalid host", 2222, std::time::Duration::from_secs(1))
+            .unwrap_err();
+        assert_ne!(error.kind(), std::io::ErrorKind::TimedOut);
+    }
+
+    #[test]
     fn compass_local_tunnel_endpoint_is_imported_for_reuse() {
         let conn = crate::compass::CompassConnection {
             name: "iopcompclopre002 (pre)".to_string(),
@@ -7223,6 +7442,7 @@ username = "usr_app"
             ssh_local_port: None,
             ssh_key_file: None,
             ssh_auth_type: None,
+            ssh_password: None,
         };
 
         let ssh = compass_ssh_config(&conn).expect("expected ssh config");

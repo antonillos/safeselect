@@ -66,6 +66,9 @@ keep the password in macOS Keychain, install the OpenCode integration, and see
 the agent read a paid order while its `DELETE` attempt is rejected. Focused
 agent and backend clips remain in the [complete demo gallery](demo/README.md).
 
+**Linux onboarding:** [Watch current-source Compass → password-authenticated bastion → check](demo/README.md#linux-onboarding-with-environment-password-references),
+using environment references for both passwords, with hidden input and no secrets stored in TOML.
+
 ## Quick Start
 
 Run setup from your repository root. You will need a PostgreSQL or MongoDB
@@ -410,6 +413,32 @@ safeselect import-compass --path ~/.config/MongoDB Compass
 <p><img src="docs/recordings/cli/import-compass.png" alt="Terminal capture for safeselect import-compass [--path &lt;path&gt;]" width="720"></p>
 
 _Compass imports preserve MongoDB connection details without exposing credentials._
+
+Interactive import uses the same password choices for the database and SSH
+bastion: keep the existing source, use a password present in the export, enter a
+password with hidden input, reference an exported variable, or configure it later.
+Imported passwords are always literal values, never interpreted as references.
+Before accepting a literal password, SafeSelect asks where to keep it: macOS
+Keychain or an environment variable available **only during that import process**.
+Session-only passwords are not saved and cannot be exported to the parent shell;
+future CLI/MCP commands need the variable exported by their launching shell.
+No plaintext password is written to TOML, logs or terminal commands.
+
+Suggested variables include the project, environment and purpose, for example
+`MYAPP_STAGING_DB_PASSWORD` and `MYAPP_STAGING_SSH_PASSWORD`. They are editable;
+existing references are not renamed. Projects with identical or normalized names
+should choose distinct prefixes when sharing a launching shell.
+
+Reimporting offers **update existing**, **create new**, or **skip**. Updates retain
+password sources by default, preserve TLS and limits, and do not silently mutate
+shared bastions. A local `.safeselect/compass-imports.toml` index recognizes custom
+names from previous imports using password-independent connection fingerprints.
+Non-interactive import skips existing connections and configures environment
+references without automatically storing exported passwords. Connectivity checks
+require confirmation after interactive import.
+
+See the [synthetic Compass UX VHS](demo/compass-import-ux/README.md).
+
 
 
 </details>
@@ -897,3 +926,14 @@ Release notes are generated from `CHANGELOG.md`.
 ## License
 
 MIT - see [LICENSE](LICENSE).
+
+When using an Azure Bastion tunnel, open it before running SafeSelect and set
+its SSH host and port to the local listener (for example `127.0.0.1:2222`).
+The SSH connectivity diagnostic reports the configured endpoint and the actual
+TCP connection or name resolution error; TCP success does not validate SSH
+credentials. Run the Azure CLI tunnel in the same WSL distribution as SafeSelect,
+or ensure that its Windows listener is accessible from WSL.
+On SSH connectivity failure, SafeSelect also prints a safely quoted TCP probe
+command for the configured endpoint, using Bash and `timeout` on Linux/WSL;
+neither `nc` nor `telnet` is required. Run it from the same terminal environment
+as SafeSelect. A successful TCP probe does not verify SSH or database authentication.

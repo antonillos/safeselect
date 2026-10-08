@@ -64,7 +64,9 @@ python3 -B tools/validate_cli_gallery.py
 
 | Scenario | Recording |
 |---|---|
-| Linux: asdf → Compass + database/SSH passwords → check | [Setup](linux-onboarding/README.md) · recording pending a release containing PR #279 |
+| Compass current source: one import → credential choices | [Watch](../docs/recordings/compass-import-ux.gif) · [MP4](../docs/recordings/compass-import-ux.mp4) · [Reproduce](compass-import-ux/README.md) |
+| Compass reimport: update/create/skip (separate feature demo) | [Watch](../docs/recordings/compass-reimport.gif) · [MP4](../docs/recordings/compass-reimport.mp4) · [Reproduce](compass-import-ux/README.md) |
+| Linux current source: one Compass import → check | [Watch](../docs/recordings/linux-onboarding-envrefs.gif) · [MP4](../docs/recordings/linux-onboarding-envrefs.mp4) · [Reproduce](linux-onboarding/README.md) |
 | Complete first-time onboarding: Homebrew, DBeaver SSH, Keychain and OpenCode | [Watch](../docs/recordings/onboarding-full-local.gif) |
 | OpenCode discovers a PostgreSQL database | [Watch](../docs/recordings/safeselect-opencode.gif) |
 | Codex discovers the same PostgreSQL database | [Watch](../docs/recordings/safeselect-codex.gif) |
@@ -78,6 +80,39 @@ python3 -B tools/validate_cli_gallery.py
 ./demo/setup.sh
 safeselect agent install opencode --project "$PWD/demo" --environment postgres --local
 ```
+
+### Current Compass import UX
+
+![Compass import: readable answers and credential choices](../docs/recordings/compass-import-ux.gif)
+
+[Watch MP4](../docs/recordings/compass-import-ux.mp4) · [Reproduce](compass-import-ux/README.md)
+
+Recorded from the current **macOS source build**, not the public release.
+Questions are white, selected answers cyan; long connection and bastion answers
+appear below their questions. Short confirmations stay inline. The synthetic,
+offline fixture performs one import using exported passwords.
+It does not write to Keychain or connect to a database.
+
+### Compass reimport feature demo
+
+![Compass reimport: update, create a copy and skip](../docs/recordings/compass-reimport.gif)
+
+This separate clip starts with a prepared synthetic environment and focuses only
+on update/create/skip. It is not part of the first-import onboarding story.
+
+### Linux onboarding with environment password references
+
+![Linux onboarding: asdf, Compass, password-authenticated SSH bastion and successful check](../docs/recordings/linux-onboarding-envrefs.gif)
+
+[Watch the MP4](../docs/recordings/linux-onboarding-envrefs.mp4) · [Reproduce the recording](linux-onboarding/README.md)
+
+Recorded on Linux with the **current source build**, with its revision shown.
+The synthetic Compass export includes disposable database/SSH passwords; both
+use the same source and storage questions, with readable project-prefixed names.
+Session-only import values expire on exit, so both passwords are silently
+exported in the launching shell before connectivity is checked. This main demo imports once;
+[reimport cases](../docs/recordings/compass-reimport.gif) have their own clip. It is not an asdf
+installation demo or evidence of the public release's UX.
 
 ### Agent discovery
 

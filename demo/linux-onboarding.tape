@@ -1,14 +1,14 @@
-# Requires a public release containing PR #279; do not render with v0.7.10.
+# Current Linux source build, not a public release or asdf installation demo.
 Output "demo/recordings/linux-onboarding-envrefs.gif"
 Output "demo/recordings/linux-onboarding-envrefs.mp4"
 Output "demo/.runtime/linux-onboarding/screen.txt"
 Require docker
 Set Shell "bash"
 Set FontSize 18
-Set Width 1440
-Set Height 900
+Set Width 1600
+Set Height 1000
 Set Padding 20
-Set Theme "GitHub Dark"
+Set Theme "Dracula"
 Set TypingSpeed 15ms
 Set WindowBar "Colorful"
 Set WaitTimeout 5m
@@ -17,20 +17,10 @@ Hide
 Type "docker exec -it safeselect-linux-onboarding-terminal bash --noprofile --norc"
 Enter
 Sleep 1s
-Type "export PS1='linux $ '; clear"
+Type "export PATH=/home/demo/.local/bin:$PATH; unset NO_COLOR; export TERM=xterm-256color CLICOLOR=1 CLICOLOR_FORCE=1; export PS1='linux $ '; clear"
 Enter
 Show
-Type "uname -sm; java -version; asdf --version"
-Enter
-Sleep 3s
-Type "asdf plugin add safeselect https://github.com/antonillos/asdf-safeselect.git"
-Enter
-Sleep 10s
-Type "asdf install safeselect latest"
-Enter
-Wait+Screen /safeselect installed at/
-Sleep 2s
-Type "asdf set safeselect latest; asdf reshim safeselect; safeselect --version"
+Type "uname -sm; java -version; safeselect --version; printf 'Current source revision: '; cat /home/demo/source-revision.txt"
 Enter
 Sleep 3s
 Type "safeselect import-compass --path /home/demo/compass.json"
@@ -56,19 +46,36 @@ Enter
 Sleep 1s
 Enter
 Sleep 1s
-Type "{env:BASTION_PASSWORD}"
+# SSH: reuse exported literal, choose process-local storage, confirm, accept variable.
 Enter
-Sleep 3s
-Type "safeselect config set-password --environment staging --password '{env:DB_PASSWORD}'"
+Sleep 1s
+Enter
+Sleep 1s
+Type "y"
+Enter
+Sleep 1s
+Enter
+Sleep 1s
+# Database: same credential choices and readable project prefix.
+Enter
+Sleep 1s
+Enter
+Sleep 1s
+Type "y"
+Enter
+Sleep 1s
+Enter
+Sleep 1s
+# Skip immediate connectivity: import-process values are not parent-shell exports.
 Enter
 Sleep 2s
-Type "read -rsp 'Database password: ' DB_PASSWORD; echo; export DB_PASSWORD"
+Type "read -rsp 'Database password: ' WORKSPACE_STAGING_DB_PASSWORD; echo; export WORKSPACE_STAGING_DB_PASSWORD"
 Enter
 Sleep 1s
 Type "demo-password"
 Enter
 Sleep 2s
-Type "read -rsp 'Bastion password: ' BASTION_PASSWORD; echo; export BASTION_PASSWORD"
+Type "read -rsp 'Bastion password: ' WORKSPACE_STAGING_SSH_PASSWORD; echo; export WORKSPACE_STAGING_SSH_PASSWORD"
 Enter
 Sleep 1s
 Type "bastion-demo-password"

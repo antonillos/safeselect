@@ -2,7 +2,10 @@
 
 ## Normal flow
 
-1. Merge feature PRs into `develop`, then promote `develop` into `main`.
+1. Merge feature PRs into `develop`. Run **Prepare Promotion** from Actions
+   to open or reuse the `develop` → `main` PR; no changes means no new PR.
+   Review it and use `/merge` after its checks pass, preserving branch ancestry.
+   The workflow never merges, changes versions or publishes a release.
 2. Run **Prepare Release** from `main` and review its version/changelog PR.
 3. Merge the release PR. **Release** validates the version and freezes the source
    commit SHA. An existing tag must resolve to that exact commit.
@@ -34,13 +37,23 @@ directory and does not overwrite a developer's existing installation.
 
 ## Credentials
 
-- `GITHUB_TOKEN`: automatic, scoped to the repository; read access in builds,
-  write access only where publishing requires it.
-- `SAFESELECT_RELEASE_TOKEN`: existing cross-repository credential used for
-  Homebrew/asdf. Grant only the required repositories and write permissions.
-  Missing credentials or denied writes fail the publication job, not silently
-  succeed. Nothing about the makevn fix requires rotating this token.
+- `RELEASE_APP_CLIENT_ID` (Actions variable) and `RELEASE_APP_PRIVATE_KEY`
+  (Actions secret): credentials for the shared Vulcan Protocol GitHub App.
+  Prepare Release and sync use repository-scoped tokens; Smart Merge validates
+  and approves with `GITHUB_TOKEN`, then merges with the App so push workflows run.
+  Publication requests contents-write only; distribution tokens access only
+  `homebrew-tap` and `asdf-safeselect`.
+- `SAFESELECT_CI_SIGNING_KEY`: SSH signing key for release, sync and distribution
+  commits; App authentication does not replace cryptographic commit signatures.
 - MCP Registry authentication continues to use GitHub OIDC.
+
+Prepare releases only from `main`. Sync opens a PR after each push to `main`;
+its merge is not automatic. Smart Merge approves the verified commit before
+waiting for branch protection. Configure one required approval on `main` only
+once the migrated workflow is active. No App bypass is required.
+
+Keep legacy credentials until the new workflows have been validated and all
+active consumers migrated. Never paste private keys into PRs, logs or chat.
 
 ## Recovering a failed release
 

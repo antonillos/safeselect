@@ -88,15 +88,33 @@ class SiteValidationTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "alternative text"):
                     site.Page(f'<img src="/icon.svg" {attributes}>')
 
-    def test_docs_skip_generated_dependencies(self):
+    def test_docs_only_include_tracked_markdown(self):
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
         (self.root / "docs").mkdir()
         (self.root / "docs/guide.md").write_text("# Guide\n")
-        for directory in ("site/node_modules/pkg", "site/out", "sidecar/target"):
+        subprocess.run(["git", "-C", str(self.root), "add", "docs/guide.md"], check=True)
+        for directory in ("site/node_modules/pkg", "site/out", "sidecar/target",
+                          "demo/.runtime", "site/source-docs"):
             path = self.root / directory
             path.mkdir(parents=True)
             (path / "README.md").write_text("Unreviewed dependency docs")
         with patch.object(docs, "ROOT", self.root):
             self.assertEqual(docs.markdown_files(), [self.root / "docs/guide.md"])
+
+    def test_docs_include_tracked_files_in_generated_looking_directories(self):
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        directory = self.root / "site/source-docs"
+        directory.mkdir(parents=True)
+        document = directory / "guide with spaces.md"
+        document.write_text("# Guide\n")
+        subprocess.run(["git", "-C", str(self.root), "add", "."], check=True)
+        with patch.object(docs, "ROOT", self.root):
+            self.assertEqual(docs.markdown_files(), [document])
+
+    def test_docs_git_failure_does_not_silently_skip_validation(self):
+        with patch.object(docs, "ROOT", self.root):
+            with self.assertRaises(subprocess.CalledProcessError):
+                docs.markdown_files()
 
 
 class WebsiteWorkflowTests(unittest.TestCase):

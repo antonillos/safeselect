@@ -1,0 +1,4 @@
+# GitHub-hosted label missing from actionlint v1.7.12 catalog.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04

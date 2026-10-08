@@ -9,6 +9,23 @@ class IntegrationArtifactNamesTest(unittest.TestCase):
         names = [f"integration-test-logs-pg{v}" for v in (15, 16, 17, 18)]
         self.assertEqual(len(names), len(set(names)))
 
+    def test_startup_failure_collects_bounded_logs_before_cleanup(self):
+        workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/integration-tests.yml").read_text()
+        self.assertIn("id: services", workflow)
+        self.assertIn("if: failure() && steps.services.outcome == 'failure'", workflow)
+        self.assertIn("logs --no-color --tail=100 postgres mongodb", workflow)
+        self.assertLess(workflow.index("Diagnose integration startup failure"),
+                        workflow.index("Stop integration services"))
+
+    def test_mongodb_jobs_use_temporary_compatible_runner(self):
+        root = Path(__file__).resolve().parents[2]
+        integration = (root / ".github/workflows/integration-tests.yml").read_text()
+        verify = (root / ".github/workflows/verify.yml").read_text()
+        mongo = verify.split("  integration-mongodb:", 1)[1].split("  security:", 1)[0]
+        self.assertIn("runs-on: ubuntu-24.04", integration)
+        self.assertIn("runs-on: ubuntu-24.04", mongo)
+        self.assertEqual(verify.count("runs-on: ubuntu-24.04"), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
