@@ -91,7 +91,8 @@ class WorkflowTests(unittest.TestCase):
         smart_merge = (ROOT / ".github/workflows/smart-merge.yml").read_text()
         self.assertNotIn('workflow_id: "release.yml"', smart_merge)
         self.assertIn("mergeGithub.request", smart_merge)
-        self.assertIn("expected_head_sha: pull.head.sha", smart_merge)
+        self.assertIn("sha: pull.head.sha", smart_merge)
+        self.assertNotIn("expected_head_sha: pull.head.sha", smart_merge)
         self.assertIn("commit_id: target.head.sha", smart_merge)
         self.assertNotIn('target_ref: "main"', smart_merge)
 

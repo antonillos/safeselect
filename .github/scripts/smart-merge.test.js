@@ -38,7 +38,7 @@ async function run(options = {}) {
     github, context: { repo: { owner: 'antonillos', repo: 'safeselect' }, issue: { number: 1 }, actor: 'antonillos', payload: { comment: { body: '/merge', id: 1 } } },
     core: { setFailed: () => events.push('failed'), info: () => {}, warning: () => {} },
     process: { env: { MERGE_APP_TOKEN: 'mock' } },
-    getOctokit: token => { assert.equal(token, 'mock'); return { request: async (route, args) => { events.push('merge'); assert.equal(args.expected_head_sha, 'abc'); return { status: 200, data: { status: 'merged', details: { sha: 'result' } } }; } }; },
+    getOctokit: token => { assert.equal(token, 'mock'); return { request: async (route, args) => { events.push('merge'); assert.equal(args.sha, 'abc'); assert.equal(Object.hasOwn(args, 'expected_head_sha'), false); return { status: 200, data: { status: 'merged', details: { sha: 'result' } } }; } }; },
     setTimeout: fn => { fn(); },
   };
   await vm.runInNewContext(`(async () => {${script}\n})()`, sandbox);

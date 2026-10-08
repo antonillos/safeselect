@@ -508,7 +508,7 @@ jobs:
               pull_number: pullNumber,
               merge_method: method,
               merge_action: "default",
-              expected_head_sha: pull.head.sha,
+              sha: pull.head.sha,
               ...githubApiRequest,
             };
             if (method === "squash") {
