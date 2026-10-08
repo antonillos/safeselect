@@ -907,3 +907,7 @@ The SSH connectivity diagnostic reports the configured endpoint and the actual
 TCP connection or name resolution error; TCP success does not validate SSH
 credentials. Run the Azure CLI tunnel in the same WSL distribution as SafeSelect,
 or ensure that its Windows listener is accessible from WSL.
+On SSH connectivity failure, SafeSelect also prints a safely quoted TCP probe
+command for the configured endpoint, using Bash and `timeout` on Linux/WSL;
+neither `nc` nor `telnet` is required. Run it from the same terminal environment
+as SafeSelect. A successful TCP probe does not verify SSH or database authentication.
