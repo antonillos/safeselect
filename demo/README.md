@@ -108,7 +108,8 @@ on update/create/skip. It is not part of the first-import onboarding story.
 
 Recorded on Linux with the **current source build**, with its revision shown.
 The synthetic Compass export includes disposable database/SSH passwords; both
-use the same source and storage questions, with readable project-prefixed names.
+use the same source and storage questions, with project-prefixed database names
+and environment-only bastion names such as `STAGING_SSH_PASSWORD`.
 Session-only import values expire on exit, so both passwords are silently
 exported in the launching shell before connectivity is checked. This main demo imports once;
 [reimport cases](../docs/recordings/compass-reimport.gif) have their own clip. It is not an asdf

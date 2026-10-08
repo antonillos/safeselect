@@ -186,7 +186,17 @@ fn default_password_names_and_keychain_selection_preserve_existing_sources() {
         default_password_variable(&root, "dev", &cfg, false).unwrap(),
         "CUSTOM_DB"
     );
-    cfg.ssh = Some(toml::from_str("enabled=true\nsecret_variable='CUSTOM_SSH'").unwrap());
+    cfg.ssh = Some(toml::from_str("enabled=true").unwrap());
+    assert_eq!(
+        default_password_variable(&root, "dev", &cfg, true).unwrap(),
+        "DEV_SSH_PASSWORD"
+    );
+    cfg.ssh.as_mut().unwrap().secret_variable = Some("LEGACY_PROJECT_DEV_SSH_PASSWORD".into());
+    assert_eq!(
+        default_password_variable(&root, "dev", &cfg, true).unwrap(),
+        "LEGACY_PROJECT_DEV_SSH_PASSWORD"
+    );
+    cfg.ssh.as_mut().unwrap().secret_variable = Some("CUSTOM_SSH".into());
     assert!(validate_password_target(&cfg, true).is_ok());
     assert_eq!(
         default_password_variable(&root, "dev", &cfg, true).unwrap(),
