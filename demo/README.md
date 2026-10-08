@@ -64,6 +64,7 @@ python3 -B tools/validate_cli_gallery.py
 
 | Scenario | Recording |
 |---|---|
+| DBeaver current source: one import → SSH and credential choices | [Watch](../docs/recordings/dbeaver-import-ux.gif) · [MP4](../docs/recordings/dbeaver-import-ux.mp4) · [Reproduce](dbeaver-import-ux/README.md) |
 | Compass current source: one import → credential choices | [Watch](../docs/recordings/compass-import-ux.gif) · [MP4](../docs/recordings/compass-import-ux.mp4) · [Reproduce](compass-import-ux/README.md) |
 | Compass reimport: update/create/skip (separate feature demo) | [Watch](../docs/recordings/compass-reimport.gif) · [MP4](../docs/recordings/compass-reimport.mp4) · [Reproduce](compass-import-ux/README.md) |
 | Linux current source: one Compass import → check | [Watch](../docs/recordings/linux-onboarding-envrefs.gif) · [MP4](../docs/recordings/linux-onboarding-envrefs.mp4) · [Reproduce](linux-onboarding/README.md) |
@@ -80,6 +81,18 @@ python3 -B tools/validate_cli_gallery.py
 ./demo/setup.sh
 safeselect agent install opencode --project "$PWD/demo" --environment postgres --local
 ```
+
+### Current DBeaver import UX
+
+![DBeaver import: SSH and shared credential choices](../docs/recordings/dbeaver-import-ux.gif)
+
+[Watch MP4](../docs/recordings/dbeaver-import-ux.mp4) · [Reproduce](dbeaver-import-ux/README.md)
+
+Recorded from the current macOS source build, with one synthetic offline import.
+The database password comes from the export; the SSH password is entered with
+hidden input. Both use session-only storage, not Keychain. The clip declines
+connectivity checks and shows password-free TOML. It does not claim a successful
+database connection or recreate the older Homebrew/agent onboarding sequence.
 
 ### Current Compass import UX
 

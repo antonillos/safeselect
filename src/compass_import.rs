@@ -153,12 +153,15 @@ pub struct ImportIndex {
 
 impl ImportIndex {
     pub fn load(dir: &Path) -> Result<Self> {
-        let path = dir.join("compass-imports.toml");
+        Self::load_file(&dir.join("compass-imports.toml"))
+    }
+
+    pub fn load_file(path: &Path) -> Result<Self> {
         if !path.exists() {
             return Ok(Self::default());
         }
         let index: Self = toml::from_str(&std::fs::read_to_string(path)?)
-            .map_err(|_| SafeselectError::Config("Invalid Compass import index".into()))?;
+            .map_err(|_| SafeselectError::Config("Invalid connection import index".into()))?;
         if index
             .connections
             .values()
@@ -166,7 +169,7 @@ impl ImportIndex {
             .any(|name| !valid_environment_name(name))
         {
             return Err(SafeselectError::Config(
-                "Invalid environment name in Compass import index".into(),
+                "Invalid environment name in connection import index".into(),
             ));
         }
         Ok(index)
@@ -193,20 +196,37 @@ impl ImportIndex {
     }
 
     pub fn record(&mut self, conn: &crate::compass::CompassConnection, name: &str) {
+        self.record_key(fingerprint(conn), name);
+    }
+
+    pub fn indexed_candidates(&self, dir: &Path, key: &str) -> Vec<String> {
+        self.connections
+            .get(key)
+            .into_iter()
+            .flatten()
+            .filter(|name| {
+                valid_environment_name(name) && dir.join(format!("{name}.toml")).exists()
+            })
+            .cloned()
+            .collect()
+    }
+
+    pub fn record_key(&mut self, key: String, name: &str) {
         // An overwritten environment belongs only to its latest imported identity.
         for names in self.connections.values_mut() {
             names.retain(|existing| existing != name);
         }
-        self.connections
-            .entry(fingerprint(conn))
-            .or_default()
-            .push(name.into());
+        self.connections.entry(key).or_default().push(name.into());
     }
 
     pub fn save(&self, dir: &Path) -> Result<()> {
+        self.save_file(&dir.join("compass-imports.toml"))
+    }
+
+    pub fn save_file(&self, path: &Path) -> Result<()> {
         let content =
             toml::to_string_pretty(self).map_err(|e| SafeselectError::TomlSer(e.to_string()))?;
-        crate::compass_import::write_atomic(&dir.join("compass-imports.toml"), &content)
+        crate::compass_import::write_atomic(path, &content)
     }
 }
 
@@ -251,7 +271,7 @@ pub fn select_environment(
 }
 
 fn environment_section(connection: &str, candidates: &[String]) -> String {
-    let mut section = format!("\n── Compass connection: {connection} ──\n");
+    let mut section = format!("\n── Import connection: {connection} ──\n");
     if !candidates.is_empty() {
         section.push_str(&format!(
             "Existing environments: {}\n",
@@ -263,7 +283,9 @@ fn environment_section(connection: &str, candidates: &[String]) -> String {
 
 fn unattended_environment(dir: &Path, candidates: &[String], default: &str) -> Option<String> {
     if !candidates.is_empty() {
-        println!("Skipping existing Compass connection (non-interactive import never overwrites).");
+        println!(
+            "Skipping existing imported connection (non-interactive import never overwrites)."
+        );
         return None;
     }
     let mut name = default.to_string();
@@ -560,7 +582,7 @@ impl CredentialPrompt<'_> {
             choices.push("Keep existing password source");
         }
         if self.imported.is_some_and(|value| !value.is_empty()) {
-            choices.push("Use password from Compass export");
+            choices.push("Use password from export");
         }
         choices.extend([
             "Enter password (hidden)",
@@ -581,7 +603,7 @@ impl CredentialPrompt<'_> {
             "Configure later" | "Use an exported environment variable" => {
                 self.reference_source(ui).map(Some)
             }
-            "Use password from Compass export" => self.prompt_literal(true, ui, storage),
+            "Use password from export" => self.prompt_literal(true, ui, storage),
             "Enter password (hidden)" => self.prompt_literal(false, ui, storage),
             _ => Err(invalid_selection()),
         }
@@ -644,7 +666,7 @@ impl CredentialPrompt<'_> {
         // Never mutate another environment's existing/shared credential.
         let suffix = if self.ssh { "/ssh" } else { "" };
         Destination::Keychain(format!(
-            "{}/{}/compass-{}{suffix}",
+            "{}/{}/import-{}{suffix}",
             self.project,
             self.environment,
             uuid::Uuid::new_v4()

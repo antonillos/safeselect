@@ -4,15 +4,15 @@ use super::*;
 fn connection_sections_separate_imports_and_identify_existing_environments() {
     assert_eq!(
         environment_section("pro", &["pro".into()]),
-        "\n── Compass connection: pro ──\nExisting environments: pro\n"
+        "\n── Import connection: pro ──\nExisting environments: pro\n"
     );
     assert_eq!(
         environment_section("production", &["pro".into(), "copy".into()]),
-        "\n── Compass connection: production ──\nExisting environments: pro, copy\n"
+        "\n── Import connection: production ──\nExisting environments: pro, copy\n"
     );
     assert_eq!(
         environment_section("staging", &[]),
-        "\n── Compass connection: staging ──\n"
+        "\n── Import connection: staging ──\n"
     );
 }
 
@@ -402,7 +402,7 @@ fn database_and_ssh_use_identical_explicit_import_and_destination_flow_on_both_p
             };
             let mut ui = ScriptedInteraction::new(
                 &[
-                    "Use password from Compass export",
+                    "Use password from export",
                     "Environment variable (this import session only)",
                 ],
                 &[true],
@@ -453,7 +453,7 @@ fn hidden_direct_passwords_preserve_whitespace_and_choose_keychain_explicitly() 
     .unwrap();
     assert_eq!(secret.source, "macos-keychain");
     assert_eq!(storage.writes[0].1, "  literal password  ");
-    assert!(storage.writes[0].0.starts_with("atlas/staging/compass-"));
+    assert!(storage.writes[0].0.starts_with("atlas/staging/import-"));
 }
 
 #[test]
@@ -663,15 +663,12 @@ fn source_menu_only_offers_credentials_that_exist() {
     prompt.imported = Some("");
     assert!(!prompt
         .source_choices()
-        .contains(&"Use password from Compass export"));
+        .contains(&"Use password from export"));
     prompt.imported = Some("literal");
     prompt.existing = Some(&existing);
     assert_eq!(
         &prompt.source_choices()[..2],
-        &[
-            "Keep existing password source",
-            "Use password from Compass export"
-        ]
+        &["Keep existing password source", "Use password from export"]
     );
 }
 
@@ -726,10 +723,7 @@ fn keychain_destination_does_not_reuse_an_existing_account_for_db_or_ssh() {
             variable: None,
         };
         let mut ui = ScriptedInteraction::new(
-            &[
-                "Use password from Compass export",
-                "macOS Keychain (recommended)",
-            ],
+            &["Use password from export", "macOS Keychain (recommended)"],
             &[],
         );
         let mut storage = RecordingStorage {
@@ -785,8 +779,7 @@ fn storage_failures_propagate_through_the_real_prompt_orchestration() {
         "macOS Keychain (recommended)",
         "Environment variable (this import session only)",
     ] {
-        let mut ui =
-            ScriptedInteraction::new(&["Use password from Compass export", destination], &[true]);
+        let mut ui = ScriptedInteraction::new(&["Use password from export", destination], &[true]);
         let mut storage = RecordingStorage {
             macos: true,
             fail_store: true,
