@@ -18,7 +18,9 @@ on:
         required: false
         type: string
     secrets:
-      SAFESELECT_RELEASE_TOKEN:
+      RELEASE_APP_PRIVATE_KEY:
+        required: true
+      SAFESELECT_CI_SIGNING_KEY:
         required: true
 
 permissions:
@@ -51,9 +53,34 @@ jobs:
           intel_mac_sha="$(awk '{print $1}' "dist/release/safeselect-${VERSION}-x86_64-apple-darwin.tar.gz.sha256")"
           printf 'arm-mac-sha=%s\n' "$arm_mac_sha" >> "$GITHUB_OUTPUT"
           printf 'intel-mac-sha=%s\n' "$intel_mac_sha" >> "$GITHUB_OUTPUT"
+      - name: Generate release app token
+        id: release-app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          owner: ${{ github.repository_owner }}
+          repositories: |
+            homebrew-tap
+            asdf-safeselect
+      - name: Prepare commit signing
+        env:
+          SIGNING_KEY: ${{ secrets.SAFESELECT_CI_SIGNING_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SIGNING_KEY"
+          umask 077
+          printf '%s\n' "$SIGNING_KEY" > "$RUNNER_TEMP/distribution-signing-key"
+          git config --global user.name antonillos
+          git config --global user.email 305277+antonillos@users.noreply.github.com
+          git config --global gpg.format ssh
+          git config --global user.signingkey "$RUNNER_TEMP/distribution-signing-key"
+          git config --global commit.gpgsign true
       - name: Publish Homebrew tap
         env:
-          RELEASE_TOKEN: ${{ secrets.SAFESELECT_RELEASE_TOKEN }}
+          RELEASE_TOKEN: ${{ steps.release-app-token.outputs.token }}
           VERSION: ${{ inputs.version }}
           ARM_SHA: ${{ steps.checksums.outputs.arm-mac-sha }}
           INTEL_SHA: ${{ steps.checksums.outputs.intel-mac-sha }}
@@ -61,15 +88,13 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -z "${RELEASE_TOKEN}" ]]; then
-            printf 'Error: SAFESELECT_RELEASE_TOKEN is required to publish Homebrew.\n' >&2
+            printf 'Error: Release App token is required to publish Homebrew.\n' >&2
             exit 1
           fi
 
           git clone "https://x-access-token:${RELEASE_TOKEN}@github.com/antonillos/homebrew-tap.git" homebrew-tap
           python3 tools/ci/check_package_version.py homebrew-tap/Formula/safeselect.rb "$VERSION"
           cd homebrew-tap
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           mkdir -p Formula
           cat > Formula/safeselect.rb <<FORMULA
           class Safeselect < Formula
@@ -122,26 +147,24 @@ jobs:
             exit 0
           fi
           git add Formula/safeselect.rb
-          git commit -m "safeselect ${VERSION}"
+          git commit --gpg-sign -m "chore(release): update safeselect to ${VERSION}"
           git push origin HEAD:main
           printf 'Updated Homebrew tap for %s.\n' "${VERSION}" >> "${GITHUB_STEP_SUMMARY}"
       - name: Publish asdf plugin
         env:
-          RELEASE_TOKEN: ${{ secrets.SAFESELECT_RELEASE_TOKEN }}
+          RELEASE_TOKEN: ${{ steps.release-app-token.outputs.token }}
           VERSION: ${{ inputs.version }}
         shell: bash
         run: |
           set -euo pipefail
           if [[ -z "${RELEASE_TOKEN}" ]]; then
-            printf 'Error: SAFESELECT_RELEASE_TOKEN is required to publish asdf.\n' >&2
+            printf 'Error: Release App token is required to publish asdf.\n' >&2
             exit 1
           fi
 
           git clone "https://x-access-token:${RELEASE_TOKEN}@github.com/antonillos/asdf-safeselect.git" asdf-safeselect
           cp -R release-source/packaging/asdf/. asdf-safeselect/
           cd asdf-safeselect
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           chmod +x bin/download bin/install bin/list-all
 
           if [[ -z "$(git status --porcelain)" ]]; then
@@ -149,6 +172,10 @@ jobs:
             exit 0
           fi
           git add .
-          git commit -m "Sync safeselect asdf plugin for ${VERSION}"
+          git commit --gpg-sign -m "chore(release): sync safeselect asdf plugin for ${VERSION}"
           git push origin HEAD:main
           printf 'Updated asdf plugin for %s.\n' "${VERSION}" >> "${GITHUB_STEP_SUMMARY}"
+      - name: Remove signing key
+        if: always()
+        shell: bash
+        run: rm -f "$RUNNER_TEMP/distribution-signing-key"
