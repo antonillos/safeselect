@@ -42,6 +42,120 @@ pub fn import_zip(zip_path: &Path) -> Result<Vec<DBeaverConnection>> {
     Ok(connections)
 }
 
+/// Password-independent identity, including the remote endpoint and bastion.
+pub fn fingerprint(conn: &DBeaverConnection) -> String {
+    use sha2::{Digest, Sha256};
+    let identity = serde_json::json!([
+        conn.host,
+        conn.port,
+        conn.database,
+        conn.driver,
+        conn.username,
+        conn.sslmode,
+        conn.ssh_host,
+        conn.ssh_port.unwrap_or(22),
+        conn.ssh_user
+    ]);
+    hex::encode(Sha256::digest(identity.to_string().as_bytes()))
+}
+
+pub fn candidates(
+    dir: &Path,
+    index: &crate::compass_import::ImportIndex,
+    conn: &DBeaverConnection,
+    project: &crate::config::ProjectConfig,
+) -> Vec<String> {
+    let mut names = index.indexed_candidates(dir, &fingerprint(conn));
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("toml") {
+                continue;
+            }
+            let Some(name) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            if name.is_empty() || !name.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-') {
+                continue;
+            }
+            let existing = (|| -> crate::error::Result<crate::config::EnvironmentConfig> {
+                let mut env = toml::from_str(&std::fs::read_to_string(&path)?)?;
+                crate::config::merge_project_ssh(project, &mut env)?;
+                Ok(env)
+            })();
+            if existing.is_ok_and(|env| legacy_match(conn, &env)) {
+                names.push(name.into());
+            }
+        }
+    }
+    names.sort();
+    names.dedup();
+    names
+}
+
+fn legacy_match(conn: &DBeaverConnection, env: &crate::config::EnvironmentConfig) -> bool {
+    let ssh = env.ssh.as_ref().filter(|s| s.enabled);
+    same_legacy_database(conn, &env.database)
+        && same_legacy_tunnel(conn, ssh)
+        && legacy_database_url_matches(conn, env, ssh)
+}
+
+fn same_legacy_database(
+    conn: &DBeaverConnection,
+    database: &crate::config::DatabaseConfig,
+) -> bool {
+    database.kind == crate::backend::BackendKind::Jdbc
+        && database.username == conn.username
+        && database.driver.as_deref() == Some(conn.driver.as_str())
+}
+
+fn same_legacy_tunnel(conn: &DBeaverConnection, ssh: Option<&crate::config::SshConfig>) -> bool {
+    match (conn.ssh_host.as_ref(), ssh) {
+        (None, None) => true,
+        (Some(host), Some(ssh)) => {
+            ssh.host.as_ref() == Some(host)
+                && ssh.port.unwrap_or(22) == conn.ssh_port.unwrap_or(22)
+                && ssh.username == conn.ssh_user
+                && ssh.forward_host.as_ref() == Some(&conn.host)
+                && ssh.forward_port == Some(conn.port)
+        }
+        _ => false,
+    }
+}
+
+fn legacy_database_url_matches(
+    conn: &DBeaverConnection,
+    env: &crate::config::EnvironmentConfig,
+    ssh: Option<&crate::config::SshConfig>,
+) -> bool {
+    if env.database.url == database_url(conn, ssh) {
+        return true;
+    }
+    // Older direct imports omitted sslmode; tunneled imports already kept it.
+    ssh.is_none()
+        && conn.sslmode.is_some()
+        && env.database.url
+            == format!(
+                "jdbc:postgresql://{}:{}/{}",
+                conn.host, conn.port, conn.database
+            )
+}
+
+pub fn database_url(conn: &DBeaverConnection, ssh: Option<&crate::config::SshConfig>) -> String {
+    let (host, port) = ssh.map_or((conn.host.as_str(), conn.port), |ssh| {
+        (
+            ssh.local_host.as_deref().unwrap_or("localhost"),
+            ssh.local_port.unwrap_or(crate::DEFAULT_SSH_LOCAL_PORT),
+        )
+    });
+    let sslmode = conn
+        .sslmode
+        .as_deref()
+        .map(|s| format!("?sslmode={s}"))
+        .unwrap_or_default();
+    format!("jdbc:postgresql://{host}:{port}/{}{sslmode}", conn.database)
+}
+
 #[derive(serde::Deserialize)]
 struct DBeaverConfig {
     #[serde(default)]
@@ -296,135 +410,5 @@ fn parse_sslmode(url: &str) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn normalizes_postgres_driver_aliases() {
-        assert_eq!(normalize_driver("postgres"), "postgresql");
-        assert_eq!(normalize_driver("POSTGRES-JDBC"), "postgresql");
-        assert_eq!(normalize_driver("mysql"), "mysql");
-    }
-
-    #[test]
-    fn converts_connection_lists_and_maps_to_vectors() {
-        let list = ConnectionsField::List(vec![]).into_vec();
-        let map = ConnectionsField::Map(HashMap::new()).into_vec();
-        assert!(list.is_empty());
-        assert!(map.is_empty());
-    }
-
-    #[test]
-    fn parses_postgres_jdbc_url_with_optional_port() {
-        let parsed = parse_postgres_jdbc_url("jdbc:postgresql://db.example:5433/app").unwrap();
-        assert_eq!(parsed.host, "db.example");
-        assert_eq!(parsed.port, 5433);
-        assert_eq!(parsed.database, "app");
-        assert!(parse_postgres_jdbc_url("jdbc:mysql://db/app").is_none());
-    }
-
-    #[test]
-    fn rejects_incomplete_postgres_jdbc_url() {
-        assert!(parse_postgres_jdbc_url("jdbc:postgresql://").is_none());
-        assert!(parse_postgres_jdbc_url("jdbc:postgresql://db").is_none());
-    }
-
-    #[test]
-    fn preserves_explicit_sslmode_from_jdbc_url() {
-        assert_eq!(
-            parse_sslmode("jdbc:postgresql://db:5432/app?sslmode=require&connectTimeout=5"),
-            Some("require".to_string())
-        );
-        assert_eq!(parse_sslmode("jdbc:postgresql://db:5432/app"), None);
-    }
-
-    #[test]
-    fn parses_dbeaver_sources_from_list_and_map_shapes() {
-        let content = r#"{
-          "connections": [{"name":"list","host":"db1","port":"5432","database":"app","driver":"postgres"}],
-          "data-sources": {"map": {"name":"map","url":"jdbc:postgresql://db2:5433/app"}}
-        }"#;
-        let connections = parse_data_sources(content).unwrap();
-        assert_eq!(connections.len(), 2);
-        assert_eq!(connections[0].driver, "postgresql");
-        assert_eq!(connections[1].host, "db2");
-        assert_eq!(connections[1].port, 5433);
-    }
-
-    #[test]
-    fn prefers_jdbc_url_when_dbeaver_fields_are_stale() {
-        let content = r#"{
-          "connections": [{
-            "name":"url-configured",
-            "host":"localhost",
-            "port":"5432",
-            "database":"postgres",
-            "url":"jdbc:postgresql://localhost:15432/safeselect_demo"
-          }]
-        }"#;
-
-        let connections = parse_data_sources(content).unwrap();
-        assert_eq!(connections.len(), 1);
-        assert_eq!(connections[0].host, "localhost");
-        assert_eq!(connections[0].port, 15432);
-        assert_eq!(connections[0].database, "safeselect_demo");
-    }
-
-    #[test]
-    fn applies_nested_configuration_fallbacks_and_skips_sources_without_hosts() {
-        let content = r###"{
-          "connections": [
-            {"name":"nested","configuration":{"host":"db","port":"bad","database":"app","driver":"postgres","userName":"agent","handlers":{"ssh_tunnel":{"enabled":true,"properties":{"#host":"jumpbox","#port":2222,"#user":"tunnel-user","#localHost":"127.0.0.1","#localPort":15432,"#keyFile":"/tmp/id_ed25519","#authType":"KEY"}}}}},
-            {"name":"missing-host","database":"ignored"}
-          ],
-          "data-sources": []
-        }"###;
-        let connections = parse_data_sources(content).unwrap();
-        assert_eq!(connections.len(), 1);
-        assert_eq!(connections[0].name, "nested");
-        assert_eq!(connections[0].host, "db");
-        assert_eq!(connections[0].port, 5432);
-        assert_eq!(connections[0].database, "app");
-        assert_eq!(connections[0].username, "agent");
-        assert_eq!(connections[0].driver, "");
-        assert_eq!(connections[0].ssh_host.as_deref(), Some("jumpbox"));
-        assert_eq!(connections[0].ssh_port, Some(2222));
-        assert_eq!(connections[0].ssh_user.as_deref(), Some("tunnel-user"));
-        assert_eq!(connections[0].ssh_local_host.as_deref(), Some("127.0.0.1"));
-        assert_eq!(connections[0].ssh_local_port, Some(15432));
-        assert_eq!(
-            connections[0].ssh_key_file.as_deref(),
-            Some("/tmp/id_ed25519")
-        );
-        assert_eq!(connections[0].ssh_auth_type.as_deref(), Some("KEY"));
-    }
-
-    #[test]
-    fn imports_data_sources_from_a_zip_archive() {
-        let path =
-            std::env::temp_dir().join(format!("safeselect-dbeaver-{}.zip", uuid::Uuid::new_v4()));
-        let file = std::fs::File::create(&path).unwrap();
-        let mut zip = zip::ZipWriter::new(file);
-        zip.start_file(
-            "workspace/readme.txt",
-            zip::write::SimpleFileOptions::default(),
-        )
-        .unwrap();
-        std::io::Write::write_all(&mut zip, b"not a data source").unwrap();
-        zip.start_file(
-            "workspace/data-sources.json",
-            zip::write::SimpleFileOptions::default(),
-        )
-        .unwrap();
-        std::io::Write::write_all(
-            &mut zip,
-            br#"{"connections":[{"name":"local","host":"localhost","database":"app"}]}"#,
-        )
-        .unwrap();
-        zip.finish().unwrap();
-
-        let connections = import_zip(&path).unwrap();
-        assert_eq!(connections[0].name, "local");
-        let _ = std::fs::remove_file(path);
-    }
-}
+#[path = "tests/dbeaver.rs"]
+mod tests;

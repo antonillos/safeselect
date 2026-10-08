@@ -388,6 +388,21 @@ safeselect import-dbeaver ~/Downloads/connections.zip
 
 _The importer keeps the connection shape while leaving passwords outside project files._
 
+DBeaver uses the same interactive workflow as Compass: choose environments,
+update/create/skip on reimport, and choose the database and SSH password sources.
+Passwords can be kept in macOS Keychain, referenced through an exported variable,
+or configured later; literal session-only passwords do not survive the import.
+Updates preserve existing TLS, limits and password sources unless changed explicitly,
+and never silently change shared bastion definitions. Connection checks are optional.
+The local `.safeselect/dbeaver-imports.toml` index recognizes custom environment
+names with password-independent fingerprints. Existing matching JDBC environments
+are also recognized without an index.
+
+With `--non-interactive`, imports never prompt, store exported passwords, overwrite
+existing matching environments, or connect to databases. Distinct connections with
+colliding names get unique names. Export the configured password variables before
+connecting. The source SSL mode is preserved both with and without an SSH tunnel.
+
 
 #### `import-compose`
 
