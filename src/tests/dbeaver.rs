@@ -231,3 +231,28 @@ fn legacy_direct_imports_without_sslmode_are_recognized_but_not_other_tls_modes(
     env.database.url = env.database.url.split('?').next().unwrap().into();
     assert!(!legacy_match(&conn, &env));
 }
+
+#[test]
+fn legacy_tunnel_identity_checks_every_field_and_requires_both_tunnels() {
+    let mut conn = sample_connection();
+    conn.ssh_host = Some("bastion.example".into());
+    conn.ssh_user = Some("demo".into());
+    let ssh = crate::dbeaver_ssh_config(&conn, "project", "staging");
+    assert!(same_legacy_tunnel(&conn, Some(&ssh)));
+    assert!(!same_legacy_tunnel(&conn, None));
+    for field in ["host", "port", "username", "target host", "target port"] {
+        let mut changed = ssh.clone();
+        match field {
+            "host" => changed.host = Some("other.example".into()),
+            "port" => changed.port = Some(2222),
+            "username" => changed.username = Some("other".into()),
+            "target host" => changed.forward_host = Some("other.example".into()),
+            "target port" => changed.forward_port = Some(6432),
+            _ => unreachable!(),
+        }
+        assert!(!same_legacy_tunnel(&conn, Some(&changed)), "{field}");
+    }
+    conn.ssh_host = None;
+    assert!(!same_legacy_tunnel(&conn, Some(&ssh)));
+    assert!(same_legacy_tunnel(&conn, None));
+}

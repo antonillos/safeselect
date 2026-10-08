@@ -94,14 +94,23 @@ pub fn candidates(
 }
 
 fn legacy_match(conn: &DBeaverConnection, env: &crate::config::EnvironmentConfig) -> bool {
-    if env.database.kind != crate::backend::BackendKind::Jdbc
-        || env.database.username != conn.username
-        || env.database.driver.as_deref() != Some(conn.driver.as_str())
-    {
-        return false;
-    }
     let ssh = env.ssh.as_ref().filter(|s| s.enabled);
-    let same_tunnel = match (conn.ssh_host.as_ref(), ssh) {
+    same_legacy_database(conn, &env.database)
+        && same_legacy_tunnel(conn, ssh)
+        && legacy_database_url_matches(conn, env, ssh)
+}
+
+fn same_legacy_database(
+    conn: &DBeaverConnection,
+    database: &crate::config::DatabaseConfig,
+) -> bool {
+    database.kind == crate::backend::BackendKind::Jdbc
+        && database.username == conn.username
+        && database.driver.as_deref() == Some(conn.driver.as_str())
+}
+
+fn same_legacy_tunnel(conn: &DBeaverConnection, ssh: Option<&crate::config::SshConfig>) -> bool {
+    match (conn.ssh_host.as_ref(), ssh) {
         (None, None) => true,
         (Some(host), Some(ssh)) => {
             ssh.host.as_ref() == Some(host)
@@ -111,8 +120,7 @@ fn legacy_match(conn: &DBeaverConnection, env: &crate::config::EnvironmentConfig
                 && ssh.forward_port == Some(conn.port)
         }
         _ => false,
-    };
-    same_tunnel && legacy_database_url_matches(conn, env, ssh)
+    }
 }
 
 fn legacy_database_url_matches(

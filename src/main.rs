@@ -2080,22 +2080,35 @@ fn dbeaver_forward_target_defaults(conn: &dbeaver::DBeaverConnection) -> (String
 }
 
 fn prompt_dbeaver_forward_target(conn: &dbeaver::DBeaverConnection) -> Result<(String, u16)> {
+    prompt_dbeaver_forward_target_with(conn, |prompt, default| {
+        inquire::Text::new(prompt)
+            .with_default(default)
+            .prompt()
+            .map_err(|_| SafeselectError::Other("Import cancelled".into()))
+    })
+}
+
+fn prompt_dbeaver_forward_target_with(
+    conn: &dbeaver::DBeaverConnection,
+    mut read: impl FnMut(&str, &str) -> Result<String>,
+) -> Result<(String, u16)> {
     let (default_host, default_port) = dbeaver_forward_target_defaults(conn);
-    let host = inquire::Text::new("  Database target host through bastion:")
-        .with_default(&default_host)
-        .prompt()
-        .map_err(|_| SafeselectError::Other("Import cancelled".into()))?
+    let host = read("  Database target host through bastion:", &default_host)?
         .trim()
         .to_string();
-    let port = inquire::Text::new("  Database target port through bastion:")
-        .with_default(&default_port.to_string())
-        .prompt()
-        .map_err(|_| SafeselectError::Other("Import cancelled".into()))?
-        .trim()
-        .parse::<u16>()
-        .unwrap_or(default_port);
+    let port = read(
+        "  Database target port through bastion:",
+        &default_port.to_string(),
+    )?
+    .trim()
+    .parse::<u16>()
+    .unwrap_or(default_port);
     Ok((host, port))
 }
+
+#[cfg(test)]
+#[path = "tests/dbeaver_forward_target.rs"]
+mod dbeaver_forward_target_tests;
 
 fn dbeaver_shared_tunnel_warning(conn: &dbeaver::DBeaverConnection) -> Option<String> {
     let host = conn.ssh_host.as_deref()?.trim();
