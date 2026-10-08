@@ -212,3 +212,22 @@ fn imports_data_sources_from_a_zip_archive() {
     assert_eq!(connections[0].name, "local");
     let _ = std::fs::remove_file(path);
 }
+
+#[test]
+fn legacy_direct_imports_without_sslmode_are_recognized_but_not_other_tls_modes() {
+    let mut conn = sample_connection();
+    conn.sslmode = Some("verify-full".into());
+    let mut env: crate::config::EnvironmentConfig = toml::from_str("version=1\n[database]\nkind='jdbc'\ndriver='postgresql'\nurl='jdbc:postgresql://db.example:5432/app'\nusername='demo'\n").unwrap();
+    assert!(legacy_match(&conn, &env));
+    env.database.url.push_str("?sslmode=verify-full");
+    assert!(legacy_match(&conn, &env));
+    env.database.url = "jdbc:postgresql://db.example:5432/app?sslmode=disable".into();
+    assert!(!legacy_match(&conn, &env));
+    conn.ssh_host = Some("bastion.example".into());
+    let ssh = crate::dbeaver_ssh_config(&conn, "project", "staging");
+    env.database.url = database_url(&conn, Some(&ssh));
+    env.ssh = Some(ssh);
+    assert!(legacy_match(&conn, &env));
+    env.database.url = env.database.url.split('?').next().unwrap().into();
+    assert!(!legacy_match(&conn, &env));
+}

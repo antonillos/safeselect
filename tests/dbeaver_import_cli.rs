@@ -136,3 +136,33 @@ fn malformed_index_is_rejected_without_overwriting_environments() {
     );
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn previous_direct_import_without_sslmode_is_skipped_without_a_duplicate() {
+    let root = std::env::temp_dir().join(format!("dbeaver-legacy-ssl-{}", uuid::Uuid::new_v4()));
+    let config = root.join(".safeselect");
+    std::fs::create_dir_all(config.join("environments")).unwrap();
+    let archive = root.join("export.zip");
+    export(
+        &archive,
+        r#"{"connections":[{"name":"staging","driver":"postgres","username":"demo","url":"jdbc:postgresql://db.example:5432/app?sslmode=require"}]}"#,
+    );
+    let original = "version=1\n[database]\nkind='jdbc'\ndriver='postgresql'\nurl='jdbc:postgresql://db.example:5432/app'\nusername='demo'\n[database.secret]\nsource='env'\nvariable='EXISTING_DB_PASSWORD'\n";
+    let path = config.join("environments/custom.toml");
+    std::fs::write(&path, original).unwrap();
+    let output = run(&root, &archive);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Skipping existing"));
+    assert_eq!(
+        std::fs::read_dir(config.join("environments"))
+            .unwrap()
+            .count(),
+        1
+    );
+    assert_eq!(std::fs::read_to_string(path).unwrap(), original);
+    std::fs::remove_dir_all(root).unwrap();
+}

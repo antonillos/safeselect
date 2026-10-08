@@ -112,7 +112,25 @@ fn legacy_match(conn: &DBeaverConnection, env: &crate::config::EnvironmentConfig
         }
         _ => false,
     };
-    same_tunnel && env.database.url == database_url(conn, ssh)
+    same_tunnel && legacy_database_url_matches(conn, env, ssh)
+}
+
+fn legacy_database_url_matches(
+    conn: &DBeaverConnection,
+    env: &crate::config::EnvironmentConfig,
+    ssh: Option<&crate::config::SshConfig>,
+) -> bool {
+    if env.database.url == database_url(conn, ssh) {
+        return true;
+    }
+    // Older direct imports omitted sslmode; tunneled imports already kept it.
+    ssh.is_none()
+        && conn.sslmode.is_some()
+        && env.database.url
+            == format!(
+                "jdbc:postgresql://{}:{}/{}",
+                conn.host, conn.port, conn.database
+            )
 }
 
 pub fn database_url(conn: &DBeaverConnection, ssh: Option<&crate::config::SshConfig>) -> String {
