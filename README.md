@@ -424,10 +424,12 @@ Session-only passwords are not saved and cannot be exported to the parent shell;
 future CLI/MCP commands need the variable exported by their launching shell.
 No plaintext password is written to TOML, logs or terminal commands.
 
-Suggested variables include the project, environment and purpose, for example
-`MYAPP_STAGING_DB_PASSWORD` and `MYAPP_STAGING_SSH_PASSWORD`. They are editable;
-existing references are not renamed. Projects with identical or normalized names
-should choose distinct prefixes when sharing a launching shell.
+Suggested database variables include the project and environment, for example
+`MYAPP_STAGING_DB_PASSWORD`. Bastion variables use only the environment, for
+example `STAGING_SSH_PASSWORD`, so projects can share a bastion password reference.
+Names are editable; existing references are not renamed. When sharing a launching
+shell, choose distinct database prefixes for projects with identical or normalized
+names, and distinct bastion variable names when their passwords differ.
 
 Reimporting offers **update existing**, **create new**, or **skip**. Updates retain
 password sources by default, preserve TLS and limits, and do not silently mutate
