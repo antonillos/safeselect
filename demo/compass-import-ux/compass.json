@@ -1,0 +1,17 @@
+{
+  "connections": [
+    {
+      "favorite": { "name": "staging" },
+      "connectionOptions": {
+        "connectionString": "mongodb://demo:synthetic-db-password@db.example.invalid:27017/app?authSource=admin",
+        "sshTunnel": {
+          "host": "bastion.example.invalid",
+          "port": 22,
+          "username": "demo",
+          "authenticationMethod": "password",
+          "password": "synthetic-ssh-password"
+        }
+      }
+    }
+  ]
+}

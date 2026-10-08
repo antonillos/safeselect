@@ -11,6 +11,23 @@ cat "$RUNTIME/tls/server.key" "$RUNTIME/tls/ca.crt" > "$RUNTIME/tls/server.pem"
 # MongoDB's non-root container user must be able to read this synthetic key.
 chmod 644 "$RUNTIME/tls/server.pem" "$RUNTIME/tls/ca.crt"
 chmod 600 "$RUNTIME/tls/server.key"
+# Build the current Linux CLI from public source inputs only, not host configuration.
+REPO="$(cd "$HERE/../.." && pwd)"
+SOURCE="$RUNTIME/source"
+mkdir -p "$SOURCE/sidecar/target" "$RUNTIME/build" "$RUNTIME/cargo"
+cp "$REPO/Cargo.toml" "$REPO/Cargo.lock" "$REPO/build.rs" "$SOURCE/"
+rm -rf "$SOURCE/src"
+cp -R "$REPO/src" "$SOURCE/src"
+cp "$REPO/sidecar/target/safeselect-sidecar.jar" "$SOURCE/sidecar/target/"
+REVISION="$(git -C "$REPO" rev-parse --short HEAD)"
+VERSION="$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$REPO/Cargo.toml" | head -n 1)"
+printf '%s\n' "$REVISION" > "$RUNTIME/source-revision.txt"
+docker run --rm \
+  -v "$SOURCE:/source:ro" -v "$RUNTIME/build:/build" -v "$RUNTIME/cargo:/cargo" \
+  -e CARGO_HOME=/cargo -e CARGO_TARGET_DIR=/build \
+  -e SAFESELECT_BUILD_VERSION="$VERSION-source-$REVISION" \
+  -w /source rust:1-bookworm@sha256:59037199c44290f2befcdd58dcc540164763fc296950255aaefeef096a1866b0 \
+  cargo build --locked
 # Recreate only this disposable stack; no shared volumes or host ports.
 docker compose -f "$HERE/compose.yaml" down
 docker compose -f "$HERE/compose.yaml" up -d --build --wait
@@ -26,4 +43,8 @@ docker cp "$RUNTIME/tls/ca.crt" safeselect-linux-onboarding-terminal:/tmp/demo-c
 docker exec -u root safeselect-linux-onboarding-terminal keytool -importcert -noprompt \
   -alias safeselect-demo -file /tmp/demo-ca.crt \
   -keystore /etc/ssl/certs/java/cacerts -storepass changeit
+docker exec safeselect-linux-onboarding-terminal mkdir -p /home/demo/.local/bin
+docker cp "$RUNTIME/build/debug/safeselect" safeselect-linux-onboarding-terminal:/home/demo/.local/bin/safeselect
+docker cp "$RUNTIME/source-revision.txt" safeselect-linux-onboarding-terminal:/home/demo/source-revision.txt
+docker exec -u root safeselect-linux-onboarding-terminal chown demo:demo /home/demo/.local/bin/safeselect /home/demo/source-revision.txt
 printf '\nLinux fixture ready. Run: vhs demo/linux-onboarding.tape\n'

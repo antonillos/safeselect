@@ -1,17 +1,24 @@
 # Linux onboarding recording
 
-Reproducible Linux CLI demo recorded with public SafeSelect **v0.7.11**, which includes
-[PR #279](https://github.com/antonillos/safeselect/pull/279). Version 0.7.10 does
-not support this tape.
+Reproducible Linux CLI demo using the **current source build**, not a released
+archive or asdf installation. Preparation builds the selected checkout in an
+isolated, digest-pinned Rust container and displays the source revision in the
+recording. The macOS [Compass UX demo](../compass-import-ux/README.md) complements
+this Linux connectivity scenario.
 
 [Watch GIF](../../docs/recordings/linux-onboarding-envrefs.gif) · [Watch MP4](../../docs/recordings/linux-onboarding-envrefs.mp4)
 
-1. Install SafeSelect through the public asdf plugin (archive SHA-256 verified).
-2. Interactively import a synthetic MongoDB Compass export with a password-authenticated SSH bastion.
-3. Read both database and SSH passwords silently and export `DB_PASSWORD` and `BASTION_PASSWORD`.
-4. Show the password-free environment TOML and run `safeselect check --environment staging`.
+1. Show Linux/Java and the current SafeSelect source revision.
+2. Import a synthetic Compass export with database and password-authenticated SSH credentials.
+3. Choose exported literal passwords and explicitly accept process-local storage for both.
+4. Read and export `WORKSPACE_STAGING_DB_PASSWORD` and `WORKSPACE_STAGING_SSH_PASSWORD`
+   silently in the launching shell: import-process values do not survive its exit.
+5. Show password-free configuration and run `safeselect check --environment staging`.
 
-Run from the repository root with Docker, VHS and OpenSSL available:
+This main demo imports once. Update/create/skip are covered by the separate
+[reimport demo](../compass-import-ux/README.md), not repeated in this clip.
+
+Run from the repository root with Docker, VHS, OpenSSL and the embedded sidecar JAR available:
 
 ```bash
 ./demo/linux-onboarding/prepare.sh
@@ -19,22 +26,31 @@ vhs demo/linux-onboarding.tape
 ```
 
 Outputs (ignored by Git): `demo/recordings/linux-onboarding-envrefs.gif` and
-`demo/recordings/linux-onboarding-envrefs.mp4`.
+`demo/recordings/linux-onboarding-envrefs.mp4`. After reviewing the rendered
+flow and successful final check, publish the gallery copies:
+
+```bash
+cp demo/recordings/linux-onboarding-envrefs.gif docs/recordings/linux-onboarding-envrefs.gif
+cp demo/recordings/linux-onboarding-envrefs.mp4 docs/recordings/linux-onboarding-envrefs.mp4
+```
 
 Preparation recreates **only** the `safeselect-linux-onboarding` stack. The
 terminal is an Ubuntu 24.04 Linux container, not the host shell. Java 17 and
 asdf 0.20.0 are prerequisites installed in its image; SafeSelect itself is
-installed visibly in the recording. No source build or development binary is
-used. The image supports Linux arm64 and amd64.
+built from `Cargo.lock`, the Rust source and the existing embedded Java artifact.
+No Java source is rebuilt; prepare that artifact with the repository's prescribed
+makevn workflow if it is absent. Only these public build inputs are copied into
+the build container; host credentials and project configuration are not mounted.
+The terminal image supports Linux arm64 and amd64. Working outputs and caches
+remain under ignored `demo/.runtime/linux-onboarding`.
 
-The Compass-shaped JSON is a synthetic export, not a capture from the Compass
-GUI. It deliberately omits the database password, just as an export may do.
-The database uses the synthetic `demo-password`, entered without terminal echo.
-On Linux, SafeSelect saves a project-scoped environment-variable reference,
-not the password. The tape selects `{env:BASTION_PASSWORD}` during import and
-uses `config set-password --password '{env:DB_PASSWORD}'` afterward. No Python
-code or TOML parsing is shown or required. Both variables must be exported in the same shell that launches
-SafeSelect. The bastion uses the synthetic `bastion-demo-password` with public-key
+The Compass-shaped JSON is synthetic, not captured from Compass. Both passwords
+are disposable fixture values; they are never displayed or written to TOML.
+Questions are light text and selected answers cyan. Long answers appear below
+their questions, while short confirmations remain inline. The tape clears
+inherited `NO_COLOR` and enables a high-contrast palette.
+
+The bastion uses the synthetic `bastion-demo-password` with public-key
 authentication disabled; its host key is pinned
 from the fixture container during preparation. No personal keys or credentials
 are mounted, and no database or SSH ports are published on the host. MongoDB
