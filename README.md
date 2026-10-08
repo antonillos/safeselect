@@ -900,3 +900,10 @@ Release notes are generated from `CHANGELOG.md`.
 ## License
 
 MIT - see [LICENSE](LICENSE).
+
+When using an Azure Bastion tunnel, open it before running SafeSelect and set
+its SSH host and port to the local listener (for example `127.0.0.1:2222`).
+The SSH connectivity diagnostic reports the configured endpoint and the actual
+TCP connection or name resolution error; TCP success does not validate SSH
+credentials. Run the Azure CLI tunnel in the same WSL distribution as SafeSelect,
+or ensure that its Windows listener is accessible from WSL.
