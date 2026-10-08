@@ -2,7 +2,10 @@
 
 ## Normal flow
 
-1. Merge feature PRs into `develop`, then promote `develop` into `main`.
+1. Merge feature PRs into `develop`. Run **Prepare Promotion** from Actions
+   to open or reuse the `develop` → `main` PR; no changes means no new PR.
+   Review it and use `/merge` after its checks pass, preserving branch ancestry.
+   The workflow never merges, changes versions or publishes a release.
 2. Run **Prepare Release** from `main` and review its version/changelog PR.
 3. Merge the release PR. **Release** validates the version and freezes the source
    commit SHA. An existing tag must resolve to that exact commit.

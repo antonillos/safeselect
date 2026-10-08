@@ -23,7 +23,9 @@ on:
 jobs:
   integration-tests:
     name: Real Integration Tests
-    runs-on: ubuntu-latest
+    # MongoDB requires a kernel outside Linux 6.19–7.0.13.
+    # Temporary exception until the Ubuntu 26.04 runner is compatible.
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -72,7 +74,15 @@ jobs:
         uses: ./.ci-tools/.github/actions/setup-makevn
 
       - name: Start integration services
+        id: services
         run: docker compose -f docker-compose.integration.yml up -d --wait
+
+      - name: Diagnose integration startup failure
+        if: failure() && steps.services.outcome == 'failure'
+        shell: bash
+        run: |
+          docker compose -f docker-compose.integration.yml ps -a
+          docker compose -f docker-compose.integration.yml logs --no-color --tail=100 postgres mongodb
 
       - name: Cache cargo dependencies
         if: ${{ !inputs.target_ref }}
