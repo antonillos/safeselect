@@ -32,7 +32,7 @@ env:
 jobs:
   classify:
     name: Classify changed paths
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       profile: ${{ steps.policy.outputs.profile }}
       docs: ${{ steps.policy.outputs.docs }}
@@ -106,7 +106,7 @@ jobs:
     name: Documentation
     needs: classify
     if: inputs.badge_only != true && needs.classify.outputs.docs == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
       - name: Validate Markdown and internal links
@@ -114,7 +114,7 @@ jobs:
 
   website:
     name: Website and positioning
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
       - name: Validate Markdown and internal links
@@ -155,7 +155,7 @@ jobs:
       always() && inputs.badge_only != true &&
       needs.classify.outputs.unit == 'true' && needs.crap-report.result == 'success'
     needs: [classify, crap-report]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
       - name: Test release pipeline and installer
@@ -230,7 +230,7 @@ jobs:
     if: >-
       always() && inputs.badge_only != true &&
       needs.classify.outputs.postgres == 'true' && needs.unit.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     services:
       postgres:
         image: postgres:17
@@ -275,7 +275,7 @@ jobs:
     if: >-
       always() && inputs.badge_only != true &&
       needs.classify.outputs.mongodb == 'true' && needs.unit.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     services:
       mongodb:
         image: mongo:8
@@ -322,7 +322,7 @@ jobs:
     if: >-
       always() && inputs.badge_only != true &&
       needs.classify.outputs.security == 'true' && needs.unit.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
       - name: Install Rust
@@ -343,7 +343,7 @@ jobs:
     name: CRAP (ratchet <=79)
     needs: classify
     if: inputs.badge_only == true || needs.classify.outputs.crap == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
       - name: Install Rust
@@ -408,7 +408,7 @@ jobs:
     if: >-
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
       github.ref == 'refs/heads/develop'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       pages: write
       id-token: write
@@ -451,7 +451,7 @@ jobs:
     name: Verify
     needs: [classify, docs, website, crap-report, unit, integration, integration-mongodb, security, real-integration]
     if: always() && inputs.badge_only != true
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     env:
       DOCS_REQUIRED: ${{ needs.classify.outputs.docs }}
       CRAP_REQUIRED: ${{ needs.classify.outputs.crap }}
