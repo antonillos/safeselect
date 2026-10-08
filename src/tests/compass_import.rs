@@ -1,20 +1,53 @@
 use super::*;
 
 #[test]
-fn readable_names_include_project_environment_and_purpose() {
+fn connection_sections_separate_imports_and_identify_existing_environments() {
+    assert_eq!(
+        environment_section("pro", &["pro".into()]),
+        "\n── Compass connection: pro ──\nExisting environments: pro\n"
+    );
+    assert_eq!(
+        environment_section("production", &["pro".into(), "copy".into()]),
+        "\n── Compass connection: production ──\nExisting environments: pro, copy\n"
+    );
+    assert_eq!(
+        environment_section("staging", &[]),
+        "\n── Compass connection: staging ──\n"
+    );
+}
+
+#[test]
+fn readable_database_names_include_project_but_bastion_names_are_shared() {
     assert_eq!(
         friendly_variable("my-app", "staging", false),
         "MY_APP_STAGING_DB_PASSWORD"
     );
     assert_eq!(
         friendly_variable("my-app", "staging", true),
-        "MY_APP_STAGING_SSH_PASSWORD"
+        "STAGING_SSH_PASSWORD"
     );
     assert_ne!(
         friendly_variable("one", "dev", false),
         friendly_variable("two", "dev", false)
     );
     password::validate_variable(&friendly_variable("123 app", "", false)).unwrap();
+    assert_eq!(
+        friendly_variable("one", "pre", true),
+        friendly_variable("two", "pre", true)
+    );
+    assert_ne!(
+        friendly_variable("one", "pre", true),
+        friendly_variable("one", "pro", true)
+    );
+    for (environment, expected) in [
+        ("pre-prod", "PRE_PROD_SSH_PASSWORD"),
+        ("123", "_123_SSH_PASSWORD"),
+        ("", "MONGODB_SSH_PASSWORD"),
+    ] {
+        let variable = friendly_variable("ignored", environment, true);
+        assert_eq!(variable, expected);
+        password::validate_variable(&variable).unwrap();
+    }
 }
 
 #[test]

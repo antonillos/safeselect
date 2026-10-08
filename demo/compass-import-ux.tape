@@ -21,7 +21,8 @@ Enter
 Sleep 1s
 Space
 Enter
-Sleep 1s
+# Hold the new connection heading before answering its first prompt.
+Sleep 3s
 Enter
 Sleep 1s
 Enter

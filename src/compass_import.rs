@@ -18,6 +18,20 @@ fn variable_component(value: &str) -> String {
 }
 
 pub fn friendly_variable(project: &str, environment: &str, ssh: bool) -> String {
+    let environment = variable_component(environment);
+    let environment = if environment.is_empty() {
+        "MONGODB".into()
+    } else {
+        environment
+    };
+    if ssh {
+        let prefix = if environment.starts_with(|c: char| c.is_ascii_digit()) {
+            "_"
+        } else {
+            ""
+        };
+        return format!("{prefix}{environment}_SSH_PASSWORD");
+    }
     let project = variable_component(project);
     let project = if project.is_empty() {
         "SAFESELECT".into()
@@ -29,14 +43,7 @@ pub fn friendly_variable(project: &str, environment: &str, ssh: bool) -> String 
     } else {
         ""
     };
-    let environment = variable_component(environment);
-    let environment = if environment.is_empty() {
-        "MONGODB".into()
-    } else {
-        environment
-    };
-    let kind = if ssh { "SSH" } else { "DB" };
-    format!("{prefix}{project}_{environment}_{kind}_PASSWORD")
+    format!("{prefix}{project}_{environment}_DB_PASSWORD")
 }
 
 fn authority(url: &str) -> Option<(usize, usize)> {
@@ -239,7 +246,19 @@ pub fn select_environment(
     if non_interactive {
         return Ok(unattended_environment(dir, candidates, default));
     }
+    println!("{}", environment_section(default, candidates));
     select_environment_with(dir, candidates, default, &mut TerminalInteraction)
+}
+
+fn environment_section(connection: &str, candidates: &[String]) -> String {
+    let mut section = format!("\n── Compass connection: {connection} ──\n");
+    if !candidates.is_empty() {
+        section.push_str(&format!(
+            "Existing environments: {}\n",
+            candidates.join(", ")
+        ));
+    }
+    section
 }
 
 fn unattended_environment(dir: &Path, candidates: &[String], default: &str) -> Option<String> {

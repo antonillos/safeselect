@@ -5,7 +5,7 @@ Linux public-release onboarding demo and does not claim database connectivity.
 
 The primary tape performs **one import**, reusing both passwords from a
 Compass-shaped fixture into process-local variables (`ATLAS_STAGING_DB_PASSWORD`
-and `ATLAS_STAGING_SSH_PASSWORD`). It explicitly declines Keychain storage and
+and `STAGING_SSH_PASSWORD`). It explicitly declines Keychain storage and
 connectivity checks, then shows the password-free configuration.
 
 A separate [reimport recording](../../docs/recordings/compass-reimport.gif)
@@ -23,6 +23,26 @@ cp demo/recordings/compass-reimport.mp4 docs/recordings/compass-reimport.mp4
 
 Its isolated runtime is `/tmp/safeselect-compass-reimport`, separate from the
 main tape, so neither recording depends on running the other.
+
+### Multiple environments in one import
+
+The `compass-environments.tape` clip updates synthetic `pre` and `pro`
+connections in a single import, keeping their existing password variable
+references. It pauses at the boundary between `pre`'s password-source summary
+and `pro`'s connection heading, existing-environment label and update prompts.
+No credentials are entered and connectivity checks are declined.
+
+```bash
+cargo build
+bash demo/compass-import-ux/prepare-environments.sh
+vhs validate demo/compass-environments.tape
+vhs demo/compass-environments.tape
+```
+
+The isolated runtime is `/tmp/safeselect-compass-environments`. Generated GIF,
+MP4 and terminal snapshots stay under `demo/recordings` and `demo/.runtime`;
+inspect the video before publishing gallery copies. The existing Compass and
+Linux onboarding tapes also pause at each connection heading before answering.
 
 No password is displayed or written to the generated TOML. Process-local values
 expire when each import exits; they are not exported to the parent terminal.

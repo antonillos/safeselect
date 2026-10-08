@@ -6,9 +6,11 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 
+- Interactive Compass import separates each connection with a heading and names
+  its existing environments before offering update/create/skip.
 - Compass import now offers consistent database and SSH password choices, explicit
-  Keychain/session-only storage, hidden literal entry, and readable project-prefixed
-  environment references. Imported credentials stay literal and selection labels
+  Keychain/session-only storage, hidden literal entry, and readable environment references (project-prefixed for
+  databases, environment-only for shared bastion passwords). Imported credentials stay literal and selection labels
   redact authentication details.
 - Repeated Compass imports offer update/create/skip instead of silent duplicates;
   unattended imports skip existing environments. Updates preserve TLS, limits and

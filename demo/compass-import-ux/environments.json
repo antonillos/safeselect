@@ -1,0 +1,16 @@
+{
+  "connections": [
+    {
+      "favorite": { "name": "pre" },
+      "connectionOptions": {
+        "connectionString": "mongodb://demo@pre.example.invalid:27017/app"
+      }
+    },
+    {
+      "favorite": { "name": "pro" },
+      "connectionOptions": {
+        "connectionString": "mongodb://demo@pro.example.invalid:27017/app"
+      }
+    }
+  ]
+}
