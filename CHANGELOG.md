@@ -2,6 +2,35 @@
 
 All notable changes to this project are documented in this file.
 
+## [v0.7.12] - 2026-10-08
+
+### Added
+
+- feat(secrets): support explicit environment password references (#279)
+- feat(compass): unify credential import and reimport choices (#290)
+
+### Fixed
+
+- fix(ssh): correct endpoint diagnostics for local Bastion tunnels (#287)
+- fix: add SSH connectivity troubleshooting hints (#288)
+- fix(site): patch sharp librsvg vulnerability (#291)
+
+### Documentation
+
+- docs(demo): publish Linux password reference onboarding (#284)
+
+### Build And CI
+
+- ci(release): migrate automation to shared Vulcan Protocol app (#293)
+- ci: add promotion workflow and pin runners
+
+### Dependencies
+
+- chore(deps): bump source-map-js from 1.2.1 to 1.2.2 in /site in the npm_and_yarn group across 1 directory (#281)
+- chore(deps): bump libc from 0.2.189 to 0.2.190 (#285)
+- chore(deps): bump uuid from 1.26.1 to 1.27.0 (#286)
+- chore(deps): bump next from 16.3.6 to 16.4.0 in /site in the npm_and_yarn group across 1 directory
+
 ## Unreleased
 
 ### Changed
