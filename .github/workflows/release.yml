@@ -188,9 +188,14 @@ jobs:
   publish-release:
     needs: [validate-version, integration-tests, build]
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
+      - name: Generate release app token
+        id: release-app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
       - name: Checkout workflow tooling
         uses: actions/checkout@v7
       - name: Download validated release source
@@ -245,7 +250,7 @@ jobs:
           } > release-notes.md
       - name: Verify, upload missing assets and publish atomically from draft
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.release-app-token.outputs.token }}
           VERSION: ${{ needs.validate-version.outputs.version }}
           SOURCE_SHA: ${{ needs.validate-version.outputs.target-ref }}
           DRAFT: ${{ needs.validate-version.outputs.draft }}
@@ -263,13 +268,20 @@ jobs:
     runs-on: ubuntu-latest
     needs: [validate-version, publish-release, integration-tests]
     permissions:
-      contents: write
+      contents: read
       id-token: write
     steps:
+      - name: Generate release app token
+        id: release-app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
       - uses: actions/checkout@v7
       - name: Download MCPB checksums
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.release-app-token.outputs.token }}
           VERSION: ${{ needs.validate-version.outputs.version }}
           REPOSITORY: ${{ github.repository }}
         shell: bash
@@ -326,7 +338,7 @@ jobs:
         run: ./mcp-publisher validate dist/server.json
       - name: Publish or verify existing MCP Registry version
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.release-app-token.outputs.token }}
           VERSION: ${{ needs.validate-version.outputs.version }}
         run: python3 tools/ci/publish_registry.py
 

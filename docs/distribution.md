@@ -15,8 +15,8 @@ JAR. No installation of the sidecar is needed — it is extracted at runtime.
 4. Merge that release PR after its required checks pass. This is the only PR
    that may change the public release version.
 5. The version change on `main` starts the release workflow; it can also be
-   dispatched manually with an explicit tag and target ref.
-6. After publication, synchronize `main` back into `develop` so both branches
+   dispatched manually with an explicit tag.
+6. After a push to main, open a signed PR to synchronize `main` back into `develop` so both branches
    contain the release version.
 7. Integration tests must pass before the GitHub release and assets are published.
 8. GitHub Actions builds for 4 targets:
@@ -25,7 +25,7 @@ JAR. No installation of the sidecar is needed — it is extracted at runtime.
    - `aarch64-unknown-linux-gnu`
    - `x86_64-unknown-linux-gnu`
 8. Each release includes the binary plus a SHA-256 checksum.
-9. Non-draft, non-prerelease releases update Homebrew and asdf when the release token is configured.
+9. Non-draft, non-prerelease releases update Homebrew and asdf using scoped Vulcan Protocol App tokens.
 10. Only after all MCPB artifacts are attached does the release workflow publish
     their checksummed `server.json` through GitHub OIDC to the official MCP Registry.
 
