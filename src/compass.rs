@@ -1,7 +1,7 @@
 use crate::error::Result;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CompassConnection {
     pub name: String,
     pub url: String,
@@ -12,6 +12,7 @@ pub struct CompassConnection {
     pub ssh_local_port: Option<u16>,
     pub ssh_key_file: Option<String>,
     pub ssh_auth_type: Option<String>,
+    pub ssh_password: Option<String>,
 }
 
 pub fn import_path(path: &Path) -> Result<Vec<CompassConnection>> {
@@ -52,6 +53,7 @@ fn collect_connections(value: &serde_json::Value, connections: &mut Vec<CompassC
         serde_json::Value::Object(map) => {
             if let Some(connection) = parse_connection_object(map) {
                 connections.push(connection);
+                return; // Do not import connectionOptions again as a second connection.
             }
 
             for child in map.values() {
@@ -134,6 +136,11 @@ fn parse_connection_object(
             .and_then(|ssh| ssh.get("identityKeyFile"))
             .and_then(|value| value.as_str())
             .map(str::to_string),
+        ssh_password: ssh_tunnel
+            .and_then(|ssh| ssh.get("password"))
+            .and_then(|value| value.as_str())
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
         ssh_auth_type: ssh_tunnel
             .and_then(|ssh| ssh.get("authenticationMethod"))
             .and_then(|value| value.as_str())
@@ -156,7 +163,7 @@ fn dedupe_connections(connections: Vec<CompassConnection>) -> Result<Vec<Compass
     let mut seen = std::collections::BTreeSet::new();
     let mut deduped = vec![];
     for connection in connections {
-        if seen.insert(connection.url.clone()) {
+        if seen.insert(crate::compass_import::fingerprint(&connection)) {
             deduped.push(connection);
         }
     }

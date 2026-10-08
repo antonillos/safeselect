@@ -5,12 +5,13 @@
         "name": "MongoDB demo via bastion"
       },
       "connectionOptions": {
-        "connectionString": "mongodb://demo@mongodb:27017/safeselect_demo?authSource=admin",
+        "connectionString": "mongodb://demo:demo-password@mongodb:27017/safeselect_demo?authSource=admin",
         "sshTunnel": {
           "host": "bastion",
           "port": 22,
           "username": "demo",
-          "authenticationMethod": "PASSWORD"
+          "authenticationMethod": "PASSWORD",
+          "password": "bastion-demo-password"
         }
       }
     }

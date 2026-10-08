@@ -33,7 +33,7 @@ impl Default for ProjectConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SharedSshConfig {
     pub host: Option<String>,
     pub port: Option<u16>,

@@ -179,7 +179,7 @@ fn default_password_names_and_keychain_selection_preserve_existing_sources() {
     assert!(validate_password_target(&cfg, true).is_err());
     assert_eq!(
         default_password_variable(&root, "dev", &cfg, false).unwrap(),
-        compose::database_env_reference(&root, "dev").unwrap()
+        compass_import::friendly_variable(&project_display_name(&root), "dev", false)
     );
     cfg.database.secret = Some(environment_password_secret("CUSTOM_DB".into()));
     assert_eq!(

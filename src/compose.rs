@@ -677,15 +677,16 @@ pub fn store_password_in_keychain(account: &str, password: &str) -> Result<()> {
     let output = keychain_command(account, password)
         .output()
         .map_err(keychain_command_error)?;
-    report_keychain_store_result(&output);
-    Ok(())
+    report_keychain_store_result(&output)
 }
 
-fn report_keychain_store_result(output: &std::process::Output) {
+fn report_keychain_store_result(output: &std::process::Output) -> Result<()> {
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        eprintln!("WARN: could not store password in Keychain: {stderr}");
+        return Err(crate::error::SafeselectError::Secret(
+            "Could not store password in macOS Keychain".into(),
+        ));
     }
+    Ok(())
 }
 
 fn keychain_command(account: &str, password: &str) -> std::process::Command {
@@ -770,8 +771,14 @@ mod tests {
 
     #[test]
     fn reports_keychain_store_status_without_panicking() {
-        report_keychain_store_result(&std::process::Command::new("true").output().unwrap());
-        report_keychain_store_result(&std::process::Command::new("false").output().unwrap());
+        assert!(report_keychain_store_result(
+            &std::process::Command::new("true").output().unwrap()
+        )
+        .is_ok());
+        assert!(report_keychain_store_result(
+            &std::process::Command::new("false").output().unwrap()
+        )
+        .is_err());
     }
 
     #[test]
