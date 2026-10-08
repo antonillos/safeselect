@@ -18,12 +18,9 @@ def prepare(repository):
     if comparison["ahead_by"] == 0:
         return "No changes to promote from develop to main."
     url = gh("pr", "create", "--repo", repository, "--base", "main", "--head", "develop",
-             "--title", "chore(release): promote develop to main for the next release",
-             "--body", "Promote develop to main in preparation for the next release.\n\n"
-             "Required checks and review must pass before merging. Use a merge commit "
-             "to preserve branch ancestry; do not squash or rebase.\n\n"
-             "This PR does not bump the version. Prepare Release creates a separate "
-             "version and changelog PR after promotion.")
+             "--title", "chore: promote develop to main",
+             "--body", "Promotes develop for the next release. "
+             "Use a merge commit. Version bump follows separately.")
     return "Promotion PR: " + url
 
 
