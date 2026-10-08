@@ -11,9 +11,10 @@ def gh(*arguments):
 
 def prepare(repository):
     pulls = json.loads(gh("pr", "list", "--repo", repository, "--base", "main",
-                          "--head", "develop", "--state", "open", "--json", "url"))
-    if pulls:
-        return "Promotion PR: " + pulls[0]["url"]
+                          "--head", "develop", "--state", "open", "--json", "url,isCrossRepository"))
+    for pull in pulls:
+        if pull["isCrossRepository"] is False:
+            return "Promotion PR: " + pull["url"]
     comparison = json.loads(gh("api", f"repos/{repository}/compare/main...develop"))
     if comparison["ahead_by"] == 0:
         return "No changes to promote from develop to main."

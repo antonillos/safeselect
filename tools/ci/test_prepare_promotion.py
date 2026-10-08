@@ -7,7 +7,7 @@ import prepare_promotion as promotion
 class PromotionTests(unittest.TestCase):
     @patch.object(promotion, "gh")
     def test_reuses_existing_pr_without_changes(self, gh):
-        gh.return_value = '[{"url":"https://github.com/example/repo/pull/1"}]'
+        gh.return_value = '[{"url":"https://github.com/example/repo/pull/1","isCrossRepository":false}]'
         self.assertIn("/pull/1", promotion.prepare("example/repo"))
         gh.assert_called_once()
 
@@ -37,6 +37,24 @@ class PromotionTests(unittest.TestCase):
         gh.side_effect = ['[]', '{"ahead_by":1}', RuntimeError("denied")]
         with self.assertRaises(RuntimeError):
             promotion.prepare("example/repo")
+
+    @patch.object(promotion, "gh")
+    def test_fork_pr_does_not_replace_promotion(self, gh):
+        gh.side_effect = [
+            '[{"url":"https://github.com/example/repo/pull/9","isCrossRepository":true}]',
+            '{"ahead_by":1}', 'https://github.com/example/repo/pull/2',
+        ]
+        self.assertIn("/pull/2", promotion.prepare("example/repo"))
+        self.assertEqual(gh.call_count, 3)
+
+    @patch.object(promotion, "gh")
+    def test_same_repository_pr_is_found_after_fork(self, gh):
+        gh.return_value = (
+            '[{"url":"https://github.com/example/repo/pull/9","isCrossRepository":true},'
+            '{"url":"https://github.com/example/repo/pull/1","isCrossRepository":false}]'
+        )
+        self.assertIn("/pull/1", promotion.prepare("example/repo"))
+        gh.assert_called_once()
 
 
 if __name__ == "__main__":
