@@ -99,10 +99,20 @@ fn stderr_category(detail: &str) -> &'static str {
 }
 
 fn credential_source(shared: &SharedSshConfig) -> (&str, Option<&str>) {
+    if shared.auth_type.as_deref() != Some("PASSWORD") {
+        if let Some(identity_file) = shared.identity_file.as_deref() {
+            return ("identity_file", Some(identity_file));
+        }
+        if shared.auth_type.is_some() {
+            return ("ssh_agent", None);
+        }
+    }
     if let Some(variable) = shared.secret_variable.as_deref() {
         ("env", Some(variable))
+    } else if let Some(account) = shared.secret_account.as_deref() {
+        ("keychain", Some(account))
     } else {
-        ("keychain", shared.secret_account.as_deref())
+        ("ssh_agent", None)
     }
 }
 
@@ -303,5 +313,35 @@ secret_account = "synthetic-private-account-b"
         assert!(duplicate_bastion_warning(&project, &ssh).is_some());
         project.ssh_bastions.get_mut("other").unwrap().username = Some("different-user".into());
         assert!(duplicate_bastion_warning(&project, &ssh).is_none());
+    }
+
+    #[test]
+    fn compares_key_file_references_without_disclosing_paths() {
+        let mut project: ProjectConfig = toml::from_str(
+            r#"
+version = 1
+[ssh_bastions.selected]
+host = "jump.example"
+username = "tunnel"
+auth_type = "key"
+identity_file = "/private/synthetic-first-key"
+[ssh_bastions.other]
+host = "jump.example"
+username = "tunnel"
+auth_type = "key"
+identity_file = "/private/synthetic-second-key"
+"#,
+        )
+        .unwrap();
+        let ssh: SshConfig = toml::from_str("enabled = true\nbastion = 'selected'").unwrap();
+        let warning = duplicate_bastion_warning(&project, &ssh).unwrap();
+        assert!(warning.contains("\"selected\""));
+        assert!(warning.contains("\"other\""));
+        assert!(!warning.contains("/private/"));
+        project.ssh_bastions.get_mut("other").unwrap().identity_file =
+            Some("/private/synthetic-first-key".into());
+        assert!(duplicate_bastion_warning(&project, &ssh).is_none());
+        project.ssh_bastions.get_mut("other").unwrap().identity_file = None;
+        assert!(duplicate_bastion_warning(&project, &ssh).is_some());
     }
 }
