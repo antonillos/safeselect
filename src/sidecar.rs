@@ -3,6 +3,7 @@ use crate::backend::{
     DocumentExplainRequest, DocumentFieldProfileRequest, DocumentFindRequest,
     DocumentFixtureRequest, DocumentResult, DocumentSchemaRequest,
 };
+use crate::connection_diagnostics::{ConnectionCategory, ConnectionFailure};
 use crate::error::{Result, SafeselectError};
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
@@ -36,6 +37,8 @@ struct Response {
 struct ResponseError {
     code: String,
     message: String,
+    category: Option<ConnectionCategory>,
+    sql_state: Option<String>,
 }
 
 pub struct SidecarProcess {
@@ -435,6 +438,17 @@ impl SidecarProcess {
 
     fn check_response_error(error: Option<ResponseError>, operation: &str) -> Result<()> {
         error.map_or(Ok(()), |error| {
+            if error.code == "CONNECTION_FAILED" {
+                return Err(error
+                    .category
+                    .and_then(|category| ConnectionFailure::from_parts(category, error.sql_state))
+                    .map(SafeselectError::ConnectionStart)
+                    .unwrap_or_else(|| {
+                        SafeselectError::Sidecar(
+                            "database connection failed; details redacted".into(),
+                        )
+                    }));
+            }
             Err(SafeselectError::Sidecar(format!(
                 "{operation} failed [{}]: {}",
                 error.code, error.message

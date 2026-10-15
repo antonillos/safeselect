@@ -225,6 +225,38 @@ read request"#,
 }
 
 #[test]
+fn document_verification_uses_structured_failure_without_echoing_message() {
+    for (category, expected) in [
+        ("authentication", "authentication failed"),
+        ("tls", "TLS negotiation failed"),
+        ("timeout", "connection timed out"),
+        ("network", "network connection failed"),
+    ] {
+        let script = format!(
+            "read request\nprintf '%s\\n' '{{\"id\":0,\"error\":{{\"code\":\"CONNECTION_FAILED\",\"category\":\"{category}\",\"message\":\"private-mongo-detail\"}}}}'"
+        );
+        let mut sidecar = mock_sidecar(&script);
+        let message = sidecar
+            .verify_document_connection()
+            .unwrap_err()
+            .to_string();
+        assert!(message.contains(expected), "{message}");
+        assert!(!message.contains("private-mongo-detail"));
+    }
+
+    let mut sidecar = mock_sidecar(
+        r#"read request
+printf '%s\n' '{"id":0,"error":{"code":"CONNECTION_FAILED","category":"network","sql_state":"private-mongo-detail","message":"private-mongo-detail"}}'"#,
+    );
+    let message = sidecar
+        .verify_document_connection()
+        .unwrap_err()
+        .to_string();
+    assert!(message.contains("details redacted"));
+    assert!(!message.contains("private-mongo-detail"));
+}
+
+#[test]
 fn startup_rejects_unknown_or_malformed_diagnostics_without_echoing_input() {
     for ack in [
         "private-host-and-password",

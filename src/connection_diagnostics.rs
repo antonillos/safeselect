@@ -27,13 +27,25 @@ impl ConnectionFailure {
             failure: ConnectionFailure,
         }
         let response: StartupFailure = serde_json::from_str(ack).ok()?;
-        let valid_state = response.failure.sql_state.as_ref().is_none_or(|state| {
+        (response.r#type == "connection_error")
+            .then_some(response.failure)
+            .and_then(|failure| Self::from_parts(failure.category, failure.sql_state))
+    }
+
+    pub(crate) fn from_parts(
+        category: ConnectionCategory,
+        sql_state: Option<String>,
+    ) -> Option<Self> {
+        let valid_state = sql_state.as_ref().is_none_or(|state| {
             state.len() == 5
                 && state
                     .bytes()
                     .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
         });
-        (response.r#type == "connection_error" && valid_state).then_some(response.failure)
+        valid_state.then_some(Self {
+            category,
+            sql_state,
+        })
     }
 }
 

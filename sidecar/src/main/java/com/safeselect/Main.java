@@ -664,14 +664,12 @@ public class Main {
                     .runCommand(new Document("ping", 1), ReadPreference.secondaryPreferred());
             sendBoundedResponse(writer, id, result);
         } catch (Exception e) {
-            sendConnectionFailureResponse(writer, id);
+            sendConnectionFailureResponse(writer, id, e);
         }
     }
 
-    private static void sendConnectionFailureResponse(PrintWriter writer, Object id) throws Exception {
-        sendResponse(writer, id, null, Map.of(
-                "code", "CONNECTION_FAILED",
-                "message", connectionFailureMessage(null)));
+    private static void sendConnectionFailureResponse(PrintWriter writer, Object id, Throwable failure) throws Exception {
+        sendResponse(writer, id, null, ConnectionFailure.from(failure).requestResponse());
     }
 
     @SuppressWarnings("unchecked")

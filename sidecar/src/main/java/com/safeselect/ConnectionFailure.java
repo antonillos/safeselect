@@ -110,6 +110,17 @@ record ConnectionFailure(String category, String sqlState) {
         return response;
     }
 
+    Map<String, String> requestResponse() {
+        final var response = new LinkedHashMap<String, String>();
+        response.put("code", "CONNECTION_FAILED");
+        response.put("message", "database connection failed; details redacted");
+        response.put("category", this.category);
+        if (!this.sqlState.isEmpty()) {
+            response.put("sql_state", this.sqlState);
+        }
+        return response;
+    }
+
     String logMessage() {
         if (this.category.equals("database") && this.sqlState.isEmpty()) {
             return "database connection failed; details redacted";
