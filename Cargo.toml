@@ -2,7 +2,7 @@
 name = "safeselect"
 version = "0.7.12"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.89"
 description = "Fail-closed read-only database access for AI agents over MCP"
 license = "MIT OR Apache-2.0"
 
@@ -11,7 +11,7 @@ clap = { version = "4", features = ["derive"] }
 libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-serde_yaml = "0.9"
+serde-saphyr = { version = "2.0.0", default-features = false, features = ["deserialize"] }
 toml = "1.1.2"
 toml_edit = "0.25.13"
 thiserror = "2"
@@ -23,7 +23,7 @@ hex = "0.4"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 reqwest = { version = "0.13.4", features = ["blocking"] }
-zip = "8.6.0"
+zip = "9.0.1"
 similar = "3.1.1"
 indoc = "2"
 inquire = "0.9"

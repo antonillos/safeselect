@@ -431,6 +431,9 @@ connecting. The source SSL mode is preserved both with and without an SSH tunnel
 
 Discover PostgreSQL services from Docker Compose.
 
+Invalid YAML and duplicate keys are rejected. YAML errors omit source snippets
+to avoid displaying nearby credentials.
+
 ```bash
 safeselect import-compose --path .
 ```
@@ -916,7 +919,7 @@ document a project-scoped MCP configuration.
 "$HOME/.local/bin/safeselect" --version
 ```
 
-Requirements: Rust 1.85+, Java 17+, and makevn 0.1.14+. The bootstrap requires
+Requirements: Rust 1.89+, Java 17+, and makevn 0.1.14+. The bootstrap requires
 Homebrew or asdf; otherwise install `makevn` first. `sshpass` is optional for
 password-based SSH tunnels. Add `~/.local/bin` to your `PATH` before invoking
 `safeselect` without its full path.
@@ -955,7 +958,7 @@ Release notes are generated from `CHANGELOG.md`.
 <summary>Runtime and distribution</summary>
 
 [![Security](https://img.shields.io/badge/Security-fail--closed-success?logo=trustpilot&logoColor=white)]()
-[![Rust](https://img.shields.io/badge/Rust-1.85%2B-dea584?logo=rust&logoColor=white)]()
+[![Rust](https://img.shields.io/badge/Rust-1.89%2B-dea584?logo=rust&logoColor=white)]()
 [![Java](https://img.shields.io/badge/Java-17%2B-5382a1?logo=openjdk&logoColor=white)]()
 [![MCP](https://img.shields.io/badge/MCP-stdio%20tools-7b68ee)]()
 [![Homebrew](https://img.shields.io/badge/Homebrew-tap-FBB040?logo=homebrew&logoColor=white)](https://github.com/antonillos/homebrew-tap)

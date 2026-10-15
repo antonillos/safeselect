@@ -197,7 +197,7 @@ fn imports_data_sources_from_a_zip_archive() {
     .unwrap();
     std::io::Write::write_all(&mut zip, b"not a data source").unwrap();
     zip.start_file(
-        "workspace/data-sources.json",
+        "workspace-é/data-sources.json",
         zip::write::SimpleFileOptions::default(),
     )
     .unwrap();
@@ -211,6 +211,19 @@ fn imports_data_sources_from_a_zip_archive() {
     let connections = import_zip(&path).unwrap();
     assert_eq!(connections[0].name, "local");
     let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn rejects_invalid_zip_archives() {
+    let path =
+        std::env::temp_dir().join(format!("safeselect-invalid-{}.zip", uuid::Uuid::new_v4()));
+    std::fs::write(&path, b"not a ZIP archive").unwrap();
+
+    assert!(matches!(
+        import_zip(&path),
+        Err(crate::error::SafeselectError::Zip(_))
+    ));
+    std::fs::remove_file(path).unwrap();
 }
 
 #[test]

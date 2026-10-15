@@ -83,7 +83,7 @@ struct ComposeService {
 #[derive(serde::Deserialize, Debug)]
 #[serde(untagged)]
 enum EnvValue {
-    Map(HashMap<String, serde_yaml::Value>),
+    Map(HashMap<String, serde_json::Value>),
     List(Vec<String>),
 }
 
@@ -96,7 +96,7 @@ enum PortValue {
 
 #[derive(serde::Deserialize, Debug)]
 struct ComposePort {
-    published: Option<serde_yaml::Value>,
+    published: Option<serde_json::Value>,
     host_ip: Option<String>,
 }
 
@@ -163,11 +163,11 @@ fn load_dotenv(dir: &Path) -> HashMap<String, String> {
         .unwrap_or_default()
 }
 
-fn resolve_scalar(value: &serde_yaml::Value) -> String {
+fn resolve_scalar(value: &serde_json::Value) -> String {
     match value {
-        serde_yaml::Value::String(s) => s.clone(),
-        serde_yaml::Value::Number(n) => n.to_string(),
-        serde_yaml::Value::Bool(b) => b.to_string(),
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::Bool(b) => b.to_string(),
         other => format!("{other:?}"),
     }
 }
@@ -346,7 +346,10 @@ fn collect_compose_entry(
 }
 
 fn parse_compose_file(path: &Path, content: &str) -> Result<Vec<ComposeConnection>> {
-    let compose: ComposeFile = serde_yaml::from_str(content)?;
+    let compose: ComposeFile = serde_saphyr::from_str_with_options(
+        content,
+        serde_saphyr::options! { with_snippet: false, strict_booleans: true },
+    )?;
     let dotenv = path.parent().map(load_dotenv).unwrap_or_default();
     let mut connections = vec![];
 
@@ -786,11 +789,11 @@ mod tests {
         let env = Some(EnvValue::Map(HashMap::from([
             (
                 "POSTGRES_PASSWORD".to_string(),
-                serde_yaml::Value::String("${DB_PASSWORD:-fallback}".to_string()),
+                serde_json::Value::String("${DB_PASSWORD:-fallback}".to_string()),
             ),
             (
                 "POSTGRES_USER".to_string(),
-                serde_yaml::Value::String("${DB_USER}".to_string()),
+                serde_json::Value::String("${DB_USER}".to_string()),
             ),
         ])));
         let dotenv = HashMap::from([
@@ -808,7 +811,7 @@ mod tests {
     fn parses_short_and_long_ports() {
         let short = PortValue::Short("15432:5432".to_string());
         let long = PortValue::Long(ComposePort {
-            published: Some(serde_yaml::Value::Number(15433.into())),
+            published: Some(serde_json::Value::Number(15433.into())),
             host_ip: Some("127.0.0.1".to_string()),
         });
 
@@ -845,6 +848,66 @@ services:
         assert_eq!(parsed[0].username, "agent");
         assert_eq!(parsed[0].password_literal.as_deref(), Some("testpass"));
         let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn parses_yaml_aliases_and_scalar_environment_values() {
+        let content = r#"
+x-environment: &environment
+  POSTGRES_DB: app
+  POSTGRES_USER: reader
+  POSTGRES_PASSWORD: 12345
+  ENABLED: true
+services:
+  db:
+    image: postgres:17
+    environment: *environment
+    ports: ["15432:5432"]
+"#;
+        let parsed = parse_compose_file(Path::new("compose.yaml"), content).unwrap();
+
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].database, "app");
+        assert_eq!(parsed[0].username, "reader");
+        assert_eq!(parsed[0].password_literal.as_deref(), Some("12345"));
+        assert_eq!(parsed[0].port, 15432);
+    }
+
+    #[test]
+    fn preserves_yaml_12_strings_in_compose_credentials() {
+        for scalar in [
+            "yes", "no", "on", "off", "YES", "NO", "On", "Off", "true", "false",
+        ] {
+            let content = format!(
+                "services:\n  db:\n    image: postgres:17\n    environment:\n      POSTGRES_USER: {scalar}\n      POSTGRES_PASSWORD: {scalar}\n"
+            );
+            let parsed = parse_compose_file(Path::new("compose.yaml"), &content).unwrap();
+
+            assert_eq!(parsed[0].username, scalar);
+            assert_eq!(parsed[0].password_literal.as_deref(), Some(scalar));
+        }
+    }
+
+    #[test]
+    fn rejects_duplicate_yaml_keys_and_invalid_documents() {
+        for content in [
+            "services: {db: {image: postgres:17, image: mysql:8}}",
+            "services: {db: {image: postgres:17, ports: [}}",
+        ] {
+            assert!(matches!(
+                parse_compose_file(Path::new("compose.yaml"), content),
+                Err(crate::error::SafeselectError::Yaml(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn yaml_errors_do_not_render_source_snippets() {
+        let content = "services:\n  db:\n    image: postgres:17\n    environment:\n      POSTGRES_PASSWORD: snippet-secret-sentinel\n    ports: [\n";
+        let error = parse_compose_file(Path::new("compose.yaml"), content).unwrap_err();
+
+        assert!(!error.to_string().contains("snippet-secret-sentinel"));
+        assert!(!error.to_string().contains("POSTGRES_PASSWORD"));
     }
 
     #[test]

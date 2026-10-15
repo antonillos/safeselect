@@ -87,9 +87,9 @@ pub enum SafeselectError {
     Other(String),
 }
 
-impl From<serde_yaml::Error> for SafeselectError {
-    fn from(e: serde_yaml::Error) -> Self {
-        SafeselectError::Yaml(e.to_string())
+impl From<serde_saphyr::Error> for SafeselectError {
+    fn from(e: serde_saphyr::Error) -> Self {
+        SafeselectError::Yaml(e.without_snippet().to_string())
     }
 }
 
