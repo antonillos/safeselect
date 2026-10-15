@@ -431,6 +431,9 @@ connecting. The source SSL mode is preserved both with and without an SSH tunnel
 
 Discover PostgreSQL services from Docker Compose.
 
+Invalid YAML and duplicate keys are rejected. YAML errors omit source snippets
+to avoid displaying nearby credentials.
+
 ```bash
 safeselect import-compose --path .
 ```

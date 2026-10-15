@@ -30,7 +30,7 @@ pub fn import_zip(zip_path: &Path) -> Result<Vec<DBeaverConnection>> {
 
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i)?;
-        let name = entry.name().to_string();
+        let name = entry.name()?.into_owned();
 
         if name.ends_with("/data-sources.json") {
             let mut content = String::new();
