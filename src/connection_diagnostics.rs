@@ -37,9 +37,9 @@ impl ConnectionFailure {
     }
 }
 
-impl fmt::Display for ConnectionFailure {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let summary = match self.category {
+impl ConnectionCategory {
+    fn summary(&self) -> &'static str {
+        match self {
             ConnectionCategory::Authentication => {
                 "Database authentication failed. Check the database credential source"
             }
@@ -54,8 +54,13 @@ impl fmt::Display for ConnectionFailure {
                 "Database network connection failed. Check the endpoint and SSH tunnel"
             }
             ConnectionCategory::Database => "Database connection failed",
-        };
-        write!(f, "{summary}")?;
+        }
+    }
+}
+
+impl fmt::Display for ConnectionFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.category.summary())?;
         if let Some(state) = &self.sql_state {
             write!(f, " (SQLSTATE {state})")?;
         }

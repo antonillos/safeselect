@@ -30,43 +30,63 @@ record ConnectionFailure(String category, String sqlState) {
     }
 
     private static String categoryOf(Throwable failure) {
-        if (failure instanceof SSLException
-                || (failure instanceof SQLException sql
-                    && "08004".equals(sql.getSQLState())
-                    && "The server does not support SSL.".equals(sql.getMessage()))) {
+        if (failure instanceof SSLException) {
             return "tls";
         }
-        if (failure instanceof ClassNotFoundException
-                || failure instanceof java.sql.SQLFeatureNotSupportedException
-                || (failure instanceof SQLException && failure.getMessage() != null
-                    && failure.getMessage().startsWith("No suitable driver"))) {
+        if (failure instanceof ClassNotFoundException) {
             return "driver";
         }
-        if (failure instanceof SQLTimeoutException || failure instanceof SocketTimeoutException
-                || failure instanceof com.mongodb.MongoTimeoutException) {
-            return "timeout";
-        }
         if (failure instanceof SQLException sql) {
-            final var state = sql.getSQLState();
-            if (state != null && state.startsWith("28")) {
-                return "authentication";
-            }
-            if ("HYT00".equals(state) || "HYT01".equals(state)) {
-                return "timeout";
-            }
-            if (state != null && state.startsWith("08")) {
-                return "network";
-            }
+            return sqlCategory(sql);
+        }
+        if (isSocketTimeout(failure)) {
+            return "timeout";
         }
         if (failure instanceof com.mongodb.MongoSecurityException) {
             return "authentication";
         }
-        if (failure instanceof ConnectException || failure instanceof UnknownHostException
-                || failure instanceof NoRouteToHostException
-                || failure instanceof com.mongodb.MongoSocketException) {
-            return "network";
+        return isNetworkFailure(failure) ? "network" : "database";
+    }
+
+    private static String sqlCategory(SQLException failure) {
+        final var state = java.util.Objects.toString(failure.getSQLState(), "");
+        if (isSslRefusal(failure)) {
+            return "tls";
         }
-        return "database";
+        if (isDriverFailure(failure)) {
+            return "driver";
+        }
+        if (failure instanceof SQLTimeoutException) {
+            return "timeout";
+        }
+        if (state.startsWith("28")) {
+            return "authentication";
+        }
+        if (java.util.Set.of("HYT00", "HYT01").contains(state)) {
+            return "timeout";
+        }
+        return state.startsWith("08") ? "network" : "database";
+    }
+
+    private static boolean isSslRefusal(SQLException failure) {
+        return "08004".equals(failure.getSQLState())
+                && "The server does not support SSL.".equals(failure.getMessage());
+    }
+
+    private static boolean isDriverFailure(SQLException failure) {
+        return failure instanceof java.sql.SQLFeatureNotSupportedException
+                || java.util.Objects.toString(failure.getMessage(), "").startsWith("No suitable driver");
+    }
+
+    private static boolean isNetworkFailure(Throwable failure) {
+        return failure instanceof ConnectException || failure instanceof UnknownHostException
+                || failure instanceof NoRouteToHostException
+                || failure instanceof com.mongodb.MongoSocketException;
+    }
+
+    private static boolean isSocketTimeout(Throwable failure) {
+        return failure instanceof SocketTimeoutException
+                || failure instanceof com.mongodb.MongoTimeoutException;
     }
 
     private static int priority(String category) {

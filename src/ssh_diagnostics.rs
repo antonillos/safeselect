@@ -33,30 +33,69 @@ pub fn wait_for_tunnel(
 
 pub fn failure_message(code: Option<i32>, stderr: &str, password_auth: bool) -> &'static str {
     let detail = stderr.to_ascii_lowercase();
-    if (password_auth && matches!(code, Some(6 | 7)))
-        || detail.contains("host key verification failed")
-        || detail.contains("remote host identification has changed")
-    {
-        "SSH host key verification failed. Check the configured known-hosts file. Database authentication was not attempted."
-    } else if (password_auth && code == Some(5))
-        || detail.contains("permission denied")
-        || detail.contains("authentication failed")
-    {
-        "SSH authentication failed for the configured bastion. Check its SSH credential source. Database authentication was not attempted."
-    } else if detail.contains("address already in use") || detail.contains("cannot listen to port")
-    {
-        "SSH local forwarding port is unavailable. Check for another process using the configured local endpoint. Database authentication was not attempted."
-    } else if detail.contains("connection timed out") || detail.contains("operation timed out") {
-        "SSH connection timed out. Check bastion connectivity. Database authentication was not attempted."
-    } else if detail.contains("connection refused")
-        || detail.contains("could not resolve hostname")
-        || detail.contains("no route to host")
-        || detail.contains("network is unreachable")
-    {
-        "SSH network connection failed. Check bastion connectivity. Database authentication was not attempted."
+    let detail_category = stderr_category(&detail);
+    let category = if detail_category == "host_key" {
+        Some(detail_category)
+    } else if password_auth {
+        match code {
+            Some(6 | 7) => Some("host_key"),
+            Some(5) => Some("authentication"),
+            _ => None,
+        }
     } else {
-        "SSH tunnel establishment failed. Check the SSH configuration and forwarding destination. Database authentication was not attempted."
+        None
+    };
+    let category = category.unwrap_or(detail_category);
+    category_message(category)
+}
+
+fn category_message(category: &str) -> &'static str {
+    match category {
+        "host_key" => "SSH host key verification failed. Check the configured known-hosts file. Database authentication was not attempted.",
+        "authentication" => "SSH authentication failed for the configured bastion. Check its SSH credential source. Database authentication was not attempted.",
+        "forwarding" => "SSH local forwarding port is unavailable. Check for another process using the configured local endpoint. Database authentication was not attempted.",
+        "timeout" => "SSH connection timed out. Check bastion connectivity. Database authentication was not attempted.",
+        "network" => "SSH network connection failed. Check bastion connectivity. Database authentication was not attempted.",
+        _ => "SSH tunnel establishment failed. Check the SSH configuration and forwarding destination. Database authentication was not attempted.",
     }
+}
+
+fn stderr_category(detail: &str) -> &'static str {
+    for (category, patterns) in [
+        (
+            "host_key",
+            &[
+                "host key verification failed",
+                "remote host identification has changed",
+            ][..],
+        ),
+        (
+            "authentication",
+            &["permission denied", "authentication failed"][..],
+        ),
+        (
+            "forwarding",
+            &["address already in use", "cannot listen to port"][..],
+        ),
+        (
+            "timeout",
+            &["connection timed out", "operation timed out"][..],
+        ),
+        (
+            "network",
+            &[
+                "connection refused",
+                "could not resolve hostname",
+                "no route to host",
+                "network is unreachable",
+            ][..],
+        ),
+    ] {
+        if patterns.iter().any(|pattern| detail.contains(pattern)) {
+            return category;
+        }
+    }
+    "unknown"
 }
 
 fn credential_source(shared: &SharedSshConfig) -> (&str, Option<&str>) {
@@ -147,6 +186,24 @@ mod tests {
             assert!(message.contains("Database authentication was not attempted"));
         }
         assert!(!failure_message(Some(5), "", false).contains("authentication failed"));
+    }
+
+    #[test]
+    fn preserves_failure_priority_when_exit_code_and_stderr_disagree() {
+        assert!(
+            failure_message(Some(5), "Host key verification failed", true)
+                .contains("host key verification failed")
+        );
+        assert!(failure_message(Some(6), "Permission denied", true)
+            .contains("host key verification failed"));
+        assert!(
+            failure_message(Some(5), "Connection refused", true).contains("authentication failed")
+        );
+        assert!(failure_message(Some(6), "Connection refused", false)
+            .contains("network connection failed"));
+        assert!(
+            failure_message(None, "Connection refused", true).contains("network connection failed")
+        );
     }
 
     #[test]

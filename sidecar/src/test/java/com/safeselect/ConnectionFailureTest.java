@@ -69,6 +69,20 @@ class ConnectionFailureTest {
     private record Example(Throwable failure, String category) {}
 
     @Test
+    void preservesSqlExceptionPrecedenceAndHandlesMissingDetails() {
+        for (final var example : List.of(
+                new Example(new SQLException(), "database"),
+                new Example(new java.sql.SQLFeatureNotSupportedException(), "driver"),
+                new Example(new SQLTimeoutException(PRIVATE_DETAIL, "28P01"), "timeout"),
+                new Example(new SQLTimeoutException("No suitable driver", "HYT00"), "driver"),
+                new Example(new SQLException(PRIVATE_DETAIL, "HYT01"), "timeout"),
+                new Example(new java.net.UnknownHostException(PRIVATE_DETAIL), "network"),
+                new Example(new java.net.NoRouteToHostException(PRIVATE_DETAIL), "network"))) {
+            assertEquals(example.category(), ConnectionFailure.from(example.failure()).category());
+        }
+    }
+
+    @Test
     void recognizesPostgresqlSslRefusalWithoutSslExceptionCause() {
         final var failure = ConnectionFailure.from(new SQLException("The server does not support SSL.", "08004"));
         assertEquals("tls", failure.category());

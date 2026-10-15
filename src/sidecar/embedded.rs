@@ -13,6 +13,11 @@ pub(super) fn ensure_jar(directory: &Path, embedded: &[u8]) -> Result<PathBuf> {
         Err(error) => return Err(error.into()),
     }
 
+    publish_jar(directory, &jar, embedded)?;
+    Ok(jar)
+}
+
+fn publish_jar(directory: &Path, jar: &Path, embedded: &[u8]) -> std::io::Result<()> {
     std::fs::create_dir_all(directory)?;
     let temporary = directory.join(format!(".sidecar-{}.tmp", uuid::Uuid::new_v4()));
     let result = (|| -> std::io::Result<()> {
@@ -28,13 +33,12 @@ pub(super) fn ensure_jar(directory: &Path, embedded: &[u8]) -> Result<PathBuf> {
         }
         file.sync_all()?;
         drop(file);
-        std::fs::rename(&temporary, &jar)
+        std::fs::rename(&temporary, jar)
     })();
     if result.is_err() {
         let _ = std::fs::remove_file(&temporary);
     }
-    result?;
-    Ok(jar)
+    result
 }
 
 #[cfg(test)]
@@ -67,6 +71,20 @@ mod tests {
         std::fs::write(&jar, b"partial").unwrap();
         assert_eq!(ensure_jar(&directory, b"embedded contents").unwrap(), jar);
         assert_eq!(std::fs::read(jar).unwrap(), b"embedded contents");
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn rejects_unreadable_cache_and_cleans_failed_publication() {
+        let directory =
+            std::env::temp_dir().join(format!("sidecar-failure-{}", uuid::Uuid::new_v4()));
+        let jar = ensure_jar(&directory, b"embedded contents").unwrap();
+        std::fs::remove_file(&jar).unwrap();
+        std::fs::create_dir(&jar).unwrap();
+        assert!(ensure_jar(&directory, b"embedded contents").is_err());
+        assert!(publish_jar(&directory, &jar, b"embedded contents").is_err());
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
+        assert!(jar.is_dir());
         std::fs::remove_dir_all(directory).unwrap();
     }
 
