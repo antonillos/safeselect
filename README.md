@@ -980,3 +980,5 @@ as SafeSelect. A successful TCP probe does not verify SSH or database authentica
 If an SSH tunnel cannot bind its local forwarding port, check for an existing
 listener or stale SSH tunnel. A bastion restart can release an old SSH session
 and its local listener, but TCP reachability alone cannot identify the cause.
+MCP `connect` and `reconnect` report the recognized SSH failure category without
+including endpoint or credential details.

@@ -3,6 +3,7 @@ use std::process::Child;
 use std::time::{Duration, Instant};
 
 pub const REUSED_ENDPOINT_MESSAGE: &str = "Reusing an existing database endpoint; no SSH tunnel was established by this check. Endpoint responsiveness does not verify the configured remote destination.";
+pub const TUNNEL_ENDPOINT_TIMEOUT_MESSAGE: &str = "SSH tunnel endpoint did not respond before the deadline. Check SSH connectivity and the forwarding destination. Database authentication was not attempted.";
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum TunnelStatus {
@@ -58,6 +59,20 @@ fn category_message(category: &str) -> &'static str {
         "network" => "SSH network connection failed. Check bastion connectivity. Database authentication was not attempted.",
         _ => "SSH tunnel establishment failed. Check the SSH configuration and forwarding destination. Database authentication was not attempted.",
     }
+}
+
+pub fn recognized_failure_message(error: &str) -> Option<&'static str> {
+    [
+        "host_key",
+        "authentication",
+        "forwarding",
+        "timeout",
+        "network",
+    ]
+    .into_iter()
+    .map(category_message)
+    .chain(std::iter::once(TUNNEL_ENDPOINT_TIMEOUT_MESSAGE))
+    .find(|message| error.contains(message))
 }
 
 fn stderr_category(detail: &str) -> &'static str {
@@ -217,6 +232,23 @@ mod tests {
             .contains("network connection failed"));
         assert!(
             failure_message(None, "Connection refused", true).contains("network connection failed")
+        );
+    }
+
+    #[test]
+    fn extracts_only_known_ssh_failures_from_setup_errors() {
+        let expected = failure_message(Some(255), "bind: Address already in use", false);
+        let setup_error = format!("SSH tunnel setup failed: private-environment: {expected}");
+        assert_eq!(recognized_failure_message(&setup_error), Some(expected));
+        assert_eq!(
+            recognized_failure_message(&format!(
+                "SSH tunnel setup failed: private-environment: {TUNNEL_ENDPOINT_TIMEOUT_MESSAGE}"
+            )),
+            Some(TUNNEL_ENDPOINT_TIMEOUT_MESSAGE)
+        );
+        assert_eq!(
+            recognized_failure_message("private-environment: unrecognized failure"),
+            None
         );
     }
 

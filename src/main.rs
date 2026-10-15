@@ -4080,7 +4080,7 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
                 })
                 .unwrap_or_else(|| ssh_diagnostics::failure_message(None, "", use_password));
             let message = if matches!(tunnel_status, Ok(ssh_diagnostics::TunnelStatus::TimedOut)) {
-                "SSH tunnel endpoint did not respond before the deadline. Check SSH connectivity and the forwarding destination. Database authentication was not attempted."
+                ssh_diagnostics::TUNNEL_ENDPOINT_TIMEOUT_MESSAGE
             } else {
                 message
             };
