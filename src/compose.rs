@@ -348,7 +348,7 @@ fn collect_compose_entry(
 fn parse_compose_file(path: &Path, content: &str) -> Result<Vec<ComposeConnection>> {
     let compose: ComposeFile = serde_saphyr::from_str_with_options(
         content,
-        serde_saphyr::options! { with_snippet: false },
+        serde_saphyr::options! { with_snippet: false, strict_booleans: true },
     )?;
     let dotenv = path.parent().map(load_dotenv).unwrap_or_default();
     let mut connections = vec![];
@@ -871,6 +871,21 @@ services:
         assert_eq!(parsed[0].username, "reader");
         assert_eq!(parsed[0].password_literal.as_deref(), Some("12345"));
         assert_eq!(parsed[0].port, 15432);
+    }
+
+    #[test]
+    fn preserves_yaml_12_strings_in_compose_credentials() {
+        for scalar in [
+            "yes", "no", "on", "off", "YES", "NO", "On", "Off", "true", "false",
+        ] {
+            let content = format!(
+                "services:\n  db:\n    image: postgres:17\n    environment:\n      POSTGRES_USER: {scalar}\n      POSTGRES_PASSWORD: {scalar}\n"
+            );
+            let parsed = parse_compose_file(Path::new("compose.yaml"), &content).unwrap();
+
+            assert_eq!(parsed[0].username, scalar);
+            assert_eq!(parsed[0].password_literal.as_deref(), Some(scalar));
+        }
     }
 
     #[test]
