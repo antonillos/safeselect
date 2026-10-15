@@ -173,7 +173,7 @@ public class Main {
         password = reader.readLine();
         validatePassword();
         configureIdleTimer(writer);
-        connectBackendOrExit();
+        connectBackendOrExit(writer);
         try {
             writer.println("ready");
             writer.flush();
@@ -185,17 +185,19 @@ public class Main {
         }
     }
 
-    private static void connectBackendOrExit() {
+    private static void connectBackendOrExit(PrintWriter writer) {
         try {
             connectBackend();
         } catch (Exception e) {
+            writer.println(MAPPER.writeValueAsString(ConnectionFailure.from(e).startupResponse()));
+            writer.flush();
             error("Fatal error: " + connectionFailureMessage(e));
             System.exit(1);
         }
     }
 
     private static String connectionFailureMessage(Throwable throwable) {
-        return "database connection failed; details redacted";
+        return ConnectionFailure.from(throwable).logMessage();
     }
 
     private static void configureLogging() throws IOException {

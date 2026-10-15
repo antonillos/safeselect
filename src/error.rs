@@ -35,6 +35,9 @@ pub enum SafeselectError {
     #[error("Sidecar error: {0}")]
     Sidecar(String),
 
+    #[error("{0}")]
+    ConnectionStart(crate::connection_diagnostics::ConnectionFailure),
+
     #[error("SQL execution failed: {0}")]
     SqlError(String),
 

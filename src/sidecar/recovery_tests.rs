@@ -206,3 +206,35 @@ fn missing_or_rejected_startup_acknowledgement_terminates_child() {
         assert!(sidecar.child.try_wait().unwrap().is_some());
     }
 }
+
+#[test]
+fn startup_authentication_failure_preserves_only_category_and_sqlstate() {
+    let mut sidecar = mock_sidecar(
+        r#"read password
+printf '%s\n' '{"type":"connection_error","category":"authentication","sql_state":"28P01","message":"private-host-and-password"}'
+read request"#,
+    );
+    let error = sidecar
+        .send_password("synthetic-password", "jdbc")
+        .unwrap_err();
+    let message = crate::redact_connection_start_error(error).to_string();
+    assert!(message.contains("authentication failed"), "{message}");
+    assert!(message.contains("SQLSTATE 28P01"), "{message}");
+    assert!(!message.contains("private-host-and-password"));
+    assert!(!message.contains("synthetic-password"));
+    assert!(sidecar.child.try_wait().unwrap().is_some());
+}
+
+#[test]
+fn startup_rejects_unknown_or_malformed_diagnostics_without_echoing_input() {
+    for ack in [
+        "private-host-and-password",
+        r#"{"type":"connection_error","category":"private-host-and-password"}"#,
+        r#"{"type":"connection_error","category":"authentication","sql_state":"private-host-and-password"}"#,
+        r#"{"type":"other","category":"authentication","sql_state":"28P01"}"#,
+    ] {
+        let message = validate_sidecar_ack(ack).unwrap_err().to_string();
+        assert!(!message.contains("private-host-and-password"));
+        assert!(!message.contains("28P01"));
+    }
+}

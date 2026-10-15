@@ -8,6 +8,7 @@ mod compass;
 mod compass_import;
 mod compose;
 mod config;
+mod connection_diagnostics;
 mod dbeaver;
 mod diagnostics;
 mod error;
@@ -16,6 +17,7 @@ mod mcp;
 mod posture;
 mod security;
 mod sidecar;
+mod ssh_diagnostics;
 
 use clap::Parser;
 use cli::{AgentAction, Cli, Command, ConfigAction, DriverAction};
@@ -232,7 +234,7 @@ fn redact_connection_start_error(error: SafeselectError) -> SafeselectError {
     match error {
         SafeselectError::Sidecar(_) | SafeselectError::SidecarJavaNotFound(_) => {
             SafeselectError::Other(
-                "Database connection could not be started. Check the connection configuration and driver availability."
+                "Database sidecar startup failed. Check the Java runtime and sidecar installation."
                     .into(),
             )
         }
@@ -834,6 +836,8 @@ fn resolve_password(password: Option<String>, _account: &str) -> Result<String> 
             "Database password or {env:NAME} (use --literal-password for a literal reference)",
         )
         .without_confirmation()
+        .with_validator(config::password::validate_prompt_password)
+        .with_formatter(&|_| "[hidden]".into())
         .prompt()
         .map_err(|e| SafeselectError::Other(format!("Failed to read password: {e}")))
     })
@@ -1074,6 +1078,8 @@ fn resolve_ssh_password(password: Option<String>, _account: &str) -> Result<Stri
             "SSH password or {env:NAME} (use --literal-password for a literal reference)",
         )
         .without_confirmation()
+        .with_validator(config::password::validate_prompt_password)
+        .with_formatter(&|_| "[hidden]".into())
         .prompt()
         .map_err(|e| SafeselectError::Other(format!("Failed to read SSH password: {e}")))
     })
@@ -3801,6 +3807,8 @@ fn build_tunnel_ssh_args(ssh: &config::SshConfig) -> Vec<String> {
         "-o".into(),
         "ExitOnForwardFailure=yes".into(),
         "-o".into(),
+        "ForkAfterAuthentication=no".into(),
+        "-o".into(),
         "ServerAliveInterval=15".into(),
         "-o".into(),
         "ServerAliveCountMax=3".into(),
@@ -3886,7 +3894,14 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
         };
 
         if backend_via_direct || backend_via_tunnel {
-            print!("  ◉ Database reachable ({env_name})");
+            println!(
+                "{}",
+                diagnostics::line(
+                    DiagnosticStatus::Warn,
+                    DiagnosticCode::SshEndpointReused,
+                    ssh_diagnostics::REUSED_ENDPOINT_MESSAGE,
+                )
+            );
             std::io::stderr().flush()?;
             continue;
         }
@@ -4028,31 +4043,24 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
 
         // Wait briefly: if the bastion/tunnel is down, fail fast like JDBC clients do.
         let tunnel_wait = Duration::from_secs(20);
-        let deadline = std::time::Instant::now() + tunnel_wait;
-        let mut backend_ok = false;
-        while std::time::Instant::now() < deadline {
-            backend_ok = match cfg.database.kind {
-                crate::backend::BackendKind::Jdbc => {
-                    check_postgres_endpoint(tunnel_local_host, tunnel_local_port)
-                        || extract_host_port(&cfg.database.url)
-                            .map(|(host, port)| check_postgres_endpoint(&host, port))
-                            .unwrap_or(false)
-                }
-                crate::backend::BackendKind::Document => {
-                    check_tcp_endpoint(tunnel_local_host, tunnel_local_port, Duration::from_secs(2))
-                        || extract_tcp_host_port(&cfg.database.url)
-                            .map(|(host, port)| {
-                                check_tcp_endpoint(&host, port, Duration::from_secs(2))
-                            })
-                            .unwrap_or(false)
-                }
-            };
-            if backend_ok {
-                break;
+        let tunnel_status = ssh_diagnostics::wait_for_tunnel(&mut child, tunnel_wait, || match cfg
+            .database
+            .kind
+        {
+            crate::backend::BackendKind::Jdbc => {
+                check_postgres_endpoint(tunnel_local_host, tunnel_local_port)
+                    || extract_host_port(&cfg.database.url)
+                        .map(|(host, port)| check_postgres_endpoint(&host, port))
+                        .unwrap_or(false)
             }
-            std::thread::sleep(Duration::from_millis(250));
-        }
-        if backend_ok {
+            crate::backend::BackendKind::Document => {
+                check_tcp_endpoint(tunnel_local_host, tunnel_local_port, Duration::from_secs(2))
+                    || extract_tcp_host_port(&cfg.database.url)
+                        .map(|(host, port)| check_tcp_endpoint(&host, port, Duration::from_secs(2)))
+                        .unwrap_or(false)
+            }
+        });
+        if matches!(tunnel_status, Ok(ssh_diagnostics::TunnelStatus::Ready)) {
             print_terminal_error_line("OK");
             // Detach child so it survives after we exit
             let _ = std::thread::spawn(move || {
@@ -4060,37 +4068,42 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
             });
         } else {
             let _ = child.kill();
-            let ssh_error = child.wait_with_output().ok().and_then(|output| {
-                let detail = String::from_utf8_lossy(&output.stderr)
-                    .lines()
-                    .map(str::trim)
-                    .filter(|line| !line.is_empty())
-                    .collect::<Vec<_>>()
-                    .join(" | ");
-                (!detail.is_empty()).then_some(detail)
-            });
+            let message = child
+                .wait_with_output()
+                .ok()
+                .map(|output| {
+                    ssh_diagnostics::failure_message(
+                        output.status.code(),
+                        &String::from_utf8_lossy(&output.stderr),
+                        use_password,
+                    )
+                })
+                .unwrap_or_else(|| ssh_diagnostics::failure_message(None, "", use_password));
+            let message = if matches!(tunnel_status, Ok(ssh_diagnostics::TunnelStatus::TimedOut)) {
+                "SSH tunnel endpoint did not respond before the deadline. Check SSH connectivity and the forwarding destination. Database authentication was not attempted."
+            } else {
+                message
+            };
             print_terminal_error_line("FAILED");
-            if ssh_error.is_some() {
-                print_terminal_error_line(
-                    "  SSH command failed; inspect the configured SSH connection.",
+            println!(
+                "{}",
+                diagnostics::line(
+                    DiagnosticStatus::Fail,
+                    DiagnosticCode::SshTunnelFailed,
+                    message,
+                )
+            );
+            if matches!(tunnel_status, Ok(ssh_diagnostics::TunnelStatus::TimedOut)) {
+                println!(
+                    "  Database endpoint was polled for up to {}s",
+                    tunnel_wait.as_secs()
                 );
             }
-            println!(
-                "  Database not reachable through SSH tunnel (polled for up to {}s)",
-                tunnel_wait.as_secs()
-            );
-            println!("  Possible causes:");
-            println!("    - Database connection settings are wrong");
-            println!("    - Database is not running or not accepting connections");
-            println!("    - SSH tunnel failed to forward (check bastion logs)");
             print_manual_tunnel_hint();
             if !bastion_up {
                 print_ssh_connectivity_hint(bastion_host, bastion_port);
             }
-            failures.push(format!(
-                "{env_name}: database not reachable through SSH tunnel after {}s",
-                tunnel_wait.as_secs()
-            ));
+            failures.push(format!("{env_name}: {message}"));
         }
     }
 
@@ -4430,6 +4443,15 @@ fn cmd_check(
 
     if let Some(ref ssh) = resolved.environment.ssh {
         if ssh.enabled {
+            if let Some(warning) =
+                ssh_diagnostics::duplicate_bastion_warning(&resolved.project, ssh)
+            {
+                diagnostics::print(
+                    DiagnosticStatus::Warn,
+                    DiagnosticCode::SshBastionCredentialsDiffer,
+                    warning,
+                );
+            }
             let bastion_host = ssh.host.as_deref().unwrap_or("unknown");
             let bastion_port = ssh.port.unwrap_or(22);
             println!("  SSH tunnel: configured");
@@ -4453,6 +4475,14 @@ fn cmd_check(
                         check_tcp_endpoint(&host, port, std::time::Duration::from_secs(3))
                     })
                     .unwrap_or(false);
+
+            if postgres_reachable || document_reachable {
+                diagnostics::print(
+                    DiagnosticStatus::Warn,
+                    DiagnosticCode::SshEndpointReused,
+                    ssh_diagnostics::REUSED_ENDPOINT_MESSAGE,
+                );
+            }
 
             // An existing database route still requires the sidecar backend check below.
             if !postgres_reachable && !document_reachable {
@@ -4505,7 +4535,7 @@ fn cmd_check(
                             "Establishing SSH tunnel...",
                         );
                     }
-                    let _ = setup_ssh_tunnels(repo_root, &[environment.to_string()]);
+                    setup_ssh_tunnels(repo_root, &[environment.to_string()])?;
                     let reachable = check_postgres_endpoint(&host, port);
                     (reachable, Some(tunnel_attempt_started.elapsed()))
                 };
@@ -4552,7 +4582,7 @@ fn cmd_check(
                             "Establishing SSH tunnel...",
                         );
                     }
-                    let _ = setup_ssh_tunnels(repo_root, &[environment.to_string()]);
+                    setup_ssh_tunnels(repo_root, &[environment.to_string()])?;
                     check_tcp_endpoint(&host, port, std::time::Duration::from_secs(3))
                 };
                 if !document_reachable {
@@ -5686,7 +5716,7 @@ auth_type="KEY"
         ));
         assert_eq!(
             connection.to_string(),
-            "Database connection could not be started. Check the connection configuration and driver availability."
+            "Database sidecar startup failed. Check the Java runtime and sidecar installation."
         );
         assert!(!connection.to_string().contains("db.internal"));
 
@@ -6100,6 +6130,32 @@ auth_type="KEY"
         ssh.forward_host = None;
         ssh.forward_port = None;
         assert_eq!(missing_ssh_fields(&ssh), ["forward_host", "forward_port"]);
+    }
+
+    #[test]
+    fn ssh_supervision_overrides_background_setting_from_user_config() {
+        let config_file =
+            std::env::temp_dir().join(format!("safeselect-ssh-{}.conf", uuid::Uuid::new_v4()));
+        std::fs::write(&config_file, "Host *\n  ForkAfterAuthentication yes\n").unwrap();
+        let ssh: config::SshConfig = toml::from_str(
+            "host = 'jump.example'\nusername = 'synthetic'\nforward_host = 'db.example'\nforward_port = 5432\n"
+        ).unwrap();
+        for password in [false, true] {
+            let mut ssh = ssh.clone();
+            ssh.auth_type = Some(if password { "PASSWORD" } else { "KEY" }.into());
+            let output = std::process::Command::new("ssh")
+                .args(["-G", "-F"])
+                .arg(&config_file)
+                .args(build_tunnel_ssh_args(&ssh))
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            let effective = String::from_utf8(output.stdout).unwrap();
+            assert!(effective
+                .lines()
+                .any(|line| line == "forkafterauthentication no"));
+        }
+        std::fs::remove_file(config_file).unwrap();
     }
 
     #[test]
