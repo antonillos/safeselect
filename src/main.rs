@@ -3897,7 +3897,7 @@ pub(crate) fn setup_ssh_tunnels(repo_root: &Path, env_names: &[String]) -> Resul
             println!(
                 "{}",
                 diagnostics::line(
-                    DiagnosticStatus::Warn,
+                    DiagnosticStatus::Info,
                     DiagnosticCode::SshEndpointReused,
                     ssh_diagnostics::REUSED_ENDPOINT_MESSAGE,
                 )
@@ -4478,7 +4478,7 @@ fn cmd_check(
 
             if postgres_reachable || document_reachable {
                 diagnostics::print(
-                    DiagnosticStatus::Warn,
+                    DiagnosticStatus::Info,
                     DiagnosticCode::SshEndpointReused,
                     ssh_diagnostics::REUSED_ENDPOINT_MESSAGE,
                 );

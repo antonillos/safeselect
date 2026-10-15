@@ -982,3 +982,5 @@ listener or stale SSH tunnel. A bastion restart can release an old SSH session
 and its local listener, but TCP reachability alone cannot identify the cause.
 MCP `connect` and `reconnect` report the recognized SSH failure category without
 including endpoint or credential details.
+When an existing database endpoint responds, `check` and `doctor` report its
+reuse as information while still verifying the backend connection.

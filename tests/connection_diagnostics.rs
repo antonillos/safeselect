@@ -104,6 +104,12 @@ printf '%s\n' '{"id":3,"ok":"bye"}'
         "{text}"
     );
     assert_eq!(
+        text.matches("◇ [SAFESELECT_SSH_ENDPOINT_REUSED]").count(),
+        2,
+        "{text}"
+    );
+    assert!(!text.contains("⚠ [SAFESELECT_SSH_ENDPOINT_REUSED]"));
+    assert_eq!(
         text.matches("SAFESELECT_BACKEND_VERIFICATION_OK").count(),
         2,
         "{text}"
