@@ -33,7 +33,7 @@ record ConnectionFailure(String category, String sqlState) {
         if (failure instanceof SSLException) {
             return "tls";
         }
-        if (failure instanceof ClassNotFoundException) {
+        if (isDriverClassFailure(failure)) {
             return "driver";
         }
         if (failure instanceof SQLException sql) {
@@ -87,6 +87,10 @@ record ConnectionFailure(String category, String sqlState) {
     private static boolean isSocketTimeout(Throwable failure) {
         return failure instanceof SocketTimeoutException
                 || failure instanceof com.mongodb.MongoTimeoutException;
+    }
+
+    private static boolean isDriverClassFailure(Throwable failure) {
+        return failure instanceof ClassNotFoundException || failure instanceof LinkageError;
     }
 
     private static int priority(String category) {

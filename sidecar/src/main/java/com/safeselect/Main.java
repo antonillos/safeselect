@@ -188,7 +188,7 @@ public class Main {
     private static void connectBackendOrExit(PrintWriter writer) {
         try {
             connectBackend();
-        } catch (Exception e) {
+        } catch (Exception | LinkageError e) {
             writer.println(MAPPER.writeValueAsString(ConnectionFailure.from(e).startupResponse()));
             writer.flush();
             error("Fatal error: " + connectionFailureMessage(e));

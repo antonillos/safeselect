@@ -30,6 +30,11 @@ class MainStartupTest {
         this.assertStartupFailure("synthetic.missing.Driver", "driver", null);
     }
 
+    @Test
+    void startupClassifiesDriverLinkageFailures() throws IOException, InterruptedException {
+        this.assertStartupFailure(BrokenDriver.class.getName(), "driver", null);
+    }
+
     private void assertStartupFailure(String driver, String category, String state) throws IOException, InterruptedException {
         final var java = Path.of(System.getProperty("java.home"), "bin", "java").toString();
         final var process = new ProcessBuilder(java, "-cp", System.getProperty("java.class.path"),
@@ -89,5 +94,15 @@ class MainStartupTest {
 
         @Override
         public Logger getParentLogger() { return Logger.getGlobal(); }
+    }
+
+    public static final class BrokenDriver {
+        static {
+            failInitialization();
+        }
+
+        private static void failInitialization() {
+            throw new NoClassDefFoundError("synthetic-private-driver-dependency");
+        }
     }
 }
