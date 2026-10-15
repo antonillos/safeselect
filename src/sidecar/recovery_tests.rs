@@ -214,14 +214,13 @@ fn startup_authentication_failure_preserves_only_category_and_sqlstate() {
 printf '%s\n' '{"type":"connection_error","category":"authentication","sql_state":"28P01","message":"private-host-and-password"}'
 read request"#,
     );
-    let error = sidecar
-        .send_password("synthetic-password", "jdbc")
-        .unwrap_err();
+    let password = uuid::Uuid::new_v4().to_string();
+    let error = sidecar.send_password(&password, "jdbc").unwrap_err();
     let message = crate::redact_connection_start_error(error).to_string();
     assert!(message.contains("authentication failed"), "{message}");
     assert!(message.contains("SQLSTATE 28P01"), "{message}");
     assert!(!message.contains("private-host-and-password"));
-    assert!(!message.contains("synthetic-password"));
+    assert!(!message.contains(&password));
     assert!(sidecar.child.try_wait().unwrap().is_some());
 }
 
