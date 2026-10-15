@@ -977,3 +977,6 @@ On SSH connectivity failure, SafeSelect also prints a safely quoted TCP probe
 command for the configured endpoint, using Bash and `timeout` on Linux/WSL;
 neither `nc` nor `telnet` is required. Run it from the same terminal environment
 as SafeSelect. A successful TCP probe does not verify SSH or database authentication.
+If an SSH tunnel cannot bind its local forwarding port, check for an existing
+listener or stale SSH tunnel. A bastion restart can release an old SSH session
+and its local listener, but TCP reachability alone cannot identify the cause.

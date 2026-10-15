@@ -53,7 +53,7 @@ fn category_message(category: &str) -> &'static str {
     match category {
         "host_key" => "SSH host key verification failed. Check the configured known-hosts file. Database authentication was not attempted.",
         "authentication" => "SSH authentication failed for the configured bastion. Check its SSH credential source. Database authentication was not attempted.",
-        "forwarding" => "SSH local forwarding port is unavailable. Check for another process using the configured local endpoint. Database authentication was not attempted.",
+        "forwarding" => "SSH local forwarding port is unavailable. Check for another local process, including a stale SSH tunnel, using the configured endpoint. Database authentication was not attempted.",
         "timeout" => "SSH connection timed out. Check bastion connectivity. Database authentication was not attempted.",
         "network" => "SSH network connection failed. Check bastion connectivity. Database authentication was not attempted.",
         _ => "SSH tunnel establishment failed. Check the SSH configuration and forwarding destination. Database authentication was not attempted.",
@@ -196,6 +196,10 @@ mod tests {
             assert!(message.contains("Database authentication was not attempted"));
         }
         assert!(!failure_message(Some(5), "", false).contains("authentication failed"));
+        assert!(
+            failure_message(Some(255), "bind: Address already in use", false)
+                .contains("stale SSH tunnel")
+        );
     }
 
     #[test]
