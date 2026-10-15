@@ -3151,7 +3151,7 @@ impl McpServer {
                 "Connection preparation failed: {}",
                 redact_connection_setup_error(&error)
             );
-            return self.send_error(id, -32000, connection_setup_error_message());
+            return self.send_error(id, -32000, connection_setup_error_message(&error));
         }
 
         match self.restart_sidecar() {
@@ -3170,7 +3170,7 @@ impl McpServer {
                     "Connection restart failed: {}",
                     redact_connection_setup_error(&error)
                 );
-                self.send_error(id, -32000, connection_setup_error_message())
+                self.send_error(id, -32000, connection_setup_error_message(&error))
             }
         }
     }
@@ -4276,12 +4276,8 @@ impl McpServer {
         let start = std::time::Instant::now();
         tracing::info!("Reconnect started");
 
-        if self.ensure_ssh_ready_for_query().is_err() {
-            return self.send_error(
-                id,
-                -32000,
-                "Connection preparation failed; check configuration and connectivity.",
-            );
+        if let Err(error) = self.ensure_ssh_ready_for_query() {
+            return self.send_error(id, -32000, connection_setup_error_message(&error));
         }
 
         tracing::info!("Restarting sidecar ({:?})", start.elapsed());
@@ -4450,8 +4446,12 @@ impl McpServer {
     }
 }
 
-fn connection_setup_error_message() -> &'static str {
-    "Database connection could not be prepared. Check the connection configuration and required dependencies."
+fn connection_setup_error_message(error: &crate::error::SafeselectError) -> String {
+    let safe_detail = redact_connection_setup_error(error);
+    if safe_detail.starts_with("SSH ") {
+        return format!("Connection preparation failed: {safe_detail}");
+    }
+    "Database connection could not be prepared. Check the connection configuration and required dependencies.".into()
 }
 
 fn redact_connection_setup_error(error: &crate::error::SafeselectError) -> &'static str {
@@ -4464,6 +4464,12 @@ fn redact_connection_setup_error(error: &crate::error::SafeselectError) -> &'sta
         | crate::error::SafeselectError::Io(_) => "configuration could not be loaded",
         crate::error::SafeselectError::Sidecar(_)
         | crate::error::SafeselectError::SidecarJavaNotFound(_) => "sidecar startup failed",
+        crate::error::SafeselectError::Other(message)
+            if message.starts_with("SSH tunnel setup failed: ") =>
+        {
+            crate::ssh_diagnostics::recognized_failure_message(message)
+                .unwrap_or("connection preparation failed")
+        }
         _ => "connection preparation failed",
     }
 }
@@ -5845,7 +5851,26 @@ mod tests {
             &crate::error::SafeselectError::SidecarJavaNotFound("/private/java".into()),
         );
         assert_eq!(startup, "sidecar startup failed");
-        assert!(!super::connection_setup_error_message().contains("/private"));
+        assert!(
+            !super::connection_setup_error_message(&crate::error::SafeselectError::Other(
+                "/private/unknown".into(),
+            ))
+            .contains("/private")
+        );
+
+        let forwarding = crate::ssh_diagnostics::failure_message(
+            Some(255),
+            "bind: Address already in use",
+            false,
+        );
+        let error = crate::error::SafeselectError::Other(format!(
+            "SSH tunnel setup failed: private-environment: {forwarding}"
+        ));
+        assert_eq!(
+            super::connection_setup_error_message(&error),
+            format!("Connection preparation failed: {forwarding}")
+        );
+        assert!(!super::connection_setup_error_message(&error).contains("private-environment"));
     }
 
     #[test]

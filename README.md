@@ -170,6 +170,29 @@ database passwords are needed in the conversation.
 (this can contact the database), then follow the reported next step. Do not
 relax policy to get past a rejection. See [agent recovery](docs/agents.md#agent-recovery-flow).
 
+Connection diagnostics distinguish SSH authentication, host-key, forwarding and
+network failures from database authentication, driver, TLS, timeout and network
+failures. JDBC startup errors retain a valid SQLSTATE (for example `28P01` for
+authentication rejection) without printing exception details. An exited SSH
+process stops tunnel polling promptly.
+
+SafeSelect keeps the SSH process in the foreground while supervising tunnel
+startup, overriding `ForkAfterAuthentication`. Released binaries extract the
+embedded sidecar under a SHA-256-specific filename and verify its contents, so
+updates use the matching sidecar without replacing a running older version.
+
+If a database endpoint already responds, diagnostics report its reuse; that
+response does not verify the remote destination behind an existing tunnel.
+Multiple databases can share one bastion while keeping separate destinations,
+local ports and database credentials. A warning identifies the selected bastion
+when duplicate definitions of the same SSH host, port and username use different
+credential references. Review those references and any environment override;
+SafeSelect does not merge definitions or replace secrets automatically.
+
+The interactive `config set-password` and `config set-ssh-password` prompts
+reject empty input before completion and allow another attempt. The completion
+label `[hidden]` does not indicate password length.
+
 <details>
 <summary>What gets installed? MCP configuration and scope</summary>
 
@@ -954,3 +977,10 @@ On SSH connectivity failure, SafeSelect also prints a safely quoted TCP probe
 command for the configured endpoint, using Bash and `timeout` on Linux/WSL;
 neither `nc` nor `telnet` is required. Run it from the same terminal environment
 as SafeSelect. A successful TCP probe does not verify SSH or database authentication.
+If an SSH tunnel cannot bind its local forwarding port, check for an existing
+listener or stale SSH tunnel. A bastion restart can release an old SSH session
+and its local listener, but TCP reachability alone cannot identify the cause.
+MCP `connect` and `reconnect` report the recognized SSH failure category without
+including endpoint or credential details.
+When an existing database endpoint responds, `check` and `doctor` report its
+reuse as information while still verifying the backend connection.

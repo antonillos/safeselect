@@ -1,6 +1,18 @@
 use super::*;
 
 #[test]
+fn password_prompt_rejects_empty_input_and_allows_retry_without_trimming() {
+    use inquire::validator::Validation;
+    assert!(matches!(
+        validate_prompt_password("").unwrap(),
+        Validation::Invalid(_)
+    ));
+    for value in ["synthetic-password", " ", " padded ", "{env:DB_PASSWORD}"] {
+        assert_eq!(validate_prompt_password(value).unwrap(), Validation::Valid);
+    }
+}
+
+#[test]
 fn explicit_references_and_literal_escape() {
     assert!(
         matches!(PasswordInput::parse("{env:DB_PASSWORD}".into()).unwrap(), PasswordInput::Environment(v) if v == "DB_PASSWORD")

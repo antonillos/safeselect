@@ -173,7 +173,7 @@ public class Main {
         password = reader.readLine();
         validatePassword();
         configureIdleTimer(writer);
-        connectBackendOrExit();
+        connectBackendOrExit(writer);
         try {
             writer.println("ready");
             writer.flush();
@@ -185,17 +185,19 @@ public class Main {
         }
     }
 
-    private static void connectBackendOrExit() {
+    private static void connectBackendOrExit(PrintWriter writer) {
         try {
             connectBackend();
-        } catch (Exception e) {
+        } catch (Exception | LinkageError e) {
+            writer.println(MAPPER.writeValueAsString(ConnectionFailure.from(e).startupResponse()));
+            writer.flush();
             error("Fatal error: " + connectionFailureMessage(e));
             System.exit(1);
         }
     }
 
     private static String connectionFailureMessage(Throwable throwable) {
-        return "database connection failed; details redacted";
+        return ConnectionFailure.from(throwable).logMessage();
     }
 
     private static void configureLogging() throws IOException {
@@ -662,14 +664,12 @@ public class Main {
                     .runCommand(new Document("ping", 1), ReadPreference.secondaryPreferred());
             sendBoundedResponse(writer, id, result);
         } catch (Exception e) {
-            sendConnectionFailureResponse(writer, id);
+            sendConnectionFailureResponse(writer, id, e);
         }
     }
 
-    private static void sendConnectionFailureResponse(PrintWriter writer, Object id) throws Exception {
-        sendResponse(writer, id, null, Map.of(
-                "code", "CONNECTION_FAILED",
-                "message", connectionFailureMessage(null)));
+    private static void sendConnectionFailureResponse(PrintWriter writer, Object id, Throwable failure) throws Exception {
+        sendResponse(writer, id, null, ConnectionFailure.from(failure).requestResponse());
     }
 
     @SuppressWarnings("unchecked")

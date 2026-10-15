@@ -206,3 +206,66 @@ fn missing_or_rejected_startup_acknowledgement_terminates_child() {
         assert!(sidecar.child.try_wait().unwrap().is_some());
     }
 }
+
+#[test]
+fn startup_authentication_failure_preserves_only_category_and_sqlstate() {
+    let mut sidecar = mock_sidecar(
+        r#"read password
+printf '%s\n' '{"type":"connection_error","category":"authentication","sql_state":"28P01","message":"private-host-and-password"}'
+read request"#,
+    );
+    let password = uuid::Uuid::new_v4().to_string();
+    let error = sidecar.send_password(&password, "jdbc").unwrap_err();
+    let message = crate::redact_connection_start_error(error).to_string();
+    assert!(message.contains("authentication failed"), "{message}");
+    assert!(message.contains("SQLSTATE 28P01"), "{message}");
+    assert!(!message.contains("private-host-and-password"));
+    assert!(!message.contains(&password));
+    assert!(sidecar.child.try_wait().unwrap().is_some());
+}
+
+#[test]
+fn document_verification_uses_structured_failure_without_echoing_message() {
+    for (category, expected) in [
+        ("authentication", "authentication failed"),
+        ("tls", "TLS negotiation failed"),
+        ("timeout", "connection timed out"),
+        ("network", "network connection failed"),
+    ] {
+        let script = format!(
+            "read request\nprintf '%s\\n' '{{\"id\":0,\"error\":{{\"code\":\"CONNECTION_FAILED\",\"category\":\"{category}\",\"message\":\"private-mongo-detail\"}}}}'"
+        );
+        let mut sidecar = mock_sidecar(&script);
+        let message = sidecar
+            .verify_document_connection()
+            .unwrap_err()
+            .to_string();
+        assert!(message.contains(expected), "{message}");
+        assert!(!message.contains("private-mongo-detail"));
+    }
+
+    let mut sidecar = mock_sidecar(
+        r#"read request
+printf '%s\n' '{"id":0,"error":{"code":"CONNECTION_FAILED","category":"network","sql_state":"private-mongo-detail","message":"private-mongo-detail"}}'"#,
+    );
+    let message = sidecar
+        .verify_document_connection()
+        .unwrap_err()
+        .to_string();
+    assert!(message.contains("details redacted"));
+    assert!(!message.contains("private-mongo-detail"));
+}
+
+#[test]
+fn startup_rejects_unknown_or_malformed_diagnostics_without_echoing_input() {
+    for ack in [
+        "private-host-and-password",
+        r#"{"type":"connection_error","category":"private-host-and-password"}"#,
+        r#"{"type":"connection_error","category":"authentication","sql_state":"private-host-and-password"}"#,
+        r#"{"type":"other","category":"authentication","sql_state":"28P01"}"#,
+    ] {
+        let message = validate_sidecar_ack(ack).unwrap_err().to_string();
+        assert!(!message.contains("private-host-and-password"));
+        assert!(!message.contains("28P01"));
+    }
+}

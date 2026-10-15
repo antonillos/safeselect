@@ -1,5 +1,16 @@
 use crate::error::{Result, SafeselectError};
 
+pub fn validate_prompt_password(
+    value: &str,
+) -> std::result::Result<inquire::validator::Validation, inquire::CustomUserError> {
+    use inquire::validator::Validation;
+    Ok(if value.is_empty() {
+        Validation::Invalid("Password must not be empty".into())
+    } else {
+        Validation::Valid
+    })
+}
+
 /// Configuration input only: never expand an imported credential or a TOML string.
 pub enum PasswordInput {
     Environment(String),
