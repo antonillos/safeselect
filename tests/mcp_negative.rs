@@ -327,19 +327,6 @@ fn mcp_manifest_protocol_cases_are_enforced() {
 fn mcp_exposes_static_read_only_prompt_and_resource_without_database_access() {
     let (mut mcp, tmp) = McpHarness::start();
 
-    let initialize = mcp.send(&serde_json::json!({
-        "jsonrpc": "2.0", "id": 1, "method": "initialize",
-        "params": {"protocolVersion": "2025-06-18", "clientInfo": {"name": "test", "version": "1"}}
-    }));
-    assert_eq!(
-        initialize["result"]["capabilities"]["prompts"]["listChanged"],
-        false
-    );
-    assert_eq!(
-        initialize["result"]["capabilities"]["resources"]["subscribe"],
-        false
-    );
-
     let prompts =
         mcp.send(&serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "prompts/list"}));
     assert_eq!(
@@ -406,4 +393,24 @@ fn mcp_exposes_static_read_only_prompt_and_resource_without_database_access() {
 
     let _ = mcp.finish();
     let _ = std::fs::remove_dir_all(tmp);
+}
+
+#[test]
+fn initialize_rejects_an_unavailable_database_and_closes_transport() {
+    let (mut mcp, tmp) = McpHarness::start();
+    let response = mcp.send(&serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": "2025-06-18"}
+    }));
+    assert_error(&response, serde_json::json!(1), -32000);
+    assert!(response.get("result").is_none());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while mcp.child.try_wait().unwrap().is_none() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(!mcp.child.wait().unwrap().success());
+    let error = mcp.finish();
+    assert!(!error.contains("unused.jar"));
+    std::fs::remove_dir_all(tmp).unwrap();
 }

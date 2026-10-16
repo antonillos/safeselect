@@ -79,6 +79,7 @@ public class Main {
 
     private static final Map<String, RequestHandler> REQUEST_HANDLERS = Map.ofEntries(
             Map.entry("ping", (w, id, r) -> sendResponse(w, id, "pong", null)),
+            Map.entry("check_connection_health", (w, id, r) -> handleConnectionHealth(w, id)),
             Map.entry("execute", Main::handleExecute),
             Map.entry("list_databases", (w, id, r) -> handleListDatabases(w, id)),
             Map.entry("verify_document_connection", (w, id, r) -> handleVerifyDocumentConnection(w, id)),
@@ -357,7 +358,9 @@ public class Main {
                     Map.of("code", "UNKNOWN_METHOD", "message", "Unknown method: " + method));
             return;
         }
-        touchActivity();
+        if (!"check_connection_health".equals(method)) {
+            touchActivity();
+        }
         handler.handle(writer, id, request);
     }
 
@@ -535,6 +538,27 @@ public class Main {
         });
         timer.setDaemon(true);
         timer.start();
+    }
+
+    private static void handleConnectionHealth(PrintWriter writer, Object id) throws Exception {
+        try {
+            if ("mongodb".equals(backend)) {
+                if (mongoClient == null) {
+                    throw new IllegalStateException("Not connected");
+                }
+                final var result = mongoClient.getDatabase("admin")
+                        .runCommand(new Document("ping", 1), ReadPreference.secondaryPreferred());
+                if (!(result.get("ok") instanceof Number ok) || ok.doubleValue() != 1.0) {
+                    throw new IllegalStateException("Connection validation failed");
+                }
+            } else if (connection == null || connection.isClosed() || !connection.isValid(5)) {
+                throw new IllegalStateException("Not connected");
+            }
+            sendResponse(writer, id, "connected", null);
+        } catch (Exception e) {
+            sendResponse(writer, id, null, Map.of("code", "CONNECTION_UNAVAILABLE",
+                    "message", "Connection health verification failed; details redacted"));
+        }
     }
 
     private static void handleDisconnect(PrintWriter writer, Object id) throws Exception {

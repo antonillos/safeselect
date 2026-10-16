@@ -31,6 +31,10 @@ for line in sys.stdin:
         break
     if method == 'ping':
         result = 'pong'
+    elif method == 'disconnect':
+        result = {'status': 'disconnected'}
+    elif method == 'check_connection_health':
+        result = 'connected'
     elif method == 'verify_document_connection':
         result = {'ok': 1.0}
     else:
@@ -47,6 +51,10 @@ struct Session {
 
 impl Session {
     fn start() -> Self {
+        Self::start_with(FAKE_JAVA, None)
+    }
+
+    fn start_with(java_script: &str, interval: Option<u64>) -> Self {
         let root =
             std::env::temp_dir().join(format!("safeselect-mcp-recovery-{}", uuid::Uuid::new_v4()));
         let project = root.join("project");
@@ -64,12 +72,21 @@ impl Session {
             "version = 1\n[database]\nkind = \"document\"\nvendor = \"mongodb\"\nurl = \"mongodb://127.0.0.1:1/synthetic\"\n",
         ).unwrap();
         let java = bin.join("java");
-        std::fs::write(&java, FAKE_JAVA).unwrap();
+        std::fs::write(&java, java_script).unwrap();
+        std::fs::create_dir_all(root.join("config")).unwrap();
+        if let Some(interval) = interval {
+            std::fs::write(
+                root.join("config/config.toml"),
+                format!("[mcp]\nhealth_check_interval_seconds = {interval}\n"),
+            )
+            .unwrap();
+        }
         std::fs::set_permissions(&java, std::fs::Permissions::from_mode(0o755)).unwrap();
         let mut child = Command::new(env!("CARGO_BIN_EXE_safeselect"))
             .args(["serve", "--environment", "testing"])
             .current_dir(project)
             .env("JAVA_HOME", root.join("jdk"))
+            .env("SAFESELECT_CONFIG_DIR", root.join("config"))
             .env("XDG_CONFIG_HOME", root.join("config"))
             .env("XDG_DATA_HOME", root.join("data"))
             .stdin(Stdio::piped())
@@ -180,6 +197,134 @@ fn stalled_check_can_reconnect_and_check_again_in_the_same_mcp_session() {
     );
     assert_eq!(session.child.id(), mcp_pid);
     assert!(session.child.try_wait().unwrap().is_none());
+    assert_eq!(
+        std::fs::read_to_string(session.root.join("jdk/bin/starts")).unwrap(),
+        "2"
+    );
+}
+
+#[test]
+fn periodic_health_failure_closes_real_stdio_without_restarting_sidecar() {
+    let script = FAKE_JAVA.replace("result = 'connected'", "result = 'connected' if not counter.with_name('checked').exists() else 'unavailable'\n        counter.with_name('checked').touch()");
+    let mut session = Session::start_with(&script, Some(1));
+    let response = session.send(1, "initialize", serde_json::json!({}));
+    assert!(response["result"]["capabilities"]["tools"].is_object());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    // Continuous requests must not starve the monitor; use notifications to avoid
+    // racing a response with the intentional transport closure.
+    while session.child.try_wait().unwrap().is_none() {
+        assert!(Instant::now() < deadline, "monitor did not close the MCP");
+        if writeln!(
+            session.stdin,
+            "{{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}}"
+        )
+        .is_err()
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    while session.child.try_wait().unwrap().is_none() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!session.child.wait().unwrap().success());
+    assert_eq!(
+        std::fs::read_to_string(session.root.join("jdk/bin/starts")).unwrap(),
+        "1"
+    );
+    let mut line = String::new();
+    assert_eq!(session.stdout.read_line(&mut line).unwrap(), 0);
+}
+
+#[test]
+fn invalid_global_interval_fails_before_starting_sidecar() {
+    let mut session = Session::start_with(FAKE_JAVA, Some(0));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while session.child.try_wait().unwrap().is_none() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!session.child.wait().unwrap().success());
+    assert!(!session.root.join("jdk/bin/starts").exists());
+    use std::io::Read;
+    let mut error = String::new();
+    session
+        .child
+        .stderr
+        .as_mut()
+        .unwrap()
+        .read_to_string(&mut error)
+        .unwrap();
+    assert!(error.contains("health_check_interval_seconds"));
+}
+
+#[test]
+fn idle_mcp_detects_failure_without_waiting_for_another_request() {
+    let script = FAKE_JAVA.replace("result = 'connected'", "result = 'connected' if not counter.with_name('checked').exists() else 'unavailable'\n        counter.with_name('checked').touch()");
+    let mut session = Session::start_with(&script, Some(1));
+    assert!(session
+        .send(1, "initialize", serde_json::json!({}))
+        .get("result")
+        .is_some());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while session.child.try_wait().unwrap().is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "idle monitor did not close transport"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!session.child.wait().unwrap().success());
+    assert_eq!(
+        std::fs::read_to_string(session.root.join("jdk/bin/starts")).unwrap(),
+        "1"
+    );
+}
+
+#[test]
+fn startup_health_failure_returns_error_instead_of_initialization_success() {
+    let script = FAKE_JAVA.replace("result = 'connected'", "result = 'unavailable'");
+    let mut session = Session::start_with(&script, None);
+    let response = session.send(1, "initialize", serde_json::json!({}));
+    assert!(response.get("result").is_none());
+    assert_eq!(response["error"]["code"], -32000);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while session.child.try_wait().unwrap().is_none() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!session.child.wait().unwrap().success());
+    assert_eq!(
+        std::fs::read_to_string(session.root.join("jdk/bin/starts")).unwrap(),
+        "1"
+    );
+}
+
+#[test]
+fn disconnect_suspends_monitor_and_manual_reconnect_resumes_it() {
+    let script = FAKE_JAVA.replace(
+        "result = 'connected'",
+        "result = 'connected' if starts == 1 else 'unavailable'",
+    );
+    let mut session = Session::start_with(&script, Some(1));
+    assert!(session
+        .send(1, "initialize", serde_json::json!({}))
+        .get("result")
+        .is_some());
+    assert!(session.tool(2, "disconnect").get("result").is_some());
+    std::thread::sleep(Duration::from_millis(1200));
+    assert!(session.send(3, "tools/list", serde_json::json!({}))["result"]["tools"].is_array());
+    assert!(session.tool(4, "reconnect").get("result").is_some());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while session.child.try_wait().unwrap().is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "monitor did not resume after reconnect"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!session.child.wait().unwrap().success());
     assert_eq!(
         std::fs::read_to_string(session.root.join("jdk/bin/starts")).unwrap(),
         "2"

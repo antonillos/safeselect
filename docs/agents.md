@@ -485,3 +485,35 @@ increasing project limits.
 - Agents cannot change the target database
 - Any security violation terminates the process
 - All queries are audited (hashed, never stored in plain text)
+
+## MCP connection monitoring
+
+SafeSelect establishes and verifies its database connection during MCP
+initialization. If startup verification fails, initialization returns an error
+and the MCP process exits. After startup, SafeSelect checks the existing
+connection every 120 seconds by default.
+
+Set the interval globally in `~/.config/safeselect/config.toml` (or
+`$SAFESELECT_CONFIG_DIR/config.toml` when that variable is set):
+
+```toml
+[mcp]
+health_check_interval_seconds = 120
+```
+
+The setting must be a positive integer in seconds that fits the timer. Missing
+files or settings use 120 seconds; invalid settings stop startup. The setting
+applies to all projects and environments. Restart MCP servers to apply changes.
+
+Checks validate the current database connection through its configured route,
+including an existing SSH tunnel. They do not open another SSH session, repair
+tunnels, reconnect the database, or retry failed operations. A check has a
+five-second deadline. Checks wait for active tool calls to finish and do not
+reset the user activity timer. Manual database disconnect suspends monitoring;
+a successful manual connect or reconnect resumes it.
+
+If a periodic check fails, SafeSelect reports a redacted diagnostic on stderr
+and closes the MCP transport. Connect the server manually again from OpenCode
+after restoring connectivity. OpenCode may display this as `Failed`; the exact
+status presentation depends on the client version. Query-triggered recovery
+retains its existing behavior. Setup-mode MCP servers are not monitored.

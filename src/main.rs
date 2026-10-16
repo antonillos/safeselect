@@ -315,7 +315,7 @@ fn cmd_serve(loader: &ConfigLoader, repo_root: &std::path::Path, environment: &s
         }
     }
 
-    tracing::info!("Starting MCP server (sidecar will start lazily on first query)");
+    tracing::info!("Starting MCP server (connection will be verified during initialize)");
 
     let db_url = resolved.environment.database.url.clone();
     let db_username = resolved.environment.database.username.clone();

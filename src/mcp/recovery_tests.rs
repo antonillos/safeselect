@@ -128,3 +128,70 @@ fn document_health_check_requires_a_successful_database_ping() {
     drop(server);
     std::fs::remove_dir_all(repo_root).unwrap();
 }
+
+#[test]
+fn overdue_monitor_checks_once_then_reschedules_without_reconnecting() {
+    let root = std::env::temp_dir().join(format!("safeselect-monitor-{}", uuid::Uuid::new_v4()));
+    let mut server = super::tests::test_server(&root);
+    server.sidecar = Some(crate::sidecar::recovery_tests::mock_sidecar(
+        r#"read request
+case "$request" in *check_connection_health*) ;; *) exit 1;; esac
+printf '%s\n' '{"id":0,"ok":"connected"}'
+read request
+case "$request" in *ping*) ;; *) exit 1;; esac
+printf '%s\n' '{"id":1,"ok":"pong"}'
+read next_request"#,
+    ));
+    server.next_health_check = Some(Instant::now() - Duration::from_secs(300));
+    server.check_health_if_due().unwrap();
+    assert!(server.next_health_check.unwrap() > Instant::now());
+    server.check_health_if_due().unwrap();
+    server.sidecar_mut().unwrap().ping().unwrap();
+    drop(server);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn monitor_failure_is_terminal_redacted_and_does_not_prepare_a_new_connection() {
+    let root = std::env::temp_dir().join(format!("safeselect-monitor-{}", uuid::Uuid::new_v4()));
+    let mut server = super::tests::test_server(&root);
+    server.sidecar = Some(crate::sidecar::recovery_tests::mock_sidecar(
+        r#"read request
+printf '%s\n' '{"id":0,"error":{"code":"UNAVAILABLE","message":"private-health-detail"}}'
+read next_request"#,
+    ));
+    server.next_health_check = Some(Instant::now());
+    let (sender, receiver) = mpsc::sync_channel(1);
+    sender
+        .send(Ok(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}".into(),
+        ))
+        .unwrap();
+    let error = server.run_with_input(&receiver).unwrap_err().to_string();
+    assert!(!error.contains("private-health-detail"));
+    assert!(server.sidecar.is_none());
+    assert!(server.next_health_check.is_none());
+    drop(server);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn manual_disconnect_suspends_monitor_and_eof_exits_without_probing() {
+    let root = std::env::temp_dir().join(format!("safeselect-monitor-{}", uuid::Uuid::new_v4()));
+    let mut server = super::tests::test_server(&root);
+    server.sidecar = Some(crate::sidecar::recovery_tests::mock_sidecar(
+        r#"read request
+printf '%s\n' '{"id":0,"ok":{"status":"disconnected"}}'
+read next_request"#,
+    ));
+    server.next_health_check = Some(Instant::now());
+    server
+        .handle_disconnect(Some(serde_json::json!(1)))
+        .unwrap();
+    assert!(server.next_health_check.is_none());
+    let (sender, receiver) = mpsc::sync_channel(1);
+    drop(sender);
+    server.run_with_input(&receiver).unwrap();
+    drop(server);
+    std::fs::remove_dir_all(root).unwrap();
+}

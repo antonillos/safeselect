@@ -39,6 +39,77 @@ class MainTest {
     }
 
     @Test
+    void healthCheckValidatesExistingJdbcWithoutActivityOrReconnect() throws Exception {
+        final var activityField = Main.class.getDeclaredField("lastActivityMs");
+        activityField.setAccessible(true);
+        final var activity = (java.util.concurrent.atomic.AtomicLong) activityField.get(null);
+        final var previousActivity = activity.get();
+        setStatic("backend", "jdbc");
+        try {
+            for (final var state : List.of("valid", "invalid", "closed", "exception", "missing")) {
+                final var calls = new ArrayList<String>();
+                final var candidate = (java.sql.Connection) Proxy.newProxyInstance(
+                        MainTest.class.getClassLoader(), new Class<?>[]{java.sql.Connection.class},
+                        (proxy, method, args) -> {
+                            calls.add(method.getName());
+                            return switch (method.getName()) {
+                                case "isClosed" -> state.equals("closed");
+                                case "isValid" -> {
+                                    assertEquals(5, args[0]);
+                                    if (state.equals("exception")) throw new java.sql.SQLException("private-health-detail");
+                                    yield state.equals("valid");
+                                }
+                                default -> throw new AssertionError("Unexpected connection operation: " + method.getName());
+                            };
+                        });
+                setStatic("connection", state.equals("missing") ? null : candidate);
+                activity.set(1234L);
+                final var output = new StringWriter();
+                invoke("dispatchRequest", new Class<?>[]{PrintWriter.class, Map.class, Object.class, String.class},
+                        new PrintWriter(output), Map.of(), "health", "check_connection_health");
+                assertEquals(1234L, activity.get());
+                assertEquals(state.equals("valid"), output.toString().contains("\"ok\":\"connected\""));
+                assertFalse(output.toString().contains("private-health-detail"));
+                assertFalse(calls.contains("close"));
+            }
+        } finally {
+            setStatic("connection", null);
+            activity.set(previousActivity);
+        }
+    }
+
+    @Test
+    void healthCheckPingsExistingMongoClientAndRedactsFailures() throws Exception {
+        setStatic("backend", "mongodb");
+        try {
+            for (final var state : List.of("valid", "invalid", "exception", "missing")) {
+                final var database = (com.mongodb.client.MongoDatabase) Proxy.newProxyInstance(
+                        MainTest.class.getClassLoader(), new Class<?>[]{com.mongodb.client.MongoDatabase.class},
+                        (proxy, method, args) -> {
+                            assertEquals("runCommand", method.getName());
+                            assertEquals(new org.bson.Document("ping", 1), args[0]);
+                            if (state.equals("exception")) throw new com.mongodb.MongoTimeoutException("private-health-detail");
+                            return new org.bson.Document("ok", state.equals("valid") ? 1.0 : 0.0);
+                        });
+                final var client = (com.mongodb.client.MongoClient) Proxy.newProxyInstance(
+                        MainTest.class.getClassLoader(), new Class<?>[]{com.mongodb.client.MongoClient.class},
+                        (proxy, method, args) -> {
+                            assertEquals("getDatabase", method.getName());
+                            return database;
+                        });
+                setStatic("mongoClient", state.equals("missing") ? null : client);
+                final var output = new StringWriter();
+                invoke("handleConnectionHealth", new Class<?>[]{PrintWriter.class, Object.class}, new PrintWriter(output), "health");
+                assertEquals(state.equals("valid"), output.toString().contains("\"ok\":\"connected\""));
+                assertFalse(output.toString().contains("private-health-detail"));
+            }
+        } finally {
+            setStatic("mongoClient", null);
+            setStatic("backend", "jdbc");
+        }
+    }
+
+    @Test
     void preservesRedactedConnectionCategory() throws Exception {
         String detail = "private-host-and-credentials";
         for (Throwable cause : List.of(

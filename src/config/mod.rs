@@ -1,16 +1,18 @@
 mod driver;
 mod environment;
+mod global;
 pub mod password;
 mod project;
 
 pub use driver::DriverConfig;
 pub use environment::{DatabaseConfig, EnvironmentConfig, LimitsOverride, SecretConfig, SshConfig};
+pub use global::GlobalConfig;
 pub use project::{AuditConfig, LimitsConfig, ProjectConfig, SecurityPolicy, SharedSshConfig};
 
 use crate::error::{Result, SafeselectError};
 use std::path::{Path, PathBuf};
 
-/// Global config loader. Only manages drivers (shared JARs) and sidecar.
+/// Global settings, shared drivers and sidecar loader.
 /// Project config lives in .safeselect/ directories inside each repo.
 pub struct ConfigLoader {
     drivers_dir: PathBuf,

@@ -17,7 +17,8 @@ use crate::{is_ssh_ready_for_query, setup_ssh_tunnels, update_generated_by};
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::time::{Duration, Instant};
 
 const READ_ONLY_DEBUG_PROMPT: &str = "Use SafeSelect only for read-only database debugging. Start with database_info, then discover the relevant schema or collection before querying it. If the user asks which PostgreSQL tables need ANALYZE or VACUUM, use get_maintenance_diagnostics without requiring the user to know the tool name. Keep every filter bounded, follow each next_suggestion, and stop rather than retrying an unchanged failure. SafeSelect never grants write access; do not use a shell, direct credentials, or another MCP server to bypass its policy.";
 const READ_ONLY_DEBUG_RESOURCE_URI: &str = "safeselect://guide/read-only-database-debugging";
@@ -281,6 +282,8 @@ macro_rules! optional_document_json {
 
 pub struct McpServer {
     sidecar: Option<SidecarProcess>,
+    health_check_interval: Duration,
+    next_health_check: Option<Instant>,
     security: SecurityEngine,
     audit: AuditLog,
     project_name: String,
@@ -327,6 +330,9 @@ impl McpServer {
 
         Ok(Self {
             sidecar: None,
+            health_check_interval: crate::config::GlobalConfig::load(config_dir)?
+                .health_check_interval()?,
+            next_health_check: None,
             security,
             audit,
             project_name: project_name.to_string(),
@@ -374,17 +380,34 @@ impl McpServer {
     }
 
     pub fn run(&mut self) -> Result<()> {
-        let stdin = std::io::stdin();
-        let mut reader = BufReader::new(stdin.lock());
-        let mut line = String::new();
-        let mut seen_requests = Vec::new();
-
-        loop {
-            line.clear();
-            let n = reader.read_line(&mut line)?;
-            if n == 0 {
-                break;
+        let (sender, receiver) = mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            let stdin = std::io::stdin();
+            for line in BufReader::new(stdin.lock()).lines() {
+                let failed = line.is_err();
+                if sender.send(line).is_err() || failed {
+                    break;
+                }
             }
+        });
+        self.run_with_input(&receiver)
+    }
+
+    fn run_with_input(&mut self, receiver: &Receiver<std::io::Result<String>>) -> Result<()> {
+        let mut seen_requests = Vec::new();
+        loop {
+            self.check_health_if_due()?;
+            let received = match self.next_health_check {
+                Some(deadline) => {
+                    receiver.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                }
+                None => receiver.recv().map_err(|_| RecvTimeoutError::Disconnected),
+            };
+            let line = match received {
+                Ok(line) => line?,
+                Err(RecvTimeoutError::Timeout) => continue,
+                Err(RecvTimeoutError::Disconnected) => break,
+            };
 
             let line = line.trim();
             if line.is_empty() {
@@ -452,6 +475,39 @@ impl McpServer {
         Ok(())
     }
 
+    fn schedule_health_check(&mut self) {
+        self.next_health_check = Instant::now().checked_add(self.health_check_interval);
+    }
+
+    fn check_connection_health(&mut self) -> Result<()> {
+        self.sidecar_mut()?.check_connection_health()
+    }
+
+    fn stop_unhealthy_connection(&mut self) -> SafeselectError {
+        self.next_health_check = None;
+        if let Some(mut sidecar) = self.sidecar.take() {
+            sidecar.force_kill_ref();
+        }
+        tracing::error!("SafeSelect connection unavailable; health verification failed. Reconnect manually from the MCP client; connection details redacted.");
+        SafeselectError::Sidecar(
+            "Connection unavailable; reconnect manually from the MCP client (details redacted)"
+                .into(),
+        )
+    }
+
+    fn check_health_if_due(&mut self) -> Result<()> {
+        if self
+            .next_health_check
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            if self.check_connection_health().is_err() {
+                return Err(self.stop_unhealthy_connection());
+            }
+            self.schedule_health_check();
+        }
+        Ok(())
+    }
+
     fn is_postgres(&self) -> bool {
         self.backend.kind == BackendKind::Jdbc
             && (self.backend.vendor.eq_ignore_ascii_case("postgresql")
@@ -485,14 +541,16 @@ impl McpServer {
         self.client_name = client_name.clone();
         self.audit.set_mcp_client(&client_name);
 
-        // Pre-start the sidecar so it's ready before the first query
-        tracing::info!("Pre-starting sidecar during initialize (client: {client_name})");
-        if let Err(e) = self
-            .ensure_ssh_ready_for_query()
-            .and_then(|_| self.ensure_sidecar())
+        if self
+            .ensure_sidecar()
+            .map(|_| ())
+            .and_then(|_| self.check_connection_health())
+            .is_err()
         {
-            tracing::warn!("Sidecar pre-start failed during initialize: {e}");
+            self.send_error(msg.id.clone(), -32000, "SafeSelect startup connection verification failed; details redacted. Check database and tunnel connectivity before connecting manually.")?;
+            return Err(self.stop_unhealthy_connection());
         }
+        self.schedule_health_check();
 
         let resp = JsonRpcResponse {
             jsonrpc: "2.0",
@@ -3126,6 +3184,7 @@ impl McpServer {
         };
         match sidecar.disconnect() {
             Ok(()) => {
+                self.next_health_check = None;
                 self.audit
                     .record("DISCONNECT", "allow", "manual disconnect")?;
                 let resp = trusted_tool_response(
@@ -3156,6 +3215,7 @@ impl McpServer {
 
         match self.restart_sidecar() {
             Ok(()) => {
+                self.schedule_health_check();
                 self.audit.record("CONNECT", "allow", "manual reconnect")?;
                 let resp = trusted_tool_response(
                     id,
@@ -4291,6 +4351,7 @@ impl McpServer {
         let verification = self.verify_sidecar_backend();
         match verification {
             Ok(detail) => {
+                self.schedule_health_check();
                 let text = format!(
                     "Reconnected and verified in {:?}.\n  ✓ Sidecar restarted\n  ✓ {detail}",
                     start.elapsed()

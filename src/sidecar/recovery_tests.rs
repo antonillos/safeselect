@@ -269,3 +269,41 @@ fn startup_rejects_unknown_or_malformed_diagnostics_without_echoing_input() {
         assert!(!message.contains("28P01"));
     }
 }
+
+#[test]
+fn connection_health_requires_a_valid_reply_and_never_reconnects() {
+    for reply in [
+        r#"{"id":0,"ok":"connected"}"#,
+        r#"{"id":0,"ok":"pong"}"#,
+        r#"{"id":0,"ok":"connected","error":{"code":"UNAVAILABLE","message":"private-detail"}}"#,
+        r#"{"id":0,"error":{"code":"UNAVAILABLE","message":"private-detail"}}"#,
+    ] {
+        let mut sidecar = mock_sidecar(&format!(
+            "read request\ncase \"$request\" in *check_connection_health*) ;; *) exit 1;; esac\nprintf '%s\\n' '{}'\nread next_request", reply
+        ));
+        let result = sidecar.check_connection_health();
+        assert_eq!(
+            result.is_ok(),
+            reply.contains("connected") && !reply.contains("error")
+        );
+        if let Err(error) = result {
+            assert!(!error.to_string().contains("private-detail"));
+        }
+    }
+}
+
+#[test]
+fn connection_health_timeout_is_independent_of_query_timeout() {
+    let mut sidecar = mock_sidecar("read request; read next_request");
+    sidecar.statement_timeout_ms = 60_000;
+    sidecar.request_timeout_ms = 61_000;
+    let start = Instant::now();
+    assert!(sidecar
+        .check_connection_health()
+        .unwrap_err()
+        .to_string()
+        .contains("deadline"));
+    assert!(start.elapsed() >= Duration::from_secs(4));
+    assert!(start.elapsed() < Duration::from_secs(8));
+    assert!(sidecar.child.try_wait().unwrap().is_some());
+}

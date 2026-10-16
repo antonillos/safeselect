@@ -390,6 +390,19 @@ impl SidecarProcess {
         })
     }
 
+    pub fn check_connection_health(&mut self) -> Result<()> {
+        let response = self.send_request("check_connection_health", None)?;
+        if response.error.is_none()
+            && response.ok.as_ref().and_then(serde_json::Value::as_str) == Some("connected")
+        {
+            Ok(())
+        } else {
+            Err(SafeselectError::Sidecar(
+                "Connection health verification failed; details redacted".into(),
+            ))
+        }
+    }
+
     pub fn execute(&mut self, sql: &str) -> Result<QueryResult> {
         let start = std::time::Instant::now();
         tracing::debug!("Sidecar execute started");
@@ -677,7 +690,9 @@ impl SidecarProcess {
         writeln!(self.writer, "{line}")?;
         self.writer.flush()?;
 
-        let timeout_ms = if self.statement_timeout_ms > 0 {
+        let timeout_ms = if method == "check_connection_health" {
+            5_000
+        } else if self.statement_timeout_ms > 0 {
             self.request_timeout_ms.max(5_000)
         } else {
             self.request_timeout_ms

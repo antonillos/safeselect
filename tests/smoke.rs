@@ -207,6 +207,32 @@ sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     )
     .unwrap();
 
+    // Initialization now requires a healthy connection. The synthetic sidecar
+    // accepts only startup/health requests, so SQL must be rejected in Rust.
+    let java_dir = tmp.join("jdk/bin");
+    std::fs::create_dir_all(&java_dir).unwrap();
+    let java = java_dir.join("java");
+    std::fs::write(
+        &java,
+        r#"#!/usr/bin/env python3
+import json
+import sys
+if '-version' in sys.argv:
+    print('openjdk version "17.0.1"', file=sys.stderr)
+    sys.exit(0)
+sys.stdin.readline()
+print('ready', flush=True)
+for line in sys.stdin:
+    request = json.loads(line)
+    assert request['method'] in ('ping', 'check_connection_health')
+    result = 'pong' if request['method'] == 'ping' else 'connected'
+    print(json.dumps({'id': request['id'], 'ok': result}), flush=True)
+"#,
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&java, std::fs::Permissions::from_mode(0o755)).unwrap();
+
     let forbidden_sql = "/* harmless prefix */\nCoMmIt ;\nDrOp TABLE public.audit_probe";
     let mut child = Command::new(safeselect_bin())
         .args([
@@ -217,6 +243,7 @@ sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
             "testing",
         ])
         .env("SAFESELECT_CONFIG_DIR", &config_dir)
+        .env("JAVA_HOME", tmp.join("jdk"))
         .env("SAFESELECT_FAIL_CLOSED_TEST_PASSWORD", "unused")
         .env("NO_COLOR", "1")
         .stdin(Stdio::piped())
