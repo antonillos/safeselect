@@ -489,9 +489,9 @@ increasing project limits.
 ## MCP connection monitoring
 
 SafeSelect establishes and verifies its database connection during MCP
-initialization. If startup verification fails, initialization returns an error
-and the MCP process exits. After startup, SafeSelect checks the existing
-connection every 120 seconds by default.
+initialization. If startup verification fails, the MCP remains available and
+reports the database as disconnected. After startup, SafeSelect checks the
+existing connection every 120 seconds by default.
 
 Set the interval globally in `~/.config/safeselect/config.toml` (or
 `$SAFESELECT_CONFIG_DIR/config.toml` when that variable is set):
@@ -513,7 +513,15 @@ reset the user activity timer. Manual database disconnect suspends monitoring;
 a successful manual connect or reconnect resumes it.
 
 If a periodic check fails, SafeSelect reports a redacted diagnostic on stderr
-and closes the MCP transport. Connect the server manually again from OpenCode
-after restoring connectivity. OpenCode may display this as `Failed`; the exact
-status presentation depends on the client version. Query-triggered recovery
-retains its existing behavior. Setup-mode MCP servers are not monitored.
+and keeps the MCP transport open. Checks continue at the configured interval but
+never open a new database connection. A transient failure can return to healthy
+if the same connection responds again. If a new session is needed, recovery is
+attempted only when a database tool is used (or connect/reconnect is requested).
+A failed connection attempt returns a tool error without closing the MCP.
+
+OpenCode's MCP indicator describes the MCP transport, so it may remain connected
+while the database is unavailable. `database_info` reports separate
+`mcp_connection_status` and `database_connection_status` fields, plus the configured
+`health_check_interval_seconds`. Reading this status does not open a database
+connection. Setup-mode MCP servers are not monitored. Security violations and
+audit failures retain their existing fail-closed behavior.

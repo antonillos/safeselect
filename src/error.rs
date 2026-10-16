@@ -41,6 +41,9 @@ pub enum SafeselectError {
     #[error("SQL execution failed: {0}")]
     SqlError(String),
 
+    #[error("Database unavailable; connection details redacted. Retry only when database access is requested.")]
+    DatabaseUnavailable,
+
     #[error("Sidecar not started")]
     SidecarNotStarted,
 

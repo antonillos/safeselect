@@ -280,10 +280,19 @@ macro_rules! optional_document_json {
     };
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum DatabaseConnectionStatus {
+    Unknown,
+    Connected,
+    Disconnected,
+}
+
 pub struct McpServer {
     sidecar: Option<SidecarProcess>,
     health_check_interval: Duration,
     next_health_check: Option<Instant>,
+    database_connection_status: DatabaseConnectionStatus,
     security: SecurityEngine,
     audit: AuditLog,
     project_name: String,
@@ -333,6 +342,7 @@ impl McpServer {
             health_check_interval: crate::config::GlobalConfig::load(config_dir)?
                 .health_check_interval()?,
             next_health_check: None,
+            database_connection_status: DatabaseConnectionStatus::Unknown,
             security,
             audit,
             project_name: project_name.to_string(),
@@ -362,14 +372,32 @@ impl McpServer {
     }
 
     fn ensure_sidecar(&mut self) -> Result<&mut SidecarProcess> {
+        if self.database_connection_status == DatabaseConnectionStatus::Disconnected {
+            if let Some(mut sidecar) = self.sidecar.take() {
+                sidecar.force_kill_ref();
+            }
+        }
         if self.sidecar.is_some() {
             return self.sidecar_mut();
         }
-        self.ensure_ssh_ready_for_query()?;
-        tracing::info!("Lazy-starting sidecar");
-        let sidecar = self.start_sidecar()?;
-        tracing::info!("Sidecar ready");
+        let result = self
+            .ensure_ssh_ready_for_query()
+            .and_then(|_| self.start_sidecar());
+        let mut sidecar = match result {
+            Ok(sidecar) => sidecar,
+            Err(_) => {
+                self.update_database_connection_status(false);
+                return Err(SafeselectError::DatabaseUnavailable);
+            }
+        };
+        if sidecar.check_connection_health().is_err() {
+            sidecar.force_kill_ref();
+            self.update_database_connection_status(false);
+            return Err(SafeselectError::DatabaseUnavailable);
+        }
         self.sidecar = Some(sidecar);
+        self.update_database_connection_status(true);
+        self.schedule_health_check();
         self.sidecar_mut()
     }
 
@@ -396,7 +424,7 @@ impl McpServer {
     fn run_with_input(&mut self, receiver: &Receiver<std::io::Result<String>>) -> Result<()> {
         let mut seen_requests = Vec::new();
         loop {
-            self.check_health_if_due()?;
+            self.check_health_if_due();
             let received = match self.next_health_check {
                 Some(deadline) => {
                     receiver.recv_timeout(deadline.saturating_duration_since(Instant::now()))
@@ -448,7 +476,15 @@ impl McpServer {
             match method {
                 "initialize" => self.handle_initialize(&msg)?,
                 "tools/list" => self.handle_tools_list(&msg)?,
-                "tools/call" => self.handle_tools_call(&msg)?,
+                "tools/call" => {
+                    if let Err(error) = self.handle_tools_call(&msg) {
+                        if matches!(error, SafeselectError::DatabaseUnavailable) {
+                            self.send_error(msg.id.clone(), -32000, error.to_string())?;
+                        } else {
+                            return Err(error);
+                        }
+                    }
+                }
                 "prompts/list" => self.handle_prompts_list(&msg)?,
                 "prompts/get" => self.handle_prompts_get(&msg)?,
                 "resources/list" => self.handle_resources_list(&msg)?,
@@ -480,32 +516,37 @@ impl McpServer {
     }
 
     fn check_connection_health(&mut self) -> Result<()> {
-        self.sidecar_mut()?.check_connection_health()
+        let result = self
+            .sidecar_mut()
+            .and_then(SidecarProcess::check_connection_health);
+        self.update_database_connection_status(result.is_ok());
+        result
     }
 
-    fn stop_unhealthy_connection(&mut self) -> SafeselectError {
-        self.next_health_check = None;
-        if let Some(mut sidecar) = self.sidecar.take() {
-            sidecar.force_kill_ref();
+    fn update_database_connection_status(&mut self, connected: bool) {
+        let status = if connected {
+            DatabaseConnectionStatus::Connected
+        } else {
+            DatabaseConnectionStatus::Disconnected
+        };
+        if self.database_connection_status != status {
+            self.database_connection_status = status;
+            if connected {
+                tracing::info!("Database connection verified; MCP remains connected");
+            } else {
+                tracing::warn!("Database disconnected; MCP remains connected. Background checks do not reconnect; database access will attempt recovery on use. Connection details redacted.");
+            }
         }
-        tracing::error!("SafeSelect connection unavailable; health verification failed. Reconnect manually from the MCP client; connection details redacted.");
-        SafeselectError::Sidecar(
-            "Connection unavailable; reconnect manually from the MCP client (details redacted)"
-                .into(),
-        )
     }
 
-    fn check_health_if_due(&mut self) -> Result<()> {
+    fn check_health_if_due(&mut self) {
         if self
             .next_health_check
             .is_some_and(|deadline| Instant::now() >= deadline)
         {
-            if self.check_connection_health().is_err() {
-                return Err(self.stop_unhealthy_connection());
-            }
+            let _ = self.check_connection_health();
             self.schedule_health_check();
         }
-        Ok(())
     }
 
     fn is_postgres(&self) -> bool {
@@ -541,15 +582,8 @@ impl McpServer {
         self.client_name = client_name.clone();
         self.audit.set_mcp_client(&client_name);
 
-        if self
-            .ensure_sidecar()
-            .map(|_| ())
-            .and_then(|_| self.check_connection_health())
-            .is_err()
-        {
-            self.send_error(msg.id.clone(), -32000, "SafeSelect startup connection verification failed; details redacted. Check database and tunnel connectivity before connecting manually.")?;
-            return Err(self.stop_unhealthy_connection());
-        }
+        // Backend availability does not determine the MCP transport's lifecycle.
+        let _ = self.ensure_sidecar();
         self.schedule_health_check();
 
         let resp = JsonRpcResponse {
@@ -1755,6 +1789,9 @@ impl McpServer {
         let resp = data_tool_response(
             id,
             &serde_json::json!({
+                "mcp_connection_status": "connected",
+                "database_connection_status": self.database_connection_status,
+                "health_check_interval_seconds": self.health_check_interval.as_secs(),
                 "kind": self.backend.kind,
                 "vendor": self.backend.vendor,
                 "capabilities": capabilities,
@@ -3185,6 +3222,7 @@ impl McpServer {
         match sidecar.disconnect() {
             Ok(()) => {
                 self.next_health_check = None;
+                self.update_database_connection_status(false);
                 self.audit
                     .record("DISCONNECT", "allow", "manual disconnect")?;
                 let resp = trusted_tool_response(
@@ -3405,10 +3443,7 @@ impl McpServer {
         // This prevents zombie queries and connection state issues
         std::thread::sleep(std::time::Duration::from_secs(2));
 
-        let sidecar = self.start_sidecar()?;
-        tracing::info!("Sidecar restarted successfully");
-        self.sidecar = Some(sidecar);
-        Ok(())
+        self.ensure_sidecar().map(|_| ())
     }
 
     fn start_sidecar(&self) -> Result<SidecarProcess> {

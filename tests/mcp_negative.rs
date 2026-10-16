@@ -396,20 +396,22 @@ fn mcp_exposes_static_read_only_prompt_and_resource_without_database_access() {
 }
 
 #[test]
-fn initialize_rejects_an_unavailable_database_and_closes_transport() {
+fn initialize_keeps_mcp_available_when_database_startup_fails() {
     let (mut mcp, tmp) = McpHarness::start();
     let response = mcp.send(&serde_json::json!({
         "jsonrpc": "2.0", "id": 1, "method": "initialize",
         "params": {"protocolVersion": "2025-06-18"}
     }));
-    assert_error(&response, serde_json::json!(1), -32000);
-    assert!(response.get("result").is_none());
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while mcp.child.try_wait().unwrap().is_none() {
-        assert!(Instant::now() < deadline);
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    assert!(!mcp.child.wait().unwrap().success());
+    assert!(response.get("result").is_some());
+    let info = mcp.send(&serde_json::json!({
+        "jsonrpc":"2.0", "id":2, "method":"tools/call", "params":{"name":"database_info"}
+    }));
+    assert_eq!(
+        info["result"]["structuredContent"]["untrusted_data"]["value"]
+            ["database_connection_status"],
+        "disconnected"
+    );
+    assert!(mcp.child.try_wait().unwrap().is_none());
     let error = mcp.finish();
     assert!(!error.contains("unused.jar"));
     std::fs::remove_dir_all(tmp).unwrap();
