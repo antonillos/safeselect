@@ -3,6 +3,7 @@ from contextlib import contextmanager
 import json
 from pathlib import Path
 import tempfile
+import subprocess
 import unittest
 from unittest.mock import patch
 
@@ -145,7 +146,7 @@ class ManifestTests(unittest.TestCase):
             self.assertEqual(methods, ["initialize", "notifications/initialized", "tools/list",
                                        "prompts/list", "resources/list"])
             self.assertEqual(set(kwargs["env"]), {"PATH", "HOME", "SAFESELECT_CONFIG_DIR",
-                                                  "SAFESELECT_EXAMPLE_PASSWORD"})
+                                                  "SAFESELECT_EXAMPLE_PASSWORD", "JAVA_HOME"})
             for mutate in ("version", "tool_cursor", "prompt_cursor", "resource_cursor", "duplicate"):
                 bad = copy.deepcopy(response)
                 if mutate == "version":
@@ -161,6 +162,28 @@ class ManifestTests(unittest.TestCase):
                 run.return_value.stdout = "\n".join(map(json.dumps, bad))
                 with self.assertRaises(ValueError):
                     updater.capture(Path("binary"), Path(tmp), "postgresql", "1.2.3")
+
+    def test_metadata_sidecar_handles_health_but_rejects_backend_operations(self):
+        with tempfile.TemporaryDirectory(prefix="metadata fixture ") as tmp:
+            launcher = updater.metadata_sidecar(Path(tmp)) / "bin/java"
+            version = subprocess.run([str(launcher), "-version"], text=True,
+                                     capture_output=True, check=True)
+            self.assertIn('version "17.', version.stderr)
+            for forbidden in (None, "execute", "connect", "verify_document_connection"):
+                requests = [{"id": 0, "method": "ping"},
+                            {"id": 1, "method": "check_connection_health"}]
+                if forbidden:
+                    requests.append({"id": 2, "method": forbidden})
+                result = subprocess.run(
+                    [str(launcher)], input="synthetic-password\n" + "".join(
+                        json.dumps(request) + "\n" for request in requests),
+                    text=True, capture_output=True, timeout=5)
+                self.assertEqual(result.returncode, 1 if forbidden else 0)
+                lines = result.stdout.splitlines()
+                self.assertEqual(lines[0], "ready")
+                self.assertEqual([json.loads(line) for line in lines[1:]],
+                                 [{"id": 0, "ok": "pong"}, {"id": 1, "ok": "connected"}])
+                self.assertNotIn("synthetic-password", result.stdout + result.stderr)
 
     def test_check_and_update_preserve_metadata(self):
         generated = {"tools": [tool()], "prompts": [prompt()], "resources": [resource()]}

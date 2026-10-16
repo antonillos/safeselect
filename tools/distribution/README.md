@@ -39,11 +39,13 @@ exporter does not hide changes in descriptions, schemas or array order.
 The script uses temporary PostgreSQL/MongoDB project configurations, synthetic
 credentials, isolated HOME/global configuration, and localhost port 1. It sends
 only `initialize`, `notifications/initialized`, `tools/list`, `prompts/list` and
-`resources/list`. SafeSelect's `initialize` handler currently pre-starts the
-sidecar, so each capture may launch Java and attempt the configured localhost
-database handshake; failures are logged by the server and the metadata response
-can still continue. No database queries, MCP tool calls, prompt retrievals or
-resource reads are made. The subprocess is bounded by a 20-second timeout.
+`resources/list`. Since initialization requires a verified database connection,
+the exporter supplies an isolated synthetic sidecar through `JAVA_HOME`. This
+fixture answers only process pings and connection health checks; any backend
+operation fails. The real SafeSelect binary still supplies every MCP definition
+and its version. No Java runtime, database queries, MCP tool calls, prompt
+retrievals or resource reads are needed. Production startup verification is
+unchanged. The subprocess is bounded by a 20-second timeout.
 This is not an OS sandbox for arbitrary executables: pass only a trusted
 SafeSelect binary. Nothing is downloaded or published to LobeHub, and
 authentication files are not read.

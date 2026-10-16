@@ -9,8 +9,10 @@ import os
 from pathlib import Path
 import re
 import shutil
+import shlex
 import stat
 import subprocess
+import sys
 import tempfile
 
 from manifest_contract import ManifestError, load_manifest, validate_manifest
@@ -28,6 +30,38 @@ def require(condition, message):
         raise ValueError(message)
 
 
+def metadata_sidecar(base):
+    """Simulate only startup/health; metadata still comes from the real binary."""
+    java_home = base / "metadata-jdk"
+    (java_home / "bin").mkdir(parents=True, exist_ok=True)
+    fixture = java_home / "sidecar.py"
+    fixture.write_text('''import json
+import sys
+
+if sys.argv[1:] == ["-version"]:
+    print('openjdk version "17.0.1"', file=sys.stderr)
+    sys.exit(0)
+
+sys.stdin.readline()  # discard synthetic password; never log it
+print("ready", flush=True)
+for line in sys.stdin:
+    request = json.loads(line)
+    method = request["method"]
+    if method == "ping":
+        result = "pong"
+    elif method == "check_connection_health":
+        result = "connected"
+    else:
+        sys.exit(1)  # introspection must never execute a backend operation
+    print(json.dumps({"id": request["id"], "ok": result}), flush=True)
+''')
+    launcher = java_home / "bin/java"
+    launcher.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + " "
+                        + shlex.quote(str(fixture)) + ' "$@"\n')
+    launcher.chmod(0o700)
+    return java_home
+
+
 def capture(binary, base, backend, version):
     project = base / "example-project"
     config = project / ".safeselect"
@@ -41,7 +75,8 @@ def capture(binary, base, backend, version):
     # Never inherit database credentials, Java hooks or the user's global config.
     env = {"PATH": os.defpath, "HOME": str(base),
            "SAFESELECT_CONFIG_DIR": str(base / "config"),
-           "SAFESELECT_EXAMPLE_PASSWORD": "synthetic-not-a-real-password"}
+           "SAFESELECT_EXAMPLE_PASSWORD": "synthetic-not-a-real-password",
+           "JAVA_HOME": str(metadata_sidecar(base))}
     messages = [
         {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
             "protocolVersion": "2024-11-05", "capabilities": {},
