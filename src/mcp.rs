@@ -478,8 +478,20 @@ impl McpServer {
                 "tools/list" => self.handle_tools_list(&msg)?,
                 "tools/call" => {
                     if let Err(error) = self.handle_tools_call(&msg) {
-                        if matches!(error, SafeselectError::DatabaseUnavailable) {
-                            self.send_error(msg.id.clone(), -32000, error.to_string())?;
+                        if matches!(
+                            error,
+                            SafeselectError::DatabaseUnavailable
+                                | SafeselectError::ConnectionStart(_)
+                                | SafeselectError::Sidecar(_)
+                                | SafeselectError::SidecarNotStarted
+                                | SafeselectError::SidecarJavaNotFound(_)
+                                | SafeselectError::SqlError(_)
+                        ) {
+                            self.send_error(
+                                msg.id.clone(),
+                                -32000,
+                                SafeselectError::DatabaseUnavailable.to_string(),
+                            )?;
                         } else {
                             return Err(error);
                         }

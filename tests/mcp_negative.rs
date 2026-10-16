@@ -411,6 +411,13 @@ fn initialize_keeps_mcp_available_when_database_startup_fails() {
             ["database_connection_status"],
         "disconnected"
     );
+    let posture = mcp.send(&serde_json::json!({
+        "jsonrpc":"2.0", "id":3, "method":"tools/call", "params":{"name":"security_posture"}
+    }));
+    assert_error(&posture, serde_json::json!(3), -32000);
+    assert!(!posture.to_string().contains("unused.jar"));
+    let tools = mcp.send(&serde_json::json!({"jsonrpc":"2.0", "id":4, "method":"tools/list"}));
+    assert!(tools["result"]["tools"].is_array());
     assert!(mcp.child.try_wait().unwrap().is_none());
     let error = mcp.finish();
     assert!(!error.contains("unused.jar"));
