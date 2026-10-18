@@ -11,7 +11,7 @@ this Linux connectivity scenario.
 1. Show Linux/Java and the current SafeSelect source revision.
 2. Import a synthetic Compass export with database and password-authenticated SSH credentials.
 3. Choose exported literal passwords and explicitly accept process-local storage for both.
-4. Read and export `WORKSPACE_STAGING_DB_PASSWORD` and `WORKSPACE_STAGING_SSH_PASSWORD`
+4. Read and export `WORKSPACE_STAGING_DB_PASSWORD` and `STAGING_SSH_PASSWORD`
    silently in the launching shell: import-process values do not survive its exit.
 5. Show password-free configuration and run `safeselect check --environment staging`.
 

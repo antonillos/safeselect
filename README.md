@@ -170,6 +170,29 @@ database passwords are needed in the conversation.
 (this can contact the database), then follow the reported next step. Do not
 relax policy to get past a rejection. See [agent recovery](docs/agents.md#agent-recovery-flow).
 
+Connection diagnostics distinguish SSH authentication, host-key, forwarding and
+network failures from database authentication, driver, TLS, timeout and network
+failures. JDBC startup errors retain a valid SQLSTATE (for example `28P01` for
+authentication rejection) without printing exception details. An exited SSH
+process stops tunnel polling promptly.
+
+SafeSelect keeps the SSH process in the foreground while supervising tunnel
+startup, overriding `ForkAfterAuthentication`. Released binaries extract the
+embedded sidecar under a SHA-256-specific filename and verify its contents, so
+updates use the matching sidecar without replacing a running older version.
+
+If a database endpoint already responds, diagnostics report its reuse; that
+response does not verify the remote destination behind an existing tunnel.
+Multiple databases can share one bastion while keeping separate destinations,
+local ports and database credentials. A warning identifies the selected bastion
+when duplicate definitions of the same SSH host, port and username use different
+credential references. Review those references and any environment override;
+SafeSelect does not merge definitions or replace secrets automatically.
+
+The interactive `config set-password` and `config set-ssh-password` prompts
+reject empty input before completion and allow another attempt. The completion
+label `[hidden]` does not indicate password length.
+
 <details>
 <summary>What gets installed? MCP configuration and scope</summary>
 
@@ -388,10 +411,28 @@ safeselect import-dbeaver ~/Downloads/connections.zip
 
 _The importer keeps the connection shape while leaving passwords outside project files._
 
+DBeaver uses the same interactive workflow as Compass: choose environments,
+update/create/skip on reimport, and choose the database and SSH password sources.
+Passwords can be kept in macOS Keychain, referenced through an exported variable,
+or configured later; literal session-only passwords do not survive the import.
+Updates preserve existing TLS, limits and password sources unless changed explicitly,
+and never silently change shared bastion definitions. Connection checks are optional.
+The local `.safeselect/dbeaver-imports.toml` index recognizes custom environment
+names with password-independent fingerprints. Existing matching JDBC environments
+are also recognized without an index.
+
+With `--non-interactive`, imports never prompt, store exported passwords, overwrite
+existing matching environments, or connect to databases. Distinct connections with
+colliding names get unique names. Export the configured password variables before
+connecting. The source SSL mode is preserved both with and without an SSH tunnel.
+
 
 #### `import-compose`
 
 Discover PostgreSQL services from Docker Compose.
+
+Invalid YAML and duplicate keys are rejected. YAML errors omit source snippets
+to avoid displaying nearby credentials.
 
 ```bash
 safeselect import-compose --path .
@@ -424,10 +465,12 @@ Session-only passwords are not saved and cannot be exported to the parent shell;
 future CLI/MCP commands need the variable exported by their launching shell.
 No plaintext password is written to TOML, logs or terminal commands.
 
-Suggested variables include the project, environment and purpose, for example
-`MYAPP_STAGING_DB_PASSWORD` and `MYAPP_STAGING_SSH_PASSWORD`. They are editable;
-existing references are not renamed. Projects with identical or normalized names
-should choose distinct prefixes when sharing a launching shell.
+Suggested database variables include the project and environment, for example
+`MYAPP_STAGING_DB_PASSWORD`. Bastion variables use only the environment, for
+example `STAGING_SSH_PASSWORD`, so projects can share a bastion password reference.
+Names are editable; existing references are not renamed. When sharing a launching
+shell, choose distinct database prefixes for projects with identical or normalized
+names, and distinct bastion variable names when their passwords differ.
 
 Reimporting offers **update existing**, **create new**, or **skip**. Updates retain
 password sources by default, preserve TLS and limits, and do not silently mutate
@@ -876,7 +919,7 @@ document a project-scoped MCP configuration.
 "$HOME/.local/bin/safeselect" --version
 ```
 
-Requirements: Rust 1.85+, Java 17+, and makevn 0.1.14+. The bootstrap requires
+Requirements: Rust 1.89+, Java 17+, and makevn 0.1.14+. The bootstrap requires
 Homebrew or asdf; otherwise install `makevn` first. `sshpass` is optional for
 password-based SSH tunnels. Add `~/.local/bin` to your `PATH` before invoking
 `safeselect` without its full path.
@@ -915,7 +958,7 @@ Release notes are generated from `CHANGELOG.md`.
 <summary>Runtime and distribution</summary>
 
 [![Security](https://img.shields.io/badge/Security-fail--closed-success?logo=trustpilot&logoColor=white)]()
-[![Rust](https://img.shields.io/badge/Rust-1.85%2B-dea584?logo=rust&logoColor=white)]()
+[![Rust](https://img.shields.io/badge/Rust-1.89%2B-dea584?logo=rust&logoColor=white)]()
 [![Java](https://img.shields.io/badge/Java-17%2B-5382a1?logo=openjdk&logoColor=white)]()
 [![MCP](https://img.shields.io/badge/MCP-stdio%20tools-7b68ee)]()
 [![Homebrew](https://img.shields.io/badge/Homebrew-tap-FBB040?logo=homebrew&logoColor=white)](https://github.com/antonillos/homebrew-tap)
@@ -937,3 +980,10 @@ On SSH connectivity failure, SafeSelect also prints a safely quoted TCP probe
 command for the configured endpoint, using Bash and `timeout` on Linux/WSL;
 neither `nc` nor `telnet` is required. Run it from the same terminal environment
 as SafeSelect. A successful TCP probe does not verify SSH or database authentication.
+If an SSH tunnel cannot bind its local forwarding port, check for an existing
+listener or stale SSH tunnel. A bastion restart can release an old SSH session
+and its local listener, but TCP reachability alone cannot identify the cause.
+MCP `connect` and `reconnect` report the recognized SSH failure category without
+including endpoint or credential details.
+When an existing database endpoint responds, `check` and `doctor` report its
+reuse as information while still verifying the backend connection.

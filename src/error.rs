@@ -35,6 +35,9 @@ pub enum SafeselectError {
     #[error("Sidecar error: {0}")]
     Sidecar(String),
 
+    #[error("{0}")]
+    ConnectionStart(crate::connection_diagnostics::ConnectionFailure),
+
     #[error("SQL execution failed: {0}")]
     SqlError(String),
 
@@ -84,9 +87,9 @@ pub enum SafeselectError {
     Other(String),
 }
 
-impl From<serde_yaml::Error> for SafeselectError {
-    fn from(e: serde_yaml::Error) -> Self {
-        SafeselectError::Yaml(e.to_string())
+impl From<serde_saphyr::Error> for SafeselectError {
+    fn from(e: serde_saphyr::Error) -> Self {
+        SafeselectError::Yaml(e.without_snippet().to_string())
     }
 }
 

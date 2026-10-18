@@ -1,0 +1,22 @@
+{
+  "connections": [{
+    "name": "staging",
+    "driver": "postgresql",
+    "username": "demo",
+    "password": "synthetic-db-password",
+    "configuration": {
+      "url": "jdbc:postgresql://database.example.invalid:5432/app?sslmode=require",
+      "handlers": {
+        "ssh_tunnel": {
+          "enabled": true,
+          "properties": {
+            "#host": "bastion.example.invalid",
+            "#port": 22,
+            "#user": "demo",
+            "#authType": "PASSWORD"
+          }
+        }
+      }
+    }
+  }]
+}

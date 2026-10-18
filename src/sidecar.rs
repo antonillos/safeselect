@@ -3,6 +3,7 @@ use crate::backend::{
     DocumentExplainRequest, DocumentFieldProfileRequest, DocumentFindRequest,
     DocumentFixtureRequest, DocumentResult, DocumentSchemaRequest,
 };
+use crate::connection_diagnostics::{ConnectionCategory, ConnectionFailure};
 use crate::error::{Result, SafeselectError};
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
@@ -10,6 +11,8 @@ use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
 use std::time::{Duration, Instant};
+
+mod embedded;
 
 #[derive(Serialize)]
 struct Request {
@@ -34,6 +37,8 @@ struct Response {
 struct ResponseError {
     code: String,
     message: String,
+    category: Option<ConnectionCategory>,
+    sql_state: Option<String>,
 }
 
 pub struct SidecarProcess {
@@ -288,14 +293,9 @@ impl SidecarProcess {
     }
 
     fn startup_connection_error(&mut self, backend: &str) -> SafeselectError {
-        let stderr = self.read_stderr();
-        let detail = if stderr.is_empty() {
-            String::new()
-        } else {
-            format!(": {stderr}")
-        };
+        let _ = self.read_stderr();
         SafeselectError::Sidecar(format!(
-            "sidecar process terminated during startup — {backend} backend connection failed{detail}"
+            "sidecar process terminated during startup — {backend} backend connection failed; details redacted"
         ))
     }
 
@@ -325,23 +325,10 @@ impl SidecarProcess {
             .join("safeselect")
             .join("sidecar");
 
-        let jar_path = data_dir.join("safeselect-sidecar.jar");
-
-        if !jar_path.exists() {
-            let embedded = include_bytes!("../sidecar/target/safeselect-sidecar.jar");
-            std::fs::create_dir_all(&data_dir)?;
-            std::fs::write(&jar_path, embedded)?;
-
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let mut perms = jar_path.metadata()?.permissions();
-                perms.set_mode(0o644);
-                std::fs::set_permissions(&jar_path, perms)?;
-            }
-        }
-
-        Ok(jar_path)
+        embedded::ensure_jar(
+            &data_dir,
+            include_bytes!("../sidecar/target/safeselect-sidecar.jar"),
+        )
     }
 
     fn java_executable() -> Result<PathBuf> {
@@ -451,6 +438,17 @@ impl SidecarProcess {
 
     fn check_response_error(error: Option<ResponseError>, operation: &str) -> Result<()> {
         error.map_or(Ok(()), |error| {
+            if error.code == "CONNECTION_FAILED" {
+                return Err(error
+                    .category
+                    .and_then(|category| ConnectionFailure::from_parts(category, error.sql_state))
+                    .map(SafeselectError::ConnectionStart)
+                    .unwrap_or_else(|| {
+                        SafeselectError::Sidecar(
+                            "database connection failed; details redacted".into(),
+                        )
+                    }));
+            }
             Err(SafeselectError::Sidecar(format!(
                 "{operation} failed [{}]: {}",
                 error.code, error.message
@@ -891,10 +889,14 @@ fn parse_response_line(line: &str) -> Result<Response> {
 fn validate_sidecar_ack(ack: &str) -> Result<()> {
     if ack == "ready" {
         Ok(())
+    } else if let Some(failure) =
+        crate::connection_diagnostics::ConnectionFailure::from_startup_ack(ack)
+    {
+        Err(SafeselectError::ConnectionStart(failure))
     } else {
-        Err(SafeselectError::Sidecar(format!(
-            "sidecar password rejected: {ack}"
-        )))
+        Err(SafeselectError::Sidecar(
+            "sidecar returned an invalid startup acknowledgement; details redacted".into(),
+        ))
     }
 }
 

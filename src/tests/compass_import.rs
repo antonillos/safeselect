@@ -1,20 +1,53 @@
 use super::*;
 
 #[test]
-fn readable_names_include_project_environment_and_purpose() {
+fn connection_sections_separate_imports_and_identify_existing_environments() {
+    assert_eq!(
+        environment_section("pro", &["pro".into()]),
+        "\n── Import connection: pro ──\nExisting environments: pro\n"
+    );
+    assert_eq!(
+        environment_section("production", &["pro".into(), "copy".into()]),
+        "\n── Import connection: production ──\nExisting environments: pro, copy\n"
+    );
+    assert_eq!(
+        environment_section("staging", &[]),
+        "\n── Import connection: staging ──\n"
+    );
+}
+
+#[test]
+fn readable_database_names_include_project_but_bastion_names_are_shared() {
     assert_eq!(
         friendly_variable("my-app", "staging", false),
         "MY_APP_STAGING_DB_PASSWORD"
     );
     assert_eq!(
         friendly_variable("my-app", "staging", true),
-        "MY_APP_STAGING_SSH_PASSWORD"
+        "STAGING_SSH_PASSWORD"
     );
     assert_ne!(
         friendly_variable("one", "dev", false),
         friendly_variable("two", "dev", false)
     );
     password::validate_variable(&friendly_variable("123 app", "", false)).unwrap();
+    assert_eq!(
+        friendly_variable("one", "pre", true),
+        friendly_variable("two", "pre", true)
+    );
+    assert_ne!(
+        friendly_variable("one", "pre", true),
+        friendly_variable("one", "pro", true)
+    );
+    for (environment, expected) in [
+        ("pre-prod", "PRE_PROD_SSH_PASSWORD"),
+        ("123", "_123_SSH_PASSWORD"),
+        ("", "MONGODB_SSH_PASSWORD"),
+    ] {
+        let variable = friendly_variable("ignored", environment, true);
+        assert_eq!(variable, expected);
+        password::validate_variable(&variable).unwrap();
+    }
 }
 
 #[test]
@@ -369,7 +402,7 @@ fn database_and_ssh_use_identical_explicit_import_and_destination_flow_on_both_p
             };
             let mut ui = ScriptedInteraction::new(
                 &[
-                    "Use password from Compass export",
+                    "Use password from export",
                     "Environment variable (this import session only)",
                 ],
                 &[true],
@@ -420,7 +453,7 @@ fn hidden_direct_passwords_preserve_whitespace_and_choose_keychain_explicitly() 
     .unwrap();
     assert_eq!(secret.source, "macos-keychain");
     assert_eq!(storage.writes[0].1, "  literal password  ");
-    assert!(storage.writes[0].0.starts_with("atlas/staging/compass-"));
+    assert!(storage.writes[0].0.starts_with("atlas/staging/import-"));
 }
 
 #[test]
@@ -630,15 +663,12 @@ fn source_menu_only_offers_credentials_that_exist() {
     prompt.imported = Some("");
     assert!(!prompt
         .source_choices()
-        .contains(&"Use password from Compass export"));
+        .contains(&"Use password from export"));
     prompt.imported = Some("literal");
     prompt.existing = Some(&existing);
     assert_eq!(
         &prompt.source_choices()[..2],
-        &[
-            "Keep existing password source",
-            "Use password from Compass export"
-        ]
+        &["Keep existing password source", "Use password from export"]
     );
 }
 
@@ -693,10 +723,7 @@ fn keychain_destination_does_not_reuse_an_existing_account_for_db_or_ssh() {
             variable: None,
         };
         let mut ui = ScriptedInteraction::new(
-            &[
-                "Use password from Compass export",
-                "macOS Keychain (recommended)",
-            ],
+            &["Use password from export", "macOS Keychain (recommended)"],
             &[],
         );
         let mut storage = RecordingStorage {
@@ -752,8 +779,7 @@ fn storage_failures_propagate_through_the_real_prompt_orchestration() {
         "macOS Keychain (recommended)",
         "Environment variable (this import session only)",
     ] {
-        let mut ui =
-            ScriptedInteraction::new(&["Use password from Compass export", destination], &[true]);
+        let mut ui = ScriptedInteraction::new(&["Use password from export", destination], &[true]);
         let mut storage = RecordingStorage {
             macos: true,
             fail_store: true,

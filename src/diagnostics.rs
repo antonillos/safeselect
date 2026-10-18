@@ -43,11 +43,13 @@ pub enum DiagnosticCode {
     SidecarRestartAttempt,
     RecoveryOk,
     RecoveryFailed,
+    SshEndpointReused,
+    SshBastionCredentialsDiffer,
 }
 
 impl DiagnosticCode {
     pub fn as_str(self) -> &'static str {
-        const NAMES: [&str; 23] = [
+        const NAMES: [&str; 25] = [
             "SAFESELECT_CONFIG_RESOLVED",
             "SAFESELECT_DRIVER_VERIFIED",
             "SAFESELECT_SECRET_RESOLVED",
@@ -71,6 +73,8 @@ impl DiagnosticCode {
             "SAFESELECT_SIDECAR_RESTART_ATTEMPT",
             "SAFESELECT_RECOVERY_OK",
             "SAFESELECT_RECOVERY_FAILED",
+            "SAFESELECT_SSH_ENDPOINT_REUSED",
+            "SAFESELECT_SSH_BASTION_CREDENTIALS_DIFFER",
         ];
         NAMES[self as usize]
     }

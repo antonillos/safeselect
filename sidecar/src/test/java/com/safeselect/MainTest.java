@@ -146,8 +146,8 @@ class MainTest {
         String failure = (String) invoke("connectionFailureMessage", new Class<?>[]{Throwable.class},
                 new IllegalStateException("Unknown host db.internal.example"));
         StringWriter output = new StringWriter();
-        invoke("sendConnectionFailureResponse", new Class<?>[]{PrintWriter.class, Object.class},
-                new PrintWriter(output), "id");
+        invoke("sendConnectionFailureResponse", new Class<?>[]{PrintWriter.class, Object.class, Throwable.class},
+                new PrintWriter(output), "id", new IllegalStateException("Unknown host db.internal.example"));
 
         assertEquals("database connection failed; details redacted", failure);
         assertFalse(failure.contains("db.internal.example"));
@@ -181,6 +181,40 @@ class MainTest {
         assertEquals("operation timed out", failure);
         assertFalse(failure.contains("db.internal.example"));
     }
+
+    @Test
+    void classifiesLazyMongoVerificationFailuresWithoutExceptionDetails() throws Exception {
+        for (final var example : List.of(
+                new VerificationFailure(new com.mongodb.MongoTimeoutException("private-mongo-detail"), "timeout"),
+                new VerificationFailure(new com.mongodb.MongoSocketException("private-mongo-detail",
+                        new com.mongodb.ServerAddress("localhost")), "network"),
+                new VerificationFailure(new com.mongodb.MongoSecurityException(
+                        com.mongodb.MongoCredential.createCredential("synthetic-user", "admin",
+                                java.util.UUID.randomUUID().toString().toCharArray()),
+                        "private-mongo-detail"), "authentication"))) {
+            final var database = (com.mongodb.client.MongoDatabase) Proxy.newProxyInstance(
+                    MainTest.class.getClassLoader(), new Class<?>[]{com.mongodb.client.MongoDatabase.class},
+                    (proxy, method, args) -> {
+                        if (method.getName().equals("runCommand")) throw example.failure();
+                        return null;
+                    });
+            final var client = (com.mongodb.client.MongoClient) Proxy.newProxyInstance(
+                    MainTest.class.getClassLoader(), new Class<?>[]{com.mongodb.client.MongoClient.class},
+                    (proxy, method, args) -> method.getName().equals("getDatabase") ? database : null);
+            final var output = new StringWriter();
+            setStatic("mongoClient", client);
+            try {
+                invoke("verifyDocumentConnectionSafely", new Class<?>[]{PrintWriter.class, Object.class},
+                        new PrintWriter(output), "id");
+            } finally {
+                setStatic("mongoClient", null);
+            }
+            assertTrue(output.toString().contains("\"category\":\"" + example.category() + "\""));
+            assertFalse(output.toString().contains("private-mongo-detail"));
+        }
+    }
+
+    private record VerificationFailure(RuntimeException failure, String category) {}
 
     @Test
     void coversExtractedExecuteValidationAndResponseHelpers() throws Exception {

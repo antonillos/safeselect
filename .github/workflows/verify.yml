@@ -181,6 +181,10 @@ jobs:
         run: |
           makevn doctor init test package
           cp sidecar/target/safeselect-sidecar-*.jar sidecar/target/safeselect-sidecar.jar
+      - name: Check minimum supported Rust version
+        run: |
+          rustup toolchain install 1.89.0 --profile minimal
+          rustup run 1.89.0 cargo check --locked --all-targets
       - name: Compile and run all tests (unit + smoke)
         run: cargo test
         env:

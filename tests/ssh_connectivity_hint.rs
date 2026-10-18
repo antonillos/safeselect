@@ -3,7 +3,12 @@
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
-fn credentialed_tunnel_failure(password_auth: bool, bastion_reachable: bool) {
+fn credentialed_tunnel_failure(
+    password_auth: bool,
+    bastion_reachable: bool,
+    rejected_password: bool,
+    command: &str,
+) {
     let root = std::env::temp_dir().join(format!("safeselect-hint-{}", uuid::Uuid::new_v4()));
     let environments = root.join(".safeselect/environments");
     let bin = root.join("bin");
@@ -12,11 +17,16 @@ fn credentialed_tunnel_failure(password_auth: bool, bastion_reachable: bool) {
     std::fs::write(root.join(".safeselect/project.toml"), "version = 1\n").unwrap();
 
     // No real SSH executable, credentials, or remote infrastructure are used.
+    let failure = if rejected_password {
+        "printf '%s\\n' 'Permission denied: synthetic-private-user synthetic-private-destination' >&2\nexit 5"
+    } else {
+        "exit 1"
+    };
     for name in ["ssh", "sshpass"] {
         let executable = bin.join(name);
         std::fs::write(
             &executable,
-            "#!/bin/sh\nif [ \"$1\" = --help ]; then exit 0; fi\nprintf attempt > \"$SAFESELECT_TEST_ATTEMPT\"\nexit 1\n",
+            format!("#!/bin/sh\nif [ \"$1\" = --help ]; then exit 0; fi\nprintf attempt > \"$SAFESELECT_TEST_ATTEMPT\"\n{failure}\n"),
         )
         .unwrap();
         std::fs::set_permissions(executable, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -43,16 +53,15 @@ fn credentialed_tunnel_failure(password_auth: bool, bastion_reachable: bool) {
     )
     .unwrap();
     let attempt = root.join("attempt");
-    let output = Command::new(env!("CARGO_BIN_EXE_safeselect"))
-        .args([
-            "query",
-            "--environment",
-            "demo",
-            "--sql",
-            "SELECT 1",
-            "--project",
-        ])
-        .arg(&root)
+    let start = std::time::Instant::now();
+    let mut process = Command::new(env!("CARGO_BIN_EXE_safeselect"));
+    process
+        .args([command, "--environment", "demo", "--project"])
+        .arg(&root);
+    if command == "query" {
+        process.args(["--sql", "SELECT 1"]);
+    }
+    let output = process
         .env("PATH", &bin)
         .env("SAFESELECT_CONFIG_DIR", root.join("global"))
         .env("SAFESELECT_TEST_ATTEMPT", &attempt)
@@ -65,9 +74,20 @@ fn credentialed_tunnel_failure(password_auth: bool, bastion_reachable: bool) {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!output.status.success(), "{stderr}");
     assert!(attempted, "The credentialed SSH attempt must run: {stderr}");
+    let expected = if rejected_password {
+        "SSH authentication failed"
+    } else {
+        "SSH tunnel establishment failed"
+    };
+    assert!(stderr.contains(expected), "{stderr}");
     assert!(
-        stderr.contains("database not reachable through SSH tunnel after"),
+        stderr.contains("Database authentication was not attempted"),
         "{stderr}"
+    );
+    assert!(!stderr.contains("synthetic-private"), "{stderr}");
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(10),
+        "SSH exit must skip the 20s poll"
     );
     assert_eq!(
         stderr.contains("Test TCP from the same terminal"),
@@ -78,20 +98,30 @@ fn credentialed_tunnel_failure(password_auth: bool, bastion_reachable: bool) {
         assert!(stderr.contains("-- 'invalid host' 2222"), "{stderr}");
     }
     assert!(!stderr.contains("synthetic-password"));
-    assert!(output.stdout.is_empty(), "Hints must not pollute stdout");
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("synthetic-private"));
+    if command == "query" {
+        assert!(output.stdout.is_empty(), "Hints must not pollute stdout");
+    }
 }
 
 #[test]
 fn key_authenticated_tunnel_failure_prints_connectivity_hint() {
-    credentialed_tunnel_failure(false, false);
+    credentialed_tunnel_failure(false, false, false, "query");
 }
 
 #[test]
 fn password_authenticated_tunnel_failure_prints_connectivity_hint() {
-    credentialed_tunnel_failure(true, false);
+    credentialed_tunnel_failure(true, false, false, "query");
 }
 
 #[test]
 fn reachable_bastion_with_failed_forwarding_does_not_print_connectivity_hint() {
-    credentialed_tunnel_failure(false, true);
+    credentialed_tunnel_failure(false, true, false, "query");
+}
+
+#[test]
+fn rejected_ssh_password_is_classified_and_redacted_without_waiting_for_deadline() {
+    for command in ["query", "check", "doctor"] {
+        credentialed_tunnel_failure(true, true, true, command);
+    }
 }

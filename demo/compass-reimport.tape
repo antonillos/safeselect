@@ -21,7 +21,8 @@ Enter
 Sleep 1s
 Space
 Enter
-Sleep 1s
+# Hold the new connection heading before answering its first prompt.
+Sleep 3s
 Enter
 Sleep 1s
 Type "y"
@@ -39,7 +40,8 @@ Enter
 Sleep 1s
 Space
 Enter
-Sleep 1s
+# Hold the new connection heading before answering its first prompt.
+Sleep 3s
 Down
 Enter
 Sleep 1s
@@ -72,7 +74,8 @@ Enter
 Sleep 1s
 Space
 Enter
-Sleep 1s
+# Hold the new connection heading before answering its first prompt.
+Sleep 3s
 Down 2
 Enter
 Sleep 1s

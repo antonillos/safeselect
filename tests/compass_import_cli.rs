@@ -28,7 +28,8 @@ fn compass_reimport_is_idempotent_and_never_persists_exported_passwords() {
     assert!(original.contains("MY_APP_STAGING_DB_PASSWORD"));
     let project_file = project.join(".safeselect/project.toml");
     let bastions = std::fs::read_to_string(&project_file).unwrap();
-    assert!(bastions.contains("MY_APP_STAGING_SSH_PASSWORD"));
+    assert!(bastions.contains("STAGING_SSH_PASSWORD"));
+    assert!(!bastions.contains("MY_APP_STAGING_SSH_PASSWORD"));
     let second = run();
     assert!(second.status.success());
     assert!(String::from_utf8_lossy(&second.stdout).contains("Skipping existing"));

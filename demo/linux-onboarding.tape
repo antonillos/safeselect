@@ -28,7 +28,8 @@ Enter
 Sleep 2s
 Space
 Enter
-Sleep 1s
+# Hold the new connection heading before answering its first prompt.
+Sleep 3s
 Type "staging"
 Enter
 Sleep 1s
@@ -75,7 +76,7 @@ Sleep 1s
 Type "demo-password"
 Enter
 Sleep 2s
-Type "read -rsp 'Bastion password: ' WORKSPACE_STAGING_SSH_PASSWORD; echo; export WORKSPACE_STAGING_SSH_PASSWORD"
+Type "read -rsp 'Bastion password: ' STAGING_SSH_PASSWORD; echo; export STAGING_SSH_PASSWORD"
 Enter
 Sleep 1s
 Type "bastion-demo-password"
