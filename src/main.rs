@@ -19,6 +19,7 @@ mod security;
 mod sidecar;
 mod ssh_diagnostics;
 
+#[cfg(test)]
 use clap::Parser;
 use cli::{AgentAction, Cli, Command, ConfigAction, DriverAction};
 use config::password::inject_mongodb_password_placeholder;
@@ -38,7 +39,7 @@ fn main() {
         .with_writer(std::io::stderr)
         .init();
 
-    let cli = Cli::parse();
+    let cli = Cli::parse_with_help();
 
     if let Err(e) = run(cli) {
         tracing::error!("{}", redact_cli_error(&e));
