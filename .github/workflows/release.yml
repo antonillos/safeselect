@@ -263,6 +263,15 @@ jobs:
           python3 tools/ci/release.py publish --version "$VERSION" --sha "$SOURCE_SHA" \
             --source . --notes release-source/release-notes.md "${flags[@]}"
 
+  sync-main-to-develop:
+    if: needs.validate-version.outputs.prerelease != 'true' && needs.validate-version.outputs.draft != 'true'
+    needs: [validate-version, publish-release]
+    uses: ./.github/workflows/sync-main-to-develop.yml
+    with:
+      version: ${{ needs.validate-version.outputs.version }}
+      target_ref: ${{ needs.validate-version.outputs.target-ref }}
+    secrets: inherit
+
   publish-mcp-registry:
     if: needs.validate-version.outputs.prerelease != 'true' && needs.validate-version.outputs.draft != 'true' && needs.integration-tests.result == 'success'
     runs-on: ubuntu-26.04

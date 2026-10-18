@@ -1,10 +1,24 @@
 name: Sync Main To Develop
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
+    inputs:
+      version:
+        description: Existing public stable release tag to sync into develop
+        required: true
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      target_ref:
+        required: true
+        type: string
+    secrets:
+      RELEASE_APP_PRIVATE_KEY:
+        required: true
+      SAFESELECT_CI_SIGNING_KEY:
+        required: true
 
 permissions:
   contents: read
@@ -18,6 +32,7 @@ concurrency:
 
 jobs:
   sync:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
@@ -33,17 +48,35 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ steps.release-app-token.outputs.token }}
+      - name: Checkout release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.target_ref || inputs.version }}
+          path: release-source
+          persist-credentials: false
+      - name: Verify public stable release and freeze sync source
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          python3 tools/ci/release.py check-public --source release-source --version "$VERSION"
+          printf 'sha=%s\n' "$(git -C release-source rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - name: Prepare sync branch
         id: sync
         env:
           ACTIONS_SIGNING_KEY: ${{ secrets.SAFESELECT_CI_SIGNING_KEY }}
+          RELEASE_SHA: ${{ steps.release.outputs.sha }}
         shell: bash
         run: |
           set -euo pipefail
           git fetch origin main develop
-          if git merge-base --is-ancestor origin/main origin/develop; then
+          git fetch origin "$RELEASE_SHA"
+          git merge-base --is-ancestor "$RELEASE_SHA" origin/main
+          if git merge-base --is-ancestor "$RELEASE_SHA" origin/develop; then
             printf 'needed=false\n' >> "${GITHUB_OUTPUT}"
-            printf 'Develop already contains main. Nothing to sync.\n' >> "${GITHUB_STEP_SUMMARY}"
+            printf 'Develop already contains the released commit. Nothing to sync.\n' >> "${GITHUB_STEP_SUMMARY}"
             exit 0
           fi
 
@@ -73,10 +106,10 @@ jobs:
             --strategy=ort \
             --strategy-option=ours \
             --message "chore: sync main into develop" \
-            origin/main 2>&1)"; then
+            "$RELEASE_SHA" 2>&1)"; then
             {
               printf '## Main could not be synced automatically\n\n'
-              printf 'Merging `origin/main` into `origin/develop` produced conflicts. Resolve them manually on a branch from `develop`, merge that branch into `develop`, then retry the release PR.\n\n'
+              printf 'Merging the released commit into `origin/develop` produced conflicts. Resolve them manually on a branch from `develop`, merge that branch into `develop`, then rerun sync for the same release tag.\n\n'
               printf '```text\n'
               printf '%s\n' "${merge_output}"
               printf '```\n'
@@ -85,7 +118,7 @@ jobs:
             exit 1
           fi
 
-          git merge-base --is-ancestor origin/main HEAD
+          git merge-base --is-ancestor "$RELEASE_SHA" HEAD
           git cat-file commit HEAD | grep -q '^gpgsig '
 
           git push --force-with-lease origin "${branch}"
@@ -98,6 +131,8 @@ jobs:
           # Use a separate identity for the PR author. Smart Merge runs as
           # github-actions[bot] and cannot approve a PR authored by itself.
           GH_TOKEN: ${{ steps.release-app-token.outputs.token }}
+          RELEASE_SHA: ${{ steps.release.outputs.sha }}
+          VERSION: ${{ inputs.version }}
         shell: bash
         run: |
           set -euo pipefail
@@ -107,7 +142,7 @@ jobs:
           fi
           branch="${{ steps.sync.outputs.branch }}"
           title="chore: sync main into develop"
-          body="Merge main back into develop after release so both branches share history. Non-conflicting changes from both branches are retained; overlapping lines keep the newer develop version."
+          body="Merge the published release ${VERSION} (${RELEASE_SHA}) back into develop so both branches share the released history. Non-conflicting changes from both branches are retained; overlapping lines keep the newer develop version."
           pr_url=""
           pr_number=""
           pr_author=""
