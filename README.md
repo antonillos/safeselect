@@ -63,7 +63,8 @@
 
 Install SafeSelect from Homebrew, import an SSH-backed DBeaver connection,
 keep the password in macOS Keychain, install the OpenCode integration, and see
-the agent read a paid order while its `DELETE` attempt is rejected. Focused
+the agent read a paid order and explain why deleting an unpaid order is
+unavailable through SafeSelect's read-only tools. Focused
 agent and backend clips remain in the [complete demo gallery](demo/README.md).
 
 **Linux onboarding:** [Watch current-source Compass → password-authenticated bastion → check](demo/README.md#linux-onboarding-with-environment-password-references),

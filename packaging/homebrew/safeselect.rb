@@ -19,27 +19,10 @@ class Safeselect < Formula
 
   def caveats
     <<~EOS
-      SafeSelect has been installed. To get started:
+      Requires Java 17+ for database commands.
 
-        safeselect --help
-
-      SafeSelect requires Java 17 or newer at runtime. If needed, install it with:
-
-        brew install openjdk@17
-
-      PostgreSQL requires a JDBC driver. Download it with:
-
-        safeselect driver download --vendor postgresql
-
-      Or register a custom driver:
-
-        safeselect driver add --vendor <name> --path /path/to/jdbc.jar --class <driver-class>
-
-      For MCP (Model Context Protocol) support, install the integration:
-
-        safeselect agent install opencode --environment <env> --name <name>
-
-      (Run from your project repo — .safeselect/ is auto-detected.)
+      Get started: https://github.com/antonillos/safeselect#quick-start
+      CLI help:    safeselect --help
     EOS
   end
 
