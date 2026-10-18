@@ -377,6 +377,12 @@ An existing but empty or invalid configuration is rejected, not replaced by setu
 
 ## CLI Essentials
 
+Use `safeselect --help` or `safeselect <command> --help` for help organized into
+DESCRIPTION, USAGE, ARGUMENTS, FLAGS, GLOBAL FLAGS and SUBCOMMANDS as applicable.
+Terminal help uses green flag names, lilac usage/subcommands and gray placeholders;
+redirected output and `NO_COLOR=1` use plain text. Nested commands share the same
+layout, including `safeselect help config set-password`.
+
 | Command | Purpose |
 |---|---|
 | `safeselect serve [--environment <env>]` | Start the MCP server |
