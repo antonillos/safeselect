@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented in this file.
 
+## [v0.8.0] - 2026-10-18
+
+### Added
+
+- feat(dbeaver): align import workflow with Compass
+
+### Fixed
+
+- fix(compass): separate environments and simplify bastion password names
+- fix: improve connection diagnostics and sidecar cache updates
+
+### Dependencies
+
+- chore(deps): consolidate bumps and replace deprecated YAML parser
+
 ## [v0.7.12] - 2026-10-08
 
 ### Added
