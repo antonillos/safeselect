@@ -82,6 +82,60 @@ python3 -B tools/validate_cli_gallery.py
 safeselect agent install opencode --project "$PWD/demo" --environment postgres --local
 ```
 
+### Complete Homebrew onboarding
+
+![Homebrew installation, DBeaver SSH import, Keychain and OpenCode](../docs/recordings/onboarding-full-local.gif)
+
+The recording installs the current public release through Homebrew and imports
+only the synthetic DBeaver fixture in `demo/fixtures/dbeaver/`. It configures the
+demo SSH key, stores the disposable database password in macOS Keychain, downloads
+the verified JDBC driver, checks the connection, and installs the project-scoped
+OpenCode integration. OpenCode uses only SafeSelect tools to read a paid order
+and demonstrate the read-only boundary;
+its shell and file tools are disabled in the isolated recording profile.
+The business prompt names only the onboarding database; it does not name
+SafeSelect, tables, or tools. The OpenAI model configuration requests detailed
+reasoning summaries, and `--thinking` displays the summaries received alongside
+tool calls. `onboarding-colors.py` adds only ANSI presentation colors to headings,
+tool calls and reasoning. It preserves every line and saves the original byte
+stream as `agent-original.txt` in the temporary project; it does not redact,
+truncate, or reorder the output. The terminal uses the Dracula palette.
+
+Prepare from the repository root with macOS, Homebrew, Docker, Java 17+, VHS,
+and an authenticated OpenCode 2 installation on `PATH`. The tape uses
+`openai/gpt-6-luna#medium`; select an available model if your account differs:
+
+```bash
+./demo/onboarding-prepare.sh
+vhs validate demo/onboarding-full-local.tape
+vhs demo/onboarding-full-local.tape
+```
+
+Preparation resets only `/private/tmp/safeselect-onboarding-full-local`, starts
+the demo containers, and isolates SafeSelect state and OpenCode configuration.
+It keeps the normal OpenCode provider login available. No personal DBeaver
+export is read. Before checking connectivity, the tape pins the bastion public
+host key obtained directly from the fixture container in the project configuration;
+it does not change the user's SSH known-hosts file. The demo audit directory also
+stays in the disposable project. SafeSelect must be absent from Homebrew before
+recording the installation step; preparation does not uninstall an existing installation.
+
+The tap must contain the shortened caveats from `packaging/homebrew/safeselect.rb`.
+Until published, apply only that `caveats` method to the local tap for recording
+and restore the tap afterward. The release URL and SHA-256 remain unchanged;
+the CLI itself comes from the public release, not the source checkout.
+
+Use VHS 0.11.0 if the installed renderer stalls; see the
+[temporary VHS installation](linux-onboarding/README.md).
+
+Review the generated GIF, MP4, and terminal snapshot under `demo/recordings/`
+and `demo/.runtime/`, including successful connectivity, the paid-order read, and the agent's
+explanation of the unavailable write. Then replace the README's shared artifact:
+
+```bash
+cp demo/recordings/onboarding-full-local.gif docs/recordings/onboarding-full-local.gif
+```
+
 ### Current DBeaver import UX
 
 ![DBeaver import: SSH and shared credential choices](../docs/recordings/dbeaver-import-ux.gif)
