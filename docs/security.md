@@ -28,13 +28,15 @@ Every time the server starts:
 Each query goes through:
 
 ```
-Raw SQL → Size check → Single statement check → Read-only check
+Raw SQL → Empty/size/comment checks → Serious operation scan
+→ Single statement check → Read-only check → System catalog restriction
 → Schema allowlist → Relation denylist → JDBC execution → Result limits
 ```
 
 | Check | What it prevents |
 |---|---|
 | Size limit | DoS via oversized queries |
+| Serious operation scan | Writes, transaction/session changes, and forbidden state-changing functions |
 | Single statement | SQL injection via stacked queries |
 | Read-only | DDL, DML, and destructive operations |
 | Schema allowlist | Access to schemas outside policy |
@@ -76,11 +78,111 @@ they never accept arbitrary catalog SQL or return raw catalog rows.
 
 ### 6. Fail-Closed
 
-Ordinary policy rejections of client-provided SQL or relation targets are audited and return an error before backend execution. The MCP process, discovery tools and `reconnect` remain available for subsequent valid calls. This includes reserved catalogs, denied relations, disallowed schemas, unrecognized SQL, query-size limits, sleep functions and multiple read-only statements.
+Fail-closed means a rejected operation cannot execute. A rejected request does
+not always require terminating the MCP process. SQL validation distinguishes
+ordinary request rejections from serious security attempts using typed errors,
+not an agent's interpretation of the error message or the caller's intent.
 
-Serious SQL security attempts are classified separately as security errors: writes, DDL, transaction or session changes, and forbidden functions that alter database or backend state. These attempts are audited and return an error before terminating the sidecar and MCP process. A destructive statement remains serious even when it targets a reserved catalog or follows a harmless SELECT.
+#### Ordinary rejections: keep the session available
 
-Failure to validate internally generated catalog SQL still terminates the Java sidecar and MCP process after recording the rejection. Audit failures also stop request processing. Keeping a session available never permits rejected SQL to execute.
+These requests return an error without executing the rejected SQL. Subsequent
+valid calls can use the same MCP process, and tools such as `list_tables`,
+`check` and `reconnect` remain available.
+
+| Request | Result |
+|---|---|
+| `describe_table` with schema `information_schema` and table `views` | Reserved catalog rejected; session stays available |
+| `select` or `explain` targeting `information_schema.views` | Catalog access rejected; session stays available |
+| A relation outside `allowed_schemas` or listed in `denied_relations` | Scope restriction enforced; session stays available |
+| Empty SQL, SQL exceeding 102,400 bytes, or unsupported nested block comments | Input rejected; session stays available |
+| Unrecognized SQL such as `not valid SQL` | Request rejected; session stays available |
+| `SELECT 1; SELECT 2` with `require_single_statement = true` | Multiple statements rejected; session stays available |
+| `SELECT pg_sleep(1)` | Forbidden sleep function rejected; session stays available |
+
+Relation-target rejections remain recoverable for `describe_table`,
+`list_table_indexes`, `list_table_partitions` and `get_table_stats`. Malformed
+arguments, such as missing names or wildcard table names, also return errors
+without closing the session. Allowing the session to continue does not grant
+access to the rejected relation or relax any configured policy.
+
+#### Serious SQL attempts: terminate the session
+
+For `select` and `explain`, the following detected operations produce
+`SafeselectError::Security`. SafeSelect records the rejection, attempts to send
+the JSON-RPC error, kills the sidecar if one exists, and exits with status 1.
+
+| Attempt | Examples |
+|---|---|
+| Writes or DDL | `INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, `TRUNCATE` |
+| Permission or session changes | `GRANT`, `REVOKE`, `SET ROLE`, `SET_CONFIG` |
+| Transaction control or administrative operations | `COMMIT`, `ROLLBACK`, `LOCK`, `VACUUM` |
+| Forbidden state-changing functions | `SETVAL`, `NEXTVAL`, advisory locks, `PG_TERMINATE_BACKEND`, file import/export functions |
+| A destructive statement combined with a read | `SELECT 1; DROP TABLE public.example` |
+| A write hidden in a CTE or passed to `explain` | `WITH removed AS (DELETE FROM public.example RETURNING *) SELECT * FROM removed` |
+
+The serious-operation scan runs before statement-count and relation-scope
+checks, after the initial empty, size and comment checks. Consequently,
+`DELETE FROM information_schema.views` is a serious attempt even though a
+read of the same catalog is an ordinary rejection. A read-only prefix cannot
+turn a subsequent detected write into a recoverable error. SQL string literals
+are excluded from the keyword scan: `SELECT 'DROP TABLE public.example'` does
+not itself constitute a destructive operation.
+
+The supported checks and forbidden operation lists are defined in
+[`src/security.rs`](../src/security.rs). They are deterministic policy checks,
+not a general assessment of malicious intent. A blocked function such as
+`pg_sleep` remains forbidden even though its rejection is recoverable.
+
+#### Internal failures and scope
+
+Failure to validate internally generated catalog SQL still terminates the
+sidecar and MCP process after recording the rejection. This is an internal
+safety failure rather than an ordinary relation-target rejection. Audit
+failures also stop request processing; the server must not continue without
+its mandatory audit trail. Configuration and driver-integrity failures can
+prevent startup. Transport and I/O failures can also end a session.
+
+This distinction applies to the SQL MCP request paths. MongoDB validation,
+read-only transactions, driver SHA-256 checks, credential handling and result
+limits are unchanged. There is no new configuration switch or exception that
+permits a rejected operation to execute.
+
+#### Recovery and MCP responses
+
+After an ordinary rejection, follow `next_suggestion` and correct the request
+within policy. For a reserved catalog, use the dedicated discovery tools and
+choose an allowed relation from `list_tables`. For query planning, call
+`explain` with `analyze=false` and an allowed SELECT. Do not reconnect solely
+because a request was rejected, repeat the unchanged request, widen policy,
+or switch to another environment to bypass the rejection.
+
+Both ordinary SQL policy rejections and serious SQL security errors use
+JSON-RPC error code `-32000`, preserve the request ID and include
+`error.data.no_data = true` with trusted `next_suggestion` guidance. The error
+code alone does not identify whether the process will terminate. Successful
+audit recording precedes the error response; audit failures can prevent that
+response from being sent. Rejection audit entries use category `REJECT`,
+decision `reject` and a query hash, without storing the SQL text.
+
+`reconnect` restarts the sidecar inside a running MCP process. It cannot revive
+a terminated MCP server, because that server's tools are no longer callable.
+After a serious security attempt or fatal internal failure, correct the cause
+and restart the affected MCP entry through the host application's server
+lifecycle controls. For stale connections in a live session, follow the
+[`check`/`reconnect` flow](agents.md#agent-recovery-flow).
+
+#### Regression coverage
+
+[`src/security.rs`](../src/security.rs) tests classification, including mixed
+read/write statements, CTE writes, EXPLAIN targets, recoverable errors and SQL
+string literals. [`tests/mcp_negative.rs`](../tests/mcp_negative.rs) verifies
+that ordinary rejections preserve the process and tool discovery, subsequent
+allowed requests reach the backend path, and serious attempts produce an
+audited error followed by exit status 1. These process tests use an unavailable
+backend fixture; they do not establish behavior against a live database.
+[`tests/smoke.rs`](../tests/smoke.rs) also checks that a destructive stacked
+query is audited before termination. See the
+[security suite contract](security-test-suite.md) for real-database validation.
 
 ### 7. Audit Log
 

@@ -460,7 +460,14 @@ release installer and `~/.cargo/bin/safeselect` from `cargo install`.
 
 ## Agent Recovery Flow
 
-When database access fails, agents should proceed in this order:
+For rejected requests, first follow the
+[rejection classification and recovery guidance](security.md#6-fail-closed).
+An ordinary catalog or scope rejection requires a corrected request, not a
+connection restart. After a serious SQL security error terminates the server,
+`reconnect` cannot run; the affected MCP entry must be restarted through the
+host after correcting the cause.
+
+For connectivity and setup failures in a running MCP session, proceed in this order:
 
 1. If a data tool returns `Connection closed`, stop probing data tools; call `check`.
 2. Otherwise, call `check` and read the stable diagnostic codes.

@@ -344,6 +344,9 @@ summary without exposing database-derived detail.
 - **Driver verification**: JDBC drivers are checked by SHA-256 before use.
 - **Audit trail**: query text is hashed before being recorded; the current session exposes bounded audit metadata through `audit_status` and `audit_recent`.
 
+See the [rejection and shutdown policy](docs/security.md#6-fail-closed) for
+recoverable errors, serious SQL attempts, examples, MCP responses and recovery.
+
 ### Deliberate Limits
 
 - SafeSelect does not expose database writes, migrations, administration, or arbitrary command execution.
