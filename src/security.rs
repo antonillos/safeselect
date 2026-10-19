@@ -895,6 +895,7 @@ impl SecurityEngine {
             "REPLACE",
             "GRANT",
             "REVOKE",
+            "RESET",
             "WITH",
             "DO",
             "DECLARE",
@@ -2400,6 +2401,25 @@ mod tests {
                 !matches!(engine.validate(sql), Err(SafeselectError::Security(_))),
                 "{sql}"
             );
+        }
+    }
+
+    #[test]
+    fn reset_session_changes_are_serious_but_quoted_reset_is_data() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        for sql in [
+            "RESET ALL",
+            "RESET SESSION AUTHORIZATION",
+            "/* session change */ rEsEt statement_timeout;",
+            "SELECT 1; RESET ALL",
+        ] {
+            assert!(
+                matches!(engine.validate(sql), Err(SafeselectError::Security(_))),
+                "{sql}"
+            );
+        }
+        for sql in ["SELECT 'RESET ALL'", "SELECT 1 AS \"RESET\""] {
+            assert!(engine.validate(sql).is_ok(), "{sql}");
         }
     }
 
