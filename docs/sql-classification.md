@@ -62,6 +62,8 @@ parser's `ANALYZE` and `FETCH` grammars for classification. Missing arguments an
 trailing tokens do not qualify. Compatibility forms outside this limited grammar
 remain blocked with recoverable errors. DO bodies are opaque string literals:
 recognizing the outer procedural command does not validate its language's body.
+Import compatibility includes `LIMIT TO (...)` and `EXCEPT (...)` table filters
+before `FROM SERVER`; each requires a non-empty, parenthesized identifier list.
 
 The initial size and nested-comment checks remain recoverable. Tokenization or
 parsing failure also rejects SQL without execution; the classifier does not

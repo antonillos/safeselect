@@ -670,5 +670,57 @@
   {
     "classification": "rejected",
     "sql": "EXPLAIN DELETE nonsense; SELECT 1"
+  },
+  {
+    "classification": "security",
+    "sql": "IMPORT FOREIGN SCHEMA remote LIMIT TO (orders) FROM SERVER fdw INTO public"
+  },
+  {
+    "classification": "security",
+    "sql": "IMPORT FOREIGN SCHEMA remote EXCEPT (orders, customers) FROM SERVER fdw INTO public"
+  },
+  {
+    "classification": "security",
+    "sql": "IMPORT FOREIGN SCHEMA remote LIMIT TO (\"Order Items\", \"select\") FROM SERVER fdw INTO public"
+  },
+  {
+    "classification": "security",
+    "sql": "SELECT 1; IMPORT FOREIGN SCHEMA remote EXCEPT (orders) FROM SERVER fdw INTO public"
+  },
+  {
+    "classification": "security",
+    "sql": "EXPLAIN IMPORT FOREIGN SCHEMA remote LIMIT TO (orders) FROM SERVER fdw INTO public"
+  },
+  {
+    "classification": "rejected",
+    "sql": "IMPORT FOREIGN SCHEMA remote LIMIT TO () FROM SERVER fdw INTO public"
+  },
+  {
+    "classification": "rejected",
+    "sql": "IMPORT FOREIGN SCHEMA remote EXCEPT () FROM SERVER fdw INTO public"
+  },
+  {
+    "classification": "rejected",
+    "sql": "IMPORT FOREIGN SCHEMA remote LIMIT (orders) FROM SERVER fdw INTO public"
+  },
+  {
+    "classification": "rejected",
+    "sql": "IMPORT FOREIGN SCHEMA remote EXCEPT orders FROM SERVER fdw INTO public"
+  },
+  {
+    "classification": "rejected",
+    "sql": "IMPORT FOREIGN SCHEMA remote LIMIT TO (orders FROM SERVER fdw INTO public"
+  },
+  {
+    "classification": "rejected",
+    "sql": "IMPORT FOREIGN SCHEMA remote EXCEPT (orders,) FROM SERVER fdw INTO public"
+  },
+  {
+    "classification": "rejected",
+    "sql": "IMPORT FOREIGN SCHEMA remote LIMIT TO (orders) FROM SERVER fdw INTO"
+  },
+  {
+    "classification": "rejected",
+    "sql": "IMPORT FOREIGN SCHEMA remote EXCEPT (orders) FROM SERVER fdw INTO public extra"
   }
 ]
