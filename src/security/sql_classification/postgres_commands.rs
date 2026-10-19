@@ -63,6 +63,15 @@ fn reassign(parser: &mut Parser<'_>) -> ParseResult {
 fn import(parser: &mut Parser<'_>) -> ParseResult {
     parser.expect_keywords(&[Keyword::FOREIGN, Keyword::SCHEMA])?;
     parser.parse_identifier()?;
+    import_table_filter(parser)?;
+    parser.expect_keywords(&[Keyword::FROM, Keyword::SERVER])?;
+    parser.parse_identifier()?;
+    parser.expect_keyword_is(Keyword::INTO)?;
+    parser.parse_identifier()?;
+    Ok(())
+}
+
+fn import_table_filter(parser: &mut Parser<'_>) -> ParseResult {
     let has_filter = if parser.parse_keyword(Keyword::LIMIT) {
         parser.expect_keyword_is(Keyword::TO)?;
         true
@@ -74,10 +83,6 @@ fn import(parser: &mut Parser<'_>) -> ParseResult {
         parser.parse_comma_separated(Parser::parse_identifier)?;
         parser.expect_token(&Token::RParen)?;
     }
-    parser.expect_keywords(&[Keyword::FROM, Keyword::SERVER])?;
-    parser.parse_identifier()?;
-    parser.expect_keyword_is(Keyword::INTO)?;
-    parser.parse_identifier()?;
     Ok(())
 }
 
