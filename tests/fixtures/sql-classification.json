@@ -1,0 +1,726 @@
+[
+  {
+    "classification": "allowed",
+    "sql": "SELECT replace('abc', 'a', 'b')"
+  },
+  {
+    "classification": "allowed",
+    "sql": "SELECT start FROM public.metrics"
+  },
+  {
+    "classification": "allowed",
+    "sql": "SELECT commit FROM public.metrics"
+  },
+  {
+    "classification": "allowed",
+    "sql": "SELECT * FROM public.lock"
+  },
+  {
+    "classification": "allowed",
+    "sql": "SELECT nextval_count FROM public.metrics"
+  },
+  {
+    "classification": "allowed",
+    "sql": "SELECT setrole_count FROM public.metrics"
+  },
+  {
+    "classification": "allowed",
+    "sql": "SELECT pg_sleep_count FROM public.metrics"
+  },
+  {
+    "classification": "allowed",
+    "sql": "SELECT reset FROM public.metrics"
+  },
+  {
+    "classification": "allowed",
+    "sql": "SELECT discard FROM public.metrics"
+  },
+  {
+    "classification": "allowed",
+    "sql": "SELECT 'DROP TABLE public.example'"
+  },
+  {
+    "classification": "allowed",
+    "sql": "SELECT 1 /* ; DROP TABLE public.example */"
+  },
+  {
+    "classification": "allowed",
+    "sql": "SELECT $tag$; COMMIT$tag$"
+  },
+  {
+    "classification": "allowed",
+    "sql": "SELECT 1 AS \"COMMIT\""
+  },
+  {
+    "classification": "security",
+    "sql": "ANALYZE public.metrics"
+  },
+  {
+    "classification": "security",
+    "sql": "COMMENT ON TABLE public.metrics IS 'example'"
+  },
+  {
+    "classification": "security",
+    "sql": "REFRESH MATERIALIZED VIEW public.metrics"
+  },
+  {
+    "classification": "security",
+    "sql": "CHECKPOINT"
+  },
+  {
+    "classification": "security",
+    "sql": "CLUSTER public.metrics"
+  },
+  {
+    "classification": "security",
+    "sql": "LOAD 'example'"
+  },
+  {
+    "classification": "security",
+    "sql": "REASSIGN OWNED BY example TO reader"
+  },
+  {
+    "classification": "security",
+    "sql": "IMPORT FOREIGN SCHEMA public FROM SERVER example INTO public"
+  },
+  {
+    "classification": "security",
+    "sql": "SECURITY LABEL ON TABLE public.metrics IS 'example'"
+  },
+  {
+    "classification": "security",
+    "sql": "DEALLOCATE ALL"
+  },
+  {
+    "classification": "security",
+    "sql": "LISTEN example"
+  },
+  {
+    "classification": "security",
+    "sql": "UNLISTEN *"
+  },
+  {
+    "classification": "security",
+    "sql": "NOTIFY example"
+  },
+  {
+    "classification": "security",
+    "sql": "CLOSE ALL"
+  },
+  {
+    "classification": "security",
+    "sql": "MOVE FORWARD 1 FROM example"
+  },
+  {
+    "classification": "security",
+    "sql": "RESET ALL"
+  },
+  {
+    "classification": "security",
+    "sql": "DISCARD ALL"
+  },
+  {
+    "classification": "security",
+    "sql": "END"
+  },
+  {
+    "classification": "security",
+    "sql": "ABORT"
+  },
+  {
+    "classification": "security",
+    "sql": "DROP TABLE public.metrics"
+  },
+  {
+    "classification": "security",
+    "sql": "SELECT 1; DROP TABLE public.metrics"
+  },
+  {
+    "classification": "security",
+    "sql": "SELECT 1 INTO public.example"
+  },
+  {
+    "classification": "security",
+    "sql": "SELECT 1 INTO TEMPORARY example"
+  },
+  {
+    "classification": "security",
+    "sql": "SELECT \"pg_catalog\".\"setval\"('public.seq', 1)"
+  },
+  {
+    "classification": "allowed",
+    "sql": "SELECT \"NEXTVAL\"()"
+  },
+  {
+    "classification": "allowed",
+    "sql": "SELECT public.nextval_count(1)"
+  },
+  {
+    "classification": "allowed",
+    "sql": "SELECT setrole_count, pg_sleep_count FROM public.metrics"
+  },
+  {
+    "classification": "allowed",
+    "sql": "WITH nextval(value) AS (SELECT 1) SELECT value FROM nextval"
+  },
+  {
+    "classification": "allowed",
+    "sql": "SELECT $$; DROP TABLE example;$$"
+  },
+  {
+    "classification": "allowed",
+    "sql": "SELECT $tag$one; $other$; COMMIT$tag$"
+  },
+  {
+    "classification": "allowed",
+    "sql": "SELECT 1 /* DROP TABLE example; */"
+  },
+  {
+    "classification": "allowed",
+    "sql": "SELECT 1 AS \"SETROLE\""
+  },
+  {
+    "classification": "allowed",
+    "sql": "SELECT (SELECT replace('a', 'a', 'b'))"
+  },
+  {
+    "classification": "allowed",
+    "sql": "EXPLAIN (ANALYZE false, VERBOSE true) SELECT replace('a', 'a', 'b')"
+  },
+  {
+    "classification": "allowed",
+    "sql": "WITH item AS (SELECT start FROM public.metrics) SELECT * FROM item"
+  },
+  {
+    "classification": "rejected",
+    "sql": ""
+  },
+  {
+    "classification": "rejected",
+    "sql": "SELECT ("
+  },
+  {
+    "classification": "rejected",
+    "sql": "SELECT 'unterminated"
+  },
+  {
+    "classification": "rejected",
+    "sql": "not valid SQL"
+  },
+  {
+    "classification": "rejected",
+    "sql": "SELECT 1; SELECT 2"
+  },
+  {
+    "classification": "rejected",
+    "sql": "SHOW ALL"
+  },
+  {
+    "classification": "rejected",
+    "sql": "VALUES (1)"
+  },
+  {
+    "classification": "security",
+    "sql": "FETCH ALL FROM example"
+  },
+  {
+    "classification": "rejected",
+    "sql": "SELECT * FROM information_schema.views"
+  },
+  {
+    "classification": "rejected",
+    "sql": "SELECT pg_sleep(1)"
+  },
+  {
+    "classification": "rejected",
+    "sql": "SELECT \"pg_catalog\".\"pg_sleep\"(1)"
+  },
+  {
+    "classification": "rejected",
+    "sql": "SELECT pg_sleep_for('1 second')"
+  },
+  {
+    "classification": "rejected",
+    "sql": "SELECT pg_sleep_until('2030-01-01')"
+  },
+  {
+    "classification": "rejected",
+    "sql": "SELECT * FROM pg_sleep(1)"
+  },
+  {
+    "classification": "rejected",
+    "sql": "EXPLAIN (ANALYZE false) SELECT pg_sleep(1)"
+  },
+  {
+    "classification": "security",
+    "sql": "INSERT INTO public.example VALUES (1)"
+  },
+  {
+    "classification": "security",
+    "sql": "UPDATE public.example SET value = 1"
+  },
+  {
+    "classification": "security",
+    "sql": "DELETE FROM public.example"
+  },
+  {
+    "classification": "security",
+    "sql": "CREATE TABLE public.example (id int)"
+  },
+  {
+    "classification": "security",
+    "sql": "ALTER TABLE public.example ADD COLUMN name text"
+  },
+  {
+    "classification": "security",
+    "sql": "TRUNCATE public.example"
+  },
+  {
+    "classification": "security",
+    "sql": "GRANT SELECT ON public.example TO reader"
+  },
+  {
+    "classification": "security",
+    "sql": "REVOKE SELECT ON public.example FROM reader"
+  },
+  {
+    "classification": "security",
+    "sql": "COPY public.example TO STDOUT"
+  },
+  {
+    "classification": "security",
+    "sql": "DO $$BEGIN NULL; END$$"
+  },
+  {
+    "classification": "security",
+    "sql": "CALL public.example()"
+  },
+  {
+    "classification": "security",
+    "sql": "PREPARE example AS SELECT 1"
+  },
+  {
+    "classification": "security",
+    "sql": "EXECUTE example"
+  },
+  {
+    "classification": "security",
+    "sql": "SET ROLE reader"
+  },
+  {
+    "classification": "security",
+    "sql": "BEGIN"
+  },
+  {
+    "classification": "security",
+    "sql": "START TRANSACTION"
+  },
+  {
+    "classification": "security",
+    "sql": "COMMIT"
+  },
+  {
+    "classification": "security",
+    "sql": "ROLLBACK"
+  },
+  {
+    "classification": "security",
+    "sql": "SAVEPOINT example"
+  },
+  {
+    "classification": "security",
+    "sql": "RELEASE SAVEPOINT example"
+  },
+  {
+    "classification": "security",
+    "sql": "LOCK public.example"
+  },
+  {
+    "classification": "security",
+    "sql": "VACUUM public.example"
+  },
+  {
+    "classification": "security",
+    "sql": "REINDEX TABLE public.example"
+  },
+  {
+    "classification": "security",
+    "sql": "DECLARE example CURSOR FOR SELECT 1"
+  },
+  {
+    "classification": "security",
+    "sql": "SELECT * FROM public.example FOR UPDATE"
+  },
+  {
+    "classification": "security",
+    "sql": "SELECT * FROM public.example FOR SHARE"
+  },
+  {
+    "classification": "security",
+    "sql": "SELECT 1 UNION SELECT 2 INTO public.example"
+  },
+  {
+    "classification": "security",
+    "sql": "WITH q AS (SELECT 1 INTO TEMP example) SELECT * FROM q"
+  },
+  {
+    "classification": "security",
+    "sql": "WITH q AS (DELETE FROM public.example RETURNING *) SELECT * FROM q"
+  },
+  {
+    "classification": "security",
+    "sql": "WITH q AS (SELECT 1) DELETE FROM public.example"
+  },
+  {
+    "classification": "security",
+    "sql": "EXPLAIN (ANALYZE false) SELECT 1 INTO public.example"
+  },
+  {
+    "classification": "security",
+    "sql": "EXPLAIN DISCARD ALL"
+  },
+  {
+    "classification": "security",
+    "sql": "EXPLAIN ANALYZE VERBOSE DELETE FROM public.example"
+  },
+  {
+    "classification": "security",
+    "sql": "SELECT pg_sleep(1), setval('public.seq', 1)"
+  },
+  {
+    "classification": "security",
+    "sql": "SELECT pg_sleep(1); RESET ALL"
+  },
+  {
+    "classification": "security",
+    "sql": "not valid SQL; DELETE FROM public.example"
+  },
+  {
+    "classification": "security",
+    "sql": "SELECT 1; /* boundary */ COMMENT ON TABLE public.example IS 'x'"
+  },
+  {
+    "classification": "security",
+    "sql": "SELECT * FROM \"pg_catalog\".\"nextval\"('public.seq')"
+  },
+  {
+    "classification": "security",
+    "sql": "SELECT * FROM LATERAL \"pg_catalog\".\"nextval\"('public.seq')"
+  },
+  {
+    "classification": "security",
+    "sql": "SELECT (SELECT \"setval\"('public.seq', 1))"
+  },
+  {
+    "classification": "allowed",
+    "sql": "EXPLAIN ANALYZE VERBOSE SELECT 1"
+  },
+  {
+    "classification": "allowed",
+    "sql": "WITH q AS (VALUES (1)) SELECT * FROM q"
+  },
+  {
+    "classification": "allowed",
+    "sql": "SELECT * FROM (VALUES (1)) q(id)"
+  },
+  {
+    "classification": "allowed",
+    "sql": "TABLE public.example"
+  },
+  {
+    "classification": "allowed",
+    "sql": "SELECT nextval FROM public.metrics"
+  },
+  {
+    "classification": "allowed",
+    "sql": "SELECT 1;;;"
+  },
+  {
+    "classification": "allowed",
+    "sql": "SELECT '/* outer /* text */'"
+  },
+  {
+    "classification": "security",
+    "sql": "ANALYSE public.example"
+  },
+  {
+    "classification": "security",
+    "sql": "SELECT * FROM public.example FOR KEY SHARE"
+  },
+  {
+    "classification": "security",
+    "sql": "SELECT * FROM public.example FOR NO KEY UPDATE"
+  },
+  {
+    "classification": "security",
+    "sql": "SELECT 1 INTO UNLOGGED public.example"
+  },
+  {
+    "classification": "security",
+    "sql": "SELECT pg_notify('example', 'payload')"
+  },
+  {
+    "classification": "rejected",
+    "sql": "/* comment only */"
+  },
+  {
+    "classification": "rejected",
+    "sql": "SELECT 1 /* comment */ /* outer /* inner */ end */"
+  },
+  {
+    "classification": "rejected",
+    "sql": "DELETE nonsense"
+  },
+  {
+    "classification": "rejected",
+    "sql": "SECURITY nonsense"
+  },
+  {
+    "classification": "rejected",
+    "sql": "DELETE"
+  },
+  {
+    "classification": "rejected",
+    "sql": "INSERT"
+  },
+  {
+    "classification": "rejected",
+    "sql": "UPDATE"
+  },
+  {
+    "classification": "rejected",
+    "sql": "DROP"
+  },
+  {
+    "classification": "rejected",
+    "sql": "RESET ALL nonsense"
+  },
+  {
+    "classification": "rejected",
+    "sql": "DISCARD nonsense"
+  },
+  {
+    "classification": "rejected",
+    "sql": "BEGIN nonsense"
+  },
+  {
+    "classification": "rejected",
+    "sql": "EXPLAIN DELETE nonsense"
+  },
+  {
+    "classification": "rejected",
+    "sql": "EXPLAIN (ANALYZE false DELETE FROM public.example"
+  },
+  {
+    "classification": "rejected",
+    "sql": "REFRESH MATERIALIZED VIEW"
+  },
+  {
+    "classification": "rejected",
+    "sql": "CHECKPOINT nonsense"
+  },
+  {
+    "classification": "rejected",
+    "sql": "CLUSTER public.example USING"
+  },
+  {
+    "classification": "rejected",
+    "sql": "REASSIGN OWNED BY example"
+  },
+  {
+    "classification": "rejected",
+    "sql": "IMPORT FOREIGN SCHEMA public FROM SERVER example"
+  },
+  {
+    "classification": "rejected",
+    "sql": "SECURITY LABEL ON TABLE public.example"
+  },
+  {
+    "classification": "rejected",
+    "sql": "MOVE FORWARD 1 FROM"
+  },
+  {
+    "classification": "rejected",
+    "sql": "DO"
+  },
+  {
+    "classification": "rejected",
+    "sql": "REINDEX TABLE"
+  },
+  {
+    "classification": "security",
+    "sql": "ANALYSE"
+  },
+  {
+    "classification": "security",
+    "sql": "REFRESH MATERIALIZED VIEW CONCURRENTLY public.metrics WITH DATA"
+  },
+  {
+    "classification": "security",
+    "sql": "REFRESH MATERIALIZED VIEW public.metrics WITH NO DATA"
+  },
+  {
+    "classification": "security",
+    "sql": "CLUSTER"
+  },
+  {
+    "classification": "security",
+    "sql": "CLUSTER VERBOSE public.metrics USING metrics_idx"
+  },
+  {
+    "classification": "security",
+    "sql": "REASSIGN OWNED BY first_role, second_role TO reader"
+  },
+  {
+    "classification": "security",
+    "sql": "SECURITY LABEL FOR provider ON COLUMN public.metrics.value IS NULL"
+  },
+  {
+    "classification": "security",
+    "sql": "DO LANGUAGE plpgsql $$BEGIN NULL; END$$"
+  },
+  {
+    "classification": "security",
+    "sql": "DO 'BEGIN NULL; END' LANGUAGE plpgsql"
+  },
+  {
+    "classification": "security",
+    "sql": "DO E'BEGIN NULL; END'"
+  },
+  {
+    "classification": "security",
+    "sql": "DO U&'BEGIN NULL; END'"
+  },
+  {
+    "classification": "security",
+    "sql": "REINDEX INDEX CONCURRENTLY public.metrics_idx"
+  },
+  {
+    "classification": "security",
+    "sql": "ANALYZE"
+  },
+  {
+    "classification": "security",
+    "sql": "VACUUM"
+  },
+  {
+    "classification": "security",
+    "sql": "DELETE nonsense; DROP TABLE public.example"
+  },
+  {
+    "classification": "rejected",
+    "sql": "DELETE nonsense; SELECT 1"
+  },
+  {
+    "classification": "rejected",
+    "sql": "WITH q AS (DELETE nonsense) SELECT * FROM q"
+  },
+  {
+    "classification": "rejected",
+    "sql": "REFRESH MATERIALIZED VIEW public.metrics WITH"
+  },
+  {
+    "classification": "rejected",
+    "sql": "CHECKPOINT extra"
+  },
+  {
+    "classification": "rejected",
+    "sql": "CLUSTER public.metrics USING metrics_idx extra"
+  },
+  {
+    "classification": "rejected",
+    "sql": "REASSIGN OWNED BY first_role, TO reader"
+  },
+  {
+    "classification": "rejected",
+    "sql": "IMPORT FOREIGN SCHEMA public FROM SERVER example INTO public extra"
+  },
+  {
+    "classification": "rejected",
+    "sql": "SECURITY LABEL ON TABLE public.metrics IS unquoted"
+  },
+  {
+    "classification": "rejected",
+    "sql": "SECURITY LABEL ON TABLE public.metrics IS 'label' extra"
+  },
+  {
+    "classification": "rejected",
+    "sql": "DO nonsense"
+  },
+  {
+    "classification": "rejected",
+    "sql": "DO \"not a string\""
+  },
+  {
+    "classification": "rejected",
+    "sql": "DO LANGUAGE plpgsql"
+  },
+  {
+    "classification": "rejected",
+    "sql": "DO $$BEGIN NULL; END$$ extra"
+  },
+  {
+    "classification": "rejected",
+    "sql": "REINDEX TABLE CONCURRENTLY"
+  },
+  {
+    "classification": "rejected",
+    "sql": "REINDEX TABLE public.metrics extra"
+  },
+  {
+    "classification": "rejected",
+    "sql": "EXPLAIN DELETE nonsense; SELECT 1"
+  },
+  {
+    "classification": "security",
+    "sql": "IMPORT FOREIGN SCHEMA remote LIMIT TO (orders) FROM SERVER fdw INTO public"
+  },
+  {
+    "classification": "security",
+    "sql": "IMPORT FOREIGN SCHEMA remote EXCEPT (orders, customers) FROM SERVER fdw INTO public"
+  },
+  {
+    "classification": "security",
+    "sql": "IMPORT FOREIGN SCHEMA remote LIMIT TO (\"Order Items\", \"select\") FROM SERVER fdw INTO public"
+  },
+  {
+    "classification": "security",
+    "sql": "SELECT 1; IMPORT FOREIGN SCHEMA remote EXCEPT (orders) FROM SERVER fdw INTO public"
+  },
+  {
+    "classification": "security",
+    "sql": "EXPLAIN IMPORT FOREIGN SCHEMA remote LIMIT TO (orders) FROM SERVER fdw INTO public"
+  },
+  {
+    "classification": "rejected",
+    "sql": "IMPORT FOREIGN SCHEMA remote LIMIT TO () FROM SERVER fdw INTO public"
+  },
+  {
+    "classification": "rejected",
+    "sql": "IMPORT FOREIGN SCHEMA remote EXCEPT () FROM SERVER fdw INTO public"
+  },
+  {
+    "classification": "rejected",
+    "sql": "IMPORT FOREIGN SCHEMA remote LIMIT (orders) FROM SERVER fdw INTO public"
+  },
+  {
+    "classification": "rejected",
+    "sql": "IMPORT FOREIGN SCHEMA remote EXCEPT orders FROM SERVER fdw INTO public"
+  },
+  {
+    "classification": "rejected",
+    "sql": "IMPORT FOREIGN SCHEMA remote LIMIT TO (orders FROM SERVER fdw INTO public"
+  },
+  {
+    "classification": "rejected",
+    "sql": "IMPORT FOREIGN SCHEMA remote EXCEPT (orders,) FROM SERVER fdw INTO public"
+  },
+  {
+    "classification": "rejected",
+    "sql": "IMPORT FOREIGN SCHEMA remote LIMIT TO (orders) FROM SERVER fdw INTO"
+  },
+  {
+    "classification": "rejected",
+    "sql": "IMPORT FOREIGN SCHEMA remote EXCEPT (orders) FROM SERVER fdw INTO public extra"
+  }
+]

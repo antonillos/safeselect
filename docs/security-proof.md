@@ -55,7 +55,7 @@ workspace may also contain tampered configuration or a modified driver.
 | Schemas, relations, databases, and collections remain within policy | Guarantee | [`docs/security.md`](security.md) and security suites | The policy must be configured with least privilege |
 | Results and execution are bounded | Mitigation | Limit tests in `real_postgres` and `real_mongodb` | Does not prevent all external resource consumption before the server responds |
 | Secrets do not appear in project files, arguments, or audit records | Design guarantee | [`docs/security.md`](security.md), [`SECURITY.md`](../SECURITY.md) | The process memory and host still require protection |
-| A security or audit failure terminates the process | Fail-closed guarantee | [`src/security.rs`](../src/security.rs), [`verify.yml`](../.github/workflows/verify.yml) | The operator must restart after correcting the cause |
+| Rejected requests never execute; serious security attempts and internal validation or audit failures stop the server | Fail-closed guarantee | [`src/security.rs`](../src/security.rs), [`verify.yml`](../.github/workflows/verify.yml) | Correct rejected requests within policy; restart only after correcting a fatal failure |
 
 ## Attack → control → test matrix
 

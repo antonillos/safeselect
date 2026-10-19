@@ -460,7 +460,14 @@ release installer and `~/.cargo/bin/safeselect` from `cargo install`.
 
 ## Agent Recovery Flow
 
-When database access fails, agents should proceed in this order:
+For rejected requests, first follow the
+[rejection classification and recovery guidance](security.md#6-fail-closed).
+An ordinary catalog or scope rejection requires a corrected request, not a
+connection restart. After a serious SQL security error terminates the server,
+`reconnect` cannot run; the affected MCP entry must be restarted through the
+host after correcting the cause.
+
+For connectivity and setup failures in a running MCP session, proceed in this order:
 
 1. If a data tool returns `Connection closed`, stop probing data tools; call `check`.
 2. Otherwise, call `check` and read the stable diagnostic codes.
@@ -469,7 +476,7 @@ When database access fails, agents should proceed in this order:
 5. If config is missing or invalid, call `config_validate` and `config_show`.
 6. If the driver is missing, call `driver_list` then `driver_download` for PostgreSQL.
 7. If the secret is missing, ask the user for permission/password and use `config_set_password`.
-8. Do not retry rejected SQL after a security violation; SafeSelect intentionally exits fail-closed.
+8. Do not retry rejected SQL unchanged. Ordinary policy rejections leave the MCP session available; correct the request within policy. Serious security attempts, internal validation failures and audit failures stop the server.
 
 Timeouts are bounded by the project `statement_timeout_ms`. If a query times out,
 agents must not retry it unchanged or broaden it. Preserve or narrow filters and
@@ -483,5 +490,5 @@ increasing project limits.
 
 - Each MCP entry is locked to a single project and environment
 - Agents cannot change the target database
-- Any security violation terminates the process
+- Ordinary policy rejections return errors without executing; serious security attempts and internal validation or audit failures stop the server
 - All queries are audited (hashed, never stored in plain text)

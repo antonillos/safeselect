@@ -249,7 +249,7 @@ SafeSelect is intentionally narrower than general-purpose database MCP servers. 
 | Local stdio transport | No network listener or open MCP port |
 | Read-only tools | Agents do not receive write-capable database tools |
 | Credential-independent safety | Even DBA credentials are constrained to SafeSelect's read-only tool surface |
-| Fail-closed enforcement | Policy violations terminate the process |
+| Fail-closed enforcement | Serious security attempts terminate the process; ordinary policy rejections return errors |
 | Secret isolation | Passwords stay in Keychain or environment variables |
 | Project-scoped policy | Each repository defines its own allowed data surface |
 | Embedded sidecar | One installed binary reaches JDBC and MongoDB drivers behind Rust policy |
@@ -335,7 +335,7 @@ summary without exposing database-derived detail.
 
 ## Security Model
 
-- **Fail closed**: security violations terminate the MCP process.
+- **Fail closed**: serious security attempts and internal validation or audit failures terminate the MCP process. Ordinary policy rejections return errors without executing and keep the session available.
 - **Read only**: SQL allows `SELECT`, `EXPLAIN`, and `WITH`; NoSQL backends allow discovery and read-only document reads.
 - **No server-side JavaScript**: MongoDB `$where`, `$function`, and `$accumulator` are rejected in Rust and again in the Java sidecar.
 - **Scoped access**: schemas, relations, databases, and collections can be allowed or denied.
@@ -343,6 +343,9 @@ summary without exposing database-derived detail.
 - **Secret isolation**: passwords live in macOS Keychain or environment variables, never in project config.
 - **Driver verification**: JDBC drivers are checked by SHA-256 before use.
 - **Audit trail**: query text is hashed before being recorded; the current session exposes bounded audit metadata through `audit_status` and `audit_recent`.
+
+See the [rejection and shutdown policy](docs/security.md#6-fail-closed) for
+recoverable errors, serious SQL attempts, examples, MCP responses and recovery.
 
 ### Deliberate Limits
 

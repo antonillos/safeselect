@@ -130,7 +130,11 @@ sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         self.stdin.flush().unwrap();
     }
 
-    fn finish(mut self) -> String {
+    fn finish(self) -> String {
+        self.finish_with_status().0
+    }
+
+    fn finish_with_status(mut self) -> (String, std::process::ExitStatus) {
         drop(self.stdin);
         let deadline = Instant::now() + Duration::from_secs(5);
         while self.child.try_wait().unwrap().is_none() {
@@ -142,7 +146,7 @@ sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         }
         let mut stderr = String::new();
         std::io::Read::read_to_string(&mut self.stderr, &mut stderr).unwrap();
-        stderr
+        (stderr, self.child.wait().unwrap())
     }
 }
 
@@ -256,6 +260,165 @@ fn mcp_negative_validation_preserves_jsonrpc_and_recovers_until_eof() {
         "stderr leaked unknown request payload: {stderr}"
     );
     let _ = std::fs::remove_dir_all(tmp);
+}
+
+#[test]
+fn policy_rejections_preserve_mcp_tools_and_audit_without_backend_access() {
+    let (mut mcp, tmp) = McpHarness::start();
+    let pid = mcp.child.id();
+    let cases = [
+        (
+            "describe_table",
+            serde_json::json!({"schema": "information_schema", "table": "views"}),
+        ),
+        (
+            "list_table_indexes",
+            serde_json::json!({"schema": "information_schema", "table": "views"}),
+        ),
+        (
+            "list_table_partitions",
+            serde_json::json!({"schema": "pg_catalog", "table": "pg_class"}),
+        ),
+        (
+            "get_table_stats",
+            serde_json::json!({"schema": "information_schema", "table": "views"}),
+        ),
+        (
+            "select",
+            serde_json::json!({"sql": "SELECT * FROM information_schema.views"}),
+        ),
+        ("select", serde_json::json!({"sql": "SELECT 1; SELECT 2"})),
+        ("select", serde_json::json!({"sql": "SELECT pg_sleep(1)"})),
+        ("select", serde_json::json!({"sql": "not valid SQL"})),
+        (
+            "explain",
+            serde_json::json!({"sql": "SELECT * FROM information_schema.views"}),
+        ),
+    ];
+    let mut id = 1;
+    for (name, arguments) in &cases {
+        let response = mcp.send(&serde_json::json!({
+            "jsonrpc": "2.0", "id": id, "method": "tools/call",
+            "params": {"name": name, "arguments": arguments}
+        }));
+        assert_error(&response, serde_json::json!(id), -32000);
+        assert_eq!(response["error"]["data"]["no_data"], true);
+        id += 1;
+        let listed = mcp.send(&serde_json::json!({
+            "jsonrpc": "2.0", "id": id, "method": "tools/list"
+        }));
+        assert!(listed["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool["name"] == "reconnect"));
+        assert_eq!(mcp.child.id(), pid);
+        assert!(mcp.child.try_wait().unwrap().is_none());
+        id += 1;
+    }
+
+    // An allowed request must still reach the backend, which is unavailable in this fixture.
+    let allowed = mcp.send(&serde_json::json!({
+        "jsonrpc": "2.0", "id": id, "method": "tools/call",
+        "params": {"name": "select", "arguments": {"sql": "SELECT 1"}}
+    }));
+    assert!(allowed["error"].is_null());
+    assert_eq!(allowed["result"]["isError"], true);
+    let _ = mcp.finish();
+
+    let audit_dir = tmp.join("audit/MCP Negative Validation/testing");
+    let entries: Vec<serde_json::Value> = std::fs::read_dir(audit_dir)
+        .unwrap()
+        .flat_map(|entry| {
+            std::fs::read_to_string(entry.unwrap().path())
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| entry["category"] == "REJECT" && entry["decision"] == "reject")
+            .count(),
+        cases.len()
+    );
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| entry["category"] == "JDBC_ERROR")
+            .count(),
+        1
+    );
+    assert!(!entries.iter().any(|entry| entry["category"] == "PASS"));
+    let _ = std::fs::remove_dir_all(tmp);
+}
+
+#[test]
+fn reset_column_read_keeps_mcp_available() {
+    let (mut mcp, tmp) = McpHarness::start();
+    let response = mcp.send(&serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "select", "arguments": {"sql": "SELECT reset FROM public.metrics"}}
+    }));
+    assert!(response["error"].is_null());
+    assert_eq!(response["result"]["isError"], true);
+    let listed = mcp.send(&serde_json::json!({
+        "jsonrpc": "2.0", "id": 2, "method": "tools/list"
+    }));
+    assert!(listed["result"]["tools"].is_array());
+    let (_, status) = mcp.finish_with_status();
+    assert!(status.success());
+    let _ = std::fs::remove_dir_all(tmp);
+}
+
+#[test]
+fn serious_security_attempts_are_audited_and_close_mcp() {
+    for (tool, sql) in [
+        ("select", "DROP TABLE public.probe"),
+        ("select", "SELECT 1; DROP TABLE public.probe"),
+        ("select", "DELETE FROM information_schema.views"),
+        (
+            "select",
+            "WITH gone AS (DELETE FROM public.probe RETURNING *) SELECT * FROM gone",
+        ),
+        ("select", "SET ROLE privileged"),
+        ("select", "RESET ALL"),
+        ("select", "RESET SESSION AUTHORIZATION"),
+        ("select", "DISCARD ALL"),
+        ("explain", "DISCARD ALL"),
+        ("select", "END"),
+        ("select", "/* transaction alias */ aBoRt;"),
+        ("select", "SELECT pg_terminate_backend(1)"),
+        ("explain", "DELETE FROM public.probe"),
+        ("explain", "SELECT setval('public.probe_id_seq', 1)"),
+    ] {
+        let (mut mcp, tmp) = McpHarness::start();
+        let rejected = mcp.send(&serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": tool, "arguments": {"sql": sql}}
+        }));
+        assert_error(&rejected, serde_json::json!(1), -32000);
+        let (stderr, status) = mcp.finish_with_status();
+        assert_eq!(status.code(), Some(1), "{tool}: {sql}");
+        assert!(stderr.contains("FAIL-CLOSED"));
+        let audit_dir = tmp.join("audit/MCP Negative Validation/testing");
+        let entries: Vec<serde_json::Value> = std::fs::read_dir(audit_dir)
+            .unwrap()
+            .flat_map(|entry| {
+                std::fs::read_to_string(entry.unwrap().path())
+                    .unwrap()
+                    .lines()
+                    .map(|line| serde_json::from_str(line).unwrap())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["category"], "REJECT");
+        assert_eq!(entries[0]["decision"], "reject");
+        let _ = std::fs::remove_dir_all(tmp);
+    }
 }
 
 #[test]
@@ -406,4 +569,43 @@ fn mcp_exposes_static_read_only_prompt_and_resource_without_database_access() {
 
     let _ = mcp.finish();
     let _ = std::fs::remove_dir_all(tmp);
+}
+
+#[test]
+fn sql_classification_matrix_controls_mcp_lifecycle() {
+    let cases: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/sql-classification.json")).unwrap();
+    for case in cases.as_array().unwrap() {
+        let (mut mcp, tmp) = McpHarness::start();
+        let response = mcp.send(&serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "select", "arguments": {"sql": case["sql"]}}
+        }));
+        match case["classification"].as_str().unwrap() {
+            "allowed" => {
+                assert!(response["error"].is_null(), "{case}: {response}");
+                // This fixture has no backend; reaching it is not proof of SQL execution.
+                assert_eq!(response["result"]["isError"], true, "{case}: {response}");
+            }
+            "rejected" | "security" => assert_error(&response, serde_json::json!(1), -32000),
+            other => panic!("unknown classification: {other}"),
+        }
+        let serious = case["classification"] == "security";
+        if !serious {
+            let listed = mcp.send(&serde_json::json!({
+                "jsonrpc": "2.0", "id": 2, "method": "tools/list"
+            }));
+            assert!(
+                listed["result"]["tools"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|tool| tool["name"] == "reconnect"),
+                "{case}"
+            );
+        }
+        let (_, status) = mcp.finish_with_status();
+        assert_eq!(status.code(), Some(if serious { 1 } else { 0 }), "{case}");
+        let _ = std::fs::remove_dir_all(tmp);
+    }
 }
