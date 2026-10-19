@@ -133,6 +133,12 @@ The supported checks and forbidden operation lists are defined in
 not a general assessment of malicious intent. A blocked function such as
 `pg_sleep` remains forbidden even though its rejection is recoverable.
 
+`RESET` is recognized as session control only when it is the first unquoted
+token of a statement. Reads such as `SELECT reset FROM public.metrics` and
+`SELECT * FROM public.reset` do not become serious attempts merely because
+they use `reset` as an identifier. The same statement-boundary detection keeps
+`END` and `ABORT` transaction commands distinct from ordinary SQL expressions.
+
 #### Internal failures and scope
 
 Failure to validate internally generated catalog SQL still terminates the

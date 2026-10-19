@@ -356,6 +356,24 @@ fn policy_rejections_preserve_mcp_tools_and_audit_without_backend_access() {
 }
 
 #[test]
+fn reset_column_read_keeps_mcp_available() {
+    let (mut mcp, tmp) = McpHarness::start();
+    let response = mcp.send(&serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "select", "arguments": {"sql": "SELECT reset FROM public.metrics"}}
+    }));
+    assert!(response["error"].is_null());
+    assert_eq!(response["result"]["isError"], true);
+    let listed = mcp.send(&serde_json::json!({
+        "jsonrpc": "2.0", "id": 2, "method": "tools/list"
+    }));
+    assert!(listed["result"]["tools"].is_array());
+    let (_, status) = mcp.finish_with_status();
+    assert!(status.success());
+    let _ = std::fs::remove_dir_all(tmp);
+}
+
+#[test]
 fn serious_security_attempts_are_audited_and_close_mcp() {
     for (tool, sql) in [
         ("select", "DROP TABLE public.probe"),

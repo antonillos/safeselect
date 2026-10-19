@@ -856,9 +856,9 @@ impl SecurityEngine {
                 SafeselectError::Security(message)
             });
         }
-        if contains_transaction_alias(sql) {
+        if contains_session_control_statement(sql) {
             return Err(SafeselectError::Security(
-                "Read-only mode: transaction control not allowed".into(),
+                "Read-only mode: transaction or session control not allowed".into(),
             ));
         }
         if contains_keyword(&compact, "SET") || compact.contains("SETROLE") {
@@ -895,7 +895,6 @@ impl SecurityEngine {
             "REPLACE",
             "GRANT",
             "REVOKE",
-            "RESET",
             "WITH",
             "DO",
             "DECLARE",
@@ -1936,7 +1935,7 @@ fn contains_keyword(sql: &str, keyword: &str) -> bool {
     sql.split_whitespace().any(|token| token == keyword)
 }
 
-fn contains_transaction_alias(sql: &str) -> bool {
+fn contains_session_control_statement(sql: &str) -> bool {
     let Ok(tokens) = Tokenizer::new(&PostgreSqlDialect {}, sql).tokenize() else {
         return false;
     };
@@ -1949,7 +1948,7 @@ fn contains_transaction_alias(sql: &str) -> bool {
         })
         .any(|token| {
             matches!(token, Token::Word(word) if word.quote_style.is_none()
-                && matches!(word.keyword, Keyword::END | Keyword::ABORT))
+                && matches!(word.keyword, Keyword::END | Keyword::ABORT | Keyword::RESET))
         })
 }
 
@@ -2396,7 +2395,7 @@ mod tests {
             "SELECT 1 -- ; ABORT",
             "SELECT 'unterminated",
         ] {
-            assert!(!contains_transaction_alias(sql), "{sql}");
+            assert!(!contains_session_control_statement(sql), "{sql}");
             assert!(
                 !matches!(engine.validate(sql), Err(SafeselectError::Security(_))),
                 "{sql}"
@@ -2405,7 +2404,7 @@ mod tests {
     }
 
     #[test]
-    fn reset_session_changes_are_serious_but_quoted_reset_is_data() {
+    fn reset_commands_are_serious_but_reset_identifiers_are_data() {
         let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
         for sql in [
             "RESET ALL",
@@ -2418,7 +2417,13 @@ mod tests {
                 "{sql}"
             );
         }
-        for sql in ["SELECT 'RESET ALL'", "SELECT 1 AS \"RESET\""] {
+        for sql in [
+            "SELECT 'RESET ALL'",
+            "SELECT 1 AS \"RESET\"",
+            "SELECT reset FROM public.metrics",
+            "SELECT * FROM public.reset",
+            "SELECT 1 AS reset",
+        ] {
             assert!(engine.validate(sql).is_ok(), "{sql}");
         }
     }
