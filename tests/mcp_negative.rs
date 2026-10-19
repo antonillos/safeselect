@@ -386,6 +386,8 @@ fn serious_security_attempts_are_audited_and_close_mcp() {
         ("select", "SET ROLE privileged"),
         ("select", "RESET ALL"),
         ("select", "RESET SESSION AUTHORIZATION"),
+        ("select", "DISCARD ALL"),
+        ("explain", "DISCARD ALL"),
         ("select", "END"),
         ("select", "/* transaction alias */ aBoRt;"),
         ("select", "SELECT pg_terminate_backend(1)"),

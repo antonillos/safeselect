@@ -1948,7 +1948,7 @@ fn contains_session_control_statement(sql: &str) -> bool {
         })
         .any(|token| {
             matches!(token, Token::Word(word) if word.quote_style.is_none()
-                && matches!(word.keyword, Keyword::END | Keyword::ABORT | Keyword::RESET))
+                && matches!(word.keyword, Keyword::END | Keyword::ABORT | Keyword::RESET | Keyword::DISCARD))
         })
 }
 
@@ -2423,6 +2423,33 @@ mod tests {
             "SELECT reset FROM public.metrics",
             "SELECT * FROM public.reset",
             "SELECT 1 AS reset",
+        ] {
+            assert!(engine.validate(sql).is_ok(), "{sql}");
+        }
+    }
+
+    #[test]
+    fn discard_commands_are_serious_but_discard_identifiers_are_data() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        for sql in [
+            "DISCARD ALL",
+            "DISCARD TEMP",
+            "DISCARD PLANS",
+            "DISCARD SEQUENCES",
+            "/* session change */ dIsCaRd ALL;",
+            "SELECT 1; DISCARD ALL",
+            "EXPLAIN DISCARD ALL",
+        ] {
+            assert!(
+                matches!(engine.validate(sql), Err(SafeselectError::Security(_))),
+                "{sql}"
+            );
+        }
+        for sql in [
+            "SELECT discard FROM public.metrics",
+            "SELECT * FROM public.discard",
+            "SELECT 'DISCARD ALL'",
+            "SELECT 1 AS \"DISCARD\"",
         ] {
             assert!(engine.validate(sql).is_ok(), "{sql}");
         }

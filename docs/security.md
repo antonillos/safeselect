@@ -114,7 +114,7 @@ the JSON-RPC error, kills the sidecar if one exists, and exits with status 1.
 | Attempt | Examples |
 |---|---|
 | Writes or DDL | `INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, `TRUNCATE` |
-| Permission or session changes | `GRANT`, `REVOKE`, `SET ROLE`, `RESET ALL`, `RESET SESSION AUTHORIZATION`, `SET_CONFIG` |
+| Permission or session changes | `GRANT`, `REVOKE`, `SET ROLE`, `RESET ALL`, `RESET SESSION AUTHORIZATION`, `DISCARD ALL`, `SET_CONFIG` |
 | Transaction control or administrative operations | `COMMIT` / `END`, `ROLLBACK` / `ABORT`, `LOCK`, `VACUUM` |
 | Forbidden state-changing functions | `SETVAL`, `NEXTVAL`, advisory locks, `PG_TERMINATE_BACKEND`, file import/export functions |
 | A destructive statement combined with a read | `SELECT 1; DROP TABLE public.example` |
@@ -133,11 +133,14 @@ The supported checks and forbidden operation lists are defined in
 not a general assessment of malicious intent. A blocked function such as
 `pg_sleep` remains forbidden even though its rejection is recoverable.
 
-`RESET` is recognized as session control only when it is the first unquoted
-token of a statement. Reads such as `SELECT reset FROM public.metrics` and
-`SELECT * FROM public.reset` do not become serious attempts merely because
-they use `reset` as an identifier. The same statement-boundary detection keeps
-`END` and `ABORT` transaction commands distinct from ordinary SQL expressions.
+`RESET` and `DISCARD` are recognized as session control only when they are the
+first unquoted token of a statement. Reads such as
+`SELECT reset FROM public.metrics`, `SELECT * FROM public.reset` and
+`SELECT discard FROM public.metrics` do not become serious attempts merely
+because they use these words as identifiers. The same statement-boundary
+detection keeps `END` and `ABORT` transaction commands distinct from ordinary
+SQL expressions. All `DISCARD` command variants, including `ALL`, `TEMP`,
+`PLANS` and `SEQUENCES`, are rejected as serious session-control attempts.
 
 #### Internal failures and scope
 
