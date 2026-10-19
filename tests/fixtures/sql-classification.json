@@ -466,5 +466,209 @@
   {
     "classification": "rejected",
     "sql": "SELECT 1 /* comment */ /* outer /* inner */ end */"
+  },
+  {
+    "classification": "rejected",
+    "sql": "DELETE nonsense"
+  },
+  {
+    "classification": "rejected",
+    "sql": "SECURITY nonsense"
+  },
+  {
+    "classification": "rejected",
+    "sql": "DELETE"
+  },
+  {
+    "classification": "rejected",
+    "sql": "INSERT"
+  },
+  {
+    "classification": "rejected",
+    "sql": "UPDATE"
+  },
+  {
+    "classification": "rejected",
+    "sql": "DROP"
+  },
+  {
+    "classification": "rejected",
+    "sql": "RESET ALL nonsense"
+  },
+  {
+    "classification": "rejected",
+    "sql": "DISCARD nonsense"
+  },
+  {
+    "classification": "rejected",
+    "sql": "BEGIN nonsense"
+  },
+  {
+    "classification": "rejected",
+    "sql": "EXPLAIN DELETE nonsense"
+  },
+  {
+    "classification": "rejected",
+    "sql": "EXPLAIN (ANALYZE false DELETE FROM public.example"
+  },
+  {
+    "classification": "rejected",
+    "sql": "REFRESH MATERIALIZED VIEW"
+  },
+  {
+    "classification": "rejected",
+    "sql": "CHECKPOINT nonsense"
+  },
+  {
+    "classification": "rejected",
+    "sql": "CLUSTER public.example USING"
+  },
+  {
+    "classification": "rejected",
+    "sql": "REASSIGN OWNED BY example"
+  },
+  {
+    "classification": "rejected",
+    "sql": "IMPORT FOREIGN SCHEMA public FROM SERVER example"
+  },
+  {
+    "classification": "rejected",
+    "sql": "SECURITY LABEL ON TABLE public.example"
+  },
+  {
+    "classification": "rejected",
+    "sql": "MOVE FORWARD 1 FROM"
+  },
+  {
+    "classification": "rejected",
+    "sql": "DO"
+  },
+  {
+    "classification": "rejected",
+    "sql": "REINDEX TABLE"
+  },
+  {
+    "classification": "security",
+    "sql": "ANALYSE"
+  },
+  {
+    "classification": "security",
+    "sql": "REFRESH MATERIALIZED VIEW CONCURRENTLY public.metrics WITH DATA"
+  },
+  {
+    "classification": "security",
+    "sql": "REFRESH MATERIALIZED VIEW public.metrics WITH NO DATA"
+  },
+  {
+    "classification": "security",
+    "sql": "CLUSTER"
+  },
+  {
+    "classification": "security",
+    "sql": "CLUSTER VERBOSE public.metrics USING metrics_idx"
+  },
+  {
+    "classification": "security",
+    "sql": "REASSIGN OWNED BY first_role, second_role TO reader"
+  },
+  {
+    "classification": "security",
+    "sql": "SECURITY LABEL FOR provider ON COLUMN public.metrics.value IS NULL"
+  },
+  {
+    "classification": "security",
+    "sql": "DO LANGUAGE plpgsql $$BEGIN NULL; END$$"
+  },
+  {
+    "classification": "security",
+    "sql": "DO 'BEGIN NULL; END' LANGUAGE plpgsql"
+  },
+  {
+    "classification": "security",
+    "sql": "DO E'BEGIN NULL; END'"
+  },
+  {
+    "classification": "security",
+    "sql": "DO U&'BEGIN NULL; END'"
+  },
+  {
+    "classification": "security",
+    "sql": "REINDEX INDEX CONCURRENTLY public.metrics_idx"
+  },
+  {
+    "classification": "security",
+    "sql": "ANALYZE"
+  },
+  {
+    "classification": "security",
+    "sql": "VACUUM"
+  },
+  {
+    "classification": "security",
+    "sql": "DELETE nonsense; DROP TABLE public.example"
+  },
+  {
+    "classification": "rejected",
+    "sql": "DELETE nonsense; SELECT 1"
+  },
+  {
+    "classification": "rejected",
+    "sql": "WITH q AS (DELETE nonsense) SELECT * FROM q"
+  },
+  {
+    "classification": "rejected",
+    "sql": "REFRESH MATERIALIZED VIEW public.metrics WITH"
+  },
+  {
+    "classification": "rejected",
+    "sql": "CHECKPOINT extra"
+  },
+  {
+    "classification": "rejected",
+    "sql": "CLUSTER public.metrics USING metrics_idx extra"
+  },
+  {
+    "classification": "rejected",
+    "sql": "REASSIGN OWNED BY first_role, TO reader"
+  },
+  {
+    "classification": "rejected",
+    "sql": "IMPORT FOREIGN SCHEMA public FROM SERVER example INTO public extra"
+  },
+  {
+    "classification": "rejected",
+    "sql": "SECURITY LABEL ON TABLE public.metrics IS unquoted"
+  },
+  {
+    "classification": "rejected",
+    "sql": "SECURITY LABEL ON TABLE public.metrics IS 'label' extra"
+  },
+  {
+    "classification": "rejected",
+    "sql": "DO nonsense"
+  },
+  {
+    "classification": "rejected",
+    "sql": "DO \"not a string\""
+  },
+  {
+    "classification": "rejected",
+    "sql": "DO LANGUAGE plpgsql"
+  },
+  {
+    "classification": "rejected",
+    "sql": "DO $$BEGIN NULL; END$$ extra"
+  },
+  {
+    "classification": "rejected",
+    "sql": "REINDEX TABLE CONCURRENTLY"
+  },
+  {
+    "classification": "rejected",
+    "sql": "REINDEX TABLE public.metrics extra"
+  },
+  {
+    "classification": "rejected",
+    "sql": "EXPLAIN DELETE nonsense; SELECT 1"
   }
 ]

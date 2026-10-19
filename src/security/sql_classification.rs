@@ -1,3 +1,5 @@
+mod postgres_commands;
+
 use super::canonical_ident;
 use crate::error::{Result, SafeselectError};
 use sqlparser::ast::{
@@ -144,14 +146,15 @@ pub(super) fn validate(sql: &str) -> Result<()> {
 }
 
 fn validate_statement(tokens: &[Token]) -> Result<()> {
-    check_command(tokens)?;
     let statements = match parse_statement(tokens) {
         Ok(statements) => statements,
         Err(_) => {
+            check_unsupported_command(tokens)?;
             check_explain_command(tokens)?;
             return Err(rejected());
         }
     };
+    check_command(tokens)?;
     let mut visitor = ReadOnlyVisitor { recovery: None };
     if let ControlFlow::Break(error) = statements.visit(&mut visitor) {
         return Err(error);
@@ -192,6 +195,21 @@ fn parser_tokens(tokens: &[Token]) -> Vec<Token> {
         }
         index += width;
     }
+    if let Some(Token::Word(command)) = normalized.first_mut() {
+        if command.quote_style.is_none() {
+            match command.value.to_ascii_uppercase().as_str() {
+                "ANALYSE" => {
+                    command.value = "ANALYZE".into();
+                    command.keyword = sqlparser::keywords::Keyword::ANALYZE;
+                }
+                "MOVE" => {
+                    command.value = "FETCH".into();
+                    command.keyword = sqlparser::keywords::Keyword::FETCH;
+                }
+                _ => {}
+            }
+        }
+    }
     normalized
 }
 
@@ -226,7 +244,27 @@ fn check_explain_command(tokens: &[Token]) -> Result<()> {
             index += 1;
         }
     }
-    check_command(&tokens[index..])
+    // Validate the EXPLAIN options independently; a malformed wrapper must not
+    // turn an otherwise recognizable target into a fatal classification.
+    let mut wrapper = tokens[..index].to_vec();
+    wrapper.extend(self::tokens("SELECT 1")?);
+    if parse_statement(&wrapper).is_err() {
+        return Ok(());
+    }
+    let target = &tokens[index..];
+    if parse_statement(target).is_ok() {
+        check_command(target)
+    } else {
+        check_unsupported_command(target)
+    }
+}
+
+fn check_unsupported_command(tokens: &[Token]) -> Result<()> {
+    if postgres_commands::recognizes(tokens) {
+        check_command(tokens)
+    } else {
+        Ok(())
+    }
 }
 
 fn check_command(tokens: &[Token]) -> Result<()> {

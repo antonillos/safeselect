@@ -48,8 +48,20 @@ Every tokenizable statement is checked before the single-statement and relation
 policies. A detected serious operation wins over an ordinary rejection in the
 same request, including a sleep call or malformed earlier statement. CTE writes,
 subqueries, table functions, set-operation branches and EXPLAIN targets receive
-the same checks. A narrowly scoped command-boundary check also handles EXPLAIN
-target commands that the parser does not support.
+the same checks. A listed command becomes serious only after its complete
+statement parses or matches an explicit PostgreSQL compatibility grammar.
+Malformed requests such as `DELETE nonsense` and `SECURITY nonsense` are
+recoverable, including inside EXPLAIN and alongside other harmless statements.
+EXPLAIN compatibility checks validate the wrapper and target separately.
+
+The [compatibility grammar](../src/security/sql_classification/postgres_commands.rs)
+recognizes complete common forms of `CHECKPOINT`, `REFRESH MATERIALIZED VIEW`,
+`CLUSTER`, `REASSIGN OWNED`, `IMPORT FOREIGN SCHEMA`, `SECURITY LABEL`, `DO` and
+`REINDEX`, requiring all tokens to be consumed. `ANALYSE` and `MOVE` reuse the
+parser's `ANALYZE` and `FETCH` grammars for classification. Missing arguments and
+trailing tokens do not qualify. Compatibility forms outside this limited grammar
+remain blocked with recoverable errors. DO bodies are opaque string literals:
+recognizing the outer procedural command does not validate its language's body.
 
 The initial size and nested-comment checks remain recoverable. Tokenization or
 parsing failure also rejects SQL without execution; the classifier does not
