@@ -135,7 +135,7 @@ fn test_serve_missing_project() {
 }
 
 #[test]
-fn test_mcp_stacked_query_rejection_is_audited_before_fail_closed_exit() {
+fn test_mcp_stacked_query_rejection_is_audited_without_closing_session() {
     let tmp = std::env::temp_dir().join(format!(
         "safeselect-fail-closed-audit-{}",
         std::process::id()
@@ -255,6 +255,12 @@ sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         })
     )
     .unwrap();
+    writeln!(
+        stdin,
+        "{}",
+        serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "resources/list"})
+    )
+    .unwrap();
     stdin.flush().unwrap();
     drop(stdin);
 
@@ -265,11 +271,11 @@ sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         }
         if Instant::now() >= deadline {
             let _ = child.kill();
-            panic!("MCP server did not fail closed after a security rejection");
+            panic!("MCP server did not exit after EOF");
         }
         std::thread::sleep(Duration::from_millis(20));
     };
-    assert_eq!(status.code(), Some(1));
+    assert!(status.success());
 
     let mut stdout_text = String::new();
     stdout
@@ -279,6 +285,9 @@ sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         .lines()
         .map(|line| serde_json::from_str(line).expect("stdout must contain only JSON-RPC frames"))
         .collect();
+    assert!(frames
+        .iter()
+        .any(|frame| frame["id"] == 3 && frame["result"]["resources"].is_array()));
     let rejection = frames
         .iter()
         .find(|frame| frame.get("id") == Some(&serde_json::json!(2)))

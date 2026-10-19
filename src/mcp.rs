@@ -2289,9 +2289,7 @@ impl McpServer {
             Ok(()) => {}
             Err(e) => {
                 self.audit.record("REJECT", "reject", sql)?;
-                let _ = self.send_error(id, -32000, format!("Query rejected: {e}"));
-                self.fail_closed("Security violation");
-                return Ok(());
+                return self.send_error(id, -32000, format!("Query rejected: {e}"));
             }
         }
 
@@ -2493,9 +2491,7 @@ impl McpServer {
         let relation_check = format!("SELECT * FROM {schema}.{table}");
         if let Err(e) = validate_describe_target(&self.security, schema, table) {
             self.audit.record("REJECT", "reject", &relation_check)?;
-            let _ = self.send_error(id, -32000, format!("Request rejected: {e}"));
-            self.fail_closed("Security violation");
-            return Ok(());
+            return self.send_error(id, -32000, format!("Request rejected: {e}"));
         }
 
         let sql = build_describe_table_sql(schema, table);
@@ -2814,8 +2810,7 @@ impl McpServer {
         if let Err(error) = validate_describe_target(&self.security, schema, table) {
             let relation_check = format!("SELECT * FROM {schema}.{table}");
             self.audit.record("REJECT", "reject", &relation_check)?;
-            let _ = self.send_error(id, -32000, format!("Request rejected: {error}"));
-            self.fail_closed("Security violation");
+            self.send_error(id, -32000, format!("Request rejected: {error}"))?;
             return Ok(None);
         }
         Ok(Some((schema.to_string(), table.to_string())))
@@ -3080,9 +3075,7 @@ impl McpServer {
             Ok(()) => {}
             Err(e) => {
                 self.audit.record("REJECT", "reject", sql)?;
-                let _ = self.send_error(id, -32000, format!("Query rejected: {e}"));
-                self.fail_closed("Security violation");
-                return Ok(());
+                return self.send_error(id, -32000, format!("Query rejected: {e}"));
             }
         }
 

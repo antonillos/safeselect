@@ -469,7 +469,7 @@ When database access fails, agents should proceed in this order:
 5. If config is missing or invalid, call `config_validate` and `config_show`.
 6. If the driver is missing, call `driver_list` then `driver_download` for PostgreSQL.
 7. If the secret is missing, ask the user for permission/password and use `config_set_password`.
-8. Do not retry rejected SQL after a security violation; SafeSelect intentionally exits fail-closed.
+8. Do not retry rejected SQL unchanged. Policy rejections leave the MCP session available; correct the request within policy. Internal validation or audit failures stop the server.
 
 Timeouts are bounded by the project `statement_timeout_ms`. If a query times out,
 agents must not retry it unchanged or broaden it. Preserve or narrow filters and
@@ -483,5 +483,5 @@ increasing project limits.
 
 - Each MCP entry is locked to a single project and environment
 - Agents cannot change the target database
-- Any security violation terminates the process
+- Policy rejections return errors without executing; internal validation or audit failures stop the server
 - All queries are audited (hashed, never stored in plain text)

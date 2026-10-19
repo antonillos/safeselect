@@ -2,8 +2,7 @@
 
 ## Principles
 
-SafeSelect is built on a **fail-closed** security model. When in doubt, shut
-down. No graceful degradation, no fallback, no second chances.
+SafeSelect is built on a **fail-closed** security model. Rejected client requests never execute and return an error while the MCP session stays available. Internal validation or audit failures stop the server; there is no fallback around policy enforcement.
 
 ## Security Layers
 
@@ -77,12 +76,9 @@ they never accept arbitrary catalog SQL or return raw catalog rows.
 
 ### 6. Fail-Closed
 
-Any violation triggers:
-1. Query cancellation
-2. Backend connection close
-3. Java sidecar termination
-4. Audit log entry
-5. MCP process exit
+Policy rejections of client-provided SQL or relation targets are audited and return an error before backend execution. The MCP process, discovery tools and `reconnect` remain available for subsequent valid calls. This includes reserved catalogs, denied relations, disallowed schemas and non-read-only SQL.
+
+Failure to validate internally generated catalog SQL still terminates the Java sidecar and MCP process after recording the rejection. Audit failures also stop request processing. Keeping a session available never permits rejected SQL to execute.
 
 ### 7. Audit Log
 
@@ -98,8 +94,8 @@ Any violation triggers:
 
 Every MCP error carries exactly one contextual `next_suggestion`. Invalid
 arguments identify the correction, timeouts point to a narrower query and
-`explain`, stale connections point to `check`/`reconnect`, and security or
-startup failures are terminal. Database-derived detail remains UUID-delimited;
+`explain`, stale connections point to `check`/`reconnect`, and policy rejections require correcting the request. Internal validation, audit and
+startup failures stop the server. Database-derived detail remains UUID-delimited;
 agents must not retry an unchanged request. The same trusted suggestion is
 also appended to the JSON-RPC error message for MCP clients that render only
 the compact error summary; database-derived detail is never appended there.

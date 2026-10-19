@@ -41,7 +41,7 @@ solely for this documentation/website change.
 
 SafeSelect MCP gives coding agents read-only PostgreSQL and MongoDB access.
 It runs locally over stdio, applies project-scoped policies and result limits,
-and terminates on security violations. Import connections from DBeaver, Docker
+and rejects policy violations before execution while keeping the session available. Import connections from DBeaver, Docker
 Compose or MongoDB Compass. Java 17+ required. Use least-privilege database roles.
 
 ### Practical tutorial introduction

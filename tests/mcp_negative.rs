@@ -259,6 +259,100 @@ fn mcp_negative_validation_preserves_jsonrpc_and_recovers_until_eof() {
 }
 
 #[test]
+fn policy_rejections_preserve_mcp_tools_and_audit_without_backend_access() {
+    let (mut mcp, tmp) = McpHarness::start();
+    let pid = mcp.child.id();
+    let cases = [
+        (
+            "describe_table",
+            serde_json::json!({"schema": "information_schema", "table": "views"}),
+        ),
+        (
+            "list_table_indexes",
+            serde_json::json!({"schema": "information_schema", "table": "views"}),
+        ),
+        (
+            "list_table_partitions",
+            serde_json::json!({"schema": "pg_catalog", "table": "pg_class"}),
+        ),
+        (
+            "get_table_stats",
+            serde_json::json!({"schema": "information_schema", "table": "views"}),
+        ),
+        (
+            "select",
+            serde_json::json!({"sql": "SELECT * FROM information_schema.views"}),
+        ),
+        (
+            "select",
+            serde_json::json!({"sql": "SELECT 1; DROP TABLE public.probe"}),
+        ),
+        (
+            "explain",
+            serde_json::json!({"sql": "SELECT * FROM information_schema.views"}),
+        ),
+    ];
+    let mut id = 1;
+    for (name, arguments) in &cases {
+        let response = mcp.send(&serde_json::json!({
+            "jsonrpc": "2.0", "id": id, "method": "tools/call",
+            "params": {"name": name, "arguments": arguments}
+        }));
+        assert_error(&response, serde_json::json!(id), -32000);
+        assert_eq!(response["error"]["data"]["no_data"], true);
+        id += 1;
+        let listed = mcp.send(&serde_json::json!({
+            "jsonrpc": "2.0", "id": id, "method": "tools/list"
+        }));
+        assert!(listed["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool["name"] == "reconnect"));
+        assert_eq!(mcp.child.id(), pid);
+        assert!(mcp.child.try_wait().unwrap().is_none());
+        id += 1;
+    }
+
+    // An allowed request must still reach the backend, which is unavailable in this fixture.
+    let allowed = mcp.send(&serde_json::json!({
+        "jsonrpc": "2.0", "id": id, "method": "tools/call",
+        "params": {"name": "select", "arguments": {"sql": "SELECT 1"}}
+    }));
+    assert!(allowed["error"].is_null());
+    assert_eq!(allowed["result"]["isError"], true);
+    let _ = mcp.finish();
+
+    let audit_dir = tmp.join("audit/MCP Negative Validation/testing");
+    let entries: Vec<serde_json::Value> = std::fs::read_dir(audit_dir)
+        .unwrap()
+        .flat_map(|entry| {
+            std::fs::read_to_string(entry.unwrap().path())
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| entry["category"] == "REJECT" && entry["decision"] == "reject")
+            .count(),
+        cases.len()
+    );
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| entry["category"] == "JDBC_ERROR")
+            .count(),
+        1
+    );
+    assert!(!entries.iter().any(|entry| entry["category"] == "PASS"));
+    let _ = std::fs::remove_dir_all(tmp);
+}
+
+#[test]
 fn postgres_posture_preflight_does_not_block_or_close_mcp() {
     let (mut mcp, tmp) = McpHarness::start();
 
