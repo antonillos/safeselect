@@ -640,11 +640,11 @@ impl SecurityEngine {
             ));
         }
 
+        self.check_forbidden_tokens(trimmed, true)?;
         self.validate_policy_constraints(trimmed)
     }
 
     fn validate_policy_constraints(&self, query: &str) -> Result<()> {
-        self.check_forbidden_tokens(query, true)?;
         self.policy
             .require_single_statement
             .then(|| self.check_single_statement(query))
@@ -763,8 +763,7 @@ impl SecurityEngine {
         }
 
         if upper.starts_with("SELECT") || upper.starts_with("TABLE") {
-            self.check_forbidden_tokens(trimmed, false)?;
-            return Ok(());
+            return self.check_forbidden_tokens(trimmed, false);
         }
 
         let disallowed = [
@@ -2233,6 +2232,39 @@ fn strip_explain_option_prefix(sql: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn select_like_validation_checks_cte_bodies_and_unsupported_targets() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        assert!(engine
+            .check_select_like_read_only("WITH item AS (SELECT 1) SELECT * FROM item")
+            .is_ok());
+        for sql in [
+            "WITH",
+            "WITH item AS (SELECT 1) VALUES (1)",
+            "not valid SQL",
+        ] {
+            assert!(
+                matches!(
+                    engine.check_select_like_read_only(sql),
+                    Err(SafeselectError::QueryRejected(_))
+                ),
+                "{sql}"
+            );
+        }
+        for sql in [
+            "DELETE FROM public.example",
+            "WITH item AS (SELECT 1) DELETE FROM public.example",
+        ] {
+            assert!(
+                matches!(
+                    engine.check_select_like_read_only(sql),
+                    Err(SafeselectError::Security(_))
+                ),
+                "{sql}"
+            );
+        }
+    }
 
     #[test]
     fn security_errors_distinguish_serious_attempts_from_recoverable_rejections() {
