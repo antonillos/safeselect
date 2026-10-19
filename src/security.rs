@@ -640,15 +640,16 @@ impl SecurityEngine {
             ));
         }
 
-        self.validate_policy_constraints(trimmed)?;
-        self.check_read_only(trimmed)
+        self.validate_policy_constraints(trimmed)
     }
 
     fn validate_policy_constraints(&self, query: &str) -> Result<()> {
+        self.check_forbidden_tokens(query, true)?;
         self.policy
             .require_single_statement
             .then(|| self.check_single_statement(query))
             .transpose()?;
+        self.check_read_only(query)?;
         self.check_system_schema_references(query)?;
         if !self.policy.allowed_schemas.is_empty() {
             self.check_allowed_schemas(query)?;
@@ -773,13 +774,14 @@ impl SecurityEngine {
 
         for kw in &disallowed {
             if upper.starts_with(kw) {
-                return Err(SafeselectError::QueryRejected(format!(
+                return Err(SafeselectError::Security(format!(
                     "Read-only mode: {} not allowed",
                     kw.trim()
                 )));
             }
         }
 
+        self.check_forbidden_tokens(trimmed, false)?;
         Err(SafeselectError::QueryRejected(
             "Read-only mode: unrecognized statement type".into(),
         ))
@@ -793,10 +795,11 @@ impl SecurityEngine {
         })?;
 
         self.check_select_like_read_only(explained_sql)
-            .map_err(|_| {
-                SafeselectError::QueryRejected(
+            .map_err(|error| match error {
+                SafeselectError::Security(_) => error,
+                _ => SafeselectError::QueryRejected(
                     "Read-only mode: EXPLAIN is only allowed for SELECT statements".into(),
-                )
+                ),
             })
     }
 
@@ -819,12 +822,12 @@ impl SecurityEngine {
                 )
             })?;
 
-            self.validate_with_query_body(body)?;
-
             self.check_forbidden_tokens(trimmed, true)?;
+            self.validate_with_query_body(body)?;
             return Ok(());
         }
 
+        self.check_forbidden_tokens(trimmed, false)?;
         Err(SafeselectError::QueryRejected(
             "Read-only mode: unrecognized statement type".into(),
         ))
@@ -847,24 +850,30 @@ impl SecurityEngine {
     fn check_forbidden_tokens(&self, sql: &str, allow_with_keyword: bool) -> Result<()> {
         let compact = sanitize_for_keyword_scan(sql);
         if let Some(keyword) = Self::first_forbidden_keyword(&compact, allow_with_keyword) {
-            return Err(SafeselectError::QueryRejected(format!(
-                "Read-only mode: {keyword} not allowed"
-            )));
+            let message = format!("Read-only mode: {keyword} not allowed");
+            return Err(if keyword == "WITH" {
+                SafeselectError::QueryRejected(message)
+            } else {
+                SafeselectError::Security(message)
+            });
         }
         if contains_transaction_alias(sql) {
-            return Err(SafeselectError::QueryRejected(
+            return Err(SafeselectError::Security(
                 "Read-only mode: transaction control not allowed".into(),
             ));
         }
-        if let Some(function) = Self::first_forbidden_function(&compact) {
-            return Err(SafeselectError::QueryRejected(format!(
-                "Read-only mode: function {function} not allowed"
-            )));
-        }
         if contains_keyword(&compact, "SET") || compact.contains("SETROLE") {
-            return Err(SafeselectError::QueryRejected(
+            return Err(SafeselectError::Security(
                 "Read-only mode: session changes are not allowed".into(),
             ));
+        }
+        if let Some(function) = Self::first_forbidden_function(&compact) {
+            let message = format!("Read-only mode: function {function} not allowed");
+            return Err(if function == "PG_SLEEP" {
+                SafeselectError::QueryRejected(message)
+            } else {
+                SafeselectError::Security(message)
+            });
         }
 
         Ok(())
@@ -909,7 +918,6 @@ impl SecurityEngine {
     fn first_forbidden_function(compact: &str) -> Option<&'static str> {
         const FORBIDDEN: &[&str] = &[
             "SET_CONFIG",
-            "PG_SLEEP",
             "SETVAL",
             "PG_ADVISORY_LOCK",
             "PG_ADVISORY_XACT_LOCK",
@@ -926,6 +934,7 @@ impl SecurityEngine {
             "LO_EXPORT",
             "LO_UNLINK",
             "NEXTVAL",
+            "PG_SLEEP",
         ];
         FORBIDDEN
             .iter()
@@ -2226,6 +2235,39 @@ mod tests {
     use super::*;
 
     #[test]
+    fn security_errors_distinguish_serious_attempts_from_recoverable_rejections() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        for sql in [
+            "DROP TABLE information_schema.views",
+            "SELECT 1; DELETE FROM public.users",
+            "SELECT pg_sleep(1), setval('public.seq', 1)",
+            "WITH removed AS (DELETE FROM public.users RETURNING *) SELECT * FROM removed",
+            "EXPLAIN DELETE FROM public.users",
+        ] {
+            assert!(
+                matches!(engine.validate(sql), Err(SafeselectError::Security(_))),
+                "{sql}"
+            );
+        }
+        for sql in [
+            "SELECT * FROM information_schema.views",
+            "SELECT 1; SELECT 2",
+            "SELECT pg_sleep(1)",
+            "not valid SQL",
+            "SELECT WITH",
+            "",
+        ] {
+            assert!(
+                matches!(engine.validate(sql), Err(SafeselectError::QueryRejected(_))),
+                "{sql}"
+            );
+        }
+        assert!(engine
+            .validate("SELECT 'DROP TABLE public.users' AS example")
+            .is_ok());
+    }
+
+    #[test]
     fn test_single_statement_simple() {
         assert_eq!(count_statements("SELECT * FROM users"), 1);
     }
@@ -2257,7 +2299,7 @@ mod tests {
                 .validate(sql)
                 .expect_err("stacked query must be rejected before sidecar execution");
             assert!(
-                error.to_string().contains("Single statement required"),
+                matches!(error, SafeselectError::Security(_)),
                 "unexpected rejection for {sql:?}: {error}"
             );
         }

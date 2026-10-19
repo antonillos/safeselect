@@ -40,8 +40,8 @@ Should a rejected operation return an error or end the session? What happens
 when audit storage fails? Who can change policy? How does an operator recover?
 There is an availability tradeoff here, not a one-word security ranking.
 
-SafeSelect rejects client policy violations before execution and keeps the MCP
-session available. Internal validation or audit failures stop the server and
+SafeSelect rejects ordinary policy violations before execution and keeps the MCP
+session available. Serious security attempts and internal validation or audit failures stop the server and
 require correcting the cause before restarting.
 
 ## 5. Ask for evidence with a scope

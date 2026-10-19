@@ -20,7 +20,7 @@ rejected operation did not mutate the fixture.
 |---|---|---|
 | PostgreSQL | [`real_postgres.rs`](../tests/security_suite/real_postgres.rs) | Read-only SQL, stacked statements, CTE DML, transaction control, side-effecting functions, schema policy, result limits, and timeouts |
 | MongoDB | [`real_mongodb.rs`](../tests/security_suite/real_mongodb.rs) | Database/collection policy, nested namespace policy, recursive pipeline stages, `$out`/`$merge`, metadata stages, bounded resource options, server-side JavaScript, result limits, timeouts, and retry guidance |
-| MCP protocol | [`mcp_negative.rs`](../tests/mcp_negative.rs) | Malformed JSON-RPC, oversized payloads, and recovery after audited policy rejections |
+| MCP protocol | [`mcp_negative.rs`](../tests/mcp_negative.rs) | Malformed JSON-RPC, oversized payloads, and recovery after ordinary policy rejections and termination after serious security attempts |
 
 ## Running locally
 

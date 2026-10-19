@@ -2,7 +2,7 @@
 
 ## Principles
 
-SafeSelect is built on a **fail-closed** security model. Rejected client requests never execute and return an error while the MCP session stays available. Internal validation or audit failures stop the server; there is no fallback around policy enforcement.
+SafeSelect is built on a **fail-closed** security model. Rejected client requests never execute. Ordinary policy rejections return an error while the MCP session stays available. Serious security attempts and internal validation or audit failures stop the server; there is no fallback around policy enforcement.
 
 ## Security Layers
 
@@ -76,7 +76,9 @@ they never accept arbitrary catalog SQL or return raw catalog rows.
 
 ### 6. Fail-Closed
 
-Policy rejections of client-provided SQL or relation targets are audited and return an error before backend execution. The MCP process, discovery tools and `reconnect` remain available for subsequent valid calls. This includes reserved catalogs, denied relations, disallowed schemas and non-read-only SQL.
+Ordinary policy rejections of client-provided SQL or relation targets are audited and return an error before backend execution. The MCP process, discovery tools and `reconnect` remain available for subsequent valid calls. This includes reserved catalogs, denied relations, disallowed schemas, unrecognized SQL, query-size limits, sleep functions and multiple read-only statements.
+
+Serious SQL security attempts are classified separately as security errors: writes, DDL, transaction or session changes, and forbidden functions that alter database or backend state. These attempts are audited and return an error before terminating the sidecar and MCP process. A destructive statement remains serious even when it targets a reserved catalog or follows a harmless SELECT.
 
 Failure to validate internally generated catalog SQL still terminates the Java sidecar and MCP process after recording the rejection. Audit failures also stop request processing. Keeping a session available never permits rejected SQL to execute.
 
@@ -94,7 +96,7 @@ Failure to validate internally generated catalog SQL still terminates the Java s
 
 Every MCP error carries exactly one contextual `next_suggestion`. Invalid
 arguments identify the correction, timeouts point to a narrower query and
-`explain`, stale connections point to `check`/`reconnect`, and policy rejections require correcting the request. Internal validation, audit and
+`explain`, stale connections point to `check`/`reconnect`, and ordinary policy rejections require correcting the request. Serious security attempts, internal validation, audit and
 startup failures stop the server. Database-derived detail remains UUID-delimited;
 agents must not retry an unchanged request. The same trusted suggestion is
 also appended to the JSON-RPC error message for MCP clients that render only

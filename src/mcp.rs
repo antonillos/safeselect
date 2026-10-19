@@ -2289,7 +2289,11 @@ impl McpServer {
             Ok(()) => {}
             Err(e) => {
                 self.audit.record("REJECT", "reject", sql)?;
-                return self.send_error(id, -32000, format!("Query rejected: {e}"));
+                let response = self.send_error(id, -32000, format!("Query rejected: {e}"));
+                if matches!(e, SafeselectError::Security(_)) {
+                    self.fail_closed("Security violation");
+                }
+                return response;
             }
         }
 
@@ -3075,7 +3079,11 @@ impl McpServer {
             Ok(()) => {}
             Err(e) => {
                 self.audit.record("REJECT", "reject", sql)?;
-                return self.send_error(id, -32000, format!("Query rejected: {e}"));
+                let response = self.send_error(id, -32000, format!("Query rejected: {e}"));
+                if matches!(e, SafeselectError::Security(_)) {
+                    self.fail_closed("Security violation");
+                }
+                return response;
             }
         }
 

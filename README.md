@@ -249,7 +249,7 @@ SafeSelect is intentionally narrower than general-purpose database MCP servers. 
 | Local stdio transport | No network listener or open MCP port |
 | Read-only tools | Agents do not receive write-capable database tools |
 | Credential-independent safety | Even DBA credentials are constrained to SafeSelect's read-only tool surface |
-| Fail-closed enforcement | Rejected requests return errors; internal validation failures terminate the process |
+| Fail-closed enforcement | Serious security attempts terminate the process; ordinary policy rejections return errors |
 | Secret isolation | Passwords stay in Keychain or environment variables |
 | Project-scoped policy | Each repository defines its own allowed data surface |
 | Embedded sidecar | One installed binary reaches JDBC and MongoDB drivers behind Rust policy |
@@ -335,7 +335,7 @@ summary without exposing database-derived detail.
 
 ## Security Model
 
-- **Fail closed**: rejected requests return errors without executing; internal validation or audit failures terminate the MCP process.
+- **Fail closed**: serious security attempts and internal validation or audit failures terminate the MCP process. Ordinary policy rejections return errors without executing and keep the session available.
 - **Read only**: SQL allows `SELECT`, `EXPLAIN`, and `WITH`; NoSQL backends allow discovery and read-only document reads.
 - **No server-side JavaScript**: MongoDB `$where`, `$function`, and `$accumulator` are rejected in Rust and again in the Java sidecar.
 - **Scoped access**: schemas, relations, databases, and collections can be allowed or denied.
