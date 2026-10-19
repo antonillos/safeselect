@@ -366,6 +366,8 @@ fn serious_security_attempts_are_audited_and_close_mcp() {
             "WITH gone AS (DELETE FROM public.probe RETURNING *) SELECT * FROM gone",
         ),
         ("select", "SET ROLE privileged"),
+        ("select", "END"),
+        ("select", "/* transaction alias */ aBoRt;"),
         ("select", "SELECT pg_terminate_backend(1)"),
         ("explain", "DELETE FROM public.probe"),
         ("explain", "SELECT setval('public.probe_id_seq', 1)"),

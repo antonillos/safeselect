@@ -1936,19 +1936,20 @@ fn contains_keyword(sql: &str, keyword: &str) -> bool {
 }
 
 fn contains_transaction_alias(sql: &str) -> bool {
-    let normalized = SecurityEngine::strip_sql_comments(sql).replace(';', " ; ");
-    let mut tokens = normalized.split_whitespace();
-    while let Some(token) = tokens.next() {
-        if token == ";"
-            && matches!(
-                tokens.next().map(str::to_ascii_uppercase).as_deref(),
-                Some("END" | "ABORT")
-            )
-        {
-            return true;
-        }
-    }
-    false
+    let Ok(tokens) = Tokenizer::new(&PostgreSqlDialect {}, sql).tokenize() else {
+        return false;
+    };
+    tokens
+        .split(|token| matches!(token, Token::SemiColon))
+        .filter_map(|statement| {
+            statement
+                .iter()
+                .find(|token| !matches!(token, Token::Whitespace(_)))
+        })
+        .any(|token| {
+            matches!(token, Token::Word(word) if word.quote_style.is_none()
+                && matches!(word.keyword, Keyword::END | Keyword::ABORT))
+        })
 }
 
 fn contains_with_ordinality_only(sql: &str) -> bool {
@@ -2367,6 +2368,38 @@ mod tests {
             "SELECT 1;\n\tEND",
         ] {
             assert!(engine.check_read_only(sql).is_err(), "{sql}");
+        }
+    }
+
+    #[test]
+    fn transaction_aliases_are_serious_only_at_statement_starts() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        for sql in [
+            "END",
+            "abort;",
+            "/* transaction alias */ eNd WORK",
+            "-- transaction alias\nABORT TRANSACTION",
+            "SELECT 1; END",
+            "SELECT 1;; /* transaction alias */ ABORT",
+        ] {
+            assert!(
+                matches!(engine.validate(sql), Err(SafeselectError::Security(_))),
+                "{sql}"
+            );
+        }
+        for sql in [
+            "SELECT CASE WHEN true THEN 1 ELSE 0 END",
+            "SELECT ';END', '; ABORT'",
+            "SELECT $$; END$$",
+            "SELECT 1 AS \"END\"",
+            "SELECT 1 -- ; ABORT",
+            "SELECT 'unterminated",
+        ] {
+            assert!(!contains_transaction_alias(sql), "{sql}");
+            assert!(
+                !matches!(engine.validate(sql), Err(SafeselectError::Security(_))),
+                "{sql}"
+            );
         }
     }
 

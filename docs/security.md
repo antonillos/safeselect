@@ -115,7 +115,7 @@ the JSON-RPC error, kills the sidecar if one exists, and exits with status 1.
 |---|---|
 | Writes or DDL | `INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, `TRUNCATE` |
 | Permission or session changes | `GRANT`, `REVOKE`, `SET ROLE`, `SET_CONFIG` |
-| Transaction control or administrative operations | `COMMIT`, `ROLLBACK`, `LOCK`, `VACUUM` |
+| Transaction control or administrative operations | `COMMIT` / `END`, `ROLLBACK` / `ABORT`, `LOCK`, `VACUUM` |
 | Forbidden state-changing functions | `SETVAL`, `NEXTVAL`, advisory locks, `PG_TERMINATE_BACKEND`, file import/export functions |
 | A destructive statement combined with a read | `SELECT 1; DROP TABLE public.example` |
 | A write hidden in a CTE or passed to `explain` | `WITH removed AS (DELETE FROM public.example RETURNING *) SELECT * FROM removed` |
