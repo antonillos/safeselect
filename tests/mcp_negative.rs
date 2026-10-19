@@ -570,3 +570,42 @@ fn mcp_exposes_static_read_only_prompt_and_resource_without_database_access() {
     let _ = mcp.finish();
     let _ = std::fs::remove_dir_all(tmp);
 }
+
+#[test]
+fn sql_classification_matrix_controls_mcp_lifecycle() {
+    let cases: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/sql-classification.json")).unwrap();
+    for case in cases.as_array().unwrap() {
+        let (mut mcp, tmp) = McpHarness::start();
+        let response = mcp.send(&serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "select", "arguments": {"sql": case["sql"]}}
+        }));
+        match case["classification"].as_str().unwrap() {
+            "allowed" => {
+                assert!(response["error"].is_null(), "{case}: {response}");
+                // This fixture has no backend; reaching it is not proof of SQL execution.
+                assert_eq!(response["result"]["isError"], true, "{case}: {response}");
+            }
+            "rejected" | "security" => assert_error(&response, serde_json::json!(1), -32000),
+            other => panic!("unknown classification: {other}"),
+        }
+        let serious = case["classification"] == "security";
+        if !serious {
+            let listed = mcp.send(&serde_json::json!({
+                "jsonrpc": "2.0", "id": 2, "method": "tools/list"
+            }));
+            assert!(
+                listed["result"]["tools"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|tool| tool["name"] == "reconnect"),
+                "{case}"
+            );
+        }
+        let (_, status) = mcp.finish_with_status();
+        assert_eq!(status.code(), Some(if serious { 1 } else { 0 }), "{case}");
+        let _ = std::fs::remove_dir_all(tmp);
+    }
+}

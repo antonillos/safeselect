@@ -48,6 +48,13 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Fixed
+
+- Classify SQL rejections by statement and function-call context, preserving MCP
+  availability for ordinary errors while terminating on known state-changing
+  operations. Cover nested writes, SELECT INTO, quoted calls and dollar-quoted
+  literals with a shared security and MCP regression matrix.
+
 ### Changed
 
 - Interactive Compass import separates each connection with a heading and names

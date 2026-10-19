@@ -1,3 +1,5 @@
+mod sql_classification;
+
 use crate::backend::{
     DocumentAggregateRequest, DocumentCollectionRequest, DocumentCountRequest,
     DocumentDistinctRequest, DocumentExplainRequest, DocumentFieldProfileRequest,
@@ -61,13 +63,11 @@ fn forbidden_mql_javascript_operator(value: &serde_json::Value) -> Option<&'stat
 }
 
 fn contains_nested_sql_block_comment(sql: &str) -> bool {
-    let Some((_, after_open)) = sql.split_once("/*") else {
-        return false;
-    };
-    let Some((comment_body, _)) = after_open.split_once("*/") else {
-        return false;
-    };
-    comment_body.contains("/*")
+    Tokenizer::new(&PostgreSqlDialect {}, sql)
+        .tokenize()
+        .is_ok_and(|tokens| tokens.iter().any(|token| {
+            matches!(token, Token::Whitespace(Whitespace::MultiLineComment(comment)) if comment.contains("/*"))
+        }))
 }
 
 impl SecurityEngine {
@@ -640,7 +640,7 @@ impl SecurityEngine {
             ));
         }
 
-        self.check_forbidden_tokens(trimmed, true)?;
+        self.check_read_only(trimmed)?;
         self.validate_policy_constraints(trimmed)
     }
 
@@ -649,7 +649,6 @@ impl SecurityEngine {
             .require_single_statement
             .then(|| self.check_single_statement(query))
             .transpose()?;
-        self.check_read_only(query)?;
         self.check_system_schema_references(query)?;
         if !self.policy.allowed_schemas.is_empty() {
             self.check_allowed_schemas(query)?;
@@ -705,240 +704,8 @@ impl SecurityEngine {
         Ok(())
     }
 
-    fn strip_sql_comments(sql: &str) -> String {
-        let mut result = String::with_capacity(sql.len());
-        let mut chars = sql.chars().peekable();
-        let mut in_single = false;
-        let mut in_double = false;
-        let mut dollar_delimiter: Option<String> = None;
-        while let Some(ch) = chars.next() {
-            if consume_dollar_quote(&mut chars, ch, &mut result, &mut dollar_delimiter)
-                || consume_quoted_char(&mut chars, ch, &mut result, &mut in_single, &mut in_double)
-            {
-                continue;
-            }
-            match (ch, chars.peek().copied()) {
-                ('-', Some('-')) => Self::skip_line_comment(&mut chars, &mut result),
-                ('/', Some('*')) => Self::skip_block_comment(&mut chars),
-                _ => result.push(ch),
-            }
-        }
-        result
-    }
-
-    fn skip_line_comment(
-        chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
-        result: &mut String,
-    ) {
-        for ch in chars.by_ref() {
-            if ch == '\n' {
-                result.push('\n');
-                break;
-            }
-        }
-    }
-
-    fn skip_block_comment(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
-        chars.next();
-        let mut previous = ' ';
-        for ch in chars.by_ref() {
-            if previous == '*' && ch == '/' {
-                break;
-            }
-            previous = ch;
-        }
-    }
-
     fn check_read_only(&self, sql: &str) -> Result<()> {
-        let stripped = Self::strip_sql_comments(sql);
-        let trimmed = stripped.trim();
-        let upper = trimmed.to_uppercase();
-
-        if upper.starts_with("WITH") {
-            return self.check_with_read_only(trimmed);
-        }
-
-        if upper.starts_with("EXPLAIN") {
-            return self.check_explain_read_only(trimmed);
-        }
-
-        if upper.starts_with("SELECT") || upper.starts_with("TABLE") {
-            return self.check_forbidden_tokens(trimmed, false);
-        }
-
-        let disallowed = [
-            "INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER", "TRUNCATE", "COPY", "SET ",
-            "PREPARE", "EXECUTE", "CALL", "MERGE", "REPLACE", "GRANT", "REVOKE",
-        ];
-
-        for kw in &disallowed {
-            if upper.starts_with(kw) {
-                return Err(SafeselectError::Security(format!(
-                    "Read-only mode: {} not allowed",
-                    kw.trim()
-                )));
-            }
-        }
-
-        self.check_forbidden_tokens(trimmed, false)?;
-        Err(SafeselectError::QueryRejected(
-            "Read-only mode: unrecognized statement type".into(),
-        ))
-    }
-
-    fn check_explain_read_only(&self, sql: &str) -> Result<()> {
-        let explained_sql = extract_explain_target(sql).ok_or_else(|| {
-            SafeselectError::QueryRejected(
-                "Read-only mode: could not validate EXPLAIN target statement".into(),
-            )
-        })?;
-
-        self.check_select_like_read_only(explained_sql)
-            .map_err(|error| match error {
-                SafeselectError::Security(_) => error,
-                _ => SafeselectError::QueryRejected(
-                    "Read-only mode: EXPLAIN is only allowed for SELECT statements".into(),
-                ),
-            })
-    }
-
-    fn check_with_read_only(&self, sql: &str) -> Result<()> {
-        self.check_select_like_read_only(sql)
-    }
-
-    fn check_select_like_read_only(&self, sql: &str) -> Result<()> {
-        let trimmed = sql.trim_start();
-        let upper = trimmed.to_uppercase();
-
-        if upper.starts_with("SELECT") || upper.starts_with("TABLE") {
-            return self.check_select_like_body(trimmed);
-        }
-
-        if upper.starts_with("WITH") {
-            let body = extract_with_query_body(trimmed).ok_or_else(|| {
-                SafeselectError::QueryRejected(
-                    "Read-only mode: could not validate WITH query".into(),
-                )
-            })?;
-
-            self.check_forbidden_tokens(trimmed, true)?;
-            self.validate_with_query_body(body)?;
-            return Ok(());
-        }
-
-        self.check_forbidden_tokens(trimmed, false)?;
-        Err(SafeselectError::QueryRejected(
-            "Read-only mode: unrecognized statement type".into(),
-        ))
-    }
-
-    fn check_select_like_body(&self, sql: &str) -> Result<()> {
-        self.check_forbidden_tokens(sql, false)
-    }
-
-    fn validate_with_query_body(&self, body: &str) -> Result<()> {
-        let upper = body.trim_start().to_uppercase();
-        if !upper.starts_with("SELECT") && !upper.starts_with("TABLE") {
-            return Err(SafeselectError::QueryRejected(
-                "Read-only mode: WITH queries must end in SELECT or TABLE".into(),
-            ));
-        }
-        Ok(())
-    }
-
-    fn check_forbidden_tokens(&self, sql: &str, allow_with_keyword: bool) -> Result<()> {
-        let compact = sanitize_for_keyword_scan(sql);
-        if let Some(keyword) = Self::first_forbidden_keyword(&compact, allow_with_keyword) {
-            let message = format!("Read-only mode: {keyword} not allowed");
-            return Err(if keyword == "WITH" {
-                SafeselectError::QueryRejected(message)
-            } else {
-                SafeselectError::Security(message)
-            });
-        }
-        if contains_session_control_statement(sql) {
-            return Err(SafeselectError::Security(
-                "Read-only mode: transaction or session control not allowed".into(),
-            ));
-        }
-        if contains_keyword(&compact, "SET") || compact.contains("SETROLE") {
-            return Err(SafeselectError::Security(
-                "Read-only mode: session changes are not allowed".into(),
-            ));
-        }
-        if let Some(function) = Self::first_forbidden_function(&compact) {
-            let message = format!("Read-only mode: function {function} not allowed");
-            return Err(if function == "PG_SLEEP" {
-                SafeselectError::QueryRejected(message)
-            } else {
-                SafeselectError::Security(message)
-            });
-        }
-
-        Ok(())
-    }
-
-    fn first_forbidden_keyword(compact: &str, allow_with_keyword: bool) -> Option<&'static str> {
-        const FORBIDDEN: &[&str] = &[
-            "INSERT",
-            "UPDATE",
-            "DELETE",
-            "DROP",
-            "CREATE",
-            "ALTER",
-            "TRUNCATE",
-            "COPY",
-            "PREPARE",
-            "EXECUTE",
-            "CALL",
-            "MERGE",
-            "REPLACE",
-            "GRANT",
-            "REVOKE",
-            "WITH",
-            "DO",
-            "DECLARE",
-            "LOCK",
-            "VACUUM",
-            "REINDEX",
-            "BEGIN",
-            "START",
-            "COMMIT",
-            "ROLLBACK",
-            "SAVEPOINT",
-            "RELEASE",
-        ];
-        FORBIDDEN.iter().copied().find(|keyword| {
-            !(*keyword == "WITH" && (allow_with_keyword || contains_with_ordinality_only(compact)))
-                && contains_keyword(compact, keyword)
-        })
-    }
-
-    fn first_forbidden_function(compact: &str) -> Option<&'static str> {
-        const FORBIDDEN: &[&str] = &[
-            "SET_CONFIG",
-            "SETVAL",
-            "PG_ADVISORY_LOCK",
-            "PG_ADVISORY_XACT_LOCK",
-            "PG_CREATE_PHYSICAL_REPLICATION_SLOT",
-            "PG_CREATE_LOGICAL_REPLICATION_SLOT",
-            "PG_DROP_REPLICATION_SLOT",
-            "PG_TERMINATE_BACKEND",
-            "PG_CANCEL_BACKEND",
-            "PG_RELOAD_CONF",
-            "PG_ROTATE_LOGFILE",
-            "PG_START_BACKUP",
-            "PG_STOP_BACKUP",
-            "LO_IMPORT",
-            "LO_EXPORT",
-            "LO_UNLINK",
-            "NEXTVAL",
-            "PG_SLEEP",
-        ];
-        FORBIDDEN
-            .iter()
-            .copied()
-            .find(|function| compact.contains(function))
+        sql_classification::validate(sql)
     }
 
     fn check_allowed_schemas(&self, sql: &str) -> Result<()> {
@@ -1044,92 +811,6 @@ impl SecurityEngine {
         }
         Ok(())
     }
-}
-
-fn consume_dollar_quote(
-    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
-    ch: char,
-    result: &mut String,
-    delimiter: &mut Option<String>,
-) -> bool {
-    if let Some(active) = delimiter {
-        result.push(ch);
-        if result.ends_with(active.as_str()) {
-            *delimiter = None;
-        }
-        return true;
-    }
-    if ch == '$' {
-        if let Some(found) = take_dollar_delimiter(chars) {
-            result.push('$');
-            result.push_str(&found[1..]);
-            *delimiter = Some(found);
-            return true;
-        }
-    }
-    false
-}
-
-fn consume_quoted_char(
-    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
-    ch: char,
-    result: &mut String,
-    in_single: &mut bool,
-    in_double: &mut bool,
-) -> bool {
-    if ch == '\'' && !*in_double {
-        *in_single = !*in_single;
-        result.push(ch);
-        return true;
-    }
-    if consume_escaped_char(chars, ch, result, *in_single) {
-        return true;
-    }
-    if ch == '"' && !*in_single {
-        *in_double = !*in_double;
-        result.push(ch);
-        return true;
-    }
-    if *in_single || *in_double {
-        result.push(ch);
-        return true;
-    }
-    false
-}
-
-fn consume_escaped_char(
-    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
-    ch: char,
-    result: &mut String,
-    in_single: bool,
-) -> bool {
-    if ch != '\\' || !in_single {
-        return false;
-    }
-    result.push(ch);
-    if let Some(escaped) = chars.next() {
-        result.push(escaped);
-    }
-    true
-}
-
-fn take_dollar_delimiter(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Option<String> {
-    let lookahead = chars.clone();
-    let mut tag = String::from("$");
-    for ch in lookahead {
-        if ch == '$' {
-            tag.push('$');
-            for _ in 0..tag.len() - 1 {
-                chars.next();
-            }
-            return Some(tag);
-        }
-        if !(ch.is_ascii_alphanumeric() || ch == '_') || tag.len() > 64 {
-            return None;
-        }
-        tag.push(ch);
-    }
-    None
 }
 
 struct RelationPolicyVisitor<'a> {
@@ -1731,503 +1412,12 @@ fn strip_trailing_semicolons(sql: &str) -> &str {
 }
 
 fn count_statements(sql: &str) -> usize {
-    let sql = sql.trim();
-    if sql.is_empty() {
-        return 0;
-    }
-
-    let mut count = 0;
-    let mut in_string = false;
-    let mut string_char = ' ';
-    let mut in_line_comment = false;
-    let mut in_block_comment = false;
-    let mut i = 0;
-    let chars: Vec<char> = sql.chars().collect();
-
-    while i < chars.len() {
-        let c = chars[i];
-
-        if in_line_comment {
-            if c == '\n' {
-                in_line_comment = false;
-            }
-            i += 1;
-            continue;
-        }
-
-        if in_block_comment {
-            if c == '*' && i + 1 < chars.len() && chars[i + 1] == '/' {
-                in_block_comment = false;
-                i += 2;
-                continue;
-            }
-            i += 1;
-            continue;
-        }
-
-        if in_string {
-            if c == '\\' && i + 1 < chars.len() {
-                i += 2;
-                continue;
-            }
-            if c == string_char {
-                in_string = false;
-            }
-            i += 1;
-            continue;
-        }
-
-        if c == '\'' || c == '"' || c == '$' {
-            in_string = true;
-            string_char = c;
-            i += 1;
-            continue;
-        }
-
-        if c == '-' && i + 1 < chars.len() && chars[i + 1] == '-' {
-            in_line_comment = true;
-            i += 2;
-            continue;
-        }
-
-        if c == '/' && i + 1 < chars.len() && chars[i + 1] == '*' {
-            in_block_comment = true;
-            i += 2;
-            continue;
-        }
-
-        if c == ';' {
-            count += 1;
-        }
-
-        i += 1;
-    }
-
-    count + 1
-}
-
-fn sanitize_for_keyword_scan(sql: &str) -> String {
-    let mut out = String::with_capacity(sql.len());
-    let chars: Vec<char> = sql.chars().collect();
-    let mut i = 0;
-    let mut in_single = false;
-    let mut in_double = false;
-    let mut in_line_comment = false;
-    let mut in_block_comment = false;
-
-    while i < chars.len() {
-        let c = chars[i];
-
-        if in_line_comment {
-            if c == '\n' {
-                in_line_comment = false;
-                out.push(' ');
-            }
-            i += 1;
-            continue;
-        }
-
-        if in_block_comment {
-            if c == '*' && i + 1 < chars.len() && chars[i + 1] == '/' {
-                in_block_comment = false;
-                i += 2;
-                out.push(' ');
-                continue;
-            }
-            i += 1;
-            continue;
-        }
-
-        if in_single {
-            if c == '\'' {
-                if i + 1 < chars.len() && chars[i + 1] == '\'' {
-                    i += 2;
-                    continue;
-                }
-                in_single = false;
-            }
-            i += 1;
-            continue;
-        }
-
-        if in_double {
-            if c == '"' {
-                in_double = false;
-            }
-            i += 1;
-            continue;
-        }
-
-        if c == '-' && i + 1 < chars.len() && chars[i + 1] == '-' {
-            in_line_comment = true;
-            i += 2;
-            continue;
-        }
-
-        if c == '/' && i + 1 < chars.len() && chars[i + 1] == '*' {
-            in_block_comment = true;
-            i += 2;
-            continue;
-        }
-
-        if c == '$' {
-            if let Some(next) = skip_dollar_quoted_literal(&chars, i) {
-                out.push(' ');
-                i = next;
-                continue;
-            }
-        }
-
-        if c == '\'' {
-            in_single = true;
-            out.push(' ');
-            i += 1;
-            continue;
-        }
-
-        if c == '"' {
-            in_double = true;
-            out.push(' ');
-            i += 1;
-            continue;
-        }
-
-        if c.is_ascii_alphanumeric() || c == '_' {
-            out.push(c.to_ascii_uppercase());
-        } else {
-            out.push(' ');
-        }
-
-        i += 1;
-    }
-
-    out
-}
-
-fn skip_dollar_quoted_literal(chars: &[char], start: usize) -> Option<usize> {
-    let delimiter_end = dollar_delimiter_end(chars, start)?;
-    let delimiter = &chars[start..delimiter_end];
-    let mut end = delimiter_end;
-    while end + delimiter.len() <= chars.len() {
-        if &chars[end..end + delimiter.len()] == delimiter {
-            return Some(end + delimiter.len());
-        }
-        end += 1;
-    }
-    None
-}
-
-fn dollar_delimiter_end(chars: &[char], start: usize) -> Option<usize> {
-    if chars.get(start) != Some(&'$') {
-        return None;
-    }
-    let mut end = start + 1;
-    while end < chars.len()
-        && (chars[end].is_ascii_alphanumeric() || chars[end] == '_')
-        && end - start <= 64
-    {
-        end += 1;
-    }
-    (chars.get(end) == Some(&'$')).then_some(end + 1)
-}
-
-fn contains_keyword(sql: &str, keyword: &str) -> bool {
-    sql.split_whitespace().any(|token| token == keyword)
-}
-
-fn contains_session_control_statement(sql: &str) -> bool {
-    let Ok(tokens) = Tokenizer::new(&PostgreSqlDialect {}, sql).tokenize() else {
-        return false;
-    };
-    tokens
-        .split(|token| matches!(token, Token::SemiColon))
-        .filter_map(|statement| {
-            statement
-                .iter()
-                .find(|token| !matches!(token, Token::Whitespace(_)))
-        })
-        .any(|token| {
-            matches!(token, Token::Word(word) if word.quote_style.is_none()
-                && matches!(word.keyword, Keyword::END | Keyword::ABORT | Keyword::RESET | Keyword::DISCARD))
-        })
-}
-
-fn contains_with_ordinality_only(sql: &str) -> bool {
-    let mut saw_with = false;
-    let mut tokens = sql.split_whitespace().peekable();
-
-    while let Some(token) = tokens.next() {
-        if token != "WITH" {
-            continue;
-        }
-
-        saw_with = true;
-        if tokens.next() != Some("ORDINALITY") {
-            return false;
-        }
-    }
-
-    saw_with
-}
-
-fn extract_with_query_body(sql: &str) -> Option<&str> {
-    let upper = sql.to_uppercase();
-    if !upper.starts_with("WITH") {
-        return None;
-    }
-
-    let mut i = 4;
-    i = skip_sql_whitespace(sql, i);
-
-    if starts_with_keyword_at(sql, i, "RECURSIVE") {
-        i += "RECURSIVE".len();
-        i = skip_sql_whitespace(sql, i);
-    }
-
-    consume_cte_list(sql, i)
-}
-
-fn consume_cte_list(sql: &str, mut i: usize) -> Option<&str> {
-    loop {
-        let (next, done) = parse_cte(sql, i)?;
-        if done {
-            return sql.get(next..);
-        }
-        i = next;
-    }
-}
-
-fn parse_cte(sql: &str, mut i: usize) -> Option<(usize, bool)> {
-    let as_index = find_top_level_keyword(sql, i, "AS")?;
-    i = skip_sql_whitespace(sql, as_index + 2);
-    if starts_with_keyword_at(sql, i, "NOT") {
-        i = skip_sql_whitespace(sql, i + 3);
-    }
-    if starts_with_keyword_at(sql, i, "MATERIALIZED") {
-        i = skip_sql_whitespace(sql, i + "MATERIALIZED".len());
-    }
-    if sql.get(i..=i)? != "(" {
-        return None;
-    }
-    i = skip_sql_whitespace(sql, skip_balanced_parentheses(sql, i)?);
-    if sql.get(i..=i) == Some(",") {
-        Some((skip_sql_whitespace(sql, i + 1), false))
-    } else {
-        Some((i, true))
-    }
-}
-
-fn skip_sql_whitespace(sql: &str, mut index: usize) -> usize {
-    while let Some(ch) = sql[index..].chars().next() {
-        if !ch.is_whitespace() {
-            break;
-        }
-        index += ch.len_utf8();
-    }
-    index
-}
-
-fn starts_with_keyword_at(sql: &str, index: usize, keyword: &str) -> bool {
-    let end = index + keyword.len();
-    let Some(candidate) = sql.get(index..end) else {
-        return false;
-    };
-    if !candidate.eq_ignore_ascii_case(keyword) {
-        return false;
-    }
-
-    let prev_ok = index == 0
-        || sql[..index]
-            .chars()
-            .next_back()
-            .is_none_or(|ch| !matches!(ch, 'A'..='Z' | 'a'..='z' | '0'..='9' | '_'));
-    let next_ok = sql[end..]
-        .chars()
-        .next()
-        .is_none_or(|ch| !matches!(ch, 'A'..='Z' | 'a'..='z' | '0'..='9' | '_'));
-
-    prev_ok && next_ok
-}
-
-fn find_top_level_keyword(sql: &str, start: usize, keyword: &str) -> Option<usize> {
-    let chars: Vec<(usize, char)> = sql.char_indices().collect();
-    let mut pos = chars.iter().position(|(idx, _)| *idx >= start)?;
-    let mut depth = 0usize;
-    let mut in_single = false;
-    let mut in_double = false;
-
-    while pos < chars.len() {
-        let (byte_idx, ch) = chars[pos];
-
-        if in_single {
-            if ch == '\'' {
-                if pos + 1 < chars.len() && chars[pos + 1].1 == '\'' {
-                    pos += 2;
-                    continue;
-                }
-                in_single = false;
-            }
-            pos += 1;
-            continue;
-        }
-
-        if in_double {
-            if ch == '"' {
-                in_double = false;
-            }
-            pos += 1;
-            continue;
-        }
-
-        if ch == '\'' {
-            in_single = true;
-            pos += 1;
-            continue;
-        }
-
-        if ch == '"' {
-            in_double = true;
-            pos += 1;
-            continue;
-        }
-
-        if ch == '-' && pos + 1 < chars.len() && chars[pos + 1].1 == '-' {
-            pos += 2;
-            while pos < chars.len() && chars[pos].1 != '\n' {
-                pos += 1;
-            }
-            continue;
-        }
-
-        if ch == '/' && pos + 1 < chars.len() && chars[pos + 1].1 == '*' {
-            pos += 2;
-            while pos + 1 < chars.len() && !(chars[pos].1 == '*' && chars[pos + 1].1 == '/') {
-                pos += 1;
-            }
-            pos = (pos + 2).min(chars.len());
-            continue;
-        }
-
-        match ch {
-            '(' => depth += 1,
-            ')' => depth = depth.saturating_sub(1),
-            _ => {}
-        }
-
-        if depth == 0 && starts_with_keyword_at(sql, byte_idx, keyword) {
-            return Some(byte_idx);
-        }
-
-        pos += 1;
-    }
-
-    None
-}
-
-fn skip_balanced_parentheses(sql: &str, start: usize) -> Option<usize> {
-    let chars: Vec<(usize, char)> = sql.char_indices().collect();
-    let mut pos = chars.iter().position(|(idx, _)| *idx == start)?;
-    let mut depth = 0usize;
-    let mut in_single = false;
-    let mut in_double = false;
-
-    while pos < chars.len() {
-        let (_, ch) = chars[pos];
-
-        if in_single {
-            if ch == '\'' {
-                if pos + 1 < chars.len() && chars[pos + 1].1 == '\'' {
-                    pos += 2;
-                    continue;
-                }
-                in_single = false;
-            }
-            pos += 1;
-            continue;
-        }
-
-        if in_double {
-            if ch == '"' {
-                in_double = false;
-            }
-            pos += 1;
-            continue;
-        }
-
-        if ch == '\'' {
-            in_single = true;
-            pos += 1;
-            continue;
-        }
-
-        if ch == '"' {
-            in_double = true;
-            pos += 1;
-            continue;
-        }
-
-        if ch == '(' {
-            depth += 1;
-        } else if ch == ')' {
-            depth = depth.saturating_sub(1);
-            if depth == 0 {
-                let next = pos + 1;
-                return Some(if next < chars.len() {
-                    chars[next].0
-                } else {
-                    sql.len()
-                });
-            }
-        }
-
-        pos += 1;
-    }
-
-    None
-}
-
-fn extract_explain_target(sql: &str) -> Option<&str> {
-    let trimmed = sql.trim_start();
-    let upper = trimmed.to_uppercase();
-    if !upper.starts_with("EXPLAIN") {
-        return None;
-    }
-
-    let after_explain = trimmed.get(7..)?.trim_start();
-    if after_explain.starts_with('(') {
-        return extract_parenthesized_explain_target(after_explain);
-    }
-
-    Some(strip_explain_option_prefix(after_explain).unwrap_or(after_explain))
-}
-
-fn extract_parenthesized_explain_target(sql: &str) -> Option<&str> {
-    let mut depth = 0usize;
-    for (idx, ch) in sql.char_indices() {
-        match ch {
-            '(' => depth += 1,
-            ')' => {
-                depth = depth.saturating_sub(1);
-                if depth == 0 {
-                    return sql.get(idx + 1..).map(str::trim_start);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-fn strip_explain_option_prefix(sql: &str) -> Option<&str> {
-    let upper = sql.to_uppercase();
-    for option in [
-        "ANALYZE", "VERBOSE", "BUFFERS", "SETTINGS", "WAL", "TIMING", "SUMMARY",
-    ] {
-        if upper.starts_with(option) {
-            return sql.get(option.len()..).map(str::trim_start);
-        }
-    }
-    None
+    sql_classification::tokens(sql).map_or(0, |tokens| {
+        tokens
+            .split(|token| *token == Token::SemiColon)
+            .filter(|statement| !statement.is_empty())
+            .count()
+    })
 }
 
 #[cfg(test)]
@@ -2235,10 +1425,67 @@ mod tests {
     use super::*;
 
     #[test]
+    fn preserves_dollar_quoted_literals_and_operator_denylists() {
+        let engine = SecurityEngine::new(
+            SecurityPolicy {
+                allowed_schemas: vec!["public".into()],
+                denied_relations: vec!["public.custom".into()],
+                require_single_statement: false,
+                ..SecurityPolicy::default()
+            },
+            LimitsConfig::default(),
+        );
+        for sql in [
+            "SELECT $$--$$; COMMIT",
+            "SELECT $tag$/*$tag$; COMMIT",
+            r#"SELECT E'abc\'--'; COMMIT"#,
+        ] {
+            assert!(
+                matches!(
+                    engine.check_read_only(sql),
+                    Err(SafeselectError::Security(_))
+                ),
+                "{sql}"
+            );
+        }
+        assert!(engine
+            .validate("SELECT 1 OPERATOR(public.custom) 1")
+            .is_err());
+        assert!(engine.validate("SELECT * FROM \"PUBLIC\".secrets").is_err());
+        for sql in [
+            "SELECT $$XDELETE$$",
+            "SELECT $tag$XDELETE$tag$",
+            "SELECT 'literal'",
+            "SELECT \"identifier\"",
+        ] {
+            assert!(engine.check_read_only(sql).is_ok(), "{sql}");
+        }
+    }
+
+    #[test]
+    fn sql_classification_matrix() {
+        let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
+        let cases: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/sql-classification.json"))
+                .unwrap();
+        for case in cases.as_array().unwrap() {
+            let sql = case["sql"].as_str().unwrap();
+            let result = engine.validate(sql);
+            let actual = match &result {
+                Ok(()) => "allowed",
+                Err(SafeselectError::QueryRejected(_)) => "rejected",
+                Err(SafeselectError::Security(_)) => "security",
+                Err(error) => panic!("unexpected error for {sql}: {error}"),
+            };
+            assert_eq!(actual, case["classification"], "{sql}: {result:?}");
+        }
+    }
+
+    #[test]
     fn select_like_validation_checks_cte_bodies_and_unsupported_targets() {
         let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
         assert!(engine
-            .check_select_like_read_only("WITH item AS (SELECT 1) SELECT * FROM item")
+            .check_read_only("WITH item AS (SELECT 1) SELECT * FROM item")
             .is_ok());
         for sql in [
             "WITH",
@@ -2247,7 +1494,7 @@ mod tests {
         ] {
             assert!(
                 matches!(
-                    engine.check_select_like_read_only(sql),
+                    engine.check_read_only(sql),
                     Err(SafeselectError::QueryRejected(_))
                 ),
                 "{sql}"
@@ -2259,7 +1506,7 @@ mod tests {
         ] {
             assert!(
                 matches!(
-                    engine.check_select_like_read_only(sql),
+                    engine.check_read_only(sql),
                     Err(SafeselectError::Security(_))
                 ),
                 "{sql}"
@@ -2287,7 +1534,7 @@ mod tests {
             "SELECT 1; SELECT 2",
             "SELECT pg_sleep(1)",
             "not valid SQL",
-            "SELECT WITH",
+            "SELECT (",
             "",
         ] {
             assert!(
@@ -2395,7 +1642,6 @@ mod tests {
             "SELECT 1 -- ; ABORT",
             "SELECT 'unterminated",
         ] {
-            assert!(!contains_session_control_statement(sql), "{sql}");
             assert!(
                 !matches!(engine.validate(sql), Err(SafeselectError::Security(_))),
                 "{sql}"
@@ -2664,22 +1910,6 @@ mod tests {
     fn test_with_cte() {
         let sql = "WITH x AS (SELECT 1) SELECT * FROM x";
         assert_eq!(count_statements(sql), 1);
-    }
-
-    #[test]
-    fn test_extract_with_query_body_variants() {
-        assert_eq!(extract_with_query_body("SELECT 1"), None);
-        assert_eq!(
-            extract_with_query_body(
-                "WITH RECURSIVE x AS NOT MATERIALIZED (SELECT 1) SELECT * FROM x"
-            ),
-            Some("SELECT * FROM x")
-        );
-        assert_eq!(
-            extract_with_query_body("WITH a AS (SELECT 1), b AS (SELECT 2) SELECT * FROM b"),
-            Some("SELECT * FROM b")
-        );
-        assert_eq!(extract_with_query_body("WITH broken AS SELECT 1"), None);
     }
 
     #[test]
@@ -2984,65 +2214,6 @@ mod tests {
                 Vec::new(),
             ))
             .is_ok());
-    }
-
-    #[test]
-    fn preserves_dollar_quoted_literals_and_operator_denylists() {
-        let engine = SecurityEngine::new(
-            SecurityPolicy {
-                allowed_schemas: vec!["public".into()],
-                denied_relations: vec!["public.custom".into()],
-                require_single_statement: false,
-                ..SecurityPolicy::default()
-            },
-            LimitsConfig::default(),
-        );
-        assert!(engine.check_read_only("SELECT $$--$$; COMMIT").is_err());
-        assert!(engine
-            .validate("SELECT 1 OPERATOR(public.custom) 1")
-            .is_err());
-        assert!(engine.validate("SELECT * FROM \"PUBLIC\".secrets").is_err());
-        assert_eq!(
-            SecurityEngine::strip_sql_comments("SELECT $$XDELETE$$"),
-            "SELECT $$XDELETE$$"
-        );
-        assert_eq!(
-            SecurityEngine::strip_sql_comments("SELECT $tag$XDELETE$tag$"),
-            "SELECT $tag$XDELETE$tag$"
-        );
-        assert!(
-            SecurityEngine::strip_sql_comments(r#"SELECT E'abc\'--'; COMMIT"#).contains("COMMIT")
-        );
-        assert!(
-            SecurityEngine::strip_sql_comments("SELECT $tag$/*$tag$; COMMIT").contains("COMMIT")
-        );
-        assert!(SecurityEngine::strip_sql_comments("SELECT $bad; COMMIT").contains("COMMIT"));
-        assert_eq!(
-            SecurityEngine::strip_sql_comments("SELECT 'literal'"),
-            "SELECT 'literal'"
-        );
-        assert_eq!(
-            SecurityEngine::strip_sql_comments("SELECT \"identifier\""),
-            "SELECT \"identifier\""
-        );
-    }
-
-    #[test]
-    fn scans_dollar_quote_delimiters_without_consuming_content() {
-        let tagged: Vec<char> = "$tag$XDELETE$tag$".chars().collect();
-        let untagged: Vec<char> = "$$XDELETE$$".chars().collect();
-        let invalid: Vec<char> = "$bad-tag$X$bad-tag$".chars().collect();
-
-        assert_eq!(dollar_delimiter_end(&tagged, 0), Some(5));
-        assert_eq!(dollar_delimiter_end(&untagged, 0), Some(2));
-        assert_eq!(dollar_delimiter_end(&tagged, 1), None);
-        assert_eq!(dollar_delimiter_end(&invalid, 0), None);
-        assert_eq!(skip_dollar_quoted_literal(&tagged, 0), Some(tagged.len()));
-        assert_eq!(
-            skip_dollar_quoted_literal(&untagged, 0),
-            Some(untagged.len())
-        );
-        assert_eq!(skip_dollar_quoted_literal(&tagged[..10], 0), None);
     }
 
     #[test]
@@ -3488,36 +2659,6 @@ mod tests {
     }
 
     #[test]
-    fn extracts_explain_targets_and_options() {
-        assert_eq!(extract_explain_target("EXPLAIN SELECT 1"), Some("SELECT 1"));
-        assert_eq!(
-            extract_explain_target("EXPLAIN (ANALYZE, BUFFERS) SELECT 1"),
-            Some("SELECT 1")
-        );
-        assert_eq!(
-            extract_explain_target("EXPLAIN () SELECT 1"),
-            Some("SELECT 1")
-        );
-        assert_eq!(
-            extract_explain_target("EXPLAIN ANALYZE SELECT 1"),
-            Some("SELECT 1")
-        );
-        assert_eq!(
-            extract_explain_target("EXPLAIN SUMMARY SELECT 1"),
-            Some("SELECT 1")
-        );
-        for option in ["VERBOSE", "BUFFERS", "SETTINGS", "WAL", "TIMING"] {
-            assert_eq!(
-                extract_explain_target(&format!("EXPLAIN {option} SELECT 1")),
-                Some("SELECT 1")
-            );
-        }
-        assert_eq!(extract_explain_target("EXPLAIN select 1"), Some("select 1"));
-        assert_eq!(extract_explain_target("SELECT 1"), None);
-        assert_eq!(extract_explain_target("EXPLAIN (ANALYZE SELECT 1"), None);
-    }
-
-    #[test]
     fn validates_document_find_projection_sort_and_limits() {
         let engine = SecurityEngine::new(SecurityPolicy::default(), LimitsConfig::default());
         let valid = DocumentFindRequest {
@@ -3553,18 +2694,6 @@ mod tests {
     }
 
     #[test]
-    fn strips_sql_comments_without_changing_literals() {
-        assert_eq!(
-            SecurityEngine::strip_sql_comments("SELECT 1 -- note\n"),
-            "SELECT 1 \n"
-        );
-        assert_eq!(
-            SecurityEngine::strip_sql_comments("SELECT 1 /* remove */"),
-            "SELECT 1 "
-        );
-    }
-
-    #[test]
     fn counts_sql_statements_and_ignores_trailing_semicolons() {
         assert_eq!(count_statements("SELECT 1"), 1);
         assert_eq!(count_statements("SELECT 1; SELECT 2"), 2);
@@ -3574,33 +2703,6 @@ mod tests {
     #[test]
     fn rejects_unbalanced_sql_parentheses() {
         assert_eq!(count_statements("SELECT (1"), 1);
-    }
-
-    #[test]
-    fn sanitizes_keyword_scan_comments_and_literals() {
-        let sanitized =
-            sanitize_for_keyword_scan("SELECT 'FROM x' /* hidden */ FROM users -- end\n");
-        assert!(sanitized.contains("SELECT"));
-        assert!(sanitized.contains("FROM USERS"));
-        assert!(!sanitized.contains("hidden"));
-        assert!(!sanitized.contains("end"));
-    }
-
-    #[test]
-    fn finds_only_top_level_keywords() {
-        let sql = "SELECT (SELECT 1 AS nested) AS value FROM users";
-        assert_eq!(find_top_level_keyword(sql, 0, "AS"), Some(28));
-        assert_eq!(find_top_level_keyword(sql, 0, "FROM"), Some(37));
-        assert_eq!(find_top_level_keyword("SELECT 'FROM'", 0, "FROM"), None);
-    }
-
-    #[test]
-    fn scans_keywords_across_comments_quotes_and_nested_parentheses() {
-        let sql = "SELECT (1 /* FROM */), \"FROM\" -- FROM\nFROM users";
-        assert_eq!(find_top_level_keyword(sql, 0, "FROM"), sql.rfind("FROM"));
-        let sanitized = sanitize_for_keyword_scan("SELECT \"secret\" -- comment\nFROM users");
-        assert!(sanitized.contains("SELECT"));
-        assert!(sanitized.contains("FROM USERS"));
     }
 
     #[test]

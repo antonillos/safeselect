@@ -28,15 +28,15 @@ Every time the server starts:
 Each query goes through:
 
 ```
-Raw SQL → Empty/size/comment checks → Serious operation scan
-→ Single statement check → Read-only check → System catalog restriction
+Raw SQL → Empty/size/comment checks → Contextual SQL classification
+→ Single statement check → System catalog restriction
 → Schema allowlist → Relation denylist → JDBC execution → Result limits
 ```
 
 | Check | What it prevents |
 |---|---|
 | Size limit | DoS via oversized queries |
-| Serious operation scan | Writes, transaction/session changes, and forbidden state-changing functions |
+| Contextual SQL classification | Writes, transaction/session changes, and forbidden state-changing functions |
 | Single statement | SQL injection via stacked queries |
 | Read-only | DDL, DML, and destructive operations |
 | Schema allowlist | Access to schemas outside policy |
@@ -120,27 +120,24 @@ the JSON-RPC error, kills the sidecar if one exists, and exits with status 1.
 | A destructive statement combined with a read | `SELECT 1; DROP TABLE public.example` |
 | A write hidden in a CTE or passed to `explain` | `WITH removed AS (DELETE FROM public.example RETURNING *) SELECT * FROM removed` |
 
-The serious-operation scan runs before statement-count and relation-scope
+The contextual classifier runs before statement-count and relation-scope
 checks, after the initial empty, size and comment checks. Consequently,
 `DELETE FROM information_schema.views` is a serious attempt even though a
 read of the same catalog is an ordinary rejection. A read-only prefix cannot
-turn a subsequent detected write into a recoverable error. SQL string literals
-are excluded from the keyword scan: `SELECT 'DROP TABLE public.example'` does
-not itself constitute a destructive operation.
+turn a subsequent detected write into a recoverable error.
 
-The supported checks and forbidden operation lists are defined in
-[`src/security.rs`](../src/security.rs). They are deterministic policy checks,
-not a general assessment of malicious intent. A blocked function such as
-`pg_sleep` remains forbidden even though its rejection is recoverable.
+Command boundaries and the parsed SQL syntax tree distinguish actual operations
+from identifiers and data. Reads such as `SELECT reset FROM public.metrics`,
+`SELECT commit FROM public.metrics`, and `SELECT replace('a', 'a', 'b')` do not
+become serious attempts because of their names. Quoted function calls and
+`SELECT INTO` remain subject to the same operation classification. Semicolons
+inside dollar-quoted literals do not create extra statements.
 
-`RESET` and `DISCARD` are recognized as session control only when they are the
-first unquoted token of a statement. Reads such as
-`SELECT reset FROM public.metrics`, `SELECT * FROM public.reset` and
-`SELECT discard FROM public.metrics` do not become serious attempts merely
-because they use these words as identifiers. The same statement-boundary
-detection keeps `END` and `ABORT` transaction commands distinct from ordinary
-SQL expressions. All `DISCARD` command variants, including `ALL`, `TEMP`,
-`PLANS` and `SEQUENCES`, are rejected as serious session-control attempts.
+The complete [classification matrix](sql-classification.md) documents command
+classes, function matching, precedence, parser limitations and executable
+regression coverage. These are deterministic checks, not a general assessment
+of malicious intent. A blocked sleep function remains forbidden even though
+its rejection is recoverable.
 
 #### Internal failures and scope
 
