@@ -23,9 +23,9 @@ on:
 jobs:
   integration-tests:
     name: Real Integration Tests
-    # MongoDB requires a kernel outside Linux 6.19–7.0.13.
-    # Temporary exception until the Ubuntu 26.04 runner is compatible.
-    runs-on: ubuntu-24.04
+    # MongoDB rejects the Linux 7.0 kernel on newer hosted runner images.
+    # Ubuntu 22.04 retains the compatible Linux 6.8 kernel (SERVER-121912).
+    runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
       matrix:

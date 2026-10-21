@@ -6,7 +6,8 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 case "$(uname -s):$(uname -m)" in
   Darwin:arm64|Darwin:aarch64) target=aarch64-apple-darwin ;;
   Darwin:x86_64) target=x86_64-apple-darwin ;;
-  Linux:x86_64) target=x86_64-unknown-linux-gnu ;;
+  # The portable shell distribution supports older runner glibc versions.
+  Linux:x86_64) target=portable ;;
   *) printf 'Unsupported makevn runner architecture\n' >&2; exit 1 ;;
 esac
 read -r version checksum < <(python3 - "$script_dir/makevn.lock.json" "$target" <<'PY'
@@ -18,7 +19,10 @@ PY
 )
 work_dir="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/makevn.XXXXXX")"
 trap 'rm -rf "$work_dir"' EXIT
-archive="makevn-${version}-${target}.tar.gz"
+archive="makevn-${version}.tar.gz"
+if [[ "$target" != portable ]]; then
+  archive="makevn-${version}-${target}.tar.gz"
+fi
 curl --fail --silent --show-error --location \
   --retry 8 --retry-delay 5 --retry-max-time 300 --retry-all-errors \
   --connect-timeout 15 --max-time 300 \

@@ -15,7 +15,8 @@
     "predev": "node scripts/prepare.mjs",
     "prebuild": "node scripts/prepare.mjs",
     "build:pages": "node scripts/prepare.mjs && node scripts/build-pages.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:dependencies": "node --test scripts/test-dependencies.mjs"
   },
   "dependencies": {
     "marked": "17.0.3",
@@ -41,12 +42,14 @@
     "tailwindcss": "4.2.1",
     "typescript": "5.9.3",
     "vinext": "1.0.0-beta.8",
-    "vite": "8.2.2",
-    "wrangler": "4.127.0"
+    "vite": "8.3.5",
+    "wrangler": "4.127.0",
+    "braces": "file:vendor/braces"
   },
   "type": "module",
   "overrides": {
     "sharp": "0.35.5",
-    "undici": "7.29.1"
+    "undici": "7.29.1",
+    "braces": "$braces"
   }
 }

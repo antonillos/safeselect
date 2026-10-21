@@ -132,6 +132,7 @@ jobs:
         run: |
           npm run icons:export --prefix site -- --check
           npm run test:icons --prefix site
+          npm run test:dependencies --prefix site
       - name: Build and validate static website
         run: |
           npm run build:pages --prefix site
@@ -279,8 +280,8 @@ jobs:
     if: >-
       always() && inputs.badge_only != true &&
       needs.classify.outputs.mongodb == 'true' && needs.unit.result == 'success'
-    # Temporary MongoDB/kernel compatibility exception.
-    runs-on: ubuntu-24.04
+    # Ubuntu 22.04 retains Linux 6.8, compatible with MongoDB (SERVER-121912).
+    runs-on: ubuntu-22.04
     services:
       mongodb:
         image: mongo:8
