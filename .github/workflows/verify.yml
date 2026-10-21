@@ -132,6 +132,7 @@ jobs:
         run: |
           npm run icons:export --prefix site -- --check
           npm run test:icons --prefix site
+          npm run test:dependencies --prefix site
       - name: Build and validate static website
         run: |
           npm run build:pages --prefix site

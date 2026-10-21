@@ -19,6 +19,7 @@ const eslintConfig = defineConfig([
   },
   globalIgnores([
     ".next/**",
+    "vendor/**",
     "out/**",
     "build/**",
     ".build/**",
