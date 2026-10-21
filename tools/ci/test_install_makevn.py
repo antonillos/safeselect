@@ -26,7 +26,7 @@ class InstallerTests(unittest.TestCase):
             stream.add(layout.parent, arcname="makevn-1.0.0")
         checksum = hashlib.sha256(self.archive.read_bytes()).hexdigest()
         self.lock = {"version": "v1.0.0", "sha256": {
-            "x86_64-unknown-linux-gnu": checksum,
+            "portable": checksum,
             "aarch64-apple-darwin": checksum,
             "x86_64-apple-darwin": checksum}}
         self.write_lock()
@@ -80,7 +80,7 @@ cp "$ARCHIVE" "$2"
     def test_cross_compile_still_installs_runner_native_makevn(self):
         self.env["CARGO_BUILD_TARGET"] = "aarch64-unknown-linux-gnu"
         self.assertEqual(self.run_installer().returncode, 0)
-        self.assertIn("x86_64-unknown-linux-gnu", (self.root / "curl-args").read_text())
+        self.assertIn("/v1.0.0/makevn-v1.0.0.tar.gz", (self.root / "curl-args").read_text())
 
     def test_apple_silicon_host(self):
         self.env.update(FAKE_OS="Darwin", FAKE_ARCH="arm64")
