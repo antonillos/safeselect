@@ -140,6 +140,87 @@ fn both_clients_and_scopes_register_update_and_keep_shared_skills() {
 }
 
 #[test]
+fn inferred_local_upgrades_preserve_global_skills() {
+    for client in ["codex", "opencode"] {
+        for named in [false, true] {
+            for global_conflict in [false, true] {
+                let f = Fixture::new();
+                f.success(&[
+                    "agent",
+                    "install",
+                    client,
+                    "--environment",
+                    "dev",
+                    "--local",
+                ]);
+                let manifest = f.root(true).join(".safeselect-skills.json");
+                let mut old: serde_json::Value =
+                    serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
+                old["version"] = "0.0.1".into();
+                fs::write(&manifest, serde_json::to_vec(&old).unwrap()).unwrap();
+                let global_skill = f.root(false).join("safeselect/SKILL.md");
+                if global_conflict {
+                    fs::create_dir_all(global_skill.parent().unwrap()).unwrap();
+                    fs::write(&global_skill, "unrelated global skill").unwrap();
+                }
+                let mut args = vec!["agent", "upgrade", client];
+                if named {
+                    args.extend(["--name", "safeselect-application-dev"]);
+                }
+                f.success(&args);
+                let current: serde_json::Value =
+                    serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
+                assert_eq!(current["version"], env!("CARGO_PKG_VERSION"));
+                assert_bundle(&f.root(true));
+                if global_conflict {
+                    assert_eq!(
+                        fs::read_to_string(global_skill).unwrap(),
+                        "unrelated global skill"
+                    );
+                    assert!(!f.root(false).join(".safeselect-skills.json").exists());
+                } else {
+                    assert!(!f.root(false).exists());
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn global_upgrades_with_other_local_entries_keep_global_skill_scope() {
+    for client in ["codex", "opencode"] {
+        for named in [false, true] {
+            let f = Fixture::new();
+            f.success(&[
+                "agent",
+                "install",
+                client,
+                "--environment",
+                "pre",
+                "--local",
+            ]);
+            f.success(&["agent", "install", client, "--environment", "dev"]);
+            let local_manifest = f.root(true).join(".safeselect-skills.json");
+            let local_before = fs::read(&local_manifest).unwrap();
+            let global_manifest = f.root(false).join(".safeselect-skills.json");
+            let mut old: serde_json::Value =
+                serde_json::from_slice(&fs::read(&global_manifest).unwrap()).unwrap();
+            old["version"] = "0.0.1".into();
+            fs::write(&global_manifest, serde_json::to_vec(&old).unwrap()).unwrap();
+            let mut args = vec!["agent", "upgrade", client, "--environment", "dev"];
+            if named {
+                args.extend(["--name", "safeselect-application-dev"]);
+            }
+            f.success(&args);
+            let current: serde_json::Value =
+                serde_json::from_slice(&fs::read(global_manifest).unwrap()).unwrap();
+            assert_eq!(current["version"], env!("CARGO_PKG_VERSION"));
+            assert_eq!(fs::read(local_manifest).unwrap(), local_before);
+        }
+    }
+}
+
+#[test]
 fn conflict_and_invalid_config_never_change_integration_or_skills() {
     let f = Fixture::new();
     let config = f.home.join("custom-codex/config.toml");

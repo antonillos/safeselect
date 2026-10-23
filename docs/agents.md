@@ -129,6 +129,9 @@ references and can be copied without this repository's README or docs.
 
 - Global scope is the default: skills go to `~/.agents/skills/`.
 - `--local` uses `.agents/skills/` inside the resolved application project.
+- Upgrades use the scope of the selected MCP entry. An existing project entry
+  updates project skills even when `--local` is omitted; global skills are left
+  untouched.
 - Both clients and all SafeSelect MCP entries share one bundle per scope.
 - Codex MCP config honors `CODEX_HOME`; OpenCode global config honors
   `XDG_CONFIG_HOME`, defaulting to `~/.config`. Skill locations stay independent.

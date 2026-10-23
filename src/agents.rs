@@ -717,9 +717,12 @@ pub fn upgrade_entry(
         Ok(())
     };
     if crate::agent_skills::supported(client) {
-        let root = crate::agent_skills::root(repo_root, local)?;
         let (config, _) =
             resolve_upgrade_target(client, entry_name, environment, repo_root, local)?;
+        let project_local = repo_root
+            .and_then(|root| detect_local_client_config(client, root))
+            .is_some_and(|path| path == config);
+        let root = crate::agent_skills::root(repo_root, project_local)?;
         crate::agent_skills::register_prepared(&root, &config, prepare, write)
     } else {
         write(prepare()?)
