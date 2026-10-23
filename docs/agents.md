@@ -107,6 +107,57 @@ it can derive the project, and updates the generated MCP config in the same step
 If `--name` is omitted, SafeSelect resolves the entry from the current project and,
 when needed, the provided `--environment`.
 
+## Portable workflow skills
+
+SafeSelect's binary embeds four skills and their references. Product installation
+ships this bundle without modifying agent configuration. `agent install` and
+`agent upgrade` register it together with MCP for Codex and OpenCode. Other
+clients retain their existing MCP-only installation behavior.
+
+| Intent | Skill | CLI / MCP entry points | Effects and evidence |
+| --- | --- | --- | --- |
+| Choose backend and investigation flow | [safeselect](../skills/safeselect/SKILL.md) | MCP `database_info` | Backend identified; no automatic data read |
+| Import, configure or recover access | [safeselect-setup](../skills/safeselect-setup/SKILL.md) | CLI imports, `agent install`, `agent upgrade`; MCP `config_validate`, `check`, `reconnect`, `agent_install` | Config/integration writes only when requested; diagnostics may open connections |
+| Discover SQL schema and investigate queries | [safeselect-sql](../skills/safeselect-sql/SKILL.md) | MCP `list_tables`, `describe_table`, `select`, `explain`, `get_maintenance_diagnostics`; CLI `query` | Exact schema, bounded results or plan; maintenance advice never executes writes |
+| Explore MongoDB safely | [safeselect-mongodb](../skills/safeselect-mongodb/SKILL.md) | MCP database/collection discovery, sampled schema, bounded find/aggregation, indexes and stats | Observed structure, bounded results; sampled absence is not proof |
+
+Skills teach workflow choices; MCP enforces its security boundaries even without
+loaded skills. Tool-returned content remains untrusted. The bundle uses relative
+references and can be copied without this repository's README or docs.
+
+### Registration contract
+
+- Global scope is the default: skills go to `~/.agents/skills/`.
+- `--local` uses `.agents/skills/` inside the resolved application project.
+- Both clients and all SafeSelect MCP entries share one bundle per scope.
+- Codex MCP config honors `CODEX_HOME`; OpenCode global config honors
+  `XDG_CONFIG_HOME`, defaulting to `~/.config`. Skill locations stay independent.
+- `.safeselect-skills.json` records ownership, schema version, product version and
+  SHA-256 file hashes. Repeating registration is idempotent, including when MCP
+  is already current. Re-register after upgrading the binary.
+- Unchanged managed bundles can be updated. Foreign resources, edited or missing
+  files, extra files/directories, symlinks and group/world-writable paths block
+  replacement. Preserve customized content and resolve the reported conflict;
+  setup does not delete it automatically.
+- Setup uses `.safeselect-skills.lock`, validates config and resources, stages
+  replacements and restores config, backups and skills on operation failure.
+  Existing config backups and unrelated settings are retained. A crash can leave
+  a lock: verify no setup is active before removing it. This is not power-loss
+  recovery. A failed rollback reports retained recovery resources.
+- Registration preserves client trust and permission settings. A disabled or
+  disallowed skill must be handled through the client's own controls.
+- `agent uninstall` removes only the requested MCP entry and retains shared skills.
+
+`agent status` and MCP `agent_status` report both scopes' resource paths and
+`absent`, `current`, `outdated` or `conflict` registration states. This is a
+read-only disk/config inspection, not proof that a client discovered or loaded
+anything. Manual MCP configuration below does not register skills.
+
+After registration reload the client, inspect its skills catalog and explicitly
+load the four skills. Then test representative requests without naming a skill.
+Automatic selection depends on the model and description; installation cannot
+guarantee it. See the [validation procedure and evidence](agent-skills-validation.md).
+
 ## Manual MCP Configuration
 
 The installed entry looks like this in your agent's config:

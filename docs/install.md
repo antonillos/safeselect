@@ -166,3 +166,14 @@ safeselect uninstall --binary-only
 
 This preserves global and project configuration, database drivers, audit data,
 and Keychain entries.
+
+## Portable agent skills
+
+The binary includes four workflow skills with their references. Register them
+alongside MCP using `safeselect agent install codex` or
+`safeselect agent install opencode` from the configured application repository.
+Add `--local` for project scope; global is the default. After binary upgrades,
+run `safeselect agent upgrade <client>` and reload the client.
+See the [workflow and ownership contract](agents.md#portable-workflow-skills)
+and [client validation procedure](agent-skills-validation.md). Product installation
+alone does not register skills, and registration does not prove model loading.

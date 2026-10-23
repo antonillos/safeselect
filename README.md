@@ -146,6 +146,12 @@ safeselect agent install opencode
 safeselect agent status
 ```
 
+For Codex and OpenCode, agent installation registers MCP and four portable
+skills: `safeselect`, `safeselect-setup`, `safeselect-sql` and
+`safeselect-mongodb`. Re-run `agent upgrade` after updating SafeSelect, reload
+the client and check discovery separately from loading. See the
+[workflow map and registration contract](docs/agents.md#portable-workflow-skills).
+
 **Multiple environments?** Use `safeselect check --environment <name>` to avoid
 checking unrelated databases, and add `--environment <name>` to
 `agent install` to select the intended target. Installation infers the name only

@@ -1325,7 +1325,7 @@ impl McpServer {
             ToolDefinition {
                 name: "agent_install".into(),
                 description: self.tool_description(
-                    "install a SafeSelect database query MCP entry for a client",
+                    "install a SafeSelect MCP entry and shared skills for Codex/OpenCode",
                 ),
                 input_schema: serde_json::json!({
                     "type": "object",
@@ -1353,7 +1353,7 @@ impl McpServer {
             ToolDefinition {
                 name: "agent_uninstall".into(),
                 description: self.tool_description(
-                    "uninstall a SafeSelect database query MCP entry from a client",
+                    "uninstall a SafeSelect MCP entry; retain shared skills for other clients and entries",
                 ),
                 input_schema: serde_json::json!({
                     "type": "object",
@@ -1373,7 +1373,7 @@ impl McpServer {
             ToolDefinition {
                 name: "agent_status".into(),
                 description: self.tool_description(
-                    "show SafeSelect database query MCP installation status for all clients",
+                    "show MCP and shared skill registration status for all clients; discovery/loading is unverified",
                 ),
                 input_schema: serde_json::json!({
                     "type": "object",
@@ -4053,7 +4053,11 @@ impl McpServer {
             local,
         ) {
             Ok(()) => {
-                let text = format!("Entry '{entry_name}' installed for {client}");
+                let text = if crate::agent_skills::supported(client) {
+                    format!("Entry '{entry_name}' and shared skills registered for {client}. Reload the client; discovery and loading remain unverified.")
+                } else {
+                    format!("Entry '{entry_name}' installed for {client}")
+                };
                 let resp = trusted_tool_response(
                     id,
                     "ok",
