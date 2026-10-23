@@ -101,6 +101,17 @@ class SiteValidationTests(unittest.TestCase):
         with patch.object(docs, "ROOT", self.root):
             self.assertEqual(docs.markdown_files(), [self.root / "docs/guide.md"])
 
+    def test_docs_skip_deleted_tracked_markdown(self):
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        retained = self.root / "retained.md"
+        deleted = self.root / "deleted.md"
+        retained.write_text("# Retained\n")
+        deleted.write_text("# Deleted\n")
+        subprocess.run(["git", "-C", str(self.root), "add", "."], check=True)
+        deleted.unlink()
+        with patch.object(docs, "ROOT", self.root):
+            self.assertEqual(docs.markdown_files(), [retained])
+
     def test_docs_include_tracked_files_in_generated_looking_directories(self):
         subprocess.run(["git", "init", "-q", str(self.root)], check=True)
         directory = self.root / "site/source-docs"

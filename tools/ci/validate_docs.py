@@ -13,11 +13,11 @@ LINK = re.compile(r"(?<!!)\[[^\]]*\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
 
 
 def markdown_files() -> list[Path]:
-    # Include new non-ignored documentation and omit working-tree deletions.
-    # Git exclusions keep generated caches and planning documents out.
+    # Only tracked Markdown is reviewed repository documentation.
+    # Skip working-tree deletions during source moves.
     # -z preserves filenames containing whitespace or newlines.
     tracked = subprocess.check_output(
-        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"], cwd=ROOT
+        ["git", "ls-files", "--cached", "-z"], cwd=ROOT
     )
     candidates = {
         ROOT / filename.decode("utf-8", errors="surrogateescape")
