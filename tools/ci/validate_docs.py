@@ -13,17 +13,18 @@ LINK = re.compile(r"(?<!!)\[[^\]]*\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
 
 
 def markdown_files() -> list[Path]:
-    # Use the Git index, not the working-tree directory inventory: generated
-    # caches and untracked dependencies are not repository documentation.
+    # Only tracked Markdown is reviewed repository documentation.
+    # Skip working-tree deletions during source moves.
     # -z preserves filenames containing whitespace or newlines.
     tracked = subprocess.check_output(
         ["git", "ls-files", "--cached", "-z"], cwd=ROOT
     )
-    return sorted({
+    candidates = {
         ROOT / filename.decode("utf-8", errors="surrogateescape")
         for filename in tracked.split(b"\0")
         if filename.endswith(b".md")
-    })
+    }
+    return sorted(path for path in candidates if path.is_file())
 
 
 def local_target(source: Path, raw: str) -> Path | None:

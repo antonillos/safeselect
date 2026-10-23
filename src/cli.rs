@@ -345,7 +345,7 @@ pub enum DriverAction {
 pub enum AgentAction {
     /// Detect installed MCP clients
     Detect,
-    /// Install MCP entry for a client
+    /// Install MCP entry (and shared skills for Codex/OpenCode)
     Install {
         /// Client name (opencode, copilot, cursor, etc.)
         client: String,
@@ -362,7 +362,7 @@ pub enum AgentAction {
         #[arg(long)]
         local: bool,
     },
-    /// Upgrade an existing MCP entry in-place
+    /// Upgrade an existing MCP entry and refresh Codex/OpenCode skills
     Upgrade {
         /// Client name (opencode, copilot, cursor, etc.)
         client: String,

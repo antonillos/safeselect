@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+mod agent_skills;
 mod agents;
 mod audit;
 mod backend;

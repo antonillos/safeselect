@@ -76,6 +76,7 @@ pub fn status_lines(repo_root: Option<&Path>) -> Result<Vec<String>> {
     ] {
         lines.extend(client_status_lines(client, repo_root)?);
     }
+    lines.extend(crate::agent_skills::status_lines(repo_root));
     Ok(lines)
 }
 
@@ -258,53 +259,66 @@ pub fn install_entry(
     if client == "claude-code" {
         return install_claude_entry(environment, entry_name, repo_root, config_dir, local);
     }
-    install_file_entry(
-        client,
-        environment,
-        entry_name,
-        repo_root,
-        config_dir,
-        mcp_timeout_ms,
-        local,
-    )
+    let prepare = || {
+        prepare_file_install(
+            client,
+            entry_name,
+            environment,
+            repo_root,
+            config_dir,
+            mcp_timeout_ms,
+            local,
+        )
+    };
+    let write = |prepared| finish_install(client, entry_name, local, prepared);
+    if crate::agent_skills::supported(client) {
+        let root = crate::agent_skills::root(repo_root, local)?;
+        let config = select_install_config(client, repo_root, local)?;
+        crate::agent_skills::register_prepared(&root, &config, prepare, write)
+    } else {
+        write(prepare()?)
+    }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn install_file_entry(
+struct PreparedConfig {
+    path: PathBuf,
+    existed: bool,
+    original: String,
+    updated: String,
+}
+
+fn finish_install(
     client: &str,
-    environment: &str,
     entry_name: &str,
-    repo_root: Option<&Path>,
-    config_dir: Option<&Path>,
-    mcp_timeout_ms: u64,
     local: bool,
+    prepared: PreparedConfig,
 ) -> Result<()> {
-    let (config_path, config_existed, content, new_content) = prepare_file_install(
-        client,
-        entry_name,
-        environment,
-        repo_root,
-        config_dir,
-        mcp_timeout_ms,
-        local,
-    )?;
-
-    if new_content == content {
-        print_agent_success(&format!(
-            "Entry '{entry_name}' is already up to date for {client}"
-        ));
-        println!("Next: {}", install_next_step(client, local));
-        return Ok(());
-    }
-
-    backup_existing_config(&config_path, config_existed)?;
-    print_install_diff(client, &config_path, &content, &new_content, config_existed);
-
-    write_config_and_verify(&config_path, &content, &new_content, config_existed)?;
-
-    print_agent_success(&format!("Entry '{entry_name}' installed for {client}"));
+    let changed = prepared.updated != prepared.original;
+    write_prepared_config(client, prepared)?;
+    let action = if changed {
+        "installed"
+    } else {
+        "already up to date"
+    };
+    print_agent_success(&format!("Entry '{entry_name}' {action} for {client}"));
     println!("Next: {}", install_next_step(client, local));
     Ok(())
+}
+
+fn write_prepared_config(client: &str, prepared: PreparedConfig) -> Result<()> {
+    let PreparedConfig {
+        path,
+        existed,
+        original,
+        updated,
+    } = prepared;
+    if original == updated {
+        return Ok(());
+    }
+    prepare_config_parent(&path)?;
+    backup_existing_config(&path, existed)?;
+    print_install_diff(client, &path, &original, &updated, existed);
+    write_config_and_verify(&path, &original, &updated, existed)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -316,7 +330,7 @@ fn prepare_file_install(
     config_dir: Option<&Path>,
     mcp_timeout_ms: u64,
     local: bool,
-) -> Result<(PathBuf, bool, String, String)> {
+) -> Result<PreparedConfig> {
     let config_path = select_install_config(client, repo_root, local)?;
     warn_scope_collision(client, &config_path, entry_name, repo_root, local)?;
     let (config_existed, content) = read_or_initialize_config(client, &config_path)?;
@@ -331,7 +345,12 @@ fn prepare_file_install(
         false,
         None,
     )?;
-    Ok((config_path, config_existed, content, new_content))
+    Ok(PreparedConfig {
+        path: config_path,
+        existed: config_existed,
+        original: content,
+        updated: new_content,
+    })
 }
 
 fn warn_scope_collision(
@@ -406,13 +425,19 @@ fn read_or_initialize_config(client: &str, path: &Path) -> Result<(bool, String)
         verify_permissions(path)?;
         return Ok((true, std::fs::read_to_string(path)?));
     }
-    prepare_config_parent(path)?;
+    if let Some(parent) = path.parent() {
+        verify_config_parent(parent)?;
+    }
     Ok((false, initial_config_content(client)?.to_string()))
 }
 
 fn backup_existing_config(path: &Path, existed: bool) -> Result<()> {
-    if existed {
-        std::fs::copy(path, path.with_extension("safeselect.bak"))?;
+    let backup = path.with_extension("safeselect.bak");
+    if existed
+        && std::fs::symlink_metadata(&backup)
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+    {
+        std::fs::copy(path, backup)?;
     }
     Ok(())
 }
@@ -565,6 +590,9 @@ fn write_config_and_verify(
     })?;
     let temp = parent.join(format!(".safeselect-{}.tmp", uuid::Uuid::new_v4()));
     write_private_file(&temp, updated)?;
+    if original_existed {
+        std::fs::set_permissions(&temp, std::fs::metadata(path)?.permissions())?;
+    }
     std::fs::rename(&temp, path)?;
     verify_or_rollback(path, updated, original, original_existed)
 }
@@ -672,15 +700,33 @@ pub fn upgrade_entry(
     if client == "claude-code" {
         return upgrade_claude_entry(entry_name, environment, repo_root, config_dir, local);
     }
-    upgrade_file_entry(
-        client,
-        entry_name,
-        environment,
-        repo_root,
-        config_dir,
-        mcp_timeout_ms,
-        local,
-    )
+    let prepare = || {
+        prepare_upgrade(
+            client,
+            entry_name,
+            environment,
+            repo_root,
+            config_dir,
+            mcp_timeout_ms,
+            local,
+        )
+    };
+    let write = |(prepared, previous, target): (PreparedConfig, String, String)| {
+        write_prepared_config(client, prepared)?;
+        print_upgrade_result(client, &previous, &target);
+        Ok(())
+    };
+    if crate::agent_skills::supported(client) {
+        let (config, _) =
+            resolve_upgrade_target(client, entry_name, environment, repo_root, local)?;
+        let project_local = repo_root
+            .and_then(|root| detect_local_client_config(client, root))
+            .is_some_and(|path| path == config);
+        let root = crate::agent_skills::root(repo_root, project_local)?;
+        crate::agent_skills::register_prepared(&root, &config, prepare, write)
+    } else {
+        write(prepare()?)
+    }
 }
 
 fn upgrade_claude_entry(
@@ -703,7 +749,7 @@ fn upgrade_claude_entry(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn upgrade_file_entry(
+fn prepare_upgrade(
     client: &str,
     entry_name: Option<&str>,
     environment: Option<&str>,
@@ -711,70 +757,36 @@ fn upgrade_file_entry(
     config_dir: Option<&Path>,
     mcp_timeout_ms: u64,
     local: bool,
-) -> Result<()> {
+) -> Result<(PreparedConfig, String, String)> {
     let (config_path, resolved_entry_name) =
         resolve_upgrade_target(client, entry_name, environment, repo_root, local)?;
-    let content = std::fs::read_to_string(&config_path)?;
-
     verify_permissions(&config_path)?;
-
+    let content = std::fs::read_to_string(&config_path)?;
     let environment =
         resolve_upgrade_environment(client, environment, &content, &resolved_entry_name)?;
     let target_entry_name =
         resolve_upgrade_entry_name(repo_root, &environment, &resolved_entry_name);
-
-    write_upgrade_config(
+    let new_content = build_entry_content(
         client,
-        &config_path,
         &content,
-        &resolved_entry_name,
         &target_entry_name,
         &environment,
         repo_root,
         config_dir,
         mcp_timeout_ms,
-    )?;
-
-    print_upgrade_result(client, &resolved_entry_name, &target_entry_name);
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-fn write_upgrade_config(
-    client: &str,
-    config_path: &Path,
-    content: &str,
-    resolved_entry_name: &str,
-    target_entry_name: &str,
-    environment: &str,
-    repo_root: Option<&Path>,
-    config_dir: Option<&Path>,
-    mcp_timeout_ms: u64,
-) -> Result<()> {
-    let backup_path = config_path.with_extension("safeselect.bak");
-    std::fs::copy(config_path, &backup_path)?;
-
-    let new_content = build_entry_content(
-        client,
-        content,
-        target_entry_name,
-        environment,
-        repo_root,
-        config_dir,
-        mcp_timeout_ms,
         true,
-        Some(resolved_entry_name),
+        Some(&resolved_entry_name),
     )?;
-
-    println!(
-        "--- Config diff for {client} ({}) ---",
-        config_path.display()
-    );
-    show_diff(content, &new_content);
-    println!("\nBackup saved to: {}", backup_path.display());
-
-    write_config_and_verify(config_path, content, &new_content, true)?;
-    Ok(())
+    Ok((
+        PreparedConfig {
+            path: config_path,
+            existed: true,
+            original: content,
+            updated: new_content,
+        },
+        resolved_entry_name,
+        target_entry_name,
+    ))
 }
 
 fn resolve_upgrade_environment(
@@ -854,8 +866,15 @@ fn uninstall_file_entry(client: &str, entry_name: &str, repo_root: Option<&Path>
     let new_content = remove_client_entry(client, &content, entry_name)?;
     write_config_and_verify(&config_path, &content, &new_content, true)?;
 
-    print_agent_success(&format!("Entry '{entry_name}' uninstalled from {client}"));
+    print_uninstall_result(client, entry_name);
     Ok(())
+}
+
+fn print_uninstall_result(client: &str, entry_name: &str) {
+    print_agent_success(&format!("Entry '{entry_name}' uninstalled from {client}"));
+    if crate::agent_skills::supported(client) {
+        println!("Shared SafeSelect skills are retained for other clients and entries.");
+    }
 }
 
 fn validate_removal_target(client: &str, content: &str, entry_name: &str) -> Result<()> {
@@ -1047,7 +1066,10 @@ fn canonical_global_config(client: &str) -> Option<PathBuf> {
 
 fn canonical_home_config(client: &str, home: &Path) -> Option<PathBuf> {
     if client == "opencode" {
-        return Some(dirs::config_dir()?.join("opencode").join("opencode.jsonc"));
+        let base = std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".config"));
+        return Some(base.join("opencode").join("opencode.jsonc"));
     }
     [
         ("cursor", home.join(".cursor").join("mcp.json")),
@@ -1126,9 +1148,12 @@ fn local_config_path(client: &str, root: &Path) -> Result<PathBuf> {
 }
 
 fn detect_opencode_config() -> Option<PathBuf> {
-    let config_dir = dirs::config_dir()?;
     let home_config = dirs::home_dir()?.join(".config");
-    for base in [&*config_dir, &home_config] {
+    let config_dir = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home_config.clone());
+    let legacy_config = dirs::config_dir()?;
+    for base in [&config_dir, &home_config, &legacy_config] {
         let dir = base.join("opencode");
         for name in ["opencode.jsonc", "opencode.json"] {
             let path = dir.join(name);

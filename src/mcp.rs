@@ -460,7 +460,7 @@ impl McpServer {
 
     fn tool_description(&self, action: &str) -> String {
         format!(
-            "SafeSelect database query MCP for environment '{}': {action}. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+            "SafeSelect database query MCP for environment '{}': {action}. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If the external bastion/VPN/tunnel is unavailable, stop and ask the user to restore it; do not call check or reconnect. With that route available and only the database session closed or disconnected, call reconnect once directly, without check first. If route availability is unknown, use check at most once. Stop after failed recovery; never alternate check and reconnect. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
             self.env_name
         )
     }
@@ -1325,7 +1325,7 @@ impl McpServer {
             ToolDefinition {
                 name: "agent_install".into(),
                 description: self.tool_description(
-                    "install a SafeSelect database query MCP entry for a client",
+                    "install a SafeSelect MCP entry and shared skills for Codex/OpenCode",
                 ),
                 input_schema: serde_json::json!({
                     "type": "object",
@@ -1353,7 +1353,7 @@ impl McpServer {
             ToolDefinition {
                 name: "agent_uninstall".into(),
                 description: self.tool_description(
-                    "uninstall a SafeSelect database query MCP entry from a client",
+                    "uninstall a SafeSelect MCP entry; retain shared skills for other clients and entries",
                 ),
                 input_schema: serde_json::json!({
                     "type": "object",
@@ -1373,7 +1373,7 @@ impl McpServer {
             ToolDefinition {
                 name: "agent_status".into(),
                 description: self.tool_description(
-                    "show SafeSelect database query MCP installation status for all clients",
+                    "show MCP and shared skill registration status for all clients; discovery/loading is unverified",
                 ),
                 input_schema: serde_json::json!({
                     "type": "object",
@@ -2542,7 +2542,7 @@ impl McpServer {
                 self.write_response(&tool_error_response(
                     id,
                     format!("Describe table failed: {e}."),
-                    "Call check, then reconnect once only if check reports a stale existing connection.",
+                    DATABASE_CONNECTION_RECOVERY_SUGGESTION,
                 ))
             }
         }
@@ -4053,7 +4053,11 @@ impl McpServer {
             local,
         ) {
             Ok(()) => {
-                let text = format!("Entry '{entry_name}' installed for {client}");
+                let text = if crate::agent_skills::supported(client) {
+                    format!("Entry '{entry_name}' and shared skills registered for {client}. Reload the client; discovery and loading remain unverified.")
+                } else {
+                    format!("Entry '{entry_name}' installed for {client}")
+                };
                 let resp = trusted_tool_response(
                     id,
                     "ok",
@@ -4238,7 +4242,7 @@ impl McpServer {
                     id,
                     "Database verification failed.",
                     &lines.join("\n"),
-                    "For a stale existing connection, call reconnect once; otherwise report the failure and fix connectivity before retrying.",
+                    DATABASE_CONNECTION_RECOVERY_SUGGESTION,
                 );
             }
         }
@@ -4420,6 +4424,9 @@ impl McpServer {
             "<{boundary}>\n{}\n</{boundary}>",
             redact_error_detail(detail)
         );
+        let recovery_context = format!("{trusted_message} {detail}");
+        let next_suggestion =
+            connection_error_suggestion(&recovery_context).unwrap_or(next_suggestion);
         let message = trusted_backend_error_message(trusted_message, next_suggestion);
         let resp = JsonRpcResponse {
             jsonrpc: "2.0",
@@ -4494,6 +4501,9 @@ fn redact_error_detail(detail: &str) -> String {
 }
 
 fn error_next_suggestion(message: &str) -> &'static str {
+    if let Some(suggestion) = connection_error_suggestion(message) {
+        return suggestion;
+    }
     let lower = message.to_ascii_lowercase();
     let rules: &[(&[&str], &str)] = &[
         (&["startup"], SECURITY_ERROR_SUGGESTION),
@@ -4510,7 +4520,6 @@ fn error_next_suggestion(message: &str) -> &'static str {
         (&["missing"], ARGUMENT_SUGGESTION),
         (&["invalid"], ARGUMENT_SUGGESTION),
         (&["required"], ARGUMENT_SUGGESTION),
-        (&["connection closed"], "Call check now; call reconnect once only if check reports a stale connection, otherwise report the connection failure."),
     ];
     rules.iter()
         .find(|(terms, _)| terms.iter().any(|term| lower.contains(term)))
@@ -4518,6 +4527,57 @@ fn error_next_suggestion(message: &str) -> &'static str {
             "Stop and report this SafeSelect error to the user; no further tool call is safe until the user provides a changed request.",
             |(_, suggestion)| *suggestion,
         )
+}
+
+const EXTERNAL_ROUTE_RECOVERY_SUGGESTION: &str =
+    "Stop and ask the user to restore the external bastion, VPN, or tunnel. Do not call check, connect, or reconnect while it is unavailable. Resume only after the user confirms it is restored.";
+const DATABASE_CONNECTION_RECOVERY_SUGGESTION: &str =
+    "If the external bastion/VPN/tunnel is unavailable, stop and ask the user to restore it. With that route available, call reconnect once directly, without check first; retry the original bounded operation once only after success. If route availability is unknown, use check at most once. After failed recovery, stop and report; never alternate check and reconnect.";
+
+fn connection_error_suggestion(message: &str) -> Option<&'static str> {
+    let lower = message.to_ascii_lowercase();
+    if contains_any(
+        &lower,
+        &[
+            "security",
+            "startup",
+            "sidecar_connection_failed",
+            "not read-only",
+            "audit",
+            "reconnect failed",
+            "reconnect verification failed",
+            "disconnect failed",
+        ],
+    ) {
+        return None;
+    }
+    if contains_any(
+        &lower,
+        &[
+            "safeselect_ssh_bastion_unreachable",
+            "safeselect_ssh_bastion_unresolved",
+            "ssh network connection failed",
+            "ssh connection timed out",
+        ],
+    ) {
+        return Some(EXTERNAL_ROUTE_RECOVERY_SUGGESTION);
+    }
+    if contains_any(&lower, &["authentication", "tls", "driver"]) {
+        return None;
+    }
+    if contains_any(
+        &lower,
+        &[
+            "connection closed",
+            "connection is closed",
+            "not connected",
+            "not_connected",
+        ],
+    ) || is_recoverable_connection_error(&lower)
+    {
+        return Some(DATABASE_CONNECTION_RECOVERY_SUGGESTION);
+    }
+    None
 }
 
 const SECURITY_ERROR_SUGGESTION: &str =
@@ -4657,6 +4717,7 @@ fn tool_error_response(
     text: String,
     next_suggestion: &str,
 ) -> JsonRpcResponse {
+    let next_suggestion = connection_error_suggestion(&text).unwrap_or(next_suggestion);
     let boundary = format!("safeselect-untrusted-data-{}", uuid::Uuid::new_v4());
     let framed_detail = format!("<{boundary}>\n{text}\n</{boundary}>");
     let rendered = format!(
@@ -5595,10 +5656,10 @@ fn contains_any(message: &str, terms: &[&str]) -> bool {
 
 fn document_operation_error_message(operation: &str, message: &str) -> String {
     let lower = message.to_lowercase();
-    let suggestion = match (operation == "discover_document_schema", is_unknown_document_field(&lower), is_recoverable_connection_error(message)) {
-        (false, true, _) => " Next suggestion: call discover_document_schema for the target collection, then retry using observed fields.",
-        (_, _, true) => " Next suggestion: call check, then reconnect once only if check reports a stale existing connection.",
-        _ => "",
+    let suggestion = match (operation == "discover_document_schema", is_unknown_document_field(&lower), connection_error_suggestion(message)) {
+        (false, true, _) => " Next suggestion: call discover_document_schema for the target collection, then retry using observed fields.".to_string(),
+        (_, _, Some(suggestion)) => format!(" Next suggestion: {suggestion}"),
+        _ => String::new(),
     };
     format!("{operation} failed: {message}{suggestion}")
 }
@@ -5611,13 +5672,14 @@ fn is_unknown_document_field(message: &str) -> bool {
 }
 
 fn document_backend_error_next_suggestion(message: &str) -> &'static str {
+    if let Some(suggestion) = connection_error_suggestion(message) {
+        return suggestion;
+    }
     let lower = message.to_ascii_lowercase();
     if lower.contains("timeout") || lower.contains("timed out") {
         "Call explain_documents with the same database, collection, and filter; then retry once with a narrower filter while preserving every existing restriction."
     } else if is_unknown_document_field_error(&lower) {
         "Call discover_document_schema for the same database and collection, then retry once using only observed fields and declarative MQL operators."
-    } else if is_recoverable_connection_error(message) {
-        "Call check now; call reconnect once only if check identifies a stale connection, otherwise report the connection failure."
     } else {
         "Stop and report this document database error to the user; no unchanged retry is safe."
     }
@@ -7035,7 +7097,8 @@ mod tests {
             document_operation_error_message("find_documents", "unknown host");
 
         assert!(!sql_message.contains("Next suggestion"));
-        assert!(document_message.contains("call check"));
+        assert!(document_message.contains("reconnect once directly, without check first"));
+        assert!(document_message.contains("check at most once"));
         assert!(!document_message.contains("discover_document_schema"));
         assert!(!unknown_host_message.contains("Next suggestion"));
     }

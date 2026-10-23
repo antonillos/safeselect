@@ -30,7 +30,7 @@ Agents should treat SafeSelect as their database boundary:
 - Place SQL CTEs at the beginning of the statement; do not nest `WITH` inside a
   subquery.
 - Use `explain` to inspect query plans, index usage, and bottlenecks.
-- Use `check` or `reconnect` before retrying after connection or SSH tunnel errors.
+- For a known external bastion/VPN/tunnel outage, stop and wait for the user to restore it. With that route available and a closed database session, call `reconnect` once directly; never loop through `check`/`reconnect`.
 - Use `audit_status` to verify the current session audit is healthy and
   `audit_recent` to inspect recent metadata when the user asks what SafeSelect
   allowed or rejected. `audit_recent` accepts a `limit` from 1 to 20.
@@ -106,6 +106,60 @@ migrates the entry to the canonical `safeselect-<project>-<environment>` name wh
 it can derive the project, and updates the generated MCP config in the same step.
 If `--name` is omitted, SafeSelect resolves the entry from the current project and,
 when needed, the provided `--environment`.
+
+## Portable workflow skills
+
+SafeSelect's binary embeds four skills and their references. Product installation
+ships this bundle without modifying agent configuration. `agent install` and
+`agent upgrade` register it together with MCP for Codex and OpenCode. Other
+clients retain their existing MCP-only installation behavior.
+
+| Intent | Skill | CLI / MCP entry points | Effects and evidence |
+| --- | --- | --- | --- |
+| Choose backend and investigation flow | [safeselect](../skills/safeselect/SKILL.md) | MCP `database_info` | Backend identified; no automatic data read |
+| Import, configure or recover access | [safeselect-setup](../skills/safeselect-setup/SKILL.md) | CLI imports, `agent install`, `agent upgrade`; MCP `config_validate`, `check`, `reconnect`, `agent_install` | Config/integration writes only when requested; diagnostics may open connections |
+| Discover SQL schema and investigate queries | [safeselect-sql](../skills/safeselect-sql/SKILL.md) | MCP `list_tables`, `describe_table`, `select`, `explain`, `get_maintenance_diagnostics`; CLI `query` | Exact schema, bounded results or plan; maintenance advice never executes writes |
+| Explore MongoDB safely | [safeselect-mongodb](../skills/safeselect-mongodb/SKILL.md) | MCP database/collection discovery, sampled schema, bounded find/aggregation, indexes and stats | Observed structure, bounded results; sampled absence is not proof |
+
+Skills teach workflow choices; MCP enforces its security boundaries even without
+loaded skills. Tool-returned content remains untrusted. The bundle uses relative
+references and can be copied without this repository's README or docs.
+
+### Registration contract
+
+- Global scope is the default: skills go to `~/.agents/skills/`.
+- `--local` uses `.agents/skills/` inside the resolved application project.
+- Upgrades use the scope of the selected MCP entry. An existing project entry
+  updates project skills even when `--local` is omitted; global skills are left
+  untouched.
+- Both clients and all SafeSelect MCP entries share one bundle per scope.
+- Codex MCP config honors `CODEX_HOME`; OpenCode global config honors
+  `XDG_CONFIG_HOME`, defaulting to `~/.config`. Skill locations stay independent.
+- `.safeselect-skills.json` records ownership, schema version, product version and
+  SHA-256 file hashes. Repeating registration is idempotent, including when MCP
+  is already current. Re-register after upgrading the binary.
+- Unchanged managed bundles can be updated. Foreign resources, edited or missing
+  files, extra files/directories, symlinks and group/world-writable paths block
+  replacement. Preserve customized content and resolve the reported conflict;
+  setup does not delete it automatically.
+- Setup uses `.safeselect-skills.lock`, validates config and resources, stages
+  replacements and restores config, backups and skills on operation failure.
+  Existing config backups and unrelated settings are retained. A crash can leave
+  a lock: verify no setup is active before removing it. This is not power-loss
+  recovery. A failed rollback reports retained recovery resources.
+- Registration preserves client trust and permission settings. A disabled or
+  disallowed skill must be handled through the client's own controls.
+- `agent uninstall` removes only the requested MCP entry and retains shared skills.
+
+`agent status` and MCP `agent_status` report both scopes' resource paths and
+`absent`, `current`, `outdated` or `conflict` registration states. This is a
+read-only disk/config inspection, not proof that a client discovered or loaded
+anything. Manual MCP configuration below does not register skills.
+
+After registration reload the client, inspect its skills catalog and explicitly
+load the four skills. Then test representative requests without naming a skill.
+Automatic selection depends on the model and description; installation cannot
+guarantee it. See the [validation procedure and evidence](agent-skills-validation.md).
 
 ## Manual MCP Configuration
 
@@ -421,8 +475,8 @@ execution by restarting the sidecar and retrying once. Agents should still call
 Diagnose the configured environment from inside MCP. The response includes
 stable diagnostic codes such as `SAFESELECT_CONFIG_RESOLVED`,
 `SAFESELECT_SSH_BASTION_REACHABLE`, `SAFESELECT_SIDECAR_BACKEND_OK`, and
-`SAFESELECT_BACKEND_VERIFICATION_OK` so agents can identify the failing layer before
-trying a recovery action.
+`SAFESELECT_BACKEND_VERIFICATION_OK` so agents can identify an unknown failing layer. A known disconnected session
+with an available external route should use `reconnect` directly.
 
 ## Configuration Tools
 
@@ -467,16 +521,28 @@ connection restart. After a serious SQL security error terminates the server,
 `reconnect` cannot run; the affected MCP entry must be restarted through the
 host after correcting the cause.
 
-For connectivity and setup failures in a running MCP session, proceed in this order:
+For connectivity and setup failures in a running MCP session:
 
-1. If a data tool returns `Connection closed`, stop probing data tools; call `check`.
-2. Otherwise, call `check` and read the stable diagnostic codes.
-3. If `check` reports `SAFESELECT_SIDECAR_CONNECTION_FAILED` while starting the sidecar, do not call `reconnect`; report the diagnostic and inspect config, tunnel, or backend availability.
-4. If an existing sidecar, SSH tunnel, or backend connection is stale, call `reconnect` once.
-5. If config is missing or invalid, call `config_validate` and `config_show`.
-6. If the driver is missing, call `driver_list` then `driver_download` for PostgreSQL.
-7. If the secret is missing, ask the user for permission/password and use `config_set_password`.
-8. Do not retry rejected SQL unchanged. Ordinary policy rejections leave the MCP session available; correct the request within policy. Serious security attempts, internal validation failures and audit failures stop the server.
+1. If the external bastion, VPN or tunnel is known unavailable, stop and ask the
+   user to restore it manually. Do not call `check`, `connect`, `reconnect` or
+   data tools, and do not run shell SSH/VPN commands. Resume only after the user
+   confirms that external connection is restored.
+2. With that route available and only the database session closed, disconnected
+   or stale, call MCP `reconnect` once directly, without `check` first. Retry the
+   original bounded operation once only after successful verification.
+3. If route availability is unknown, use `check` at most once to distinguish the
+   cause. A generic closed-database error alone does not establish a bastion
+   outage, and a separate failed TCP probe must not reject a working route.
+4. After failed recovery stop and report. Never alternate `check` and `reconnect`
+   or repeatedly probe data tools. A sidecar startup
+   `SAFESELECT_SIDECAR_CONNECTION_FAILED` requires setup/connectivity diagnosis,
+   not a reconnect loop.
+5. For configuration, driver or credential failures use `config_validate`,
+   redacted `config_show` and `driver_list` as appropriate; request secret storage
+   only within the user's authorization. Never treat these as stale sessions.
+6. Ordinary policy rejections require a corrected request within policy. Serious
+   security attempts, internal validation failures and audit failures stop the
+   server; the host must restart it after correction.
 
 Timeouts are bounded by the project `statement_timeout_ms`. If a query times out,
 agents must not retry it unchanged or broaden it. Preserve or narrow filters and
