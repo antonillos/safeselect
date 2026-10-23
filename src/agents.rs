@@ -76,16 +76,7 @@ pub fn status_lines(repo_root: Option<&Path>) -> Result<Vec<String>> {
     ] {
         lines.extend(client_status_lines(client, repo_root)?);
     }
-    match crate::agent_skills::root(None, false) {
-        Ok(root) => lines.push(crate::agent_skills::status(&root, "user")),
-        Err(error) => lines.push(format!("  skills: conflict [scope=user]: {error}")),
-    }
-    if let Some(repo) = repo_root {
-        match crate::agent_skills::root(Some(repo), true) {
-            Ok(root) => lines.push(crate::agent_skills::status(&root, "project")),
-            Err(error) => lines.push(format!("  skills: conflict [scope=project]: {error}")),
-        }
-    }
+    lines.extend(crate::agent_skills::status_lines(repo_root));
     Ok(lines)
 }
 
@@ -872,11 +863,15 @@ fn uninstall_file_entry(client: &str, entry_name: &str, repo_root: Option<&Path>
     let new_content = remove_client_entry(client, &content, entry_name)?;
     write_config_and_verify(&config_path, &content, &new_content, true)?;
 
+    print_uninstall_result(client, entry_name);
+    Ok(())
+}
+
+fn print_uninstall_result(client: &str, entry_name: &str) {
     print_agent_success(&format!("Entry '{entry_name}' uninstalled from {client}"));
     if crate::agent_skills::supported(client) {
         println!("Shared SafeSelect skills are retained for other clients and entries.");
     }
-    Ok(())
 }
 
 fn validate_removal_target(client: &str, content: &str, entry_name: &str) -> Result<()> {

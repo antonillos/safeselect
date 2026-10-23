@@ -149,59 +149,98 @@ fn inventory(
     files: &mut BTreeMap<String, String>,
     dirs: &BTreeSet<String>,
 ) -> Result<()> {
+    required_directory(directory)?;
+    for entry in fs::read_dir(directory)? {
+        inventory_entry(root, &entry?.path(), files, dirs)?;
+    }
+    Ok(())
+}
+
+fn required_directory(directory: &Path) -> Result<()> {
     safe(directory, true)?;
     if metadata(directory)?.is_none() {
         return Err(failure(directory, "missing managed directory"));
     }
-    for entry in fs::read_dir(directory)? {
-        let path = entry?.path();
-        let meta = fs::symlink_metadata(&path)?;
-        let relative = path
-            .strip_prefix(root)
-            .map_err(|error| failure(&path, error))?
-            .to_string_lossy()
-            .to_string();
-        if meta.is_dir() {
-            if !dirs.contains(&relative) {
-                return Err(failure(&path, "extra directory"));
-            }
-            inventory(root, &path, files, dirs)?;
-        } else {
-            safe(&path, false)?;
-            files.insert(relative, hash(&fs::read(&path)?));
+    Ok(())
+}
+
+fn inventory_entry(
+    root: &Path,
+    path: &Path,
+    files: &mut BTreeMap<String, String>,
+    dirs: &BTreeSet<String>,
+) -> Result<()> {
+    let meta = fs::symlink_metadata(path)?;
+    let relative = path
+        .strip_prefix(root)
+        .map_err(|error| failure(path, error))?
+        .to_string_lossy()
+        .to_string();
+    if meta.is_dir() {
+        if !dirs.contains(&relative) {
+            return Err(failure(path, "extra directory"));
+        }
+        inventory(root, path, files, dirs)
+    } else {
+        safe(path, false)?;
+        files.insert(relative, hash(&fs::read(path)?));
+        Ok(())
+    }
+}
+
+fn inspect(root: &Path) -> Result<&'static str> {
+    safe_root(root)?;
+    let Some(old) = read_manifest(root)? else {
+        return Ok("absent");
+    };
+    verify_manifest(root, &old)?;
+    verify_owned_files(root, &old)?;
+    Ok(registered_version(&old))
+}
+
+fn read_manifest(root: &Path) -> Result<Option<Manifest>> {
+    let path = root.join(MANIFEST);
+    safe(&path, false)?;
+    if metadata(&path)?.is_none() {
+        ensure_unclaimed(root)?;
+        return Ok(None);
+    }
+    load_manifest(&path).map(Some)
+}
+
+fn load_manifest(path: &Path) -> Result<Manifest> {
+    serde_json::from_slice(&fs::read(path)?).map_err(|error| failure(path, error))
+}
+
+fn ensure_unclaimed(root: &Path) -> Result<()> {
+    for name in NAMES {
+        let path = root.join(name);
+        if metadata(&path)?.is_some() {
+            return Err(failure(
+                &path,
+                "foreign resource without ownership manifest",
+            ));
         }
     }
     Ok(())
 }
 
-fn inspect(root: &Path) -> Result<&'static str> {
-    safe_root(root)?;
-    let manifest_path = root.join(MANIFEST);
-    safe(&manifest_path, false)?;
-    let Some(_) = metadata(&manifest_path)? else {
-        for name in NAMES {
-            if metadata(&root.join(name))?.is_some() {
-                return Err(failure(
-                    &root.join(name),
-                    "foreign resource without ownership manifest",
-                ));
-            }
-        }
-        return Ok("absent");
-    };
-    let old: Manifest = serde_json::from_slice(&fs::read(&manifest_path)?)
-        .map_err(|error| failure(&manifest_path, error))?;
-    if old.owner != "safeselect"
-        || old.schema != 1
-        || old.version.is_empty()
-        || old.files.keys().any(|path| !valid_resource(path))
+fn verify_manifest(root: &Path, manifest: &Manifest) -> Result<()> {
+    if manifest.owner != "safeselect"
+        || manifest.schema != 1
+        || manifest.version.is_empty()
+        || manifest.files.keys().any(|path| !valid_resource(path))
         || NAMES
             .iter()
-            .any(|name| !old.files.contains_key(&format!("{name}/SKILL.md")))
+            .any(|name| !manifest.files.contains_key(&format!("{name}/SKILL.md")))
     {
-        return Err(failure(&manifest_path, "invalid ownership manifest"));
+        return Err(failure(&root.join(MANIFEST), "invalid ownership manifest"));
     }
-    let dirs = old
+    Ok(())
+}
+
+fn verify_owned_files(root: &Path, manifest: &Manifest) -> Result<()> {
+    let dirs = manifest
         .files
         .keys()
         .flat_map(|path| {
@@ -216,15 +255,16 @@ fn inspect(root: &Path) -> Result<&'static str> {
     for name in NAMES {
         inventory(root, &root.join(name), &mut actual, &dirs)?;
     }
-    verify_inventory(root, &old.files, &actual)?;
+    verify_inventory(root, &manifest.files, &actual)
+}
+
+fn registered_version(manifest: &Manifest) -> &'static str {
     let current = desired();
-    Ok(
-        if old.version == current.version && old.files == current.files {
-            "current"
-        } else {
-            "outdated"
-        },
-    )
+    if manifest.version == current.version && manifest.files == current.files {
+        "current"
+    } else {
+        "outdated"
+    }
 }
 
 fn verify_inventory(
@@ -248,6 +288,21 @@ fn verify_inventory(
         return Err(failure(&root.join(path), "extra managed resource"));
     }
     Ok(())
+}
+
+pub fn status_lines(repo: Option<&Path>) -> Vec<String> {
+    let mut lines = vec![scope_status(None, false, "user")];
+    if let Some(repo) = repo {
+        lines.push(scope_status(Some(repo), true, "project"));
+    }
+    lines
+}
+
+fn scope_status(repo: Option<&Path>, local: bool, scope: &str) -> String {
+    match root(repo, local) {
+        Ok(path) => status(&path, scope),
+        Err(error) => format!("  skills: conflict [scope={scope}]: {error}"),
+    }
 }
 
 pub fn status(root: &Path, scope: &str) -> String {
@@ -319,22 +374,25 @@ impl Snapshot {
     }
     fn restore(&self) -> Result<()> {
         match &self.original {
-            Some((bytes, permissions)) => {
-                let temp = self
-                    .path
-                    .with_file_name(format!(".safeselect-restore-{}", uuid::Uuid::new_v4()));
-                private_write(&temp, bytes)?;
-                fs::set_permissions(&temp, permissions.clone())?;
-                fs::rename(temp, &self.path)?;
-            }
-            None => {
-                if metadata(&self.path)?.is_some() {
-                    fs::remove_file(&self.path)?;
-                }
-            }
+            Some((bytes, permissions)) => restore_file(&self.path, bytes, permissions),
+            None => remove_created_file(&self.path),
         }
-        Ok(())
     }
+}
+
+fn restore_file(path: &Path, bytes: &[u8], permissions: &Permissions) -> Result<()> {
+    let temp = path.with_file_name(format!(".safeselect-restore-{}", uuid::Uuid::new_v4()));
+    private_write(&temp, bytes)?;
+    fs::set_permissions(&temp, permissions.clone())?;
+    fs::rename(temp, path)?;
+    Ok(())
+}
+
+fn remove_created_file(path: &Path) -> Result<()> {
+    if metadata(path)?.is_some() {
+        fs::remove_file(path)?;
+    }
+    Ok(())
 }
 
 struct Stage(PathBuf);
@@ -348,21 +406,27 @@ fn stage(root: &Path) -> Result<Stage> {
     let path = root.join(format!(".safeselect-stage-{}", uuid::Uuid::new_v4()));
     private_directory(&path)?;
     let stage = Stage(path);
-    for (relative, content) in FILES {
-        let target = stage.0.join("new").join(relative);
-        private_directory(
-            target
-                .parent()
-                .ok_or_else(|| failure(&target, "missing parent"))?,
-        )?;
-        private_write(&target, content.as_bytes())?;
-    }
-    private_write(
-        &stage.0.join("new").join(MANIFEST),
-        &serde_json::to_vec_pretty(&desired())?,
-    )?;
+    write_bundle(&stage.0.join("new"))?;
     private_directory(&stage.0.join("old"))?;
     Ok(stage)
+}
+
+fn write_bundle(directory: &Path) -> Result<()> {
+    for (relative, content) in FILES {
+        write_resource(&directory.join(relative), content.as_bytes())?;
+    }
+    private_write(
+        &directory.join(MANIFEST),
+        &serde_json::to_vec_pretty(&desired())?,
+    )
+}
+
+fn write_resource(path: &Path, bytes: &[u8]) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| failure(path, "missing parent"))?;
+    private_directory(parent)?;
+    private_write(path, bytes)
 }
 
 fn replace(root: &Path, stage: &Stage, changed: &mut Vec<(&'static str, bool)>) -> Result<()> {
@@ -416,6 +480,23 @@ pub fn register_prepared<T>(
 ) -> Result<()> {
     let _lock = lock(root)?;
     let state = inspect(root)?;
+    let (snapshot, backup) = snapshot_config(config)?;
+    let prepared = prepare()?;
+    let operation = || operation(prepared);
+    if state == "current" {
+        return run_operation(operation, &snapshot, &backup);
+    }
+    register_staged(root, operation, &snapshot, &backup)
+}
+
+fn snapshot_config(config: &Path) -> Result<(Snapshot, Snapshot)> {
+    verify_config_location(config)?;
+    let snapshot = Snapshot::capture(config)?;
+    let backup = Snapshot::capture(&config.with_extension("safeselect.bak"))?;
+    Ok((snapshot, backup))
+}
+
+fn verify_config_location(config: &Path) -> Result<()> {
     let parent = config
         .parent()
         .ok_or_else(|| failure(config, "missing parent"))?;
@@ -423,17 +504,19 @@ pub fn register_prepared<T>(
     if let Some(grandparent) = parent.parent() {
         safe(grandparent, true)?;
     }
-    let snapshot = Snapshot::capture(config)?;
-    let backup = Snapshot::capture(&config.with_extension("safeselect.bak"))?;
-    let prepared = prepare()?;
-    let operation = || operation(prepared);
-    if state == "current" {
-        return run_operation(operation, &snapshot, &backup);
-    }
+    Ok(())
+}
+
+fn register_staged(
+    root: &Path,
+    operation: impl FnOnce() -> Result<()>,
+    config: &Snapshot,
+    backup: &Snapshot,
+) -> Result<()> {
     let stage = stage(root)?;
     let mut changed = Vec::new();
-    let result = replace(root, &stage, &mut changed)
-        .and_then(|()| run_operation(operation, &snapshot, &backup));
+    let result =
+        replace(root, &stage, &mut changed).and_then(|()| run_operation(operation, config, backup));
     if let Err(error) = result {
         if let Err(restore_error) = rollback(root, &stage, &changed) {
             let recovery = stage.0.clone();
