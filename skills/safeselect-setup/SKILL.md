@@ -12,10 +12,16 @@ Read [setup recipes and effects](references/workflows.md) before making changes.
 
 1. Resolve the application repository and environment. Never guess among multiple
    environments. `config_validate` and redacted `config_show` diagnose config.
-2. Use `check` for connection failures and follow its stable diagnostic codes.
-3. For an existing stale sidecar/JDBC/SSH connection, use `reconnect` once.
-   If `SAFESELECT_SIDECAR_CONNECTION_FAILED` occurs during startup, report it and
-   inspect configuration, tunnel and backend availability instead of reconnecting.
+2. If an external bastion, VPN, or tunnel is known unavailable, stop and ask the
+   user to restore it manually. Do not call `check`, `connect` or `reconnect`, or
+   try shell SSH/VPN commands; wait for the user's confirmation before resuming.
+3. With that route available and only the database session closed/disconnected,
+   call `reconnect` once directly, without `check` first. Retry the original
+   bounded operation once only after success. Stop after failed recovery; never
+   alternate `check` and `reconnect`. If route availability is unknown, use
+   `check` at most once to distinguish the cause. For a startup
+   `SAFESELECT_SIDECAR_CONNECTION_FAILED`, report the diagnostic instead of
+   treating it as an established database session that merely needs reconnecting.
 4. For missing JDBC drivers, use `driver_list`; `driver_download` supports
    PostgreSQL. Register other trusted JARs with `driver_add` and SHA-256 checking.
 5. Reuse configured secret sources. Never print passwords, put them in JDBC URLs,

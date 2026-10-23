@@ -36,6 +36,8 @@ databases, write config or execute queries during these model checks.
 | Explore document fields in this collection | base + MongoDB; exact database/collection discovery and sampled schema, no invented fields |
 | A flattened filter was rejected | MongoDB; resend complete nested/encoded filter, never replace with an empty filter |
 | Serious security rejection stopped the server | base; stop and report, host restart after correction; no reconnect on a dead session |
+| My external bastion/VPN/tunnel is down and I must restore it myself | base + setup; stop, ask for manual restoration, no check/reconnect/shell loop; wait for user confirmation |
+| The bastion works but the database session is disconnected | base + setup; one direct MCP reconnect before check, retry only after success; stop on failure |
 
 ## Implementation evidence (2026-10-23)
 
@@ -43,7 +45,7 @@ databases, write config or execute queries during these model checks.
   source and embedded hashes, check metadata, cover both clients/scopes, repeated
   setup, MCP-only migration, shared resources, unchanged-owned updates,
   conflicts, unsafe permissions, symlinks, lock contention and operation rollback.
-  Final local checks passed: 522 Rust tests, `cargo fmt --check`, `cargo clippy`,
+  Final local checks passed: 526 Rust tests, `cargo fmt --check`, `cargo clippy`,
   `python3 tools/ci/validate_docs.py` and `git diff --check`. The existing build
   script emits its informational embedded-JAR warning; Java was not rebuilt.
 - Codex CLI 0.152.0: isolated HOME/CODEX_HOME, app-server `initialize` followed by
