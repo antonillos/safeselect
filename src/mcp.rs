@@ -494,10 +494,12 @@ impl McpServer {
             tracing::warn!("Sidecar pre-start failed during initialize: {e}");
         }
 
+        let notice = crate::updates::automatic_notice();
         let resp = JsonRpcResponse {
             jsonrpc: "2.0",
             id: msg.id.clone(),
             result: Some(serde_json::json!({
+                "instructions": crate::updates::mcp_instructions(notice.as_deref()),
                 "protocolVersion": proto_version,
                 "capabilities": {
                     "tools": {
@@ -4792,10 +4794,12 @@ fn run_setup_server_with_io<R: BufRead, W: Write>(
                         .and_then(|v| v.as_str()),
                 );
 
+                let notice = crate::updates::automatic_notice();
                 let resp = JsonRpcResponse {
                     jsonrpc: "2.0",
                     id: msg.id.clone(),
                     result: Some(serde_json::json!({
+                        "instructions": crate::updates::mcp_instructions(notice.as_deref()),
                         "protocolVersion": proto_version,
                         "capabilities": {
                             "tools": {

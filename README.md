@@ -114,6 +114,34 @@ asdf reshim safeselect "${SAFESELECT_VERSION}"
 
 </details>
 
+### Update notifications
+
+Run `safeselect update-check` to check the latest stable GitHub release and show
+an update command for your installation. This command does not install anything.
+Homebrew installations use `brew update && brew upgrade antonillos/tap/safeselect`;
+asdf installations use `asdf install safeselect latest` followed by selecting the
+new version. Source builds installed with `./install.sh` remember the local checkout and show
+`cd '<repo>' && BIN_DIR='<destination>' ./install.sh --update --release --branch '<installed-branch>'` (or
+`--debug`). The installer requires a clean checkout and a branch with an upstream,
+checks that the current branch matches the branch recorded in the installed binary,
+runs `git pull --ff-only`, then restarts the updated installer to build and install.
+Other custom binary locations link to the release download so you can preserve
+your installation directory.
+
+Automatic checks run at most once per day, with an 800 ms network timeout and
+silent network failures. A successful interactive CLI command shows a brief
+notice on stderr; redirected stderr stays quiet. MCP includes the notice in the
+initialization instructions for both configured and setup servers. Whether the
+notice is shown to the user depends on the MCP client. Neither path adds notices
+to query results or runs an update. Notices are remembered across CLI and MCP
+sessions for seven days per release in the system cache directory.
+
+Set `SAFESELECT_NO_UPDATE_CHECK=1` to disable automatic checks, including in the
+MCP server's environment. The explicit `update-check` command still works.
+Only public release metadata is requested; configuration and credentials are
+never sent. Help, version, uninstall and non-interactive CLI commands do not
+perform automatic checks.
+
 SafeSelect uses any available Java 17+ runtime rather than requiring a specific
 package-manager formula. If Java is missing or too old, install or select a
 Java 17+ runtime before running database commands. On macOS with Homebrew, you
