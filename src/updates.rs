@@ -38,12 +38,6 @@ fn newer(latest: &str, current: &str) -> bool {
 }
 
 fn fetch_latest() -> Option<String> {
-    #[derive(Deserialize)]
-    struct Release {
-        tag_name: String,
-        draft: bool,
-        prerelease: bool,
-    }
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_millis(800))
         .redirect(reqwest::redirect::Policy::none())
@@ -56,20 +50,31 @@ fn fetch_latest() -> Option<String> {
         .ok()?
         .error_for_status()
         .ok()?;
+    parse_release(response)
+}
+
+fn parse_release(reader: impl Read) -> Option<String> {
+    #[derive(Deserialize)]
+    struct Release {
+        tag_name: String,
+        draft: bool,
+        prerelease: bool,
+    }
     let mut bytes = Vec::new();
-    response.take(64 * 1024 + 1).read_to_end(&mut bytes).ok()?;
+    reader.take(64 * 1024 + 1).read_to_end(&mut bytes).ok()?;
     if bytes.len() > 64 * 1024 {
         return None;
     }
     let release: Release = serde_json::from_slice(&bytes).ok()?;
-    let version = semver::Version::parse(
-        release
-            .tag_name
-            .strip_prefix('v')
-            .unwrap_or(&release.tag_name),
-    )
-    .ok()?;
-    if release.draft || release.prerelease || !version.pre.is_empty() {
+    if release.draft || release.prerelease {
+        return None;
+    }
+    stable_version(&release.tag_name)
+}
+
+fn stable_version(tag: &str) -> Option<String> {
+    let version = semver::Version::parse(tag.strip_prefix('v').unwrap_or(tag)).ok()?;
+    if !version.pre.is_empty() {
         return None;
     }
     Some(version.to_string())
@@ -82,14 +87,7 @@ fn update_hint(executable: &Path) -> String {
     } else if path.contains("/installs/safeselect/") {
         "asdf install safeselect latest && asdf set -u safeselect latest && asdf reshim safeselect"
             .into()
-    } else if let Some(command) = option_env!("SAFESELECT_SOURCE_DIR").and_then(|directory| {
-        source_update_hint(
-            Path::new(directory),
-            executable,
-            option_env!("SAFESELECT_SOURCE_MODE").unwrap_or("release"),
-            option_env!("SAFESELECT_SOURCE_BRANCH").unwrap_or_default(),
-        )
-    }) {
+    } else if let Some(command) = installed_source_hint(executable) {
         command
     } else if dirs::home_dir().is_some_and(|home| executable == home.join(".local/bin/safeselect"))
     {
@@ -97,6 +95,15 @@ fn update_hint(executable: &Path) -> String {
     } else {
         format!("Download the matching binary from {RELEASES} (or use your original installation method).")
     }
+}
+
+fn installed_source_hint(executable: &Path) -> Option<String> {
+    source_update_hint(
+        Path::new(option_env!("SAFESELECT_SOURCE_DIR")?),
+        executable,
+        option_env!("SAFESELECT_SOURCE_MODE").unwrap_or("release"),
+        option_env!("SAFESELECT_SOURCE_BRANCH").unwrap_or_default(),
+    )
 }
 
 fn shell_quote(value: &str) -> String {
@@ -109,30 +116,45 @@ fn source_update_hint(
     mode: &str,
     branch: &str,
 ) -> Option<String> {
-    if branch.is_empty() || branch.contains(['\n', '\r']) {
+    if !valid_branch(branch) {
         return Some(format!(
             "Source branch unavailable. Update manually from {RELEASES}."
         ));
     }
-    if !directory.join("install.sh").is_file() || !directory.join(".git").exists() {
+    if !source_checkout_exists(directory) {
         return None;
     }
     let destination = executable.parent()?.to_str()?;
     let directory = directory.to_str()?;
-    if directory.contains(['\n', '\r']) || destination.contains(['\n', '\r']) {
+    if [directory, destination]
+        .iter()
+        .any(|path| path.contains(['\n', '\r']))
+    {
         return None;
     }
-    let mode = if mode == "debug" {
-        "--debug"
-    } else {
-        "--release"
-    };
+    let mode = build_mode_flag(mode);
     Some(format!(
         "cd {} && BIN_DIR={} ./install.sh --update {mode} --branch {}",
         shell_quote(directory),
         shell_quote(destination),
         shell_quote(branch)
     ))
+}
+
+fn build_mode_flag(mode: &str) -> &str {
+    if mode == "debug" {
+        "--debug"
+    } else {
+        "--release"
+    }
+}
+
+fn valid_branch(branch: &str) -> bool {
+    !branch.is_empty() && !branch.contains(['\n', '\r'])
+}
+
+fn source_checkout_exists(directory: &Path) -> bool {
+    directory.join("install.sh").is_file() && directory.join(".git").exists()
 }
 
 fn notice(latest: &str) -> String {
@@ -145,7 +167,11 @@ fn notice(latest: &str) -> String {
 }
 
 pub(crate) fn explicit_check() -> String {
-    match fetch_latest() {
+    check_with(fetch_latest)
+}
+
+fn check_with(fetch: impl FnOnce() -> Option<String>) -> String {
+    match fetch() {
         Some(latest) if newer(&latest, crate::cli::VERSION) => notice(&latest),
         Some(latest) => format!(
             "SafeSelect {}: no newer stable release (latest: {latest}).",
@@ -208,6 +234,44 @@ pub(crate) fn mcp_instructions(notice: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn release_metadata_accepts_only_bounded_stable_releases() {
+        let release = |tag: &str, draft: bool, prerelease: bool| {
+            serde_json::json!({
+                "tag_name": tag, "draft": draft, "prerelease": prerelease
+            })
+            .to_string()
+        };
+        assert_eq!(
+            parse_release(release("v1.2.3", false, false).as_bytes()),
+            Some("1.2.3".into())
+        );
+        for (tag, draft, prerelease) in [
+            ("1.2.3", true, false),
+            ("1.2.3", false, true),
+            ("1.2.3-rc.1", false, false),
+            ("invalid", false, false),
+        ] {
+            assert!(parse_release(release(tag, draft, prerelease).as_bytes()).is_none());
+        }
+        assert!(parse_release(b"invalid JSON".as_slice()).is_none());
+        assert!(parse_release(vec![b' '; 64 * 1024 + 1].as_slice()).is_none());
+        struct FailedReader;
+        impl Read for FailedReader {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("read failed"))
+            }
+        }
+        assert!(parse_release(FailedReader).is_none());
+    }
+
+    #[test]
+    fn explicit_check_reports_update_current_and_unavailable_states() {
+        assert!(check_with(|| Some("999.0.0".into())).contains("Update:"));
+        assert!(check_with(|| Some("0.0.0".into())).contains("no newer stable release"));
+        assert!(check_with(|| None).contains("Could not check"));
+    }
 
     #[test]
     fn compares_semantic_versions_and_rejects_untrusted_tags() {
