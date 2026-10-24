@@ -22,6 +22,30 @@ rejected operation did not mutate the fixture.
 | MongoDB | [`real_mongodb.rs`](../tests/security_suite/real_mongodb.rs) | Database/collection policy, nested namespace policy, recursive pipeline stages, `$out`/`$merge`, metadata stages, bounded resource options, server-side JavaScript, result limits, timeouts, and retry guidance |
 | MCP protocol | [`mcp_negative.rs`](../tests/mcp_negative.rs) | Malformed JSON-RPC, oversized payloads, and recovery after ordinary policy rejections and termination after serious security attempts |
 
+## Verify a CI execution
+
+1. Open the commit or PR's checks and follow its
+   [Verify run](https://github.com/antonillos/safeselect/actions/workflows/verify.yml).
+   Confirm the run belongs to the revision you are evaluating.
+2. In the **Real Integration Tests** jobs, inspect the **Run security tests**
+   step. It enables `SAFESELECT_SECURITY_TEST=1` and runs the security suite
+   against disposable PostgreSQL and MongoDB services. Confirm that both backend
+   suites executed and passed; the local test functions can return early when
+   this environment flag is absent.
+3. For protocol regressions, inspect **Unit & Smoke** and its **Compile and run
+   all tests (unit + smoke)** step. For quality metrics, download that revision's
+   `crap-report` artifact using the [CRAP guide](ci.md#crap-quality-report).
+4. Record the commit SHA, run URL and relevant job/step outcomes together.
+   Failed, cancelled, skipped, missing or pending checks do not establish a pass.
+   CI selects jobs by changed paths, so the aggregate Verify result alone does
+   not establish that every security suite ran.
+
+The integration workflow can also upload `integration-test-logs-pg<version>`
+artifacts. These supplemental logs may expire or be absent; inspect the executed
+step and its result before drawing a conclusion. See the
+[workflow source](../.github/workflows/integration-tests.yml) for the fixture
+configuration and commands.
+
 ## Running locally
 
 Build the sidecar and fixtures using the repository workflow before running
@@ -31,10 +55,10 @@ real database tests:
 makevn doctor init test package
 cp sidecar/target/safeselect-sidecar-*.jar sidecar/target/safeselect-sidecar.jar
 
-SAFESELECT_SECURITY_TEST=1 \\
+SAFESELECT_SECURITY_TEST=1 \
   cargo test --test security real_postgres_security_rejections_and_limits -- --nocapture
 
-SAFESELECT_SECURITY_TEST=1 \\
+SAFESELECT_SECURITY_TEST=1 \
   cargo test --test security real_mongodb_security_rejections_and_limits -- --nocapture
 ```
 

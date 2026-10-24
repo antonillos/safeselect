@@ -47,7 +47,21 @@ unknown paths retain full verification even when combined with website files.
 Consequently, a PR changing this classification policy must itself run the full
 suite; the optimization must not exempt its own implementation from review.
 
-## Java CRAP analyzer
+## CRAP quality report
+
+The README's CRAP badge shows the warning count from the latest report published
+from `develop`. The combined report covers Rust and Java, using complexity and
+test coverage to identify code that may be harder to maintain. The badge counts
+entries above the configured CRAP score threshold; it is not a coverage percentage.
+
+For a particular commit or PR, open its
+[Verify run](https://github.com/antonillos/safeselect/actions/workflows/verify.yml)
+and download the `crap-report` artifact. `report.md` contains the readable summary;
+`report.json` contains the complete findings. The published badge can represent a
+different revision, so use the matching run for review evidence. See the
+[code review guide](code-review.md#quality-criteria).
+
+### Java CRAP analyzer
 
 Java CRAP metrics use [antonillos/crap4java](https://github.com/antonillos/crap4java).
 Java build and coverage steps run through
