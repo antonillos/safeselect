@@ -116,42 +116,11 @@ asdf reshim safeselect "${SAFESELECT_VERSION}"
 
 ### Update notifications
 
-SafeSelect checks automatically after a successful CLI command in an interactive
-terminal and when an MCP server initializes. No background service or manual
-check is required. Detection is automatic; you run the suggested update command
-when convenient.
-
-![Illustrative SafeSelect update notices for Homebrew, asdf, release binaries, source installations, and MCP](docs/images/update-notifications.png)
-
-*Illustrative examples with sample versions and paths. MCP presentation depends
-on the client. Line breaks in the illustration are visual wrapping; copy the
-complete command printed by SafeSelect.*
-
-Run `safeselect update-check` to check the latest stable GitHub release and show
-an update command for your installation. This command does not install anything.
-Homebrew installations use `brew update && brew upgrade antonillos/tap/safeselect`;
-asdf installations use `asdf install safeselect latest` followed by selecting the
-new version. Source builds installed with `./install.sh` remember the local checkout and show
-`cd '<repo>' && BIN_DIR='<destination>' ./install.sh --update --release --branch '<installed-branch>'` (or
-`--debug`). The installer requires a clean checkout and a branch with an upstream,
-checks that the current branch matches the branch recorded in the installed binary,
-runs `git pull --ff-only`, then restarts the updated installer to build and install.
-Other custom binary locations link to the release download so you can preserve
-your installation directory.
-
-Automatic checks run at most once per day, with an 800 ms network timeout and
-silent network failures. A successful interactive CLI command shows a brief
-notice on stderr; redirected stderr stays quiet. MCP includes the notice in the
-initialization instructions for both configured and setup servers. Whether the
-notice is shown to the user depends on the MCP client. Neither path adds notices
-to query results or runs an update. Notices are remembered across CLI and MCP
-sessions for seven days per release in the system cache directory.
-
-Set `SAFESELECT_NO_UPDATE_CHECK=1` to disable automatic checks, including in the
-MCP server's environment. The explicit `update-check` command still works.
-Only public release metadata is requested; configuration and credentials are
-never sent. Help, version, uninstall and non-interactive CLI commands do not
-perform automatic checks.
+SafeSelect checks for updates after successful interactive CLI commands and during
+MCP initialization, then suggests the command for your installation. Updates are
+manual. Run `safeselect update-check` to check now, or set
+`SAFESELECT_NO_UPDATE_CHECK=1` to disable automatic checks.
+See [update behavior and examples](docs/install.md#updates-and-notifications).
 
 SafeSelect uses any available Java 17+ runtime rather than requiring a specific
 package-manager formula. If Java is missing or too old, install or select a
