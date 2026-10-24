@@ -51,7 +51,8 @@ configuration is not modified.
 
 ### CLI command captures
 
-The README and website share the static command gallery in docs/cli-gallery.json.
+The [visual command gallery](../docs/cli-gallery.md) and website share the
+command catalog in `docs/cli-gallery.json`.
 Its PNG captures live under docs/recordings/cli/ and use this disposable
 fixture's real command output, redacted configuration/driver output, and bounded SQL
 workflow output. They contain no real credentials, private paths or visitor

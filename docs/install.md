@@ -154,7 +154,7 @@ Unlike single-environment commands, `check`, `doctor`, `posture`,
 `reconnect`, and `config validate` process all environments by default. Checks
 can access secrets, open tunnels, and connect to databases. Select an environment
 explicitly when other connections, especially production, must remain untouched.
-See [CLI conventions and effects](../README.md#convention-before-configuration).
+See [CLI conventions and effects](configuration.md#convention-before-configuration).
 
 During an interactive OpenCode installation, SafeSelect can use the existing
 project-local config, create `.opencode/opencode.jsonc` alongside an existing
@@ -184,7 +184,7 @@ closed. SSH password authentication requires `sshpass`. `{file:...}` and general
 configuration interpolation are not supported. On macOS, ordinary password input
 still uses Keychain; `--literal-password` opens a secure literal prompt even for
 passwords that resemble references. Never put real literal passwords in command
-arguments. See [password sources](../README.md#password-references-on-all-platforms).
+arguments. See [password sources](configuration.md#password-references-on-all-platforms).
 
 ## Uninstall
 
