@@ -323,13 +323,22 @@ sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 #[test]
 fn test_setup_mode_documentation_matches_cli() {
     let readme = repo_file("README.md");
+    let agent_guide = repo_file("docs/agents.md");
     assert!(
-        readme.contains("enters setup mode automatically"),
-        "README should document implicit setup mode"
+        readme.contains("](docs/agents.md)"),
+        "README should link to the agent integration guide"
+    );
+    assert!(
+        agent_guide.contains("enters setup mode automatically"),
+        "Agent integration guide should document implicit setup mode"
     );
     assert!(
         !readme.contains("safeselect serve --setup"),
         "README must not document a non-existent serve --setup flag"
+    );
+    assert!(
+        !agent_guide.contains("safeselect serve --setup"),
+        "Agent integration guide must not document a non-existent serve --setup flag"
     );
 
     let (_stdout, stderr, success) = run(&["serve", "--help"]);
