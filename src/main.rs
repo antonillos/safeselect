@@ -1539,6 +1539,7 @@ fn cmd_agent(action: AgentAction) -> Result<()> {
             environment,
             name,
             local,
+            global,
         } => {
             let loader = ConfigLoader::new();
             let (repo_root, project_dir) = match project {
@@ -1554,6 +1555,18 @@ fn cmd_agent(action: AgentAction) -> Result<()> {
                     (found.clone(), found)
                 }
             };
+            let local = agents::resolve_agent_scope(&client, repo_root.as_deref(), local, global)?;
+            let scope = if local {
+                "local (project)"
+            } else {
+                "global (user)"
+            };
+            if client == "claude-code" {
+                println!("Installation scope: {scope}");
+            } else {
+                let target = agents::select_install_config(&client, repo_root.as_deref(), local)?;
+                println!("Installation scope: {scope}; config: {}", target.display());
+            }
             let environments = match environment {
                 Some(environment) => vec![environment],
                 None => {
@@ -1652,6 +1665,7 @@ fn cmd_agent(action: AgentAction) -> Result<()> {
             project,
             environment,
             local,
+            global,
         } => {
             let loader = ConfigLoader::new();
             let (repo_root, _project_dir) = match project {
@@ -1666,6 +1680,16 @@ fn cmd_agent(action: AgentAction) -> Result<()> {
                     (loader.find_local_project(&cwd), ())
                 }
             };
+
+            let local = agents::resolve_agent_scope(&client, repo_root.as_deref(), local, global)?;
+            println!(
+                "Upgrade scope: {}",
+                if local {
+                    "local (project)"
+                } else {
+                    "global (user)"
+                }
+            );
 
             let mcp_timeout_ms = if let Some(ref root) = repo_root {
                 let project_file = root.join(".safeselect").join("project.toml");

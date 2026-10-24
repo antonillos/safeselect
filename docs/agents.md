@@ -50,8 +50,8 @@ Agents should treat SafeSelect as their database boundary:
 | Gemini CLI | Yes | Yes | `mcpServers` in `settings.json` |
 
 SafeSelect rejects `--local` for Windsurf rather than silently changing a global
-file. User scope is the default for every other client; pass `--local` when the
-integration should travel with the repository.
+file. Installation reuses an existing project-local client configuration;
+otherwise it asks for scope. Pass `--local` or `--global` to choose explicitly.
 
 CLI `connect`, `disconnect`, and `reconnect` use their own temporary sidecar;
 they do not control an existing agent session. To change that session's
@@ -64,7 +64,7 @@ connection state, invoke its MCP tools. See [CLI conventions and effects](config
 safeselect agent detect
 
 # Install in user scope. The only environment is inferred when unambiguous.
-safeselect agent install opencode --project /absolute/path/to/myapp
+safeselect agent install opencode --project /absolute/path/to/myapp --global
 
 # Or install in the repository's official project-scoped client config.
 safeselect agent install codex --project /absolute/path/to/myapp --local
@@ -105,7 +105,20 @@ entry and want to refresh it after upgrading the SafeSelect binary. By default i
 migrates the entry to the canonical `safeselect-<project>-<environment>` name when
 it can derive the project, and updates the generated MCP config in the same step.
 If `--name` is omitted, SafeSelect resolves the entry from the current project and,
-when needed, the provided `--environment`.
+when needed, the provided `--environment`. In an interactive terminal, multiple
+matches within the selected scope open an entry selector showing each configuration
+path. Scripts must resolve entry ambiguity with `--name` or `--environment`. The selected
+upgrade destination is printed before changes are prepared.
+
+`agent install` and `agent upgrade` select scope before selecting environments
+or entries. Installation prints the scope and configuration path before asking
+for environments. If the client already has a project-local configuration,
+that scope is selected automatically. Otherwise, SafeSelect asks for local or
+global scope, showing the destination paths with local first. Use `--local` or
+`--global` to choose explicitly. Without a local configuration, non-interactive
+runs require one of these flags instead of silently choosing global scope.
+Upgrades search only the selected scope; a missing entry does not trigger a
+fallback to another scope.
 
 ## Portable workflow skills
 
@@ -127,11 +140,11 @@ references and can be copied without this repository's README or docs.
 
 ### Registration contract
 
-- Global scope is the default: skills go to `~/.agents/skills/`.
-- `--local` uses `.agents/skills/` inside the resolved application project.
-- Upgrades use the scope of the selected MCP entry. An existing project entry
-  updates project skills even when `--local` is omitted; global skills are left
-  untouched.
+- Skills follow the selected MCP installation scope.
+- Global scope uses `~/.agents/skills/`; local scope uses `.agents/skills/`
+  inside the resolved application project.
+- Upgrades follow the same scope selection as installation. Existing local config
+  selects project scope unless `--global` is passed. Skills follow that scope.
 - Both clients and all SafeSelect MCP entries share one bundle per scope.
 - Codex MCP config honors `CODEX_HOME`; OpenCode global config honors
   `XDG_CONFIG_HOME`, defaulting to `~/.config`. Skill locations stay independent.

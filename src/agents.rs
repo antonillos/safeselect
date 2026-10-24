@@ -462,7 +462,57 @@ fn opencode_jsonc_alternative(client: &str, local_path: &Path) -> Option<PathBuf
     (!jsonc_path.exists()).then_some(jsonc_path)
 }
 
-fn select_install_config(client: &str, repo_root: Option<&Path>, local: bool) -> Result<PathBuf> {
+pub fn resolve_agent_scope(
+    client: &str,
+    repo_root: Option<&Path>,
+    local: bool,
+    global: bool,
+) -> Result<bool> {
+    if local && global {
+        return Err(SafeselectError::Other(
+            "--local conflicts with --global".into(),
+        ));
+    }
+    if global {
+        return Ok(false);
+    }
+    if local {
+        get_local_client_config(client, repo_root)?;
+        return Ok(true);
+    }
+    if repo_root
+        .and_then(|root| detect_local_client_config(client, root))
+        .is_some()
+    {
+        return Ok(true);
+    }
+    if !agent_terminal_is_interactive() {
+        return Err(SafeselectError::Other(
+            "No local client config found; choose --local or --global in non-interactive mode"
+                .into(),
+        ));
+    }
+    let mut choices = Vec::new();
+    if let Ok(path) = get_local_client_config(client, repo_root) {
+        choices.push(format!("Local (project): {}", path.display()));
+    }
+    let global_choice = if client == "claude-code" {
+        "Global (user): Claude Code user scope".to_string()
+    } else {
+        format!("Global (user): {}", get_client_config(client)?.display())
+    };
+    choices.push(global_choice.clone());
+    let selected = inquire::Select::new("Select SafeSelect configuration scope:", choices)
+        .prompt()
+        .map_err(|error| SafeselectError::Other(format!("Cancelled: {error}")))?;
+    Ok(selected != global_choice)
+}
+
+pub fn select_install_config(
+    client: &str,
+    repo_root: Option<&Path>,
+    local: bool,
+) -> Result<PathBuf> {
     if local {
         return get_local_client_config(client, repo_root);
     }
@@ -700,15 +750,24 @@ pub fn upgrade_entry(
     if client == "claude-code" {
         return upgrade_claude_entry(entry_name, environment, repo_root, config_dir, local);
     }
+    let config = select_install_config(client, repo_root, local)?;
+    let resolved = resolve_upgrade_target_in_configs(
+        client,
+        entry_name,
+        environment,
+        repo_root,
+        vec![config],
+        agent_terminal_is_interactive(),
+    )?;
+    println!("Upgrade target: {} ({})", resolved.1, resolved.0.display());
     let prepare = || {
         prepare_upgrade(
             client,
-            entry_name,
+            &resolved,
             environment,
             repo_root,
             config_dir,
             mcp_timeout_ms,
-            local,
         )
     };
     let write = |(prepared, previous, target): (PreparedConfig, String, String)| {
@@ -717,13 +776,12 @@ pub fn upgrade_entry(
         Ok(())
     };
     if crate::agent_skills::supported(client) {
-        let (config, _) =
-            resolve_upgrade_target(client, entry_name, environment, repo_root, local)?;
+        let config = &resolved.0;
         let project_local = repo_root
             .and_then(|root| detect_local_client_config(client, root))
-            .is_some_and(|path| path == config);
+            .is_some_and(|path| path == *config);
         let root = crate::agent_skills::root(repo_root, project_local)?;
-        crate::agent_skills::register_prepared(&root, &config, prepare, write)
+        crate::agent_skills::register_prepared(&root, config, prepare, write)
     } else {
         write(prepare()?)
     }
@@ -751,15 +809,13 @@ fn upgrade_claude_entry(
 #[allow(clippy::too_many_arguments)]
 fn prepare_upgrade(
     client: &str,
-    entry_name: Option<&str>,
+    resolved: &(PathBuf, String),
     environment: Option<&str>,
     repo_root: Option<&Path>,
     config_dir: Option<&Path>,
     mcp_timeout_ms: u64,
-    local: bool,
 ) -> Result<(PreparedConfig, String, String)> {
-    let (config_path, resolved_entry_name) =
-        resolve_upgrade_target(client, entry_name, environment, repo_root, local)?;
+    let (config_path, resolved_entry_name) = resolved.clone();
     verify_permissions(&config_path)?;
     let content = std::fs::read_to_string(&config_path)?;
     let environment =
@@ -1142,7 +1198,7 @@ fn local_config_path(client: &str, root: &Path) -> Result<PathBuf> {
         "copilot" => Ok(root.join(".vscode").join("mcp.json")),
         "gemini-cli" => Ok(root.join(".gemini").join("settings.json")),
         c => Err(SafeselectError::Other(format!(
-            "Local config not supported for {c}; use global install (without --local)"
+            "Local config not supported for {c}; use --global"
         ))),
     }
 }
@@ -1421,6 +1477,11 @@ fn replace_json_entry(
     Ok(serde_json::to_string_pretty(&config)?)
 }
 
+fn agent_terminal_is_interactive() -> bool {
+    use std::io::IsTerminal;
+    std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
+}
+
 fn resolve_upgrade_target(
     client: &str,
     entry_name: Option<&str>,
@@ -1428,9 +1489,44 @@ fn resolve_upgrade_target(
     repo_root: Option<&Path>,
     local: bool,
 ) -> Result<(PathBuf, String)> {
+    resolve_upgrade_target_with_selection(client, entry_name, environment, repo_root, local, false)
+}
+
+fn resolve_upgrade_target_with_selection(
+    client: &str,
+    entry_name: Option<&str>,
+    environment: Option<&str>,
+    repo_root: Option<&Path>,
+    local: bool,
+    interactive: bool,
+) -> Result<(PathBuf, String)> {
     if let Some(name) = entry_name {
         let config_path = resolve_upgrade_config_path_for_name(client, name, repo_root, local)?;
         return Ok((config_path, name.to_string()));
+    }
+
+    let configs = candidate_upgrade_config_paths(client, repo_root, local)?;
+    resolve_upgrade_target_in_configs(client, None, environment, repo_root, configs, interactive)
+}
+
+fn resolve_upgrade_target_in_configs(
+    client: &str,
+    entry_name: Option<&str>,
+    environment: Option<&str>,
+    repo_root: Option<&Path>,
+    configs: Vec<PathBuf>,
+    interactive: bool,
+) -> Result<(PathBuf, String)> {
+    if let Some(name) = entry_name {
+        for path in configs {
+            let content = std::fs::read_to_string(&path)?;
+            if config_has_entry(client, &content, name)? {
+                return Ok((path, name.to_string()));
+            }
+        }
+        return Err(SafeselectError::Other(format!(
+            "Entry '{name}' not found in selected {client} scope"
+        )));
     }
 
     let project_name = repo_root
@@ -1442,7 +1538,6 @@ fn resolve_upgrade_target(
             )
         })?;
 
-    let configs = candidate_upgrade_config_paths(client, repo_root, local)?;
     let mut matches = Vec::new();
     for config_path in configs {
         let content = std::fs::read_to_string(&config_path)?;
@@ -1466,6 +1561,22 @@ fn resolve_upgrade_target(
             }
         ))),
         1 => Ok(matches.remove(0)),
+        _ if interactive => {
+            let options = matches
+                .iter()
+                .map(|(path, name)| format!("{name} ({})", path.display()))
+                .collect::<Vec<_>>();
+            let selected = inquire::Select::new("Select entry to upgrade:", options.clone())
+                .prompt()
+                .map_err(|error| SafeselectError::Other(format!("Cancelled: {error}")))?;
+            let index = options
+                .iter()
+                .position(|option| *option == selected)
+                .ok_or_else(|| {
+                    SafeselectError::Other("Selected upgrade entry was not found".into())
+                })?;
+            Ok(matches.remove(index))
+        }
         _ => Err(SafeselectError::Other(format!(
             "Multiple SafeSelect entries found for project '{project_name}': {}; use --name{}",
             matches
@@ -2322,7 +2433,7 @@ mcp_servers = { safe = { command = "safeselect", args = ["serve", "--environment
             std::env::temp_dir().join(format!("safeselect-windsurf-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let error = get_local_client_config("windsurf", Some(&root)).unwrap_err();
-        assert!(error.to_string().contains("without --local"));
+        assert!(error.to_string().contains("--global"));
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -2507,6 +2618,112 @@ mcp_servers = { safe = { command = "safeselect", args = ["serve", "--environment
             2
         );
         assert!(candidate_entry_names("unknown", json, "demo", None, None).is_err());
+    }
+
+    #[test]
+    fn install_scope_prefers_existing_local_config_and_honors_explicit_flags() {
+        let root = std::env::temp_dir().join(format!("safeselect-scope-{}", uuid::Uuid::new_v4()));
+        let path = root.join(".opencode/opencode.jsonc");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "{}").unwrap();
+        assert!(resolve_agent_scope("opencode", Some(&root), false, false).unwrap());
+        assert!(!resolve_agent_scope("opencode", Some(&root), false, true).unwrap());
+        assert!(resolve_agent_scope("opencode", Some(&root), true, false).unwrap());
+        assert!(resolve_agent_scope("opencode", Some(&root), true, true).is_err());
+        std::fs::remove_file(path).unwrap();
+        assert!(resolve_agent_scope("opencode", Some(&root), true, false).unwrap());
+        if !agent_terminal_is_interactive() {
+            let error = resolve_agent_scope("opencode", Some(&root), false, false).unwrap_err();
+            assert!(error.to_string().contains("choose --local or --global"));
+        }
+        assert!(resolve_agent_scope("opencode", None, true, false).is_err());
+        assert!(resolve_agent_scope("windsurf", Some(&root), true, false).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn upgrade_selection_stays_in_the_selected_config() {
+        let root =
+            std::env::temp_dir().join(format!("safeselect-upgrade-scope-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let local = root.join("local.json");
+        let global = root.join("global.json");
+        for (path, name) in [
+            (&local, "safeselect-demo-dev"),
+            (&global, "safeselect-demo-prod"),
+        ] {
+            std::fs::write(
+                path,
+                serde_json::json!({"mcp": {
+                    name: {"type": "local", "command": ["safeselect"]}
+                }})
+                .to_string(),
+            )
+            .unwrap();
+        }
+        for (path, name, other) in [
+            (&local, "safeselect-demo-dev", "safeselect-demo-prod"),
+            (&global, "safeselect-demo-prod", "safeselect-demo-dev"),
+        ] {
+            assert_eq!(
+                resolve_upgrade_target_in_configs(
+                    "opencode",
+                    Some(name),
+                    None,
+                    None,
+                    vec![path.clone()],
+                    false,
+                )
+                .unwrap(),
+                (path.clone(), name.to_string())
+            );
+            assert!(resolve_upgrade_target_in_configs(
+                "opencode",
+                Some(other),
+                None,
+                None,
+                vec![path.clone()],
+                false,
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("selected opencode scope"));
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn upgrade_rejects_ambiguity_in_scripts_and_prepares_selected_entry() {
+        let temp =
+            std::env::temp_dir().join(format!("safeselect-upgrade-{}", uuid::Uuid::new_v4()));
+        let root = temp.join("demo");
+        let path = root.join(".opencode/opencode.jsonc");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let content = serde_json::json!({"mcp": {
+            "safeselect-demo-dev": {"type": "local", "command": ["safeselect", "serve", "--environment", "dev"]},
+            "safeselect-demo-test": {"type": "local", "command": ["safeselect", "serve", "--environment", "test"]}
+        }}).to_string();
+        std::fs::write(&path, &content).unwrap();
+        let error =
+            resolve_upgrade_target_with_selection("opencode", None, None, Some(&root), true, false)
+                .unwrap_err();
+        assert!(error.to_string().contains("Multiple SafeSelect entries"));
+        let selected = (path.clone(), "safeselect-demo-test".to_string());
+        let (prepared, previous, target) = prepare_upgrade(
+            "opencode",
+            &selected,
+            Some("test"),
+            Some(&root),
+            None,
+            120_000,
+        )
+        .unwrap();
+        assert_eq!(prepared.path, path);
+        assert_eq!(previous, selected.1);
+        assert_eq!(target, selected.1);
+        assert!(prepared.updated.contains("safeselect-demo-dev"));
+        assert_eq!(std::fs::read_to_string(path).unwrap(), content);
+        std::fs::remove_dir_all(temp).unwrap();
     }
 
     #[test]
