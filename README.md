@@ -24,6 +24,7 @@
 
 <p align="center">
   <a href="https://github.com/antonillos/safeselect/actions/workflows/verify.yml"><img src="https://github.com/antonillos/safeselect/actions/workflows/verify.yml/badge.svg" alt="CI"></a>
+  <a href="docs/ci.md#crap-quality-report"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fantonillos.github.io%2Fsafeselect%2Fcrap-badge.json" alt="CRAP warnings"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-225b42" alt="License: MIT"></a>
 </p>
 
@@ -162,6 +163,8 @@ For alternatives and tradeoffs, see the [database MCP comparison](docs/compare.m
 | Find a command or MCP tool | [CLI reference](docs/cli.md) · [MCP tools](docs/agents.md#mcp-tools) |
 | Configure policy, environments or passwords | [Configuration](docs/configuration.md) |
 | Understand the security boundary | [Threat model and limits](docs/security-proof.md) · [Architecture](docs/architecture.md) |
+| Inspect quality checks and security tests | [CI and CRAP report](docs/ci.md#crap-quality-report) · [Security test suite](docs/security-test-suite.md) |
+| Find packages and directory listings | [Distribution](docs/distribution.md) |
 | Build or contribute | [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) |
 
 ## Feedback and contributions

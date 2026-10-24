@@ -72,3 +72,9 @@ The `safeselect` binary includes:
 
 **Not included**: JDBC drivers. PostgreSQL users install one separately via
 `safeselect driver download --vendor postgresql`; the MongoDB driver is embedded.
+
+## Directory listings
+
+- [mcpservers.org](https://mcpservers.org/servers/antonillos/safeselect)
+- [TensorBlock MCP Index](https://www.tensorblock.co/mcp/servers/github-antonillos-safeselect-4c99dff4)
+- [LobeHub](https://lobehub.com/mcp/antonillos-safeselect)
