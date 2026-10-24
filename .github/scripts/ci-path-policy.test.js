@@ -45,6 +45,20 @@ const WEBSITE_PR = [
 ];
 const FULL = ["crap", "unit", "postgres", "mongodb", "security", "realIntegration"];
 
+test("classifies the exact CLI gallery validator as documentation", () => {
+  const gallery = "tools/validate_cli_gallery.py";
+  expected([gallery], "docs", ["docs"]);
+  expected(["README.md", "docs/cli-gallery.md", gallery], "docs", ["docs"]);
+  expected([...WEBSITE_PR, gallery], "website", ["docs"]);
+  expected([gallery, "src/mcp.rs"], "shared-rust", ["crap", "unit"]);
+  expected([gallery, "tests/security.rs"], "both-backends", ["crap", "unit", "postgres", "mongodb", "realIntegration"]);
+  expected([gallery, ".github/workflows/verify.yml"], "sensitive", FULL);
+  for (const path of ["tools/validate_cli_gallery.py.bak", "tools/another_validator.py",
+    "tools/ci/validate_docs.py"]) {
+    expected([gallery, path], "unknown", FULL);
+  }
+});
+
 test("classifies the exact Google verification PR as website-only", () =>
   expected(WEBSITE_PR, "website", ["docs"]));
 
@@ -95,6 +109,15 @@ test("empty or unavailable path lists still require full verification", () => {
 
 // Exercise the actual workflow gate, not a second implementation of its rules.
 const workflow = readFileSync(resolve(__dirname, "../workflows/verify.yml"), "utf8");
+
+test("Verify runs on PR code updates without rerunning on metadata edits", () => {
+  const pullRequest = workflow.split("  pull_request:\n")[1].split("  push:\n")[0];
+  assert.match(pullRequest, /types: \[opened, synchronize, reopened\]/);
+  assert.doesNotMatch(pullRequest, /\bedited\b/);
+  assert.match(workflow, /^  push:\n/m);
+  assert.match(workflow, /^  workflow_dispatch:\n/m);
+});
+
 const jobs = Object.fromEntries([...workflow.split("jobs:\n")[1]
   .matchAll(/^  ([\w-]+):\n([\s\S]*?)(?=^  [\w-]+:|(?![\s\S]))/gm)]
   .map((match) => [match[1], match[2]]));
@@ -104,7 +127,8 @@ test("lightweight profile retains all website checks and mandatory Verify depend
   assert.ok(website);
   assert.doesNotMatch(website, /^    if:/m, "website job must not become conditional");
   for (const command of ["npm run build:pages", "npm run typecheck", "npm run lint",
-    "python3 tools/ci/validate_docs.py", "python3 tools/ci/validate_site.py", "test_site_validation.py"]) {
+    "python3 tools/ci/validate_docs.py", "python3 -B tools/validate_cli_gallery.py",
+    "python3 tools/ci/validate_site.py", "test_site_validation.py"]) {
     assert.ok(website.includes(command), `missing ${command}`);
   }
   assert.match(jobs.verify, /needs: \[[^\n]*website/);
