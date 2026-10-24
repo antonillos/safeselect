@@ -47,8 +47,9 @@ environment `staging`. A sole imported environment is selected by convention.
 If this project already has other environments, add `--environment staging`
 (or your chosen name) to the checks and agent installation commands below.
 Review imported host, database, SSH settings and policy before allowing access.
-Enter secrets through the local prompts, not the chat. On macOS, database
-passwords are stored in Keychain rather than the project TOML.
+Enter secrets through the local prompts, not the chat. For this macOS
+walkthrough, choose Keychain when asked where to keep the password. The importer
+also supports environment references; neither option stores passwords in TOML.
 
 The usual import path can download the PostgreSQL JDBC driver. If setup reports
 that it is missing, use the supported command:

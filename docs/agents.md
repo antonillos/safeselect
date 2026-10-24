@@ -55,7 +55,7 @@ integration should travel with the repository.
 
 CLI `connect`, `disconnect`, and `reconnect` use their own temporary sidecar;
 they do not control an existing agent session. To change that session's
-connection state, invoke its MCP tools. See [CLI conventions and effects](../README.md#convention-before-configuration).
+connection state, invoke its MCP tools. See [CLI conventions and effects](configuration.md#convention-before-configuration).
 
 ## Installing in an Agent
 
@@ -163,7 +163,13 @@ guarantee it. See the [validation procedure and evidence](agent-skills-validatio
 
 ## Manual MCP Configuration
 
-The installed entry looks like this in your agent's config:
+The generated name defaults to `safeselect-<project>-<environment>`. Each entry
+pins the absolute project path and one environment.
+
+For clients that use a `mcpServers` JSON object, the entry has this shape.
+Codex uses TOML, OpenCode uses `mcp`, and Copilot uses `servers`; consult the
+[supported-agent table](#supported-agents) or use `agent install` to generate
+the client's configuration.
 
 ```json
 {
@@ -480,14 +486,17 @@ with an available external route should use `reconnect` directly.
 
 ## Configuration Tools
 
-These tools let an agent guide setup without leaving MCP. Destructive tools require
-explicit confirmation arguments.
+These tools let an agent guide setup without leaving MCP. They can modify local
+configuration and credentials; the database read-only boundary does not make
+setup tools read-only. `config_reset` and `uninstall` require `confirm: true`;
+`config_delete_environment` takes the environment name without a separate
+confirmation argument.
 
 | Tool | Purpose | Arguments |
 |---|---|---|
 | `config_validate` | Validate project/environment config | `environment` optional |
 | `config_show` | Show resolved config with secrets redacted | `environment` required |
-| `config_set_password` | Store an environment password in macOS Keychain | `environment`, `password` |
+| `config_set_password` | Configure an environment reference on any platform, or Keychain on macOS | `environment`, `password`; prefer `{env:NAME}` |
 | `config_rename_environment` | Rename an environment and migrate secret references | `old_name`, `new_name` |
 | `config_delete_environment` | Delete one environment | `name` |
 | `config_reset` | Delete all environments and keychain entries for the project | `confirm: true` |
@@ -558,3 +567,86 @@ increasing project limits.
 - Agents cannot change the target database
 - Ordinary policy rejections return errors without executing; serious security attempts and internal validation or audit failures stop the server
 - All queries are audited (hashed, never stored in plain text)
+
+## Guided MCP Context
+
+Clients that support MCP prompts can invoke `read_only_database_debugging` for a
+safe investigation checklist. Clients can also read
+`safeselect://guide/read-only-database-debugging` for the same static workflow
+and boundary notes. Neither capability exposes database data, credentials, or
+write access; use the database tools below for discovery and bounded reads.
+
+## Agent Workflow
+
+Start with `database_info`, then follow the flow for the connected backend:
+
+- **PostgreSQL:** `list_tables` → `describe_table` → relevant indexes or statistics
+  → a targeted `select` or `explain`.
+- **MongoDB:** `list_databases` → `list_collections` → `discover_document_schema`
+  → a bounded document query. Schema inference reads a sample of documents;
+  for a metadata-only request, stop after listing collections.
+
+Follow the [agent recovery flow](#agent-recovery-flow) if connectivity fails.
+
+MCP `check` verifies the backend used by the current session (`SELECT 1` for
+PostgreSQL, a database ping for MongoDB). An existing usable connection or tunnel
+does not require a separate successful bastion probe. Sidecar startup and response
+reads have deadlines; stalled or malformed responses invalidate the sidecar
+without closing the MCP session. For a stale connection with an available route,
+call `reconnect` once and retry the bounded operation only after successful
+verification. A startup or configuration failure
+still requires fixing its cause before retrying; do not loop on reconnection.
+
+Agents must discover relation or collection structure before querying unfamiliar data and use each discovery response's `next_suggestion` instead of guessing column or field names. SQL descriptions are catalog metadata; MongoDB schemas are inferred from a bounded, non-exhaustive sample.
+
+A `next_suggestion` does not expand the user's request or authorize additional
+data reads. Stop at the requested boundary, even when a tool suggests a next step.
+
+MongoDB query documents must remain complete nested JSON values. Clients that
+flatten nested tool arguments can pass `filter`, `projection`, and `sort` as
+JSON-encoded object strings and `pipeline` as a JSON-encoded array string.
+`redact_fields` also accepts a JSON-encoded string array. Flattened keys are
+rejected so a lost filter or redaction can never become a less constrained
+fallback.
+
+MongoDB server-side JavaScript is never available: `$where`, `$function`, and
+`$accumulator` are rejected recursively in filters, projections, sorts, and
+aggregation pipelines before the MongoDB driver receives them. When rejected,
+rebuild the request with declarative MQL operators; SafeSelect has no setting
+that enables JavaScript.
+
+Query responses include `row_count`, `byte_count`, `elapsed_ms`, and a human-readable `elapsed` value so agents can reason about result size and latency.
+
+Every MCP success and error includes one contextual `next_suggestion`. Agents
+should follow that single safe action, never blindly repeat an invalid request,
+and stop when the suggestion is terminal. For clients that only show an MCP
+error summary, SafeSelect also includes the trusted next suggestion in that
+summary without exposing database-derived detail.
+
+## MCP Tools
+
+Availability depends on the connected backend and whether the server is in
+setup mode. SQL and MongoDB tools are alternative backend surfaces.
+
+| Area | Tools |
+|---|---|
+| SQL | `list_tables`, `describe_table`, `list_table_indexes`, `list_table_partitions`, `list_functions`, `list_triggers`, `list_scheduled_jobs`, `get_database_stats`, `get_table_stats`, `get_maintenance_diagnostics`, `select`, `explain` |
+| MongoDB reads | `list_databases`, `list_collections`, `find_documents`, `aggregate_documents`, `distinct_documents`, `count_documents`, `explain_documents` |
+| MongoDB analysis | `profile_document_field`, `discover_document_schema`, `generate_document_fixture`, `list_collection_indexes`, `get_database_stats`, `get_collection_stats` |
+| Connection | `database_info`, `check`, `connect`, `disconnect`, `reconnect` |
+| Audit | `audit_status`, `audit_recent` |
+| Config | `config_validate`, `config_show`, `config_set_password`, `config_rename_environment`, `config_delete_environment`, `config_reset` |
+| Setup | `import_compose`, `driver_list`, `driver_add`, `driver_download`, `agent_detect`, `agent_install`, `agent_status`, `agent_uninstall`, `uninstall` |
+
+`get_maintenance_diagnostics` supports PostgreSQL 15, 16, 17, and 18.
+
+## First-run setup
+
+When no `.safeselect/` directory exists, `safeselect serve` scans for PostgreSQL
+Compose services. If found, it enters setup mode automatically: it imports them,
+writes project configuration, and starts a setup-only MCP server. Otherwise it
+prints setup instructions and exits.
+An existing but empty or invalid configuration is rejected, not replaced by setup.
+
+> [!IMPORTANT]
+> Setup mode does not expose query tools. Agents can help import and validate configuration before any database inspection tools become available.
