@@ -468,30 +468,39 @@ pub fn resolve_agent_scope(
     local: bool,
     global: bool,
 ) -> Result<bool> {
-    if local && global {
-        return Err(SafeselectError::Other(
+    match (local, global) {
+        (true, true) => Err(SafeselectError::Other(
             "--local conflicts with --global".into(),
-        ));
+        )),
+        (true, false) => get_local_client_config(client, repo_root).map(|_| true),
+        (false, true) => Ok(false),
+        (false, false) => {
+            if repo_root
+                .and_then(|root| detect_local_client_config(client, root))
+                .is_some()
+            {
+                return Ok(true);
+            }
+            prompt_agent_scope(client, repo_root)
+        }
     }
-    if global {
-        return Ok(false);
-    }
-    if local {
-        get_local_client_config(client, repo_root)?;
-        return Ok(true);
-    }
-    if repo_root
-        .and_then(|root| detect_local_client_config(client, root))
-        .is_some()
-    {
-        return Ok(true);
-    }
+}
+
+fn prompt_agent_scope(client: &str, repo_root: Option<&Path>) -> Result<bool> {
     if !agent_terminal_is_interactive() {
         return Err(SafeselectError::Other(
             "No local client config found; choose --local or --global in non-interactive mode"
                 .into(),
         ));
     }
+    let choices = agent_scope_choices(client, repo_root)?;
+    let selected = inquire::Select::new("Select SafeSelect configuration scope:", choices)
+        .prompt()
+        .map_err(|error| SafeselectError::Other(format!("Cancelled: {error}")))?;
+    Ok(selected.starts_with("Local (project):"))
+}
+
+fn agent_scope_choices(client: &str, repo_root: Option<&Path>) -> Result<Vec<String>> {
     let mut choices = Vec::new();
     if let Ok(path) = get_local_client_config(client, repo_root) {
         choices.push(format!("Local (project): {}", path.display()));
@@ -501,11 +510,8 @@ pub fn resolve_agent_scope(
     } else {
         format!("Global (user): {}", get_client_config(client)?.display())
     };
-    choices.push(global_choice.clone());
-    let selected = inquire::Select::new("Select SafeSelect configuration scope:", choices)
-        .prompt()
-        .map_err(|error| SafeselectError::Other(format!("Cancelled: {error}")))?;
-    Ok(selected != global_choice)
+    choices.push(global_choice);
+    Ok(choices)
 }
 
 pub fn select_install_config(
@@ -2618,6 +2624,35 @@ mcp_servers = { safe = { command = "safeselect", args = ["serve", "--environment
             2
         );
         assert!(candidate_entry_names("unknown", json, "demo", None, None).is_err());
+    }
+
+    #[test]
+    fn scope_choices_put_local_destination_first_and_exclude_unsupported_scopes() {
+        let root =
+            std::env::temp_dir().join(format!("safeselect-scope-choices-{}", uuid::Uuid::new_v4()));
+        let choices = agent_scope_choices("opencode", Some(&root)).unwrap();
+        assert_eq!(choices.len(), 2);
+        assert_eq!(
+            choices[0],
+            format!(
+                "Local (project): {}",
+                root.join(".opencode/opencode.jsonc").display()
+            )
+        );
+        assert!(choices[1].starts_with("Global (user):"));
+        let choices = agent_scope_choices("opencode", None).unwrap();
+        assert_eq!(choices.len(), 1);
+        assert!(choices[0].starts_with("Global (user):"));
+        let choices = agent_scope_choices("windsurf", Some(&root)).unwrap();
+        assert_eq!(choices.len(), 1);
+        assert!(choices[0].starts_with("Global (user):"));
+        let choices = agent_scope_choices("claude-code", Some(&root)).unwrap();
+        assert_eq!(
+            choices[0],
+            format!("Local (project): {}", root.join(".mcp.json").display())
+        );
+        assert_eq!(choices[1], "Global (user): Claude Code user scope");
+        assert!(agent_scope_choices("unknown", Some(&root)).is_err());
     }
 
     #[test]
