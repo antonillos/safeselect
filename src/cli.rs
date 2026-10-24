@@ -360,9 +360,12 @@ pub enum AgentAction {
         /// Entry name (default: safeselect-<project-dir>-<environment>)
         #[arg(long)]
         name: Option<String>,
-        /// Install to project-local config instead of global config
-        #[arg(long)]
+        /// Install to project-local config (auto-selected when local config exists)
+        #[arg(long, conflicts_with = "global")]
         local: bool,
+        /// Install to global user config instead of detecting or asking for scope
+        #[arg(long)]
+        global: bool,
     },
     /// Upgrade an existing MCP entry and refresh Codex/OpenCode skills
     Upgrade {
@@ -377,9 +380,12 @@ pub enum AgentAction {
         /// Environment name to serve (auto-detected from the existing entry if omitted)
         #[arg(long)]
         environment: Option<String>,
-        /// Upgrade the project-local config instead of global config
-        #[arg(long)]
+        /// Upgrade project-local config (auto-selected when local config exists)
+        #[arg(long, conflicts_with = "global")]
         local: bool,
+        /// Upgrade global user config instead of detecting or asking for scope
+        #[arg(long)]
+        global: bool,
     },
     /// Uninstall MCP entry
     Uninstall {
@@ -479,6 +485,42 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn agent_install_scope_flags_are_optional_and_mutually_exclusive() {
+        for flag in [None, Some("--local"), Some("--global")] {
+            let mut args = vec!["safeselect", "agent", "install", "opencode"];
+            args.extend(flag);
+            assert!(Cli::try_parse_from(args).is_ok());
+        }
+        assert!(Cli::try_parse_from([
+            "safeselect",
+            "agent",
+            "install",
+            "opencode",
+            "--local",
+            "--global",
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn agent_upgrade_scope_flags_are_optional_and_mutually_exclusive() {
+        for flag in [None, Some("--local"), Some("--global")] {
+            let mut args = vec!["safeselect", "agent", "upgrade", "opencode"];
+            args.extend(flag);
+            assert!(Cli::try_parse_from(args).is_ok());
+        }
+        assert!(Cli::try_parse_from([
+            "safeselect",
+            "agent",
+            "upgrade",
+            "opencode",
+            "--local",
+            "--global",
+        ])
+        .is_err());
     }
 
     #[test]

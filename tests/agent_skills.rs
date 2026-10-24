@@ -85,9 +85,7 @@ fn both_clients_and_scopes_register_update_and_keep_shared_skills() {
                 "--name",
                 "safe",
             ];
-            if local {
-                args.push("--local");
-            }
+            args.push(if local { "--local" } else { "--global" });
             f.success(&args);
             let root = f.root(local);
             assert_bundle(&root);
@@ -112,9 +110,7 @@ fn both_clients_and_scopes_register_update_and_keep_shared_skills() {
                 "--environment",
                 "dev",
             ];
-            if local {
-                upgrade.push("--local");
-            }
+            upgrade.push(if local { "--local" } else { "--global" });
             let mut old: serde_json::Value =
                 serde_json::from_slice(&fs::read(root.join(".safeselect-skills.json")).unwrap())
                     .unwrap();
@@ -136,6 +132,39 @@ fn both_clients_and_scopes_register_update_and_keep_shared_skills() {
         let config = fs::read_to_string(f.home.join(".config/opencode/opencode.jsonc")).unwrap();
         let config: serde_json::Value = serde_json::from_str(&config).unwrap();
         assert_eq!(config["permissions"][0]["effect"], "ask");
+    }
+}
+
+#[test]
+fn scope_convention_rejects_implicit_global_and_reuses_existing_local_config() {
+    for client in ["codex", "opencode"] {
+        let f = Fixture::new();
+        for action in ["install", "upgrade"] {
+            let output = f.run(&["agent", action, client, "--environment", "dev"]);
+            assert!(!output.status.success());
+            assert!(String::from_utf8_lossy(&output.stderr).contains("choose --local or --global"));
+            assert!(!f.root(false).exists());
+            assert!(!f.root(true).exists());
+        }
+        f.success(&[
+            "agent",
+            "install",
+            client,
+            "--environment",
+            "dev",
+            "--local",
+        ]);
+        let local_manifest = f.root(true).join(".safeselect-skills.json");
+        let before = fs::read(&local_manifest).unwrap();
+        let output = f.success(&["agent", "install", client, "--environment", "test"]);
+        assert!(output.contains("Installation scope: local (project)"));
+        let output = f.success(&["agent", "upgrade", client, "--environment", "dev"]);
+        assert!(output.contains("Upgrade scope: local (project)"));
+        let output = f.run(&["agent", "upgrade", client, "--name", "missing"]);
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("selected"));
+        assert_eq!(fs::read(local_manifest).unwrap(), before);
+        assert!(!f.root(false).exists());
     }
 }
 
@@ -199,7 +228,14 @@ fn global_upgrades_with_other_local_entries_keep_global_skill_scope() {
                 "pre",
                 "--local",
             ]);
-            f.success(&["agent", "install", client, "--environment", "dev"]);
+            f.success(&[
+                "agent",
+                "install",
+                client,
+                "--environment",
+                "dev",
+                "--global",
+            ]);
             let local_manifest = f.root(true).join(".safeselect-skills.json");
             let local_before = fs::read(&local_manifest).unwrap();
             let global_manifest = f.root(false).join(".safeselect-skills.json");
@@ -207,7 +243,14 @@ fn global_upgrades_with_other_local_entries_keep_global_skill_scope() {
                 serde_json::from_slice(&fs::read(&global_manifest).unwrap()).unwrap();
             old["version"] = "0.0.1".into();
             fs::write(&global_manifest, serde_json::to_vec(&old).unwrap()).unwrap();
-            let mut args = vec!["agent", "upgrade", client, "--environment", "dev"];
+            let mut args = vec![
+                "agent",
+                "upgrade",
+                client,
+                "--environment",
+                "dev",
+                "--global",
+            ];
             if named {
                 args.extend(["--name", "safeselect-application-dev"]);
             }
@@ -227,18 +270,39 @@ fn conflict_and_invalid_config_never_change_integration_or_skills() {
     fs::create_dir_all(config.parent().unwrap()).unwrap();
     fs::write(&config, "invalid = [").unwrap();
     assert!(!f
-        .run(&["agent", "install", "codex", "--environment", "dev"])
+        .run(&[
+            "agent",
+            "install",
+            "codex",
+            "--environment",
+            "dev",
+            "--global"
+        ])
         .status
         .success());
     assert!(!f.root(false).join("safeselect").exists());
     assert_eq!(fs::read_to_string(&config).unwrap(), "invalid = [");
     fs::write(&config, "# preserve comment\nmodel = \"example-model\"\n").unwrap();
-    f.success(&["agent", "install", "codex", "--environment", "dev"]);
+    f.success(&[
+        "agent",
+        "install",
+        "codex",
+        "--environment",
+        "dev",
+        "--global",
+    ]);
     let before = fs::read(&config).unwrap();
     let skill = f.root(false).join("safeselect/SKILL.md");
     fs::write(&skill, "user customized skill").unwrap();
     assert!(!f
-        .run(&["agent", "install", "codex", "--environment", "other"])
+        .run(&[
+            "agent",
+            "install",
+            "codex",
+            "--environment",
+            "other",
+            "--global"
+        ])
         .status
         .success());
     assert_eq!(fs::read(&config).unwrap(), before);
@@ -282,6 +346,7 @@ fn config_modes_comments_and_existing_backup_survive_registration() {
         "dev",
         "--name",
         "safe",
+        "--global",
     ]);
     f.success(&[
         "agent",
@@ -291,6 +356,7 @@ fn config_modes_comments_and_existing_backup_survive_registration() {
         "dev",
         "--name",
         "safe",
+        "--global",
     ]);
     let text = fs::read_to_string(&config).unwrap();
     assert!(text.contains("# user comment"));
