@@ -17,7 +17,7 @@
   <a href="#quick-start"><strong>Get started →</strong></a> ·
   <a href="#see-it-in-action">Demo</a> ·
   <a href="#supported-agents">Agents</a> ·
-  <a href="docs/security-proof.md">Security</a> ·
+  <a href="#security-and-quality-evidence">Security &amp; quality</a> ·
   <a href="#documentation">Docs</a> ·
   <a href="https://antonillos.github.io/safeselect/">Website</a>
 </p>
@@ -140,16 +140,33 @@ scopes and manual setup. Codex and OpenCode also receive four portable workflow
 skills. After updating SafeSelect, run `safeselect agent upgrade <client>` and
 reload your client.
 
-## How access is controlled
+## Security and quality evidence
 
 SafeSelect validates requests against project policy before database execution.
 Ordinary policy rejections return an error; serious security attempts and internal
 validation or audit failures stop the server. Result limits and timeouts bound
 reads, and query text is hashed for audit records.
 
-Read the [security model](docs/security.md), inspect the
-[security evidence](docs/security-proof.md), or see the
-[architecture](docs/architecture.md) for the Rust and embedded Java design.
+The database security suites run against disposable PostgreSQL and MongoDB
+fixtures. Rejection cases check the expected error and compare the resulting
+database state with a baseline, so a rejected response alone is not enough to pass.
+
+| What is checked | Inspect the evidence |
+|---|---|
+| SQL writes, stacked statements and side-effecting functions | [PostgreSQL security tests](tests/security_suite/real_postgres.rs) |
+| MongoDB write stages, server-side JavaScript and access boundaries | [MongoDB security tests](tests/security_suite/real_mongodb.rs) |
+| Malformed MCP requests, policy rejection and shutdown behavior | [MCP regression tests](tests/mcp_negative.rs) |
+| Rust and Java complexity with test coverage | [CRAP report and CI artifacts](docs/ci.md#crap-quality-report) |
+| Commit signatures and message format | [Commit Policy](docs/ci.md#commit-policy) |
+
+See [how to verify a CI execution](docs/security-test-suite.md#verify-a-ci-execution)
+for results tied to a specific commit. Test source describes the checks; a
+successful matching run provides execution evidence. Pending or skipped suites
+are unverified, and badges can refer to a different revision.
+
+Read the [threat model and limits](docs/security-proof.md), the
+[security model](docs/security.md), or the [architecture](docs/architecture.md)
+for the scope of these controls.
 For alternatives and tradeoffs, see the [database MCP comparison](docs/compare.md).
 
 ## Documentation
