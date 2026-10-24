@@ -34,8 +34,28 @@ def local_target(source: Path, raw: str) -> Path | None:
     return ROOT / target.lstrip("/") if target.startswith("/") else source.parent / target
 
 
-def main() -> int:
+def setup_documentation_errors() -> list[str]:
+    readme = ROOT / "README.md"
+    guide = ROOT / "docs/agents.md"
+    readme_text = readme.read_text(encoding="utf-8")
+    guide_text = guide.read_text(encoding="utf-8") if guide.is_file() else ""
     errors: list[str] = []
+    if "enters setup mode automatically" not in readme_text:
+        if "enters setup mode automatically" not in guide_text:
+            errors.append("README.md or docs/agents.md must document implicit setup mode")
+        if not any(
+            local_target(readme, match.group(1)) == guide
+            for match in LINK.finditer(readme_text)
+        ):
+            errors.append("README.md must link to docs/agents.md when setup guidance is moved there")
+    for path, text in [(readme, readme_text), (guide, guide_text)]:
+        if "safeselect serve --setup" in text:
+            errors.append(f"{path.relative_to(ROOT)}: non-existent serve --setup flag")
+    return errors
+
+
+def main() -> int:
+    errors = setup_documentation_errors()
     for path in markdown_files():
         text = path.read_text(encoding="utf-8")
         relative = path.relative_to(ROOT)
@@ -51,7 +71,7 @@ def main() -> int:
     if errors:
         print("Markdown validation failed:", *errors, sep="\n", file=sys.stderr)
         return 1
-    print("Markdown formatting and repository-local links are valid.")
+    print("Markdown formatting, repository-local links and setup guidance are valid.")
     return 0
 
 

@@ -6,6 +6,25 @@ was cancelled or was skipped. **Website and positioning** is always required;
 it builds the static site, checks TypeScript/lint, validates Markdown, links,
 metadata and assets, and runs the website validator tests.
 
+## Documentation-only pull requests
+
+Documentation paths and the exact `tools/validate_cli_gallery.py` helper use the
+`docs` profile. The mandatory **Website and positioning** job executes this
+helper and checks its command catalog and captures. This exemption does not
+extend to other tools or shared validators. Mixing the helper with product,
+unknown or sensitive paths preserves those paths' required checks.
+
+Setup guidance is checked by `tools/ci/validate_docs.py`, with regression tests
+in the mandatory website job. The Rust smoke test checks only `serve --help`.
+Documentation may explain implicit setup in the README or in the linked agent
+guide; neither location may advertise a nonexistent `serve --setup` flag.
+
+Verify runs when a PR is opened, receives new commits or is reopened. Editing
+its title or description does not rerun Verify. After changing a PR's base branch,
+reopen it or push a new commit to refresh classification and checks for the new
+base. Push and manual workflow runs retain their existing behavior. The
+independent Commit Policy workflow continues to check PR edits.
+
 ## Website-only pull requests
 
 A PR containing only the following paths uses the `website` profile:
