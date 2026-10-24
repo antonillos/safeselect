@@ -128,7 +128,7 @@ test("lightweight profile retains all website checks and mandatory Verify depend
   assert.doesNotMatch(website, /^    if:/m, "website job must not become conditional");
   for (const command of ["npm run build:pages", "npm run typecheck", "npm run lint",
     "python3 tools/ci/validate_docs.py", "python3 -B tools/validate_cli_gallery.py",
-    "python3 tools/ci/validate_site.py", "test_site_validation.py"]) {
+    "python3 tools/ci/validate_site.py", "test_site_validation.py", "test_docs_validation.py"]) {
     assert.ok(website.includes(command), `missing ${command}`);
   }
   assert.match(jobs.verify, /needs: \[[^\n]*website/);
