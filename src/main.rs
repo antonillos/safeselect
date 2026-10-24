@@ -19,6 +19,7 @@ mod posture;
 mod security;
 mod sidecar;
 mod ssh_diagnostics;
+mod updates;
 
 #[cfg(test)]
 use clap::Parser;
@@ -42,9 +43,21 @@ fn main() {
 
     let cli = Cli::parse_with_help();
 
+    let automatic_notice = !matches!(
+        cli.command,
+        Command::Serve { .. } | Command::UpdateCheck | Command::Uninstall { .. }
+    );
     if let Err(e) = run(cli) {
         tracing::error!("{}", redact_cli_error(&e));
         std::process::exit(1);
+    }
+    if automatic_notice
+        && std::io::IsTerminal::is_terminal(&std::io::stderr())
+        && std::io::IsTerminal::is_terminal(&std::io::stdout())
+    {
+        if let Some(notice) = updates::automatic_notice() {
+            eprintln!("{notice}");
+        }
     }
 }
 
@@ -52,6 +65,10 @@ fn run(cli: Cli) -> Result<()> {
     let loader = ConfigLoader::new();
 
     match cli.command {
+        Command::UpdateCheck => {
+            println!("{}", updates::explicit_check());
+            Ok(())
+        }
         Command::Serve {
             project,
             environment,

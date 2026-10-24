@@ -74,6 +74,44 @@ before installing to `~/.local/bin` (override with `PREFIX`):
 curl -fsSL https://raw.githubusercontent.com/antonillos/safeselect/main/packaging/install/install-release.sh | sh
 ```
 
+## Updates and notifications
+
+SafeSelect automatically checks for a newer stable release after successful CLI
+commands in an interactive terminal and during MCP initialization. It does not
+run as a background service or install updates automatically. Checks run at most
+once a day, reminders repeat after seven days per release, and network failures
+stay silent (800 ms request timeout). Help, version, uninstall, and non-interactive
+CLI commands do not perform automatic checks. Only public release metadata is
+requested; configuration and credentials are never sent. MCP clients decide how
+to present the initialization notice.
+
+![Illustrative SafeSelect update notices for Homebrew, asdf, release binaries, source installations, and MCP](images/update-notifications.png)
+
+*Illustrative examples with sample versions and paths. MCP presentation depends
+on the client. Line breaks are visual wrapping; copy the complete command printed
+by SafeSelect.*
+
+To check explicitly from any directory:
+
+```bash
+safeselect update-check
+```
+
+The notice prints a complete update command for the detected installation method:
+Homebrew uses `brew update && brew upgrade antonillos/tap/safeselect`; asdf installs
+and selects the latest version. Release binaries in the standard location use the
+release installer; other custom locations link to the release download.
+Source installs made with `./install.sh` record their checkout, branch, and build
+mode. The suggested command changes to that checkout, preserves the installation
+destination, and invokes `./install.sh --update` with the recorded mode and branch.
+The installer refuses a dirty checkout, a detached HEAD, a missing upstream, or a
+branch that differs from the installed branch. It pulls with `--ff-only` and runs
+the updated installer to rebuild and install.
+
+Set `SAFESELECT_NO_UPDATE_CHECK=1` to disable automatic checks; for MCP, set it in
+the server's environment. Explicit checks still work. Existing source installs
+need to be reinstalled with the updated installer to record their origin.
+
 ## Verify installation
 
 ```bash

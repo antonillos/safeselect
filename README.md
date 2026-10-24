@@ -114,6 +114,14 @@ asdf reshim safeselect "${SAFESELECT_VERSION}"
 
 </details>
 
+### Update notifications
+
+SafeSelect checks for updates after successful interactive CLI commands and during
+MCP initialization, then suggests the command for your installation. Updates are
+manual. Run `safeselect update-check` to check now, or set
+`SAFESELECT_NO_UPDATE_CHECK=1` to disable automatic checks.
+See [update behavior and examples](docs/install.md#updates-and-notifications).
+
 SafeSelect uses any available Java 17+ runtime rather than requiring a specific
 package-manager formula. If Java is missing or too old, install or select a
 Java 17+ runtime before running database commands. On macOS with Homebrew, you

@@ -1,7 +1,7 @@
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use std::path::PathBuf;
 
-const VERSION: &str = match option_env!("SAFESELECT_BUILD_VERSION") {
+pub(crate) const VERSION: &str = match option_env!("SAFESELECT_BUILD_VERSION") {
     Some(v) => v,
     None => env!("CARGO_PKG_VERSION"),
 };
@@ -87,6 +87,8 @@ fn style_help(command: clap::Command) -> clap::Command {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Check for a newer stable release and show how to update
+    UpdateCheck,
     /// Start the MCP server for a project/environment
     Serve {
         /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)

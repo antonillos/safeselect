@@ -1829,6 +1829,7 @@ dependencies = [
  "libc",
  "reqwest",
  "rpassword",
+ "semver",
  "serde",
  "serde-saphyr",
  "serde_json",
