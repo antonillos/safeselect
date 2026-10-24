@@ -74,6 +74,35 @@ before installing to `~/.local/bin` (override with `PREFIX`):
 curl -fsSL https://raw.githubusercontent.com/antonillos/safeselect/main/packaging/install/install-release.sh | sh
 ```
 
+## Updates and notifications
+
+SafeSelect automatically checks for a newer stable release after successful CLI
+commands in an interactive terminal and during MCP initialization. It does not
+run as a background service or install updates automatically. Checks run at most
+once a day, reminders repeat after seven days per release, and network failures
+stay silent. MCP clients decide how to present the initialization notice.
+
+To check explicitly from any directory:
+
+```bash
+safeselect update-check
+```
+
+The notice prints a complete update command for the detected installation method.
+Source installs made with `./install.sh` record their checkout, branch, and build
+mode. The suggested command changes to that checkout, preserves the installation
+destination, and invokes `./install.sh --update` with the recorded mode and branch.
+The installer refuses a dirty checkout, a detached HEAD, a missing upstream, or a
+branch that differs from the installed branch. It pulls with `--ff-only` and runs
+the updated installer to rebuild and install.
+
+Set `SAFESELECT_NO_UPDATE_CHECK=1` to disable automatic checks; for MCP, set it in
+the server's environment. Explicit checks still work. Existing source installs
+need to be reinstalled with the updated installer to record their origin.
+
+See the [update notification examples](../README.md#update-notifications) for
+Homebrew, asdf, release binaries, source installations, and MCP.
+
 ## Verify installation
 
 ```bash

@@ -116,6 +116,17 @@ asdf reshim safeselect "${SAFESELECT_VERSION}"
 
 ### Update notifications
 
+SafeSelect checks automatically after a successful CLI command in an interactive
+terminal and when an MCP server initializes. No background service or manual
+check is required. Detection is automatic; you run the suggested update command
+when convenient.
+
+![Illustrative SafeSelect update notices for Homebrew, asdf, release binaries, source installations, and MCP](docs/images/update-notifications.png)
+
+*Illustrative examples with sample versions and paths. MCP presentation depends
+on the client. Line breaks in the illustration are visual wrapping; copy the
+complete command printed by SafeSelect.*
+
 Run `safeselect update-check` to check the latest stable GitHub release and show
 an update command for your installation. This command does not install anything.
 Homebrew installations use `brew update && brew upgrade antonillos/tap/safeselect`;
