@@ -3336,10 +3336,10 @@ impl McpServer {
             self.managed_tunnel = Some(tunnel);
             return Ok(true);
         }
-        self.managed_tunnel = None;
+        let endpoint_changed = self.managed_tunnel.take().is_some();
 
         if self.is_backend_ready_for_query(ssh, &resolved.environment.database.url) {
-            return Ok(false);
+            return Ok(endpoint_changed);
         }
 
         tracing::warn!(
@@ -6050,6 +6050,46 @@ mod tests {
             environment.database.url
         );
         server.refresh_managed_tunnel().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn switching_to_ready_external_tunnel_reports_endpoint_change_once() {
+        use crate::managed_tunnel::tests::{environment, Fixture};
+        use std::net::{TcpListener, TcpStream};
+
+        let fixture = Fixture::new();
+        let root = fixture.0.join("project");
+        let environments = root.join(".safeselect/environments");
+        std::fs::create_dir_all(&environments).unwrap();
+        let mut environment = environment("remote.invalid");
+        let file = environments.join("test.toml");
+        std::fs::write(&file, toml::to_string(&environment).unwrap()).unwrap();
+        let mut server = test_server(&root);
+        server.backend = environment.database.backend();
+        server.managed_tunnel = Some(fixture.start(environment.ssh.as_ref().unwrap()).unwrap());
+        let old_url = server.effective_database_url(&environment).unwrap();
+        let (old_host, old_port) = crate::extract_tcp_host_port(&old_url).unwrap();
+
+        let external = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let external_port = external.local_addr().unwrap().port();
+        environment.database.url = format!("mongodb://127.0.0.1:{external_port}/app");
+        let ssh = environment.ssh.as_mut().unwrap();
+        ssh.forward_host = None;
+        ssh.forward_port = None;
+        ssh.local_host = Some("127.0.0.1".into());
+        ssh.local_port = Some(external_port);
+        std::fs::write(&file, toml::to_string(&environment).unwrap()).unwrap();
+
+        assert!(server.ensure_ssh_ready_for_query().unwrap());
+        assert!(server.managed_tunnel.is_none());
+        assert!(TcpStream::connect((old_host.as_str(), old_port)).is_err());
+        assert_eq!(
+            server.effective_database_url(&environment).unwrap(),
+            environment.database.url
+        );
+        assert!(!server.ensure_ssh_ready_for_query().unwrap());
+        assert!(TcpStream::connect(("127.0.0.1", external_port)).is_ok());
     }
 
     pub(super) fn test_server(repo_root: &Path) -> McpServer {
