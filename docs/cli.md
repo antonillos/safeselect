@@ -38,8 +38,22 @@ startup, overriding `ForkAfterAuthentication`. Released binaries extract the
 embedded sidecar under a SHA-256-specific filename and verify its contents, so
 updates use the matching sidecar without replacing a running older version.
 
-If a database endpoint already responds, diagnostics report its reuse; that
+If a database endpoint already responds, CLI diagnostics report its reuse; that
 response does not verify the remote destination behind an existing tunnel.
+MCP servers with a configured SSH forwarding destination open an instance-owned
+SSH tunnel on an operating-system-selected loopback port. The database URL is
+updated only in memory; saved URLs and `ssh.local_port` remain unchanged. Each
+instance confirms its own forwarding with a private OpenSSH control socket,
+retries port allocation races, and closes its tunnel on normal shutdown. It does
+not reuse another process's listener. This allows simultaneous workspaces to use
+the same bastion even when their saved local ports match. Reconnect and sidecar
+restarts continue to use the instance's effective endpoint.
+
+External tunnels (SSH configurations without a forwarding destination) retain
+their configured endpoint and must be opened separately. CLI connection checks
+continue to use the configured local ports, so assign distinct ports when using
+those commands concurrently for different destinations.
+
 Multiple databases can share one bastion while keeping separate destinations,
 local ports and database credentials. A warning identifies the selected bastion
 when duplicate definitions of the same SSH host, port and username use different

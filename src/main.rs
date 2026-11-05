@@ -14,6 +14,7 @@ mod dbeaver;
 mod diagnostics;
 mod error;
 mod maintenance;
+mod managed_tunnel;
 mod mcp;
 mod posture;
 mod security;

@@ -281,6 +281,7 @@ macro_rules! optional_document_json {
 
 pub struct McpServer {
     sidecar: Option<SidecarProcess>,
+    managed_tunnel: Option<crate::managed_tunnel::ManagedTunnel>,
     security: SecurityEngine,
     audit: AuditLog,
     project_name: String,
@@ -327,6 +328,7 @@ impl McpServer {
 
         Ok(Self {
             sidecar: None,
+            managed_tunnel: None,
             security,
             audit,
             project_name: project_name.to_string(),
@@ -356,6 +358,12 @@ impl McpServer {
     }
 
     fn ensure_sidecar(&mut self) -> Result<&mut SidecarProcess> {
+        if self.managed_tunnel.is_some()
+            && self.ensure_ssh_ready_for_query()?
+            && self.sidecar.is_some()
+        {
+            self.restart_sidecar()?;
+        }
         if self.sidecar.is_some() {
             return self.sidecar_mut();
         }
@@ -1582,7 +1590,13 @@ impl McpServer {
             password: self.db_password.clone(),
             repo_root: self.repo_root.clone(),
         };
-        let mut report = crate::posture::inspect(&resolved, &self.config_dir)?;
+        self.ensure_ssh_ready_for_query()?;
+        let mut effective = resolved.environment.clone();
+        if let Some(tunnel) = self.managed_tunnel.as_ref() {
+            tunnel.apply(&mut effective)?;
+        }
+        let mut report =
+            crate::posture::inspect_with_url(&resolved, &self.config_dir, &effective.database.url)?;
         Self::acknowledge_posture(&mut report, args, &self.config_dir)?;
         let payload =
             serde_json::to_string(&report).map_err(|e| SafeselectError::Other(e.to_string()))?;
@@ -3228,14 +3242,12 @@ impl McpServer {
             "{}: attempting SSH tunnel recovery",
             DiagnosticCode::SshTunnelRecoveryAttempt.as_str()
         );
-        if let Err(e) = setup_ssh_tunnels(&self.repo_root, std::slice::from_ref(&self.env_name)) {
-            tracing::warn!("SSH tunnel recovery attempt failed: {e}");
-        }
+        let tunnel_repaired = self.ensure_ssh_ready_for_query()?;
 
-        if is_timeout {
-            // Sidecar is hung, do full restart immediately
+        if is_timeout || tunnel_repaired {
+            // A timeout or changed tunnel endpoint requires a fresh sidecar.
             tracing::warn!(
-                "{}: execute timed out — restarting sidecar process immediately ({:?})",
+                "{}: connection recovery requires restarting sidecar process ({:?})",
                 DiagnosticCode::SidecarRestartAttempt.as_str(),
                 start.elapsed()
             );
@@ -3297,8 +3309,28 @@ impl McpServer {
         let resolved = loader.resolve_local(&self.repo_root, &self.env_name)?;
         let ssh = match resolved.environment.ssh.as_ref() {
             Some(ssh) if ssh.enabled => ssh,
-            _ => return Ok(false),
+            _ => return Ok(self.managed_tunnel.take().is_some()),
         };
+
+        if crate::managed_tunnel::is_managed(ssh) {
+            if let Some(tunnel) = self.managed_tunnel.as_mut() {
+                if tunnel.is_alive(ssh)? {
+                    return Ok(false);
+                }
+            }
+            self.managed_tunnel = None;
+            let account = format!(
+                "{}/{}/ssh",
+                crate::project_display_name(&self.repo_root),
+                self.env_name
+            );
+            let tunnel = crate::managed_tunnel::ManagedTunnel::start(ssh, &account)?;
+            let mut environment = resolved.environment.clone();
+            tunnel.apply(&mut environment)?;
+            self.managed_tunnel = Some(tunnel);
+            return Ok(true);
+        }
+        self.managed_tunnel = None;
 
         if self.is_backend_ready_for_query(ssh, &resolved.environment.database.url) {
             return Ok(false);
@@ -3354,13 +3386,17 @@ impl McpServer {
         Ok(())
     }
 
-    fn start_sidecar(&self) -> Result<SidecarProcess> {
+    fn start_sidecar(&mut self) -> Result<SidecarProcess> {
+        self.ensure_ssh_ready_for_query()?;
         let limits = ResultLimits {
             max_rows: self.security.limits().max_rows,
             max_result_bytes: self.security.limits().max_result_bytes,
         };
         // A changed reference must never fall back to a cached credential.
-        let resolved = ConfigLoader::new().resolve_local(&self.repo_root, &self.env_name)?;
+        let mut resolved = ConfigLoader::new().resolve_local(&self.repo_root, &self.env_name)?;
+        if let Some(tunnel) = self.managed_tunnel.as_ref() {
+            tunnel.apply(&mut resolved.environment)?;
+        }
         let backend = resolved.environment.database.backend();
         let db_url = resolved.environment.database.url.as_str();
         let db_username = resolved.environment.database.username.as_str();
@@ -4388,6 +4424,7 @@ impl McpServer {
         if let Some(mut sidecar) = self.sidecar.take() {
             sidecar.force_kill_ref();
         }
+        self.managed_tunnel = None;
         std::process::exit(1);
     }
 
