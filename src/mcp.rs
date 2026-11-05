@@ -281,6 +281,7 @@ macro_rules! optional_document_json {
 
 pub struct McpServer {
     sidecar: Option<SidecarProcess>,
+    managed_tunnel: Option<crate::managed_tunnel::ManagedTunnel>,
     security: SecurityEngine,
     audit: AuditLog,
     project_name: String,
@@ -327,6 +328,7 @@ impl McpServer {
 
         Ok(Self {
             sidecar: None,
+            managed_tunnel: None,
             security,
             audit,
             project_name: project_name.to_string(),
@@ -356,6 +358,7 @@ impl McpServer {
     }
 
     fn ensure_sidecar(&mut self) -> Result<&mut SidecarProcess> {
+        self.refresh_managed_tunnel()?;
         if self.sidecar.is_some() {
             return self.sidecar_mut();
         }
@@ -365,6 +368,21 @@ impl McpServer {
         tracing::info!("Sidecar ready");
         self.sidecar = Some(sidecar);
         self.sidecar_mut()
+    }
+
+    fn refresh_managed_tunnel(&mut self) -> Result<()> {
+        if self.managed_tunnel.is_some() && self.ensure_ssh_ready_for_query()? {
+            self.sidecar = None;
+        }
+        Ok(())
+    }
+
+    fn effective_database_url(&self, environment: &EnvironmentConfig) -> Result<String> {
+        let mut effective = environment.clone();
+        if let Some(tunnel) = self.managed_tunnel.as_ref() {
+            tunnel.apply(&mut effective)?;
+        }
+        Ok(effective.database.url)
     }
 
     fn sidecar_mut(&mut self) -> Result<&mut SidecarProcess> {
@@ -1582,7 +1600,9 @@ impl McpServer {
             password: self.db_password.clone(),
             repo_root: self.repo_root.clone(),
         };
-        let mut report = crate::posture::inspect(&resolved, &self.config_dir)?;
+        self.ensure_ssh_ready_for_query()?;
+        let url = self.effective_database_url(&resolved.environment)?;
+        let mut report = crate::posture::inspect_with_url(&resolved, &self.config_dir, &url)?;
         Self::acknowledge_posture(&mut report, args, &self.config_dir)?;
         let payload =
             serde_json::to_string(&report).map_err(|e| SafeselectError::Other(e.to_string()))?;
@@ -3228,14 +3248,12 @@ impl McpServer {
             "{}: attempting SSH tunnel recovery",
             DiagnosticCode::SshTunnelRecoveryAttempt.as_str()
         );
-        if let Err(e) = setup_ssh_tunnels(&self.repo_root, std::slice::from_ref(&self.env_name)) {
-            tracing::warn!("SSH tunnel recovery attempt failed: {e}");
-        }
+        let tunnel_repaired = self.ensure_ssh_ready_for_query()?;
 
-        if is_timeout {
-            // Sidecar is hung, do full restart immediately
+        if is_timeout || tunnel_repaired {
+            // A timeout or changed tunnel endpoint requires a fresh sidecar.
             tracing::warn!(
-                "{}: execute timed out — restarting sidecar process immediately ({:?})",
+                "{}: connection recovery requires restarting sidecar process ({:?})",
                 DiagnosticCode::SidecarRestartAttempt.as_str(),
                 start.elapsed()
             );
@@ -3297,11 +3315,31 @@ impl McpServer {
         let resolved = loader.resolve_local(&self.repo_root, &self.env_name)?;
         let ssh = match resolved.environment.ssh.as_ref() {
             Some(ssh) if ssh.enabled => ssh,
-            _ => return Ok(false),
+            _ => return Ok(self.managed_tunnel.take().is_some()),
         };
 
+        if crate::managed_tunnel::is_managed(ssh) {
+            if let Some(tunnel) = self.managed_tunnel.as_mut() {
+                if tunnel.is_alive(ssh)? {
+                    return Ok(false);
+                }
+            }
+            self.managed_tunnel = None;
+            let account = format!(
+                "{}/{}/ssh",
+                crate::project_display_name(&self.repo_root),
+                self.env_name
+            );
+            let tunnel = crate::managed_tunnel::ManagedTunnel::start(ssh, &account)?;
+            let mut environment = resolved.environment.clone();
+            tunnel.apply(&mut environment)?;
+            self.managed_tunnel = Some(tunnel);
+            return Ok(true);
+        }
+        let endpoint_changed = self.managed_tunnel.take().is_some();
+
         if self.is_backend_ready_for_query(ssh, &resolved.environment.database.url) {
-            return Ok(false);
+            return Ok(endpoint_changed);
         }
 
         tracing::warn!(
@@ -3354,7 +3392,8 @@ impl McpServer {
         Ok(())
     }
 
-    fn start_sidecar(&self) -> Result<SidecarProcess> {
+    fn start_sidecar(&mut self) -> Result<SidecarProcess> {
+        self.ensure_ssh_ready_for_query()?;
         let limits = ResultLimits {
             max_rows: self.security.limits().max_rows,
             max_result_bytes: self.security.limits().max_result_bytes,
@@ -3362,7 +3401,8 @@ impl McpServer {
         // A changed reference must never fall back to a cached credential.
         let resolved = ConfigLoader::new().resolve_local(&self.repo_root, &self.env_name)?;
         let backend = resolved.environment.database.backend();
-        let db_url = resolved.environment.database.url.as_str();
+        let effective_url = self.effective_database_url(&resolved.environment)?;
+        let db_url = effective_url.as_str();
         let db_username = resolved.environment.database.username.as_str();
         let db_password = resolved.password.as_str();
         let driver_path = resolved
@@ -4388,6 +4428,7 @@ impl McpServer {
         if let Some(mut sidecar) = self.sidecar.take() {
             sidecar.force_kill_ref();
         }
+        self.managed_tunnel = None;
         std::process::exit(1);
     }
 
@@ -5969,6 +6010,86 @@ mod tests {
         for sensitive in ["db.internal", "private-reader", "secret", "project-name"] {
             assert!(!summary.contains(sensitive));
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn managed_endpoint_survives_config_reload_and_releases_disabled_tunnel() {
+        use crate::managed_tunnel::tests::{environment, Fixture};
+
+        let fixture = Fixture::new();
+        let root = fixture.0.join("project");
+        let environments = root.join(".safeselect/environments");
+        std::fs::create_dir_all(&environments).unwrap();
+        let mut environment = environment("remote.invalid");
+        let file = environments.join("test.toml");
+        let saved = toml::to_string(&environment).unwrap();
+        std::fs::write(&file, &saved).unwrap();
+        let mut server = test_server(&root);
+        server.managed_tunnel = Some(fixture.start(environment.ssh.as_ref().unwrap()).unwrap());
+
+        let effective = server.effective_database_url(&environment).unwrap();
+        assert_ne!(effective, environment.database.url);
+        assert!(effective.contains("127.0.0.1:"));
+        server.refresh_managed_tunnel().unwrap();
+        let reloaded = ConfigLoader::new().resolve_local(&root, "test").unwrap();
+        assert_eq!(
+            server
+                .effective_database_url(&reloaded.environment)
+                .unwrap(),
+            effective
+        );
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), saved);
+
+        environment.ssh.as_mut().unwrap().enabled = false;
+        std::fs::write(&file, toml::to_string(&environment).unwrap()).unwrap();
+        server.refresh_managed_tunnel().unwrap();
+        assert!(server.managed_tunnel.is_none());
+        assert_eq!(
+            server.effective_database_url(&environment).unwrap(),
+            environment.database.url
+        );
+        server.refresh_managed_tunnel().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn switching_to_ready_external_tunnel_reports_endpoint_change_once() {
+        use crate::managed_tunnel::tests::{environment, Fixture};
+        use std::net::{TcpListener, TcpStream};
+
+        let fixture = Fixture::new();
+        let root = fixture.0.join("project");
+        let environments = root.join(".safeselect/environments");
+        std::fs::create_dir_all(&environments).unwrap();
+        let mut environment = environment("remote.invalid");
+        let file = environments.join("test.toml");
+        std::fs::write(&file, toml::to_string(&environment).unwrap()).unwrap();
+        let mut server = test_server(&root);
+        server.backend = environment.database.backend();
+        server.managed_tunnel = Some(fixture.start(environment.ssh.as_ref().unwrap()).unwrap());
+        let old_url = server.effective_database_url(&environment).unwrap();
+        let (old_host, old_port) = crate::extract_tcp_host_port(&old_url).unwrap();
+
+        let external = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let external_port = external.local_addr().unwrap().port();
+        environment.database.url = format!("mongodb://127.0.0.1:{external_port}/app");
+        let ssh = environment.ssh.as_mut().unwrap();
+        ssh.forward_host = None;
+        ssh.forward_port = None;
+        ssh.local_host = Some("127.0.0.1".into());
+        ssh.local_port = Some(external_port);
+        std::fs::write(&file, toml::to_string(&environment).unwrap()).unwrap();
+
+        assert!(server.ensure_ssh_ready_for_query().unwrap());
+        assert!(server.managed_tunnel.is_none());
+        assert!(TcpStream::connect((old_host.as_str(), old_port)).is_err());
+        assert_eq!(
+            server.effective_database_url(&environment).unwrap(),
+            environment.database.url
+        );
+        assert!(!server.ensure_ssh_ready_for_query().unwrap());
+        assert!(TcpStream::connect(("127.0.0.1", external_port)).is_ok());
     }
 
     pub(super) fn test_server(repo_root: &Path) -> McpServer {

@@ -56,7 +56,7 @@ pub struct TlsConfig {
     pub key_file: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SshConfig {
     #[serde(default)]
     pub enabled: bool,
