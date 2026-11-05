@@ -358,12 +358,7 @@ impl McpServer {
     }
 
     fn ensure_sidecar(&mut self) -> Result<&mut SidecarProcess> {
-        if self.managed_tunnel.is_some()
-            && self.ensure_ssh_ready_for_query()?
-            && self.sidecar.is_some()
-        {
-            self.restart_sidecar()?;
-        }
+        self.refresh_managed_tunnel()?;
         if self.sidecar.is_some() {
             return self.sidecar_mut();
         }
@@ -373,6 +368,21 @@ impl McpServer {
         tracing::info!("Sidecar ready");
         self.sidecar = Some(sidecar);
         self.sidecar_mut()
+    }
+
+    fn refresh_managed_tunnel(&mut self) -> Result<()> {
+        if self.managed_tunnel.is_some() && self.ensure_ssh_ready_for_query()? {
+            self.sidecar = None;
+        }
+        Ok(())
+    }
+
+    fn effective_database_url(&self, environment: &EnvironmentConfig) -> Result<String> {
+        let mut effective = environment.clone();
+        if let Some(tunnel) = self.managed_tunnel.as_ref() {
+            tunnel.apply(&mut effective)?;
+        }
+        Ok(effective.database.url)
     }
 
     fn sidecar_mut(&mut self) -> Result<&mut SidecarProcess> {
@@ -1591,12 +1601,8 @@ impl McpServer {
             repo_root: self.repo_root.clone(),
         };
         self.ensure_ssh_ready_for_query()?;
-        let mut effective = resolved.environment.clone();
-        if let Some(tunnel) = self.managed_tunnel.as_ref() {
-            tunnel.apply(&mut effective)?;
-        }
-        let mut report =
-            crate::posture::inspect_with_url(&resolved, &self.config_dir, &effective.database.url)?;
+        let url = self.effective_database_url(&resolved.environment)?;
+        let mut report = crate::posture::inspect_with_url(&resolved, &self.config_dir, &url)?;
         Self::acknowledge_posture(&mut report, args, &self.config_dir)?;
         let payload =
             serde_json::to_string(&report).map_err(|e| SafeselectError::Other(e.to_string()))?;
@@ -3393,12 +3399,10 @@ impl McpServer {
             max_result_bytes: self.security.limits().max_result_bytes,
         };
         // A changed reference must never fall back to a cached credential.
-        let mut resolved = ConfigLoader::new().resolve_local(&self.repo_root, &self.env_name)?;
-        if let Some(tunnel) = self.managed_tunnel.as_ref() {
-            tunnel.apply(&mut resolved.environment)?;
-        }
+        let resolved = ConfigLoader::new().resolve_local(&self.repo_root, &self.env_name)?;
         let backend = resolved.environment.database.backend();
-        let db_url = resolved.environment.database.url.as_str();
+        let effective_url = self.effective_database_url(&resolved.environment)?;
+        let db_url = effective_url.as_str();
         let db_username = resolved.environment.database.username.as_str();
         let db_password = resolved.password.as_str();
         let driver_path = resolved
@@ -6006,6 +6010,46 @@ mod tests {
         for sensitive in ["db.internal", "private-reader", "secret", "project-name"] {
             assert!(!summary.contains(sensitive));
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn managed_endpoint_survives_config_reload_and_releases_disabled_tunnel() {
+        use crate::managed_tunnel::tests::{environment, Fixture};
+
+        let fixture = Fixture::new();
+        let root = fixture.0.join("project");
+        let environments = root.join(".safeselect/environments");
+        std::fs::create_dir_all(&environments).unwrap();
+        let mut environment = environment("remote.invalid");
+        let file = environments.join("test.toml");
+        let saved = toml::to_string(&environment).unwrap();
+        std::fs::write(&file, &saved).unwrap();
+        let mut server = test_server(&root);
+        server.managed_tunnel = Some(fixture.start(environment.ssh.as_ref().unwrap()).unwrap());
+
+        let effective = server.effective_database_url(&environment).unwrap();
+        assert_ne!(effective, environment.database.url);
+        assert!(effective.contains("127.0.0.1:"));
+        server.refresh_managed_tunnel().unwrap();
+        let reloaded = ConfigLoader::new().resolve_local(&root, "test").unwrap();
+        assert_eq!(
+            server
+                .effective_database_url(&reloaded.environment)
+                .unwrap(),
+            effective
+        );
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), saved);
+
+        environment.ssh.as_mut().unwrap().enabled = false;
+        std::fs::write(&file, toml::to_string(&environment).unwrap()).unwrap();
+        server.refresh_managed_tunnel().unwrap();
+        assert!(server.managed_tunnel.is_none());
+        assert_eq!(
+            server.effective_database_url(&environment).unwrap(),
+            environment.database.url
+        );
+        server.refresh_managed_tunnel().unwrap();
     }
 
     pub(super) fn test_server(repo_root: &Path) -> McpServer {

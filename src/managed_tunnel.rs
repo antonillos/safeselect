@@ -34,59 +34,9 @@ impl ManagedTunnel {
         if !crate::missing_ssh_fields(ssh).is_empty() {
             return Err(failure("SSH forwarding configuration is incomplete."));
         }
-        // Keep Unix socket paths below the platform limit, including on macOS.
-        let temporary = if cfg!(unix) {
-            PathBuf::from("/tmp")
-        } else {
-            std::env::temp_dir()
-        };
-        let directory = temporary.join(format!("ss-{}", uuid::Uuid::new_v4().simple()));
-        let mut builder = std::fs::DirBuilder::new();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt;
-            builder.mode(0o700);
-        }
-        builder.create(&directory)?;
+        let directory = control_directory()?;
         let socket = directory.join("ctl");
-        let mut args = crate::build_tunnel_ssh_args(ssh);
-        let forwarding = args.iter().position(|arg| arg == "-L").unwrap();
-        args.drain(forwarding..forwarding + 2);
-        args.extend([
-            "-M".into(),
-            "-S".into(),
-            socket.to_string_lossy().into_owned(),
-            "-o".into(),
-            "ControlMaster=yes".into(),
-            "-o".into(),
-            "ControlPersist=no".into(),
-            "-o".into(),
-            "ClearAllForwardings=yes".into(),
-        ]);
-        let child = (|| -> Result<Child> {
-            let mut command = if crate::ssh_uses_password(ssh) {
-                let password = crate::resolve_tunnel_password(ssh, fallback_account)?;
-                let mut command = Command::new("sshpass");
-                command.arg("-e").arg(program).env("SSHPASS", password);
-                command
-            } else {
-                let mut command = Command::new(program);
-                command.args(["-o", "BatchMode=yes"]);
-                command
-            };
-            #[cfg(unix)]
-            {
-                use std::os::unix::process::CommandExt;
-                command.process_group(0);
-            }
-            Ok(command
-                .args(args)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::piped())
-                .spawn()?)
-        })();
-        let mut child = match child {
+        let mut child = match spawn_master(ssh, fallback_account, program, &socket) {
             Ok(child) => child,
             Err(error) => {
                 let _ = std::fs::remove_dir_all(&directory);
@@ -104,28 +54,19 @@ impl ManagedTunnel {
             program: program.to_path_buf(),
             stderr,
         };
+        tunnel.wait_for_master()?;
+        tunnel.open_forwarding()?;
+        Ok(tunnel)
+    }
+
+    fn wait_for_master(&mut self) -> Result<()> {
         let deadline = Instant::now() + Duration::from_secs(20);
         loop {
-            if let Some(status) = tunnel.child.try_wait()? {
-                let detail = tunnel
-                    .stderr
-                    .take()
-                    .and_then(|reader| reader.join().ok())
-                    .unwrap_or("SSH tunnel establishment failed.");
-                let detail = if crate::ssh_diagnostics::recognized_failure_message(detail).is_some()
-                {
-                    detail
-                } else {
-                    crate::ssh_diagnostics::failure_message(
-                        status.code(),
-                        "",
-                        crate::ssh_uses_password(ssh),
-                    )
-                };
-                return Err(failure(detail));
+            if let Some(status) = self.child.try_wait()? {
+                return Err(self.startup_failure(status.code()));
             }
-            if tunnel.control("check").status()?.success() {
-                break;
+            if self.control("check").status()?.success() {
+                return Ok(());
             }
             if Instant::now() >= deadline {
                 return Err(failure(
@@ -134,22 +75,30 @@ impl ManagedTunnel {
             }
             std::thread::sleep(Duration::from_millis(100));
         }
+    }
+
+    fn startup_failure(&mut self, code: Option<i32>) -> SafeselectError {
+        let detail = self
+            .stderr
+            .take()
+            .and_then(|reader| reader.join().ok())
+            .unwrap_or("SSH tunnel establishment failed.");
+        let detail = if crate::ssh_diagnostics::recognized_failure_message(detail).is_some() {
+            detail
+        } else {
+            crate::ssh_diagnostics::failure_message(code, "", crate::ssh_uses_password(&self.ssh))
+        };
+        failure(detail)
+    }
+
+    fn open_forwarding(&mut self) -> Result<()> {
         // The OS chooses a candidate. SSH must acknowledge the bind; retry races.
         for _ in 0..8 {
-            let reservation = TcpListener::bind(("127.0.0.1", 0))?;
-            let port = reservation.local_addr()?.port();
-            drop(reservation);
-            let target = format!(
-                "127.0.0.1:{port}:{}:{}",
-                ssh.forward_host.as_deref().unwrap(),
-                ssh.forward_port.unwrap()
-            );
-            let output = tunnel.control("forward").args(["-L", &target]).output()?;
-            if output.status.success() {
-                tunnel.port = port;
-                return Ok(tunnel);
+            if let Some(port) = self.try_forwarding()? {
+                self.port = port;
+                return Ok(());
             }
-            if tunnel.child.try_wait()?.is_some() {
+            if self.child.try_wait()?.is_some() {
                 return Err(failure("SSH tunnel establishment failed."));
             }
         }
@@ -158,6 +107,19 @@ impl ManagedTunnel {
             "address already in use",
             false,
         )))
+    }
+
+    fn try_forwarding(&self) -> Result<Option<u16>> {
+        let reservation = TcpListener::bind(("127.0.0.1", 0))?;
+        let port = reservation.local_addr()?.port();
+        drop(reservation);
+        let target = format!(
+            "127.0.0.1:{port}:{}:{}",
+            self.ssh.forward_host.as_deref().unwrap(),
+            self.ssh.forward_port.unwrap()
+        );
+        let output = self.control("forward").args(["-L", &target]).output()?;
+        Ok(output.status.success().then_some(port))
     }
 
     fn control(&self, operation: &str) -> Command {
@@ -250,6 +212,67 @@ fn forwarded_url(url: &str, port: u16) -> Result<String> {
     ))
 }
 
+fn control_directory() -> Result<PathBuf> {
+    // Keep Unix socket paths below the platform limit, including on macOS.
+    let temporary = if cfg!(unix) {
+        PathBuf::from("/tmp")
+    } else {
+        std::env::temp_dir()
+    };
+    let directory = temporary.join(format!("ss-{}", uuid::Uuid::new_v4().simple()));
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(&directory)?;
+    Ok(directory)
+}
+
+fn spawn_master(
+    ssh: &SshConfig,
+    fallback_account: &str,
+    program: &Path,
+    socket: &Path,
+) -> Result<Child> {
+    let mut args = crate::build_tunnel_ssh_args(ssh);
+    let forwarding = args.iter().position(|arg| arg == "-L").unwrap();
+    args.drain(forwarding..forwarding + 2);
+    args.extend([
+        "-M".into(),
+        "-S".into(),
+        socket.to_string_lossy().into_owned(),
+        "-o".into(),
+        "ControlMaster=yes".into(),
+        "-o".into(),
+        "ControlPersist=no".into(),
+        "-o".into(),
+        "ClearAllForwardings=yes".into(),
+    ]);
+    let mut command = if crate::ssh_uses_password(ssh) {
+        let password = crate::resolve_tunnel_password(ssh, fallback_account)?;
+        let mut command = Command::new("sshpass");
+        command.arg("-e").arg(program).env("SSHPASS", password);
+        command
+    } else {
+        let mut command = Command::new(program);
+        command.args(["-o", "BatchMode=yes"]);
+        command
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    Ok(command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()?)
+}
+
 fn read_failure(mut pipe: impl Read) -> &'static str {
     let mut buffer = [0; 4096];
     let mut tail = String::new();
@@ -277,15 +300,15 @@ fn read_failure(mut pipe: impl Read) -> &'static str {
 }
 
 #[cfg(all(test, unix))]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::net::TcpStream;
     use std::os::unix::fs::PermissionsExt;
 
-    struct Fixture(PathBuf);
+    pub(crate) struct Fixture(pub(crate) PathBuf);
 
     impl Fixture {
-        fn new() -> Self {
+        pub(crate) fn new() -> Self {
             let directory = PathBuf::from("/tmp").join(format!("ss-test-{}", uuid::Uuid::new_v4()));
             std::fs::create_dir(&directory).unwrap();
             let program = directory.join("ssh");
@@ -294,7 +317,7 @@ mod tests {
             Self(directory)
         }
 
-        fn start(&self, ssh: &SshConfig) -> Result<ManagedTunnel> {
+        pub(crate) fn start(&self, ssh: &SshConfig) -> Result<ManagedTunnel> {
             ManagedTunnel::start_with_program(ssh, "unused", &self.0.join("ssh"))
         }
     }
@@ -305,7 +328,7 @@ mod tests {
         }
     }
 
-    fn environment(destination: &str) -> EnvironmentConfig {
+    pub(crate) fn environment(destination: &str) -> EnvironmentConfig {
         toml::from_str(&format!(
             r#"
 version = 1
