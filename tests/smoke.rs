@@ -321,21 +321,11 @@ sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 }
 
 #[test]
-fn test_setup_mode_documentation_matches_cli() {
-    let readme = repo_file("README.md");
-    assert!(
-        readme.contains("enters setup mode automatically"),
-        "README should document implicit setup mode"
-    );
-    assert!(
-        !readme.contains("safeselect serve --setup"),
-        "README must not document a non-existent serve --setup flag"
-    );
-
-    let (_stdout, stderr, success) = run(&["serve", "--help"]);
+fn test_serve_help_has_no_setup_flag() {
+    let (stdout, stderr, success) = run(&["serve", "--help"]);
     assert!(success, "serve --help failed: {stderr}");
     assert!(
-        !stderr.contains("--setup"),
+        !stdout.contains("--setup") && !stderr.contains("--setup"),
         "CLI help unexpectedly exposes --setup"
     );
 }

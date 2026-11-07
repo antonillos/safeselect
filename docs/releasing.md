@@ -16,6 +16,10 @@
    then publishes. A failed upload leaves a draft, not a public partial release.
 6. Homebrew/asdf and MCP Registry run only after successful publication. An
    explicitly requested draft or prerelease is not distributed to these channels.
+7. After stable release publication, **Sync Main To Develop** opens or updates
+   the sync PR using the exact published source SHA. It does not include later
+   commits on `main`, and does not run for drafts, prereleases or failed publication.
+   Distribution and sync run independently after publication.
 
 The Release workflow is serialised with `cancel-in-progress: false`. Package
 manager publication has its own serialisation shared by automatic and manual
@@ -47,7 +51,7 @@ directory and does not overwrite a developer's existing installation.
   commits; App authentication does not replace cryptographic commit signatures.
 - MCP Registry authentication continues to use GitHub OIDC.
 
-Prepare releases only from `main`. Sync opens a PR after each push to `main`;
+Prepare releases only from `main`. Sync opens a PR after stable release publication;
 its merge is not automatic. Smart Merge approves the verified commit before
 waiting for branch protection. Configure one required approval on `main` only
 once the migrated workflow is active. No App bypass is required.
@@ -102,6 +106,16 @@ gh workflow run publish-package-managers.yml --ref main -f version=v0.7.6
 
 This uses the same verification and publisher as Release. It rejects draft,
 prerelease, missing/corrupt assets and a source commit inconsistent with the tag.
+
+For sync-only recovery, run from `main` with an existing public stable release:
+
+```bash
+gh workflow run sync-main-to-develop.yml --ref main -f version=v0.8.0
+```
+
+Sync verifies the release tag and complete assets before pushing a branch. If
+`develop` already contains the released commit, it does nothing. Pushes to `main`
+alone no longer open or update the sync PR.
 
 ## Validation
 

@@ -1,6 +1,8 @@
 "use strict";
 
 const DOC_PATH = /^(README(?:\.[^/]+)?|docs\/|demo\/(?:README\.md|recordings\/|[^/]+\.tape$))/;
+// This exact helper runs in the mandatory website job, including docs-only PRs.
+const isDocPath = (path) => DOC_PATH.test(path) || path === "tools/validate_cli_gallery.py";
 // These helpers validate only the marketing site. Other tools/ci paths remain
 // unknown (full verification), including release tooling and shared validators.
 const WEBSITE_HELPERS = new Set([
@@ -32,8 +34,8 @@ function classifyPaths(paths) {
   if (paths.some((path) => SENSITIVE_PATH.test(path))) return fullPolicy("sensitive");
 
   const flags = {
-    docs: paths.every((path) => DOC_PATH.test(path)),
-    website: paths.every((path) => DOC_PATH.test(path) || isWebsitePath(path)),
+    docs: paths.every(isDocPath),
+    website: paths.every((path) => isDocPath(path) || isWebsitePath(path)),
     postgres: paths.some((path) => POSTGRES_PATH.test(path)),
     mongodb: paths.some((path) => MONGODB_PATH.test(path)),
     sharedTests: paths.some((path) => SHARED_TEST_PATH.test(path) && !POSTGRES_PATH.test(path) && !MONGODB_PATH.test(path)),
@@ -55,7 +57,7 @@ function classifyPaths(paths) {
     };
   }
 
-  if (paths.some((path) => !DOC_PATH.test(path) && !isWebsitePath(path) && !POSTGRES_PATH.test(path) && !MONGODB_PATH.test(path) && !SHARED_TEST_PATH.test(path) && !SHARED_RUST_PATH.test(path))) {
+  if (paths.some((path) => !isDocPath(path) && !isWebsitePath(path) && !POSTGRES_PATH.test(path) && !MONGODB_PATH.test(path) && !SHARED_TEST_PATH.test(path) && !SHARED_RUST_PATH.test(path))) {
     return fullPolicy("unknown");
   }
 

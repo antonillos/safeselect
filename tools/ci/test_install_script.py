@@ -34,6 +34,66 @@ printf '#!/bin/sh\\n' > target/release/safeselect
 chmod +x target/release/safeselect
 ''')
 
+    def add_git_stub(self):
+        self.env["GIT_LOG"] = str(self.root / "git.log")
+        self.executable("git", r'''#!/bin/sh
+printf '%s\n' "$*" >> "$GIT_LOG"
+case "$*" in
+  "rev-parse --show-toplevel") pwd ;;
+  "status --porcelain") printf '%s' "${GIT_DIRTY:-}" ;;
+  "symbolic-ref --short -q HEAD") printf '%s\n' "${GIT_BRANCH:-main}" ;;
+  "symbolic-ref -q HEAD") exit "${GIT_DETACHED:-0}" ;;
+  "rev-parse --verify @{upstream}") exit "${GIT_NO_UPSTREAM:-0}" ;;
+  "pull --ff-only") exit "${GIT_PULL_FAILURE:-0}" ;;
+  *) exit 1 ;;
+esac
+''')
+
+    def test_update_pulls_once_before_restarting_installer(self):
+        self.add_git_stub()
+        result = self.run_installer("--update")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("makevn is required", result.stderr)
+        calls = (self.root / "git.log").read_text().splitlines()
+        self.assertEqual(calls[-1], "pull --ff-only")
+        self.assertEqual(calls.count("pull --ff-only"), 1)
+
+    def test_update_rejects_dirty_detached_and_untracked_branches(self):
+        self.add_git_stub()
+        for variable, value in [("GIT_DIRTY", " M Cargo.toml"),
+                                ("GIT_DETACHED", "1"), ("GIT_NO_UPSTREAM", "1")]:
+            with self.subTest(variable=variable):
+                (self.root / "git.log").write_text("")
+                self.env[variable] = value
+                result = self.run_installer("--update")
+                del self.env[variable]
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn("pull --ff-only", (self.root / "git.log").read_text())
+                self.assertNotIn("Building", result.stdout)
+
+    def test_update_requires_the_installed_branch(self):
+        self.add_git_stub()
+        result = self.run_installer("--update", "--branch", "feature/installed")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("installed source branch", result.stderr)
+        self.assertNotIn("pull --ff-only", (self.root / "git.log").read_text())
+        self.env["GIT_BRANCH"] = "feature/installed"
+        result = self.run_installer("--update", "--branch", "feature/installed")
+        self.assertIn("pull --ff-only", (self.root / "git.log").read_text())
+        self.assertIn("makevn is required", result.stderr)
+
+    def test_branch_option_requires_a_value(self):
+        result = self.run_installer("--update", "--branch")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("requires a branch name", result.stderr)
+
+    def test_failed_pull_does_not_build(self):
+        self.add_git_stub()
+        self.env["GIT_PULL_FAILURE"] = "23"
+        result = self.run_installer("--update")
+        self.assertEqual(result.returncode, 23)
+        self.assertNotIn("Building", result.stdout)
+
     def test_missing_makevn_fails_without_install_opt_in(self):
         result = self.run_installer()
         self.assertNotEqual(result.returncode, 0)

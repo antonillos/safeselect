@@ -12,7 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CATALOG = ROOT / "docs" / "cli-gallery.json"
-README = ROOT / "README.md"
+GALLERY = ROOT / "docs" / "cli-gallery.md"
 EXPECTED = {
     "list_tables",
     "describe_table",
@@ -125,10 +125,10 @@ def main() -> int:
         raise SystemExit("query and nosql must be the final separate workflows")
     if {item["id"] for item in groups[-2]["commands"]} != {"query", "list_tables", "describe_table", "get_maintenance_diagnostics"}:
         raise SystemExit("query must remain the SQL workflow with its NoSQL sibling")
-    readme = README.read_text(encoding="utf-8")
+    gallery = GALLERY.read_text(encoding="utf-8")
     for item in commands:
-        if f"docs/recordings/{item['image']}" not in readme:
-            raise SystemExit(f"README is missing the shared capture for {item['id']}")
+        if f"recordings/{item['image']}" not in gallery:
+            raise SystemExit(f"CLI gallery is missing the shared capture for {item['id']}")
 
     seen_images: set[str] = set()
     for item in commands:

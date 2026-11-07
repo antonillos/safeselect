@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+mod agent_skills;
 mod agents;
 mod audit;
 mod backend;
@@ -13,12 +14,15 @@ mod dbeaver;
 mod diagnostics;
 mod error;
 mod maintenance;
+mod managed_tunnel;
 mod mcp;
 mod posture;
 mod security;
 mod sidecar;
 mod ssh_diagnostics;
+mod updates;
 
+#[cfg(test)]
 use clap::Parser;
 use cli::{AgentAction, Cli, Command, ConfigAction, DriverAction};
 use config::password::inject_mongodb_password_placeholder;
@@ -38,11 +42,23 @@ fn main() {
         .with_writer(std::io::stderr)
         .init();
 
-    let cli = Cli::parse();
+    let cli = Cli::parse_with_help();
 
+    let automatic_notice = !matches!(
+        cli.command,
+        Command::Serve { .. } | Command::UpdateCheck | Command::Uninstall { .. }
+    );
     if let Err(e) = run(cli) {
         tracing::error!("{}", redact_cli_error(&e));
         std::process::exit(1);
+    }
+    if automatic_notice
+        && std::io::IsTerminal::is_terminal(&std::io::stderr())
+        && std::io::IsTerminal::is_terminal(&std::io::stdout())
+    {
+        if let Some(notice) = updates::automatic_notice() {
+            eprintln!("{notice}");
+        }
     }
 }
 
@@ -50,6 +66,10 @@ fn run(cli: Cli) -> Result<()> {
     let loader = ConfigLoader::new();
 
     match cli.command {
+        Command::UpdateCheck => {
+            println!("{}", updates::explicit_check());
+            Ok(())
+        }
         Command::Serve {
             project,
             environment,
@@ -1520,6 +1540,7 @@ fn cmd_agent(action: AgentAction) -> Result<()> {
             environment,
             name,
             local,
+            global,
         } => {
             let loader = ConfigLoader::new();
             let (repo_root, project_dir) = match project {
@@ -1535,6 +1556,18 @@ fn cmd_agent(action: AgentAction) -> Result<()> {
                     (found.clone(), found)
                 }
             };
+            let local = agents::resolve_agent_scope(&client, repo_root.as_deref(), local, global)?;
+            let scope = if local {
+                "local (project)"
+            } else {
+                "global (user)"
+            };
+            if client == "claude-code" {
+                println!("Installation scope: {scope}");
+            } else {
+                let target = agents::select_install_config(&client, repo_root.as_deref(), local)?;
+                println!("Installation scope: {scope}; config: {}", target.display());
+            }
             let environments = match environment {
                 Some(environment) => vec![environment],
                 None => {
@@ -1633,6 +1666,7 @@ fn cmd_agent(action: AgentAction) -> Result<()> {
             project,
             environment,
             local,
+            global,
         } => {
             let loader = ConfigLoader::new();
             let (repo_root, _project_dir) = match project {
@@ -1647,6 +1681,16 @@ fn cmd_agent(action: AgentAction) -> Result<()> {
                     (loader.find_local_project(&cwd), ())
                 }
             };
+
+            let local = agents::resolve_agent_scope(&client, repo_root.as_deref(), local, global)?;
+            println!(
+                "Upgrade scope: {}",
+                if local {
+                    "local (project)"
+                } else {
+                    "global (user)"
+                }
+            );
 
             let mcp_timeout_ms = if let Some(ref root) = repo_root {
                 let project_file = root.join(".safeselect").join("project.toml");

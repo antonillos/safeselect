@@ -25,8 +25,12 @@ pub struct Report {
 }
 
 pub fn inspect(resolved: &ResolvedConfig, config_dir: &Path) -> Result<Report> {
+    inspect_with_url(resolved, config_dir, &resolved.environment.database.url)
+}
+
+pub fn inspect_with_url(resolved: &ResolvedConfig, config_dir: &Path, url: &str) -> Result<Report> {
     let driver = posture_target(resolved)?;
-    let row = run_posture_query(resolved, driver)?;
+    let row = run_posture_query(resolved, driver, url)?;
     let text = |n: usize| {
         row.get(n)
             .and_then(|v| v.as_str())
@@ -41,11 +45,12 @@ pub fn inspect(resolved: &ResolvedConfig, config_dir: &Path) -> Result<Report> {
 fn run_posture_query(
     resolved: &ResolvedConfig,
     driver: &crate::config::DriverConfig,
+    url: &str,
 ) -> Result<Vec<serde_json::Value>> {
     let mut sidecar = SidecarProcess::start_with_timeout(
         &driver.path,
         &driver.class,
-        &resolved.environment.database.url,
+        url,
         &resolved.environment.database.username,
         &resolved.password,
         0,
@@ -398,7 +403,7 @@ mod tests {
             class: "org.postgresql.Driver".into(),
             sha256: "00".into(),
         };
-        assert!(run_posture_query(&config, &driver).is_err());
+        assert!(run_posture_query(&config, &driver, &config.environment.database.url).is_err());
     }
 
     #[test]

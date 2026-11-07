@@ -43,6 +43,33 @@ class WorkflowTests(unittest.TestCase):
             self.assertRegex(self.jobs[name], r"needs: \[[^\n]*publish-release")
             self.assertIn("outputs.draft != 'true'", self.jobs[name])
 
+    def test_sync_waits_for_stable_release_publication(self):
+        sync = self.jobs["sync-main-to-develop"]
+        self.assertIn("needs: [validate-version, publish-release]", sync)
+        self.assertIn("outputs.draft != 'true'", sync)
+        self.assertIn("outputs.prerelease != 'true'", sync)
+        self.assertNotIn("always()", sync)
+        self.assertIn("uses: ./.github/workflows/sync-main-to-develop.yml", sync)
+        self.assertIn("version: ${{ needs.validate-version.outputs.version }}", sync)
+        self.assertIn("target_ref: ${{ needs.validate-version.outputs.target-ref }}", sync)
+        self.assertIn("secrets: inherit", sync)
+
+    def test_sync_recovery_verifies_release_and_merges_frozen_source(self):
+        sync = (ROOT / ".github/workflows/sync-main-to-develop.yml").read_text()
+        triggers = sync.split("permissions:\n", 1)[0]
+        self.assertNotIn("  push:", triggers)
+        self.assertIn("  workflow_call:", triggers)
+        self.assertIn("  workflow_dispatch:\n    inputs:\n      version:", triggers)
+        self.assertIn("ref: ${{ inputs.target_ref || inputs.version }}", sync)
+        self.assertIn('release.py check-public --source release-source --version "$VERSION"', sync)
+        self.assertLess(sync.index("release.py check-public"), sync.index("git push"))
+        self.assertIn('git -C release-source rev-parse HEAD', sync)
+        self.assertIn('git merge-base --is-ancestor "$RELEASE_SHA" origin/main', sync)
+        self.assertIn('git merge-base --is-ancestor "$RELEASE_SHA" origin/develop', sync)
+        self.assertIn('"$RELEASE_SHA" 2>&1)', sync)
+        self.assertNotIn("origin/main 2>&1)", sync)
+        self.assertIn('git merge-base --is-ancestor "$RELEASE_SHA" HEAD', sync)
+
     def test_existing_release_not_blindly_skipped_deleted_or_overwritten(self):
         self.assertNotIn("outputs.exists", self.release)
         self.assertNotIn("gh release delete", self.release)

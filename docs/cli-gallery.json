@@ -27,7 +27,7 @@
           "id": "import-compass",
           "command": "safeselect import-compass [--path <path>]",
           "purpose": "Import MongoDB Compass connections.",
-          "example": "safeselect import-compass --path ~/.config/MongoDB Compass",
+          "example": "safeselect import-compass --path \"$HOME/.config/MongoDB Compass\"",
           "image": "cli/import-compass.png",
           "caption": "Compass imports preserve MongoDB connection details without exposing credentials."
         }
@@ -127,10 +127,10 @@
         {
           "id": "reconnect",
           "command": "safeselect reconnect [--environment <env>]",
-          "purpose": "Restart the sidecar and verify connectivity.",
+          "purpose": "Verify connectivity using a new, temporary sidecar.",
           "example": "safeselect reconnect",
           "image": "cli/reconnect.png",
-          "caption": "Reconnect restarts the sidecar and verifies the live fixture instead of hiding a stale database."
+          "caption": "CLI reconnect checks all environments by default using temporary sidecars; it does not restart an agent MCP session."
         }
       ]
     },
@@ -176,7 +176,7 @@
     {
       "id": "nosql",
       "title": "Explore NoSQL",
-      "description": "Follow MongoDB discovery from databases to bounded documents, with sampled schema inference before reads.",
+      "description": "List databases and collections, sample documents to infer their structure, then run a bounded query.",
       "commands": [
         {
           "id": "list_databases",

@@ -9,6 +9,8 @@ BIN_DIR="${BIN_DIR:-${PREFIX}/bin}"
 MODE="release"
 RUST_FLAGS="--release"
 INSTALL_MAKEVN=false
+UPDATE=false
+EXPECTED_BRANCH=""
 
 if [[ -t 1 && -z "${NO_COLOR:-}" && "${TERM:-}" != "dumb" ]]; then
   SUCCESS_MARKER=$'\033[32m✓\033[0m'
@@ -18,6 +20,17 @@ fi
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --branch)
+      if [[ $# -lt 2 || -z "$2" ]]; then
+        printf 'Error: --branch requires a branch name.\n' >&2
+        exit 1
+      fi
+      EXPECTED_BRANCH="$2"
+      shift
+      ;;
+    --update)
+      UPDATE=true
+      ;;
     --debug)
       MODE="debug"
       RUST_FLAGS=""
@@ -30,8 +43,10 @@ while [[ $# -gt 0 ]]; do
       INSTALL_MAKEVN=true
       ;;
     --help|-h)
-      printf 'Usage: ./install.sh [--release|--debug] [--install-makevn]\n'
+      printf 'Usage: ./install.sh [--release|--debug] [--install-makevn] [--update] [--branch <name>]\n'
       printf '  --release   Build and install release binary (default)\n'
+      printf '  --branch    Require this installed source branch when updating\n'
+      printf '  --update    Fast-forward the clean local checkout before installing\n'
       printf '  --debug     Build and install debug binary\n'
       printf '  --install-makevn  Install missing makevn with Homebrew or asdf\n'
       exit 0
@@ -42,6 +57,32 @@ while [[ $# -gt 0 ]]; do
 done
 
 cd "${SCRIPT_DIR}"
+
+if [[ "${UPDATE}" == true ]]; then
+  if [[ "$(git rev-parse --show-toplevel 2>/dev/null)" != "${SCRIPT_DIR}" ]]; then
+    printf 'Error: --update requires the SafeSelect Git checkout.\n' >&2
+    exit 1
+  fi
+  if [[ -n "$(git status --porcelain)" ]]; then
+    printf 'Error: commit or stash local changes before updating.\n' >&2
+    exit 1
+  fi
+  if ! git symbolic-ref -q HEAD >/dev/null || ! git rev-parse --verify '@{upstream}' >/dev/null 2>&1; then
+    printf 'Error: --update requires a branch with an upstream.\n' >&2
+    exit 1
+  fi
+  if [[ -n "${EXPECTED_BRANCH}" && "$(git symbolic-ref --short -q HEAD)" != "${EXPECTED_BRANCH}" ]]; then
+    printf 'Error: checkout does not match the installed source branch; switch branches manually before updating.\n' >&2
+    exit 1
+  fi
+  git pull --ff-only
+  # Run the updated installer, preserving the selected installation settings.
+  update_args=("--${MODE}")
+  if [[ "${INSTALL_MAKEVN}" == true ]]; then
+    update_args+=(--install-makevn)
+  fi
+  exec env BIN_DIR="${BIN_DIR}" bash "${SCRIPT_DIR}/install.sh" "${update_args[@]}"
+fi
 
 ensure_makevn() {
   if command -v makevn >/dev/null 2>&1 && makevn --version >/dev/null 2>&1; then
@@ -102,8 +143,10 @@ base_version="$(sed -nE 's/^version = "([^"]+)"/\1/p' Cargo.toml | head -1)"
 build_stamp="$(date +"%Y.%m.%d.%H.%M")"
 build_version="${base_version} (${build_stamp})"
 
+source_branch="$(git symbolic-ref --short -q HEAD 2>/dev/null || true)"
+
 printf 'Building Rust binary (%s)...\n' "${MODE}"
-SAFESELECT_BUILD_VERSION="${build_version}" RUSTFLAGS="-A warnings" cargo build ${RUST_FLAGS} -q
+SAFESELECT_SOURCE_BRANCH="${source_branch}" SAFESELECT_SOURCE_DIR="${SCRIPT_DIR}" SAFESELECT_SOURCE_MODE="${MODE}" SAFESELECT_BUILD_VERSION="${build_version}" RUSTFLAGS="-A warnings" cargo build ${RUST_FLAGS} -q
 
 TARGET_DIR="${SCRIPT_DIR}/target/${MODE}"
 printf 'Installing to %s...\n' "${BIN_DIR}"

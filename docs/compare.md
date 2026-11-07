@@ -13,7 +13,7 @@ is enforced, and which credentials and other tools it can access.
 
 | Project | Documented contract and boundary | Deployment and scope | Choose it when |
 | --- | --- | --- | --- |
-| **SafeSelect MCP** | Fixed database read tools, Rust validation and a second sidecar check; project policy and row/byte/time limits. Security violations terminate the process. | Local MCP stdio; PostgreSQL and MongoDB. Java 17+ required. | Coding agents need direct but constrained database inspection across these two backends, with connection import and inspectable security evidence. |
+| **SafeSelect MCP** | Fixed database read tools, Rust validation and a second sidecar check; project policy and row/byte/time limits. Ordinary policy rejections return errors; serious security attempts and internal validation or audit failures stop the server. | Local MCP stdio; PostgreSQL and MongoDB. Java 17+ required. | Coding agents need direct but constrained database inspection across these two backends, with connection import and inspectable security evidence. |
 | **DBHub** | Configurable tools; `readonly = true` combines a keyword classifier with engine read-only enforcement where documented. Limits and custom SQL tools are configurable. | Multiple SQL engines, including PostgreSQL, MySQL, MariaDB, SQL Server and SQLite; stdio/HTTP options. | Multiple SQL engines, a small default tool surface, custom operations or a workbench matter more than a fixed read-only product contract. [Sources: introduction and SQL tool](https://dbhub.ai/tools/execute-sql). |
 | **MongoDB MCP Server** | `--readOnly` restricts tools to read, connect and metadata operations. The documented default permits writes. MongoDB recommends a dedicated read-only database user too. | Official MongoDB integration. This row concerns its local server, not every hosted or Atlas configuration. | An official MongoDB-specific integration is the priority and you can manage the read-only setting and database permissions. [Source: security guidance](https://www.mongodb.com/docs/mcp-server/local-mcp/security-best-practices/). |
 | **Postgres MCP Pro** | Configurable access: restricted mode uses read-only transactions and an execution-time constraint; unrestricted mode supports writes. | PostgreSQL; local stdio or shared SSE deployment. Performance-analysis tooling is a major part of the offering. | PostgreSQL health analysis, index tuning and DBA workflows are central. [Source: access modes and tools](https://github.com/crystaldba/postgres-mcp#access-mode). |
@@ -39,9 +39,9 @@ route to the database. Readable data can still be sensitive. Read-only queries
 can still cost resources. Native permissions and deliberate data selection
 remain necessary.
 
-Fail-closed is a tradeoff: terminating on a security violation reduces continued
-use of that session, but the operator must correct the cause before restarting.
-It is not evidence that a competitor returning an error is inherently unsafe.
+SafeSelect rejects ordinary policy violations before execution and keeps the session available.
+Serious security attempts and internal validation or audit failures stop the server and require correcting the cause
+before restarting. Returning a policy error does not by itself weaken enforcement.
 
 ## Evidence, not checkmark theatre
 

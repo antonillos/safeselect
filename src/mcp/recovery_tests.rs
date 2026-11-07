@@ -128,3 +128,81 @@ fn document_health_check_requires_a_successful_database_ping() {
     drop(server);
     std::fs::remove_dir_all(repo_root).unwrap();
 }
+
+#[test]
+fn unavailable_external_routes_require_user_recovery_without_tool_loops() {
+    for message in [
+        "SAFESELECT_SSH_BASTION_UNREACHABLE",
+        "SAFESELECT_SSH_BASTION_UNRESOLVED",
+        "SSH network connection failed. Database authentication was not attempted.",
+        "SSH connection timed out. Database authentication was not attempted.",
+    ] {
+        let suggestion = error_next_suggestion(message);
+        assert!(
+            suggestion.contains("ask the user to restore"),
+            "{message}: {suggestion}"
+        );
+        assert!(
+            suggestion.contains("Do not call check, connect, or reconnect"),
+            "{suggestion}"
+        );
+        assert!(suggestion.contains("user confirms"), "{suggestion}");
+    }
+}
+
+#[test]
+fn closed_database_connections_prioritize_one_reconnect_with_an_available_route() {
+    for message in [
+        "Connection closed",
+        "Connection is closed",
+        "Database not connected",
+        "NOT_CONNECTED",
+    ] {
+        let suggestion = error_next_suggestion(message);
+        assert!(
+            suggestion.contains("without check first"),
+            "{message}: {suggestion}"
+        );
+        assert!(suggestion.contains("reconnect once"), "{suggestion}");
+        assert!(
+            suggestion.contains("never alternate check and reconnect"),
+            "{suggestion}"
+        );
+        let response = tool_error_response(None, message.into(), "Call check first.");
+        let value = serde_json::to_value(response).unwrap();
+        assert_eq!(
+            value["result"]["structuredContent"]["next_suggestion"],
+            suggestion
+        );
+        assert_eq!(value["result"]["structuredContent"]["no_data"], true);
+        assert!(document_backend_error_next_suggestion(message).contains("without check first"));
+    }
+}
+
+#[test]
+fn startup_and_security_failures_never_become_connection_retries() {
+    for message in [
+        "Security error: Connection closed",
+        "Startup failure: Database not connected",
+        "SAFESELECT_SIDECAR_CONNECTION_FAILED: connection refused",
+    ] {
+        assert_eq!(error_next_suggestion(message), SECURITY_ERROR_SUGGESTION);
+    }
+}
+
+#[test]
+fn failed_recovery_and_explicit_disconnect_do_not_recommend_reconnecting_again() {
+    for message in [
+        "Reconnect failed: Connection closed",
+        "Reconnect verification failed: Database not connected",
+        "Disconnect failed: Connection is closed",
+    ] {
+        assert!(connection_error_suggestion(message).is_none());
+        let response = tool_error_response(None, message.into(), "Stop and report the failure.");
+        let value = serde_json::to_value(response).unwrap();
+        assert_eq!(
+            value["result"]["structuredContent"]["next_suggestion"],
+            "Stop and report the failure."
+        );
+    }
+}

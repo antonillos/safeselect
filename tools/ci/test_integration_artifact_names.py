@@ -22,9 +22,9 @@ class IntegrationArtifactNamesTest(unittest.TestCase):
         integration = (root / ".github/workflows/integration-tests.yml").read_text()
         verify = (root / ".github/workflows/verify.yml").read_text()
         mongo = verify.split("  integration-mongodb:", 1)[1].split("  security:", 1)[0]
-        self.assertIn("runs-on: ubuntu-24.04", integration)
-        self.assertIn("runs-on: ubuntu-24.04", mongo)
-        self.assertEqual(verify.count("runs-on: ubuntu-24.04"), 1)
+        self.assertIn("runs-on: ubuntu-22.04", integration)
+        self.assertIn("runs-on: ubuntu-22.04", mongo)
+        self.assertEqual(verify.count("runs-on: ubuntu-22.04"), 1)
 
 
 if __name__ == "__main__":

@@ -281,6 +281,7 @@ macro_rules! optional_document_json {
 
 pub struct McpServer {
     sidecar: Option<SidecarProcess>,
+    managed_tunnel: Option<crate::managed_tunnel::ManagedTunnel>,
     security: SecurityEngine,
     audit: AuditLog,
     project_name: String,
@@ -327,6 +328,7 @@ impl McpServer {
 
         Ok(Self {
             sidecar: None,
+            managed_tunnel: None,
             security,
             audit,
             project_name: project_name.to_string(),
@@ -356,6 +358,7 @@ impl McpServer {
     }
 
     fn ensure_sidecar(&mut self) -> Result<&mut SidecarProcess> {
+        self.refresh_managed_tunnel()?;
         if self.sidecar.is_some() {
             return self.sidecar_mut();
         }
@@ -365,6 +368,21 @@ impl McpServer {
         tracing::info!("Sidecar ready");
         self.sidecar = Some(sidecar);
         self.sidecar_mut()
+    }
+
+    fn refresh_managed_tunnel(&mut self) -> Result<()> {
+        if self.managed_tunnel.is_some() && self.ensure_ssh_ready_for_query()? {
+            self.sidecar = None;
+        }
+        Ok(())
+    }
+
+    fn effective_database_url(&self, environment: &EnvironmentConfig) -> Result<String> {
+        let mut effective = environment.clone();
+        if let Some(tunnel) = self.managed_tunnel.as_ref() {
+            tunnel.apply(&mut effective)?;
+        }
+        Ok(effective.database.url)
     }
 
     fn sidecar_mut(&mut self) -> Result<&mut SidecarProcess> {
@@ -460,7 +478,7 @@ impl McpServer {
 
     fn tool_description(&self, action: &str) -> String {
         format!(
-            "SafeSelect database query MCP for environment '{}': {action}. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If a data tool returns Connection closed, do not keep probing data access; call check, then reconnect once only for stale existing connections. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
+            "SafeSelect database query MCP for environment '{}': {action}. Use tools for database discovery; the read-only debugging resource is static guidance, not database data. If the external bastion/VPN/tunnel is unavailable, stop and ask the user to restore it; do not call check or reconnect. With that route available and only the database session closed or disconnected, call reconnect once directly, without check first. If route availability is unknown, use check at most once. Stop after failed recovery; never alternate check and reconnect. If check reports SAFESELECT_SIDECAR_CONNECTION_FAILED during startup, do not call reconnect; report the diagnostic.",
             self.env_name
         )
     }
@@ -494,10 +512,12 @@ impl McpServer {
             tracing::warn!("Sidecar pre-start failed during initialize: {e}");
         }
 
+        let notice = crate::updates::automatic_notice();
         let resp = JsonRpcResponse {
             jsonrpc: "2.0",
             id: msg.id.clone(),
             result: Some(serde_json::json!({
+                "instructions": crate::updates::mcp_instructions(notice.as_deref()),
                 "protocolVersion": proto_version,
                 "capabilities": {
                     "tools": {
@@ -1325,7 +1345,7 @@ impl McpServer {
             ToolDefinition {
                 name: "agent_install".into(),
                 description: self.tool_description(
-                    "install a SafeSelect database query MCP entry for a client",
+                    "install a SafeSelect MCP entry and shared skills for Codex/OpenCode",
                 ),
                 input_schema: serde_json::json!({
                     "type": "object",
@@ -1353,7 +1373,7 @@ impl McpServer {
             ToolDefinition {
                 name: "agent_uninstall".into(),
                 description: self.tool_description(
-                    "uninstall a SafeSelect database query MCP entry from a client",
+                    "uninstall a SafeSelect MCP entry; retain shared skills for other clients and entries",
                 ),
                 input_schema: serde_json::json!({
                     "type": "object",
@@ -1373,7 +1393,7 @@ impl McpServer {
             ToolDefinition {
                 name: "agent_status".into(),
                 description: self.tool_description(
-                    "show SafeSelect database query MCP installation status for all clients",
+                    "show MCP and shared skill registration status for all clients; discovery/loading is unverified",
                 ),
                 input_schema: serde_json::json!({
                     "type": "object",
@@ -1580,7 +1600,9 @@ impl McpServer {
             password: self.db_password.clone(),
             repo_root: self.repo_root.clone(),
         };
-        let mut report = crate::posture::inspect(&resolved, &self.config_dir)?;
+        self.ensure_ssh_ready_for_query()?;
+        let url = self.effective_database_url(&resolved.environment)?;
+        let mut report = crate::posture::inspect_with_url(&resolved, &self.config_dir, &url)?;
         Self::acknowledge_posture(&mut report, args, &self.config_dir)?;
         let payload =
             serde_json::to_string(&report).map_err(|e| SafeselectError::Other(e.to_string()))?;
@@ -2289,9 +2311,11 @@ impl McpServer {
             Ok(()) => {}
             Err(e) => {
                 self.audit.record("REJECT", "reject", sql)?;
-                let _ = self.send_error(id, -32000, format!("Query rejected: {e}"));
-                self.fail_closed("Security violation");
-                return Ok(());
+                let response = self.send_error(id, -32000, format!("Query rejected: {e}"));
+                if matches!(e, SafeselectError::Security(_)) {
+                    self.fail_closed("Security violation");
+                }
+                return response;
             }
         }
 
@@ -2493,9 +2517,7 @@ impl McpServer {
         let relation_check = format!("SELECT * FROM {schema}.{table}");
         if let Err(e) = validate_describe_target(&self.security, schema, table) {
             self.audit.record("REJECT", "reject", &relation_check)?;
-            let _ = self.send_error(id, -32000, format!("Request rejected: {e}"));
-            self.fail_closed("Security violation");
-            return Ok(());
+            return self.send_error(id, -32000, format!("Request rejected: {e}"));
         }
 
         let sql = build_describe_table_sql(schema, table);
@@ -2542,7 +2564,7 @@ impl McpServer {
                 self.write_response(&tool_error_response(
                     id,
                     format!("Describe table failed: {e}."),
-                    "Call check, then reconnect once only if check reports a stale existing connection.",
+                    DATABASE_CONNECTION_RECOVERY_SUGGESTION,
                 ))
             }
         }
@@ -2814,8 +2836,7 @@ impl McpServer {
         if let Err(error) = validate_describe_target(&self.security, schema, table) {
             let relation_check = format!("SELECT * FROM {schema}.{table}");
             self.audit.record("REJECT", "reject", &relation_check)?;
-            let _ = self.send_error(id, -32000, format!("Request rejected: {error}"));
-            self.fail_closed("Security violation");
+            self.send_error(id, -32000, format!("Request rejected: {error}"))?;
             return Ok(None);
         }
         Ok(Some((schema.to_string(), table.to_string())))
@@ -3080,9 +3101,11 @@ impl McpServer {
             Ok(()) => {}
             Err(e) => {
                 self.audit.record("REJECT", "reject", sql)?;
-                let _ = self.send_error(id, -32000, format!("Query rejected: {e}"));
-                self.fail_closed("Security violation");
-                return Ok(());
+                let response = self.send_error(id, -32000, format!("Query rejected: {e}"));
+                if matches!(e, SafeselectError::Security(_)) {
+                    self.fail_closed("Security violation");
+                }
+                return response;
             }
         }
 
@@ -3225,14 +3248,12 @@ impl McpServer {
             "{}: attempting SSH tunnel recovery",
             DiagnosticCode::SshTunnelRecoveryAttempt.as_str()
         );
-        if let Err(e) = setup_ssh_tunnels(&self.repo_root, std::slice::from_ref(&self.env_name)) {
-            tracing::warn!("SSH tunnel recovery attempt failed: {e}");
-        }
+        let tunnel_repaired = self.ensure_ssh_ready_for_query()?;
 
-        if is_timeout {
-            // Sidecar is hung, do full restart immediately
+        if is_timeout || tunnel_repaired {
+            // A timeout or changed tunnel endpoint requires a fresh sidecar.
             tracing::warn!(
-                "{}: execute timed out — restarting sidecar process immediately ({:?})",
+                "{}: connection recovery requires restarting sidecar process ({:?})",
                 DiagnosticCode::SidecarRestartAttempt.as_str(),
                 start.elapsed()
             );
@@ -3294,11 +3315,31 @@ impl McpServer {
         let resolved = loader.resolve_local(&self.repo_root, &self.env_name)?;
         let ssh = match resolved.environment.ssh.as_ref() {
             Some(ssh) if ssh.enabled => ssh,
-            _ => return Ok(false),
+            _ => return Ok(self.managed_tunnel.take().is_some()),
         };
 
+        if crate::managed_tunnel::is_managed(ssh) {
+            if let Some(tunnel) = self.managed_tunnel.as_mut() {
+                if tunnel.is_alive(ssh)? {
+                    return Ok(false);
+                }
+            }
+            self.managed_tunnel = None;
+            let account = format!(
+                "{}/{}/ssh",
+                crate::project_display_name(&self.repo_root),
+                self.env_name
+            );
+            let tunnel = crate::managed_tunnel::ManagedTunnel::start(ssh, &account)?;
+            let mut environment = resolved.environment.clone();
+            tunnel.apply(&mut environment)?;
+            self.managed_tunnel = Some(tunnel);
+            return Ok(true);
+        }
+        let endpoint_changed = self.managed_tunnel.take().is_some();
+
         if self.is_backend_ready_for_query(ssh, &resolved.environment.database.url) {
-            return Ok(false);
+            return Ok(endpoint_changed);
         }
 
         tracing::warn!(
@@ -3351,7 +3392,8 @@ impl McpServer {
         Ok(())
     }
 
-    fn start_sidecar(&self) -> Result<SidecarProcess> {
+    fn start_sidecar(&mut self) -> Result<SidecarProcess> {
+        self.ensure_ssh_ready_for_query()?;
         let limits = ResultLimits {
             max_rows: self.security.limits().max_rows,
             max_result_bytes: self.security.limits().max_result_bytes,
@@ -3359,7 +3401,8 @@ impl McpServer {
         // A changed reference must never fall back to a cached credential.
         let resolved = ConfigLoader::new().resolve_local(&self.repo_root, &self.env_name)?;
         let backend = resolved.environment.database.backend();
-        let db_url = resolved.environment.database.url.as_str();
+        let effective_url = self.effective_database_url(&resolved.environment)?;
+        let db_url = effective_url.as_str();
         let db_username = resolved.environment.database.username.as_str();
         let db_password = resolved.password.as_str();
         let driver_path = resolved
@@ -4052,7 +4095,11 @@ impl McpServer {
             local,
         ) {
             Ok(()) => {
-                let text = format!("Entry '{entry_name}' installed for {client}");
+                let text = if crate::agent_skills::supported(client) {
+                    format!("Entry '{entry_name}' and shared skills registered for {client}. Reload the client; discovery and loading remain unverified.")
+                } else {
+                    format!("Entry '{entry_name}' installed for {client}")
+                };
                 let resp = trusted_tool_response(
                     id,
                     "ok",
@@ -4237,7 +4284,7 @@ impl McpServer {
                     id,
                     "Database verification failed.",
                     &lines.join("\n"),
-                    "For a stale existing connection, call reconnect once; otherwise report the failure and fix connectivity before retrying.",
+                    DATABASE_CONNECTION_RECOVERY_SUGGESTION,
                 );
             }
         }
@@ -4381,6 +4428,7 @@ impl McpServer {
         if let Some(mut sidecar) = self.sidecar.take() {
             sidecar.force_kill_ref();
         }
+        self.managed_tunnel = None;
         std::process::exit(1);
     }
 
@@ -4419,6 +4467,9 @@ impl McpServer {
             "<{boundary}>\n{}\n</{boundary}>",
             redact_error_detail(detail)
         );
+        let recovery_context = format!("{trusted_message} {detail}");
+        let next_suggestion =
+            connection_error_suggestion(&recovery_context).unwrap_or(next_suggestion);
         let message = trusted_backend_error_message(trusted_message, next_suggestion);
         let resp = JsonRpcResponse {
             jsonrpc: "2.0",
@@ -4493,6 +4544,9 @@ fn redact_error_detail(detail: &str) -> String {
 }
 
 fn error_next_suggestion(message: &str) -> &'static str {
+    if let Some(suggestion) = connection_error_suggestion(message) {
+        return suggestion;
+    }
     let lower = message.to_ascii_lowercase();
     let rules: &[(&[&str], &str)] = &[
         (&["startup"], SECURITY_ERROR_SUGGESTION),
@@ -4509,7 +4563,6 @@ fn error_next_suggestion(message: &str) -> &'static str {
         (&["missing"], ARGUMENT_SUGGESTION),
         (&["invalid"], ARGUMENT_SUGGESTION),
         (&["required"], ARGUMENT_SUGGESTION),
-        (&["connection closed"], "Call check now; call reconnect once only if check reports a stale connection, otherwise report the connection failure."),
     ];
     rules.iter()
         .find(|(terms, _)| terms.iter().any(|term| lower.contains(term)))
@@ -4517,6 +4570,57 @@ fn error_next_suggestion(message: &str) -> &'static str {
             "Stop and report this SafeSelect error to the user; no further tool call is safe until the user provides a changed request.",
             |(_, suggestion)| *suggestion,
         )
+}
+
+const EXTERNAL_ROUTE_RECOVERY_SUGGESTION: &str =
+    "Stop and ask the user to restore the external bastion, VPN, or tunnel. Do not call check, connect, or reconnect while it is unavailable. Resume only after the user confirms it is restored.";
+const DATABASE_CONNECTION_RECOVERY_SUGGESTION: &str =
+    "If the external bastion/VPN/tunnel is unavailable, stop and ask the user to restore it. With that route available, call reconnect once directly, without check first; retry the original bounded operation once only after success. If route availability is unknown, use check at most once. After failed recovery, stop and report; never alternate check and reconnect.";
+
+fn connection_error_suggestion(message: &str) -> Option<&'static str> {
+    let lower = message.to_ascii_lowercase();
+    if contains_any(
+        &lower,
+        &[
+            "security",
+            "startup",
+            "sidecar_connection_failed",
+            "not read-only",
+            "audit",
+            "reconnect failed",
+            "reconnect verification failed",
+            "disconnect failed",
+        ],
+    ) {
+        return None;
+    }
+    if contains_any(
+        &lower,
+        &[
+            "safeselect_ssh_bastion_unreachable",
+            "safeselect_ssh_bastion_unresolved",
+            "ssh network connection failed",
+            "ssh connection timed out",
+        ],
+    ) {
+        return Some(EXTERNAL_ROUTE_RECOVERY_SUGGESTION);
+    }
+    if contains_any(&lower, &["authentication", "tls", "driver"]) {
+        return None;
+    }
+    if contains_any(
+        &lower,
+        &[
+            "connection closed",
+            "connection is closed",
+            "not connected",
+            "not_connected",
+        ],
+    ) || is_recoverable_connection_error(&lower)
+    {
+        return Some(DATABASE_CONNECTION_RECOVERY_SUGGESTION);
+    }
+    None
 }
 
 const SECURITY_ERROR_SUGGESTION: &str =
@@ -4656,6 +4760,7 @@ fn tool_error_response(
     text: String,
     next_suggestion: &str,
 ) -> JsonRpcResponse {
+    let next_suggestion = connection_error_suggestion(&text).unwrap_or(next_suggestion);
     let boundary = format!("safeselect-untrusted-data-{}", uuid::Uuid::new_v4());
     let framed_detail = format!("<{boundary}>\n{text}\n</{boundary}>");
     let rendered = format!(
@@ -4730,10 +4835,12 @@ fn run_setup_server_with_io<R: BufRead, W: Write>(
                         .and_then(|v| v.as_str()),
                 );
 
+                let notice = crate::updates::automatic_notice();
                 let resp = JsonRpcResponse {
                     jsonrpc: "2.0",
                     id: msg.id.clone(),
                     result: Some(serde_json::json!({
+                        "instructions": crate::updates::mcp_instructions(notice.as_deref()),
                         "protocolVersion": proto_version,
                         "capabilities": {
                             "tools": {
@@ -5594,10 +5701,10 @@ fn contains_any(message: &str, terms: &[&str]) -> bool {
 
 fn document_operation_error_message(operation: &str, message: &str) -> String {
     let lower = message.to_lowercase();
-    let suggestion = match (operation == "discover_document_schema", is_unknown_document_field(&lower), is_recoverable_connection_error(message)) {
-        (false, true, _) => " Next suggestion: call discover_document_schema for the target collection, then retry using observed fields.",
-        (_, _, true) => " Next suggestion: call check, then reconnect once only if check reports a stale existing connection.",
-        _ => "",
+    let suggestion = match (operation == "discover_document_schema", is_unknown_document_field(&lower), connection_error_suggestion(message)) {
+        (false, true, _) => " Next suggestion: call discover_document_schema for the target collection, then retry using observed fields.".to_string(),
+        (_, _, Some(suggestion)) => format!(" Next suggestion: {suggestion}"),
+        _ => String::new(),
     };
     format!("{operation} failed: {message}{suggestion}")
 }
@@ -5610,13 +5717,14 @@ fn is_unknown_document_field(message: &str) -> bool {
 }
 
 fn document_backend_error_next_suggestion(message: &str) -> &'static str {
+    if let Some(suggestion) = connection_error_suggestion(message) {
+        return suggestion;
+    }
     let lower = message.to_ascii_lowercase();
     if lower.contains("timeout") || lower.contains("timed out") {
         "Call explain_documents with the same database, collection, and filter; then retry once with a narrower filter while preserving every existing restriction."
     } else if is_unknown_document_field_error(&lower) {
         "Call discover_document_schema for the same database and collection, then retry once using only observed fields and declarative MQL operators."
-    } else if is_recoverable_connection_error(message) {
-        "Call check now; call reconnect once only if check identifies a stale connection, otherwise report the connection failure."
     } else {
         "Stop and report this document database error to the user; no unchanged retry is safe."
     }
@@ -5902,6 +6010,86 @@ mod tests {
         for sensitive in ["db.internal", "private-reader", "secret", "project-name"] {
             assert!(!summary.contains(sensitive));
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn managed_endpoint_survives_config_reload_and_releases_disabled_tunnel() {
+        use crate::managed_tunnel::tests::{environment, Fixture};
+
+        let fixture = Fixture::new();
+        let root = fixture.0.join("project");
+        let environments = root.join(".safeselect/environments");
+        std::fs::create_dir_all(&environments).unwrap();
+        let mut environment = environment("remote.invalid");
+        let file = environments.join("test.toml");
+        let saved = toml::to_string(&environment).unwrap();
+        std::fs::write(&file, &saved).unwrap();
+        let mut server = test_server(&root);
+        server.managed_tunnel = Some(fixture.start(environment.ssh.as_ref().unwrap()).unwrap());
+
+        let effective = server.effective_database_url(&environment).unwrap();
+        assert_ne!(effective, environment.database.url);
+        assert!(effective.contains("127.0.0.1:"));
+        server.refresh_managed_tunnel().unwrap();
+        let reloaded = ConfigLoader::new().resolve_local(&root, "test").unwrap();
+        assert_eq!(
+            server
+                .effective_database_url(&reloaded.environment)
+                .unwrap(),
+            effective
+        );
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), saved);
+
+        environment.ssh.as_mut().unwrap().enabled = false;
+        std::fs::write(&file, toml::to_string(&environment).unwrap()).unwrap();
+        server.refresh_managed_tunnel().unwrap();
+        assert!(server.managed_tunnel.is_none());
+        assert_eq!(
+            server.effective_database_url(&environment).unwrap(),
+            environment.database.url
+        );
+        server.refresh_managed_tunnel().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn switching_to_ready_external_tunnel_reports_endpoint_change_once() {
+        use crate::managed_tunnel::tests::{environment, Fixture};
+        use std::net::{TcpListener, TcpStream};
+
+        let fixture = Fixture::new();
+        let root = fixture.0.join("project");
+        let environments = root.join(".safeselect/environments");
+        std::fs::create_dir_all(&environments).unwrap();
+        let mut environment = environment("remote.invalid");
+        let file = environments.join("test.toml");
+        std::fs::write(&file, toml::to_string(&environment).unwrap()).unwrap();
+        let mut server = test_server(&root);
+        server.backend = environment.database.backend();
+        server.managed_tunnel = Some(fixture.start(environment.ssh.as_ref().unwrap()).unwrap());
+        let old_url = server.effective_database_url(&environment).unwrap();
+        let (old_host, old_port) = crate::extract_tcp_host_port(&old_url).unwrap();
+
+        let external = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let external_port = external.local_addr().unwrap().port();
+        environment.database.url = format!("mongodb://127.0.0.1:{external_port}/app");
+        let ssh = environment.ssh.as_mut().unwrap();
+        ssh.forward_host = None;
+        ssh.forward_port = None;
+        ssh.local_host = Some("127.0.0.1".into());
+        ssh.local_port = Some(external_port);
+        std::fs::write(&file, toml::to_string(&environment).unwrap()).unwrap();
+
+        assert!(server.ensure_ssh_ready_for_query().unwrap());
+        assert!(server.managed_tunnel.is_none());
+        assert!(TcpStream::connect((old_host.as_str(), old_port)).is_err());
+        assert_eq!(
+            server.effective_database_url(&environment).unwrap(),
+            environment.database.url
+        );
+        assert!(!server.ensure_ssh_ready_for_query().unwrap());
+        assert!(TcpStream::connect(("127.0.0.1", external_port)).is_ok());
     }
 
     pub(super) fn test_server(repo_root: &Path) -> McpServer {
@@ -7034,7 +7222,8 @@ mod tests {
             document_operation_error_message("find_documents", "unknown host");
 
         assert!(!sql_message.contains("Next suggestion"));
-        assert!(document_message.contains("call check"));
+        assert!(document_message.contains("reconnect once directly, without check first"));
+        assert!(document_message.contains("check at most once"));
         assert!(!document_message.contains("discover_document_schema"));
         assert!(!unknown_host_message.contains("Next suggestion"));
     }

@@ -481,7 +481,7 @@ fn assert_security_rejection_visible(repo_root: &std::path::Path, config_dir: &s
         postgres::run_safeselect(repo_root, config_dir, "DELETE FROM public.safe_table");
     assert!(!success, "DELETE unexpectedly succeeded: {stdout}");
     assert!(
-        stderr.contains("Query rejected") && stderr.contains("Read-only mode"),
+        stderr.contains("Security error: Read-only mode: DELETE not allowed"),
         "security rejection was not visible enough\nstdout:\n{stdout}\nstderr:\n{stderr}"
     );
 }

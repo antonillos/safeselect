@@ -1,7 +1,7 @@
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use std::path::PathBuf;
 
-const VERSION: &str = match option_env!("SAFESELECT_BUILD_VERSION") {
+pub(crate) const VERSION: &str = match option_env!("SAFESELECT_BUILD_VERSION") {
     Some(v) => v,
     None => env!("CARGO_PKG_VERSION"),
 };
@@ -17,8 +17,78 @@ pub struct Cli {
     pub command: Command,
 }
 
+impl Cli {
+    pub fn parse_with_help() -> Self {
+        let matches = Self::help_command().get_matches();
+        Self::from_arg_matches(&matches).unwrap_or_else(|error| error.exit())
+    }
+
+    fn help_command() -> clap::Command {
+        let mut command = Self::command();
+        // Build first so generated help/version flags receive the same layout.
+        command.build();
+        style_help(command)
+    }
+}
+
+fn style_help(command: clap::Command) -> clap::Command {
+    use clap::builder::styling::{Ansi256Color, Style, Styles};
+
+    let heading = Style::new().bold();
+    let usage_color = Ansi256Color(147).on_default();
+    let styles = Styles::styled()
+        .header(heading)
+        .usage(heading)
+        .literal(Ansi256Color(155).on_default())
+        .placeholder(Ansi256Color(245).on_default());
+    let mut command = command
+        .styles(styles.clone())
+        .mut_args(|arg| {
+            let heading = if arg.is_positional() {
+                "ARGUMENTS"
+            } else if matches!(arg.get_id().as_str(), "help" | "version") {
+                "GLOBAL FLAGS"
+            } else {
+                "FLAGS"
+            };
+            arg.help_heading(heading)
+        })
+        .mut_subcommands(style_help);
+    let usage = command.render_usage().to_string();
+    let usage = usage.strip_prefix("Usage: ").unwrap_or(&usage);
+    let sections = if command.get_subcommands().any(|sub| !sub.is_hide_set()) {
+        let flags = command
+            .clone()
+            .mut_subcommands(|sub| sub.hide(true))
+            .help_template("{all-args}")
+            .render_help();
+        let subcommands = command
+            .clone()
+            .styles(styles.literal(usage_color))
+            .help_template("{subcommands}")
+            .render_help();
+        let flags = flags.ansi().to_string();
+        let flags = flags.trim_end();
+        let separator = if flags.is_empty() { "" } else { "\n\n" };
+        format!(
+            "{flags}{separator}{heading}SUBCOMMANDS{heading:#}\n{}",
+            subcommands.ansi().to_string().trim_end()
+        )
+    } else {
+        "{all-args}".to_owned()
+    };
+    let template = format!(
+        "{{before-help}}{heading}DESCRIPTION{heading:#}\n  {{about}}\n\n\
+         {heading}USAGE{heading:#}\n  {usage_color}{usage}{usage_color:#}\n\n\
+         {sections}{{after-help}}\n"
+    );
+    command.help_template(template)
+}
+
 #[derive(Subcommand)]
 pub enum Command {
+    /// Check for a newer stable release and show how to update
+    UpdateCheck,
     /// Start the MCP server for a project/environment
     Serve {
         /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
@@ -77,6 +147,7 @@ pub enum Command {
         /// Environment to validate (all environments by default)
         #[arg(long)]
         environment: Option<String>,
+        /// Show detailed connectivity diagnostics
         #[arg(long, default_value_t = false)]
         verbose: bool,
     },
@@ -97,10 +168,13 @@ pub enum Command {
         /// Environment to inspect (all environments by default)
         #[arg(long)]
         environment: Option<String>,
+        /// Output format (text or json)
         #[arg(long, default_value = "text")]
         format: String,
+        /// Exit with an error when the security posture is unsafe
         #[arg(long, default_value_t = false)]
         strict: bool,
+        /// Record acknowledgement of the current security posture
         #[arg(long, default_value_t = false)]
         acknowledge: bool,
     },
@@ -142,6 +216,7 @@ pub enum Command {
         /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
         #[arg(long)]
         project: Option<PathBuf>,
+        /// Environment to reconnect (all environments by default)
         #[arg(long)]
         environment: Option<String>,
     },
@@ -163,6 +238,7 @@ pub enum ConfigAction {
         /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
         #[arg(long)]
         project: Option<PathBuf>,
+        /// Environment to validate (all environments by default)
         #[arg(long)]
         environment: Option<String>,
     },
@@ -244,12 +320,16 @@ pub enum ConfigAction {
 pub enum DriverAction {
     /// Register a JDBC driver
     Add {
+        /// Vendor name used to identify the driver
         #[arg(long)]
         vendor: String,
+        /// Path to the JDBC driver JAR
         #[arg(long)]
         path: String,
+        /// Fully qualified JDBC driver class name
         #[arg(long)]
         class: String,
+        /// SHA-256 checksum to register (computed from the JAR if omitted)
         #[arg(long)]
         sha256: Option<String>,
     },
@@ -257,6 +337,7 @@ pub enum DriverAction {
     List,
     /// Download official PostgreSQL driver
     Download {
+        /// Driver vendor (postgresql)
         #[arg(long)]
         vendor: String,
     },
@@ -266,23 +347,27 @@ pub enum DriverAction {
 pub enum AgentAction {
     /// Detect installed MCP clients
     Detect,
-    /// Install MCP entry for a client
+    /// Install MCP entry (and shared skills for Codex/OpenCode)
     Install {
         /// Client name (opencode, copilot, cursor, etc.)
         client: String,
         /// Path to repo root containing .safeselect/ (auto-detected from CWD if omitted)
         #[arg(long)]
         project: Option<PathBuf>,
+        /// Environment to serve (inferred when the project has exactly one)
         #[arg(long)]
         environment: Option<String>,
         /// Entry name (default: safeselect-<project-dir>-<environment>)
         #[arg(long)]
         name: Option<String>,
-        /// Install to project-local config instead of global config
-        #[arg(long)]
+        /// Install to project-local config (auto-selected when local config exists)
+        #[arg(long, conflicts_with = "global")]
         local: bool,
+        /// Install to global user config instead of detecting or asking for scope
+        #[arg(long)]
+        global: bool,
     },
-    /// Upgrade an existing MCP entry in-place
+    /// Upgrade an existing MCP entry and refresh Codex/OpenCode skills
     Upgrade {
         /// Client name (opencode, copilot, cursor, etc.)
         client: String,
@@ -295,14 +380,18 @@ pub enum AgentAction {
         /// Environment name to serve (auto-detected from the existing entry if omitted)
         #[arg(long)]
         environment: Option<String>,
-        /// Upgrade the project-local config instead of global config
-        #[arg(long)]
+        /// Upgrade project-local config (auto-selected when local config exists)
+        #[arg(long, conflicts_with = "global")]
         local: bool,
+        /// Upgrade global user config instead of detecting or asking for scope
+        #[arg(long)]
+        global: bool,
     },
     /// Uninstall MCP entry
     Uninstall {
         /// Client name
         client: String,
+        /// Entry to uninstall (auto-detected with confirmation if omitted)
         #[arg(long)]
         name: Option<String>,
     },
@@ -317,6 +406,65 @@ mod tests {
 
     use super::{Cli, Command};
     use clap::Parser;
+
+    #[test]
+    fn help_layout_reaches_every_command() {
+        fn check(command: &mut clap::Command) {
+            let help = command.render_help().to_string();
+            assert!(help.starts_with("DESCRIPTION\n  "), "{help}");
+            assert!(help.contains("\n\nUSAGE\n  safeselect"), "{help}");
+            assert!(!help.contains('\u{1b}'), "{help}");
+            if command.get_arguments().any(|arg| arg.get_id() == "help") {
+                assert!(help.contains("GLOBAL FLAGS:"), "{help}");
+            }
+            if command.get_subcommands().any(|sub| !sub.is_hide_set())
+                && help.contains("GLOBAL FLAGS:")
+            {
+                assert!(
+                    matches!(
+                        (help.find("GLOBAL FLAGS:"), help.find("SUBCOMMANDS\n")),
+                        (Some(flags), Some(subcommands)) if flags < subcommands
+                    ),
+                    "{help}"
+                );
+            }
+            for subcommand in command.get_subcommands_mut() {
+                check(subcommand);
+            }
+        }
+        check(&mut Cli::help_command());
+    }
+
+    #[test]
+    fn help_entry_points_share_layout_and_preserve_arguments() {
+        for args in [
+            vec!["safeselect", "agent", "install", "--help"],
+            vec!["safeselect", "agent", "install", "-h"],
+            vec!["safeselect", "help", "agent", "install"],
+        ] {
+            let error = Cli::help_command().try_get_matches_from(args).unwrap_err();
+            assert_eq!(error.kind(), clap::error::ErrorKind::DisplayHelp);
+            let help = error.to_string();
+            for text in [
+                "DESCRIPTION",
+                "USAGE",
+                "ARGUMENTS:",
+                "FLAGS:",
+                "GLOBAL FLAGS:",
+                "<CLIENT>",
+                "--project",
+                "--local",
+                "--help",
+            ] {
+                assert!(help.contains(text), "Missing {text}: {help}");
+            }
+        }
+        let matches = Cli::help_command()
+            .try_get_matches_from(["safeselect", "query", "--sql", "SELECT 1"])
+            .unwrap();
+        let cli = <Cli as clap::FromArgMatches>::from_arg_matches(&matches).unwrap();
+        assert!(matches!(cli.command, Command::Query { sql: Some(sql), .. } if sql == "SELECT 1"));
+    }
 
     #[test]
     fn doctor_and_posture_default_to_all_environments() {
@@ -337,6 +485,42 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn agent_install_scope_flags_are_optional_and_mutually_exclusive() {
+        for flag in [None, Some("--local"), Some("--global")] {
+            let mut args = vec!["safeselect", "agent", "install", "opencode"];
+            args.extend(flag);
+            assert!(Cli::try_parse_from(args).is_ok());
+        }
+        assert!(Cli::try_parse_from([
+            "safeselect",
+            "agent",
+            "install",
+            "opencode",
+            "--local",
+            "--global",
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn agent_upgrade_scope_flags_are_optional_and_mutually_exclusive() {
+        for flag in [None, Some("--local"), Some("--global")] {
+            let mut args = vec!["safeselect", "agent", "upgrade", "opencode"];
+            args.extend(flag);
+            assert!(Cli::try_parse_from(args).is_ok());
+        }
+        assert!(Cli::try_parse_from([
+            "safeselect",
+            "agent",
+            "upgrade",
+            "opencode",
+            "--local",
+            "--global",
+        ])
+        .is_err());
     }
 
     #[test]

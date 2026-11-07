@@ -30,7 +30,7 @@ Agents should treat SafeSelect as their database boundary:
 - Place SQL CTEs at the beginning of the statement; do not nest `WITH` inside a
   subquery.
 - Use `explain` to inspect query plans, index usage, and bottlenecks.
-- Use `check` or `reconnect` before retrying after connection or SSH tunnel errors.
+- For a known external bastion/VPN/tunnel outage, stop and wait for the user to restore it. With that route available and a closed database session, call `reconnect` once directly; never loop through `check`/`reconnect`.
 - Use `audit_status` to verify the current session audit is healthy and
   `audit_recent` to inspect recent metadata when the user asks what SafeSelect
   allowed or rejected. `audit_recent` accepts a `limit` from 1 to 20.
@@ -50,12 +50,12 @@ Agents should treat SafeSelect as their database boundary:
 | Gemini CLI | Yes | Yes | `mcpServers` in `settings.json` |
 
 SafeSelect rejects `--local` for Windsurf rather than silently changing a global
-file. User scope is the default for every other client; pass `--local` when the
-integration should travel with the repository.
+file. Installation reuses an existing project-local client configuration;
+otherwise it asks for scope. Pass `--local` or `--global` to choose explicitly.
 
 CLI `connect`, `disconnect`, and `reconnect` use their own temporary sidecar;
 they do not control an existing agent session. To change that session's
-connection state, invoke its MCP tools. See [CLI conventions and effects](../README.md#convention-before-configuration).
+connection state, invoke its MCP tools. See [CLI conventions and effects](configuration.md#convention-before-configuration).
 
 ## Installing in an Agent
 
@@ -64,7 +64,7 @@ connection state, invoke its MCP tools. See [CLI conventions and effects](../REA
 safeselect agent detect
 
 # Install in user scope. The only environment is inferred when unambiguous.
-safeselect agent install opencode --project /absolute/path/to/myapp
+safeselect agent install opencode --project /absolute/path/to/myapp --global
 
 # Or install in the repository's official project-scoped client config.
 safeselect agent install codex --project /absolute/path/to/myapp --local
@@ -105,11 +105,84 @@ entry and want to refresh it after upgrading the SafeSelect binary. By default i
 migrates the entry to the canonical `safeselect-<project>-<environment>` name when
 it can derive the project, and updates the generated MCP config in the same step.
 If `--name` is omitted, SafeSelect resolves the entry from the current project and,
-when needed, the provided `--environment`.
+when needed, the provided `--environment`. In an interactive terminal, multiple
+matches within the selected scope open an entry selector showing each configuration
+path. Scripts must resolve entry ambiguity with `--name` or `--environment`. The selected
+upgrade destination is printed before changes are prepared.
+
+`agent install` and `agent upgrade` select scope before selecting environments
+or entries. Installation prints the scope and configuration path before asking
+for environments. If the client already has a project-local configuration,
+that scope is selected automatically. Otherwise, SafeSelect asks for local or
+global scope, showing the destination paths with local first. Use `--local` or
+`--global` to choose explicitly. Without a local configuration, non-interactive
+runs require one of these flags instead of silently choosing global scope.
+Upgrades search only the selected scope; a missing entry does not trigger a
+fallback to another scope.
+
+## Portable workflow skills
+
+SafeSelect's binary embeds four skills and their references. Product installation
+ships this bundle without modifying agent configuration. `agent install` and
+`agent upgrade` register it together with MCP for Codex and OpenCode. Other
+clients retain their existing MCP-only installation behavior.
+
+| Intent | Skill | CLI / MCP entry points | Effects and evidence |
+| --- | --- | --- | --- |
+| Choose backend and investigation flow | [safeselect](../skills/safeselect/SKILL.md) | MCP `database_info` | Backend identified; no automatic data read |
+| Import, configure or recover access | [safeselect-setup](../skills/safeselect-setup/SKILL.md) | CLI imports, `agent install`, `agent upgrade`; MCP `config_validate`, `check`, `reconnect`, `agent_install` | Config/integration writes only when requested; diagnostics may open connections |
+| Discover SQL schema and investigate queries | [safeselect-sql](../skills/safeselect-sql/SKILL.md) | MCP `list_tables`, `describe_table`, `select`, `explain`, `get_maintenance_diagnostics`; CLI `query` | Exact schema, bounded results or plan; maintenance advice never executes writes |
+| Explore MongoDB safely | [safeselect-mongodb](../skills/safeselect-mongodb/SKILL.md) | MCP database/collection discovery, sampled schema, bounded find/aggregation, indexes and stats | Observed structure, bounded results; sampled absence is not proof |
+
+Skills teach workflow choices; MCP enforces its security boundaries even without
+loaded skills. Tool-returned content remains untrusted. The bundle uses relative
+references and can be copied without this repository's README or docs.
+
+### Registration contract
+
+- Skills follow the selected MCP installation scope.
+- Global scope uses `~/.agents/skills/`; local scope uses `.agents/skills/`
+  inside the resolved application project.
+- Upgrades follow the same scope selection as installation. Existing local config
+  selects project scope unless `--global` is passed. Skills follow that scope.
+- Both clients and all SafeSelect MCP entries share one bundle per scope.
+- Codex MCP config honors `CODEX_HOME`; OpenCode global config honors
+  `XDG_CONFIG_HOME`, defaulting to `~/.config`. Skill locations stay independent.
+- `.safeselect-skills.json` records ownership, schema version, product version and
+  SHA-256 file hashes. Repeating registration is idempotent, including when MCP
+  is already current. Re-register after upgrading the binary.
+- Unchanged managed bundles can be updated. Foreign resources, edited or missing
+  files, extra files/directories, symlinks and group/world-writable paths block
+  replacement. Preserve customized content and resolve the reported conflict;
+  setup does not delete it automatically.
+- Setup uses `.safeselect-skills.lock`, validates config and resources, stages
+  replacements and restores config, backups and skills on operation failure.
+  Existing config backups and unrelated settings are retained. A crash can leave
+  a lock: verify no setup is active before removing it. This is not power-loss
+  recovery. A failed rollback reports retained recovery resources.
+- Registration preserves client trust and permission settings. A disabled or
+  disallowed skill must be handled through the client's own controls.
+- `agent uninstall` removes only the requested MCP entry and retains shared skills.
+
+`agent status` and MCP `agent_status` report both scopes' resource paths and
+`absent`, `current`, `outdated` or `conflict` registration states. This is a
+read-only disk/config inspection, not proof that a client discovered or loaded
+anything. Manual MCP configuration below does not register skills.
+
+After registration reload the client, inspect its skills catalog and explicitly
+load the four skills. Then test representative requests without naming a skill.
+Automatic selection depends on the model and description; installation cannot
+guarantee it. See the [validation procedure and evidence](agent-skills-validation.md).
 
 ## Manual MCP Configuration
 
-The installed entry looks like this in your agent's config:
+The generated name defaults to `safeselect-<project>-<environment>`. Each entry
+pins the absolute project path and one environment.
+
+For clients that use a `mcpServers` JSON object, the entry has this shape.
+Codex uses TOML, OpenCode uses `mcp`, and Copilot uses `servers`; consult the
+[supported-agent table](#supported-agents) or use `agent install` to generate
+the client's configuration.
 
 ```json
 {
@@ -421,19 +494,22 @@ execution by restarting the sidecar and retrying once. Agents should still call
 Diagnose the configured environment from inside MCP. The response includes
 stable diagnostic codes such as `SAFESELECT_CONFIG_RESOLVED`,
 `SAFESELECT_SSH_BASTION_REACHABLE`, `SAFESELECT_SIDECAR_BACKEND_OK`, and
-`SAFESELECT_BACKEND_VERIFICATION_OK` so agents can identify the failing layer before
-trying a recovery action.
+`SAFESELECT_BACKEND_VERIFICATION_OK` so agents can identify an unknown failing layer. A known disconnected session
+with an available external route should use `reconnect` directly.
 
 ## Configuration Tools
 
-These tools let an agent guide setup without leaving MCP. Destructive tools require
-explicit confirmation arguments.
+These tools let an agent guide setup without leaving MCP. They can modify local
+configuration and credentials; the database read-only boundary does not make
+setup tools read-only. `config_reset` and `uninstall` require `confirm: true`;
+`config_delete_environment` takes the environment name without a separate
+confirmation argument.
 
 | Tool | Purpose | Arguments |
 |---|---|---|
 | `config_validate` | Validate project/environment config | `environment` optional |
 | `config_show` | Show resolved config with secrets redacted | `environment` required |
-| `config_set_password` | Store an environment password in macOS Keychain | `environment`, `password` |
+| `config_set_password` | Configure an environment reference on any platform, or Keychain on macOS | `environment`, `password`; prefer `{env:NAME}` |
 | `config_rename_environment` | Rename an environment and migrate secret references | `old_name`, `new_name` |
 | `config_delete_environment` | Delete one environment | `name` |
 | `config_reset` | Delete all environments and keychain entries for the project | `confirm: true` |
@@ -460,16 +536,35 @@ release installer and `~/.cargo/bin/safeselect` from `cargo install`.
 
 ## Agent Recovery Flow
 
-When database access fails, agents should proceed in this order:
+For rejected requests, first follow the
+[rejection classification and recovery guidance](security.md#6-fail-closed).
+An ordinary catalog or scope rejection requires a corrected request, not a
+connection restart. After a serious SQL security error terminates the server,
+`reconnect` cannot run; the affected MCP entry must be restarted through the
+host after correcting the cause.
 
-1. If a data tool returns `Connection closed`, stop probing data tools; call `check`.
-2. Otherwise, call `check` and read the stable diagnostic codes.
-3. If `check` reports `SAFESELECT_SIDECAR_CONNECTION_FAILED` while starting the sidecar, do not call `reconnect`; report the diagnostic and inspect config, tunnel, or backend availability.
-4. If an existing sidecar, SSH tunnel, or backend connection is stale, call `reconnect` once.
-5. If config is missing or invalid, call `config_validate` and `config_show`.
-6. If the driver is missing, call `driver_list` then `driver_download` for PostgreSQL.
-7. If the secret is missing, ask the user for permission/password and use `config_set_password`.
-8. Do not retry rejected SQL after a security violation; SafeSelect intentionally exits fail-closed.
+For connectivity and setup failures in a running MCP session:
+
+1. If the external bastion, VPN or tunnel is known unavailable, stop and ask the
+   user to restore it manually. Do not call `check`, `connect`, `reconnect` or
+   data tools, and do not run shell SSH/VPN commands. Resume only after the user
+   confirms that external connection is restored.
+2. With that route available and only the database session closed, disconnected
+   or stale, call MCP `reconnect` once directly, without `check` first. Retry the
+   original bounded operation once only after successful verification.
+3. If route availability is unknown, use `check` at most once to distinguish the
+   cause. A generic closed-database error alone does not establish a bastion
+   outage, and a separate failed TCP probe must not reject a working route.
+4. After failed recovery stop and report. Never alternate `check` and `reconnect`
+   or repeatedly probe data tools. A sidecar startup
+   `SAFESELECT_SIDECAR_CONNECTION_FAILED` requires setup/connectivity diagnosis,
+   not a reconnect loop.
+5. For configuration, driver or credential failures use `config_validate`,
+   redacted `config_show` and `driver_list` as appropriate; request secret storage
+   only within the user's authorization. Never treat these as stale sessions.
+6. Ordinary policy rejections require a corrected request within policy. Serious
+   security attempts, internal validation failures and audit failures stop the
+   server; the host must restart it after correction.
 
 Timeouts are bounded by the project `statement_timeout_ms`. If a query times out,
 agents must not retry it unchanged or broaden it. Preserve or narrow filters and
@@ -483,5 +578,88 @@ increasing project limits.
 
 - Each MCP entry is locked to a single project and environment
 - Agents cannot change the target database
-- Any security violation terminates the process
+- Ordinary policy rejections return errors without executing; serious security attempts and internal validation or audit failures stop the server
 - All queries are audited (hashed, never stored in plain text)
+
+## Guided MCP Context
+
+Clients that support MCP prompts can invoke `read_only_database_debugging` for a
+safe investigation checklist. Clients can also read
+`safeselect://guide/read-only-database-debugging` for the same static workflow
+and boundary notes. Neither capability exposes database data, credentials, or
+write access; use the database tools below for discovery and bounded reads.
+
+## Agent Workflow
+
+Start with `database_info`, then follow the flow for the connected backend:
+
+- **PostgreSQL:** `list_tables` → `describe_table` → relevant indexes or statistics
+  → a targeted `select` or `explain`.
+- **MongoDB:** `list_databases` → `list_collections` → `discover_document_schema`
+  → a bounded document query. Schema inference reads a sample of documents;
+  for a metadata-only request, stop after listing collections.
+
+Follow the [agent recovery flow](#agent-recovery-flow) if connectivity fails.
+
+MCP `check` verifies the backend used by the current session (`SELECT 1` for
+PostgreSQL, a database ping for MongoDB). An existing usable connection or tunnel
+does not require a separate successful bastion probe. Sidecar startup and response
+reads have deadlines; stalled or malformed responses invalidate the sidecar
+without closing the MCP session. For a stale connection with an available route,
+call `reconnect` once and retry the bounded operation only after successful
+verification. A startup or configuration failure
+still requires fixing its cause before retrying; do not loop on reconnection.
+
+Agents must discover relation or collection structure before querying unfamiliar data and use each discovery response's `next_suggestion` instead of guessing column or field names. SQL descriptions are catalog metadata; MongoDB schemas are inferred from a bounded, non-exhaustive sample.
+
+A `next_suggestion` does not expand the user's request or authorize additional
+data reads. Stop at the requested boundary, even when a tool suggests a next step.
+
+MongoDB query documents must remain complete nested JSON values. Clients that
+flatten nested tool arguments can pass `filter`, `projection`, and `sort` as
+JSON-encoded object strings and `pipeline` as a JSON-encoded array string.
+`redact_fields` also accepts a JSON-encoded string array. Flattened keys are
+rejected so a lost filter or redaction can never become a less constrained
+fallback.
+
+MongoDB server-side JavaScript is never available: `$where`, `$function`, and
+`$accumulator` are rejected recursively in filters, projections, sorts, and
+aggregation pipelines before the MongoDB driver receives them. When rejected,
+rebuild the request with declarative MQL operators; SafeSelect has no setting
+that enables JavaScript.
+
+Query responses include `row_count`, `byte_count`, `elapsed_ms`, and a human-readable `elapsed` value so agents can reason about result size and latency.
+
+Every MCP success and error includes one contextual `next_suggestion`. Agents
+should follow that single safe action, never blindly repeat an invalid request,
+and stop when the suggestion is terminal. For clients that only show an MCP
+error summary, SafeSelect also includes the trusted next suggestion in that
+summary without exposing database-derived detail.
+
+## MCP Tools
+
+Availability depends on the connected backend and whether the server is in
+setup mode. SQL and MongoDB tools are alternative backend surfaces.
+
+| Area | Tools |
+|---|---|
+| SQL | `list_tables`, `describe_table`, `list_table_indexes`, `list_table_partitions`, `list_functions`, `list_triggers`, `list_scheduled_jobs`, `get_database_stats`, `get_table_stats`, `get_maintenance_diagnostics`, `select`, `explain` |
+| MongoDB reads | `list_databases`, `list_collections`, `find_documents`, `aggregate_documents`, `distinct_documents`, `count_documents`, `explain_documents` |
+| MongoDB analysis | `profile_document_field`, `discover_document_schema`, `generate_document_fixture`, `list_collection_indexes`, `get_database_stats`, `get_collection_stats` |
+| Connection | `database_info`, `check`, `connect`, `disconnect`, `reconnect` |
+| Audit | `audit_status`, `audit_recent` |
+| Config | `config_validate`, `config_show`, `config_set_password`, `config_rename_environment`, `config_delete_environment`, `config_reset` |
+| Setup | `import_compose`, `driver_list`, `driver_add`, `driver_download`, `agent_detect`, `agent_install`, `agent_status`, `agent_uninstall`, `uninstall` |
+
+`get_maintenance_diagnostics` supports PostgreSQL 15, 16, 17, and 18.
+
+## First-run setup
+
+When no `.safeselect/` directory exists, `safeselect serve` scans for PostgreSQL
+Compose services. If found, it enters setup mode automatically: it imports them,
+writes project configuration, and starts a setup-only MCP server. Otherwise it
+prints setup instructions and exits.
+An existing but empty or invalid configuration is rejected, not replaced by setup.
+
+> [!IMPORTANT]
+> Setup mode does not expose query tools. Agents can help import and validate configuration before any database inspection tools become available.
