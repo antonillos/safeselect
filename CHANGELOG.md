@@ -2,6 +2,38 @@
 
 All notable changes to this project are documented in this file.
 
+## [v0.9.0] - 2026-11-07
+
+### Added
+
+- feat(cli): unify help layout and terminal colors
+- feat(agents): register portable workflow skills
+- feat(updates): add quiet release checks and source update hints
+
+### Fixed
+
+- fix(mcp): reserve policy shutdowns for serious SQL attempts
+- fix(site): update vulnerable dependencies
+- fix(agents): prefer local scope for install and upgrade
+- fix(deps): resolve Dependabot security alerts
+- fix(ssh): isolate MCP tunnels with dynamic local ports
+
+### Documentation
+
+- docs: simplify Homebrew caveats and refresh onboarding demo
+- docs: simplify README and clarify setup guidance
+
+### Build And CI
+
+- ci: sync develop only after stable release publication
+- ci: keep gallery documentation checks lightweight
+
+### Dependencies
+
+- chore(deps): update Dependabot dependencies and patch braces
+- chore(deps): bump similar from 3.1.2 to 3.2.1
+- chore(deps): bump uuid from 1.28.0 to 1.29.0
+
 ## [v0.8.0] - 2026-10-18
 
 ### Added
