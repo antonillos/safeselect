@@ -572,6 +572,53 @@ fn mcp_exposes_static_read_only_prompt_and_resource_without_database_access() {
 }
 
 #[test]
+fn lateral_jsonb_queries_are_validated_without_duplicate_rejection_prefixes() {
+    let valid_sql = "WITH input AS (SELECT '[{\"id\":\"example\"}]'::jsonb AS payload)
+        SELECT md5(jsonb_agg(calc.out)::text)
+        FROM input AS i
+        CROSS JOIN LATERAL (
+            WITH rows AS (
+                SELECT item.value ->> 'id' AS id
+                FROM jsonb_array_elements(COALESCE(i.payload, '[]'::jsonb)) AS item(value)
+            )
+            SELECT jsonb_build_object('ids', jsonb_agg(DISTINCT rows.id)) FROM rows
+        ) AS calc(out)";
+    for tool in ["select", "explain"] {
+        let (mut mcp, tmp) = McpHarness::start();
+        let invalid_sql = valid_sql.replace("FROM rows\n", "FROM rows;\n");
+        let rejected = mcp.send(&serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": tool, "arguments": {"sql": invalid_sql}}
+        }));
+        assert_error(&rejected, serde_json::json!(1), -32000);
+        assert_eq!(
+            rejected["error"]["message"],
+            "Query rejected: Read-only mode: unsupported or invalid SQL",
+            "{tool}: {rejected}"
+        );
+        let accepted = mcp.send(&serde_json::json!({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {"name": tool, "arguments": {"sql": valid_sql}}
+        }));
+        // No database is configured: acceptance reaches the backend error path.
+        if tool == "select" {
+            assert!(accepted["error"].is_null(), "{accepted}");
+            assert_eq!(accepted["result"]["isError"], true, "{accepted}");
+        } else {
+            assert!(
+                accepted["error"]["message"]
+                    .as_str()
+                    .is_some_and(|message| message.starts_with("Explain failed.")),
+                "{accepted}"
+            );
+        }
+        let (_, status) = mcp.finish_with_status();
+        assert!(status.success());
+        let _ = std::fs::remove_dir_all(tmp);
+    }
+}
+
+#[test]
 fn sql_classification_matrix_controls_mcp_lifecycle() {
     let cases: serde_json::Value =
         serde_json::from_str(include_str!("fixtures/sql-classification.json")).unwrap();
