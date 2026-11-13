@@ -6087,6 +6087,16 @@ auth_type="KEY"
     use super::*;
 
     #[test]
+    fn deleting_an_environment_without_a_secret_leaves_the_message_unchanged() {
+        let mut removed = String::from("Deleted environment 'demo'");
+        append_deleted_secret_message(&mut removed, None).unwrap();
+        assert_eq!(removed, "Deleted environment 'demo'");
+        append_deleted_secret_message(&mut removed, Some(("unsupported".into(), None, None)))
+            .unwrap();
+        assert_eq!(removed, "Deleted environment 'demo'");
+    }
+
+    #[test]
     fn covers_small_configuration_helpers() {
         let root = std::env::temp_dir().join(format!("safeselect-config-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);

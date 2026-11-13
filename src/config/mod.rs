@@ -401,6 +401,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn local_ssh_fields_override_shared_bastion_settings() {
+        let shared: SharedSshConfig = toml::from_str(
+            "host = 'shared.example'\nport = 2222\nusername = 'shared'\nidentity_file = '/tmp/shared.key'\nknown_hosts = '/tmp/shared_hosts'\nauth_type = 'key'\n",
+        )
+        .unwrap();
+        let mut ssh: SshConfig = toml::from_str(
+            "enabled = true\nhost = 'local.example'\nport = 2200\nusername = 'local'\nidentity_file = '/tmp/local.key'\nknown_hosts = '/tmp/local_hosts'\nauth_type = 'password'\n",
+        )
+        .unwrap();
+        merge_shared_ssh_fields(&mut ssh, &shared);
+        assert_eq!(ssh.host.as_deref(), Some("local.example"));
+        assert_eq!(ssh.port, Some(2200));
+        assert_eq!(ssh.username.as_deref(), Some("local"));
+        assert_eq!(ssh.identity_file.as_deref(), Some("/tmp/local.key"));
+        assert_eq!(ssh.known_hosts.as_deref(), Some("/tmp/local_hosts"));
+        assert_eq!(ssh.auth_type.as_deref(), Some("password"));
+    }
+
+    #[test]
     fn merges_shared_ssh_settings_into_environment() {
         let project: ProjectConfig = toml::from_str(
             r#"

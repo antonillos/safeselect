@@ -82,6 +82,8 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- Remove duplicated query rejection prefixes from MCP validation errors.
+
 - Classify SQL rejections by statement and function-call context, preserving MCP
   availability for ordinary errors while terminating on known state-changing
   operations. Cover nested writes, SELECT INTO, quoted calls and dollar-quoted

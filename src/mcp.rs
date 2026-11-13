@@ -2311,7 +2311,7 @@ impl McpServer {
             Ok(()) => {}
             Err(e) => {
                 self.audit.record("REJECT", "reject", sql)?;
-                let response = self.send_error(id, -32000, format!("Query rejected: {e}"));
+                let response = self.send_error(id, -32000, e.to_string());
                 if matches!(e, SafeselectError::Security(_)) {
                     self.fail_closed("Security violation");
                 }
@@ -2455,7 +2455,7 @@ impl McpServer {
             Ok(()) => {}
             Err(e) => {
                 self.audit.record("REJECT", "reject", &sql)?;
-                let _ = self.send_error(id, -32000, format!("Query rejected: {e}"));
+                let _ = self.send_error(id, -32000, e.to_string());
                 self.fail_closed("Security violation");
                 return Ok(());
             }
@@ -2523,7 +2523,7 @@ impl McpServer {
         let sql = build_describe_table_sql(schema, table);
         if let Err(e) = self.security.validate_system(&sql) {
             self.audit.record("REJECT", "reject", &sql)?;
-            let _ = self.send_error(id, -32000, format!("Query rejected: {e}"));
+            let _ = self.send_error(id, -32000, e.to_string());
             self.fail_closed("Security violation");
             return Ok(());
         }
@@ -3037,7 +3037,7 @@ impl McpServer {
         let sql = format!("{sql} LIMIT {}", self.security.limits().max_rows);
         if let Err(error) = self.security.validate_system(&sql) {
             self.audit.record("REJECT", "reject", &sql)?;
-            let _ = self.send_error(id, -32000, format!("Query rejected: {error}"));
+            let _ = self.send_error(id, -32000, error.to_string());
             self.fail_closed("Security violation");
             return Ok(());
         }
@@ -3101,7 +3101,7 @@ impl McpServer {
             Ok(()) => {}
             Err(e) => {
                 self.audit.record("REJECT", "reject", sql)?;
-                let response = self.send_error(id, -32000, format!("Query rejected: {e}"));
+                let response = self.send_error(id, -32000, e.to_string());
                 if matches!(e, SafeselectError::Security(_)) {
                     self.fail_closed("Security violation");
                 }

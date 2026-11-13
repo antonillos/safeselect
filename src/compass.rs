@@ -177,6 +177,7 @@ mod tests {
     #[test]
     fn collects_connections_from_nested_arrays() {
         let value = serde_json::json!({
+            "description": "not a connection",
             "items": [
                 {"connectionString": "mongodb://nested"},
                 null,
