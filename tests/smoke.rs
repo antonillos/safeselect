@@ -284,10 +284,8 @@ sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         .find(|frame| frame.get("id") == Some(&serde_json::json!(2)))
         .expect("missing JSON-RPC rejection response");
     assert_eq!(rejection["error"]["code"], -32000);
-    assert!(
-        rejection["error"]["message"]
-            .as_str()
-            .is_some_and(|message| message.contains("Query rejected")),
+    assert_eq!(
+        rejection["error"]["message"], "Security error: Read-only mode: COMMIT not allowed",
         "unexpected rejection response: {rejection}"
     );
     assert!(
