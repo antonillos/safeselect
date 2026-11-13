@@ -2404,6 +2404,16 @@ mcp_servers = { safe = { command = "safeselect", args = ["serve", "--environment
             1_000,
         )
         .is_err());
+        let error = upsert_codex_toml(
+            "mcp_servers = 1",
+            None,
+            "safe",
+            &["serve".into()],
+            None,
+            1_000,
+        )
+        .unwrap_err();
+        assert_eq!(error.to_string(), "'mcp_servers' must be a TOML table");
         let _ = std::fs::remove_dir_all(root);
     }
 
