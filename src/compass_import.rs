@@ -211,6 +211,20 @@ impl ImportIndex {
             .collect()
     }
 
+    pub fn staged_candidates(
+        &self,
+        key: &str,
+        staged: &[(String, crate::config::EnvironmentConfig)],
+    ) -> Vec<String> {
+        self.connections
+            .get(key)
+            .into_iter()
+            .flatten()
+            .filter(|name| staged.iter().any(|(staged_name, _)| staged_name == *name))
+            .cloned()
+            .collect()
+    }
+
     pub fn record_key(&mut self, key: String, name: &str) {
         // An overwritten environment belongs only to its latest imported identity.
         for names in self.connections.values_mut() {
@@ -262,12 +276,19 @@ pub fn select_environment(
     candidates: &[String],
     default: &str,
     non_interactive: bool,
+    reset: bool,
+    ui: &mut crate::import_wizard::Wizard,
 ) -> Result<Option<String>> {
     if non_interactive {
         return Ok(unattended_environment(dir, candidates, default));
     }
     println!("{}", environment_section(default, candidates));
-    select_environment_with(dir, candidates, default, &mut TerminalInteraction)
+    select_environment_with(
+        dir,
+        candidates,
+        default,
+        &mut DraftInteraction { ui, reset },
+    )
 }
 
 fn environment_section(connection: &str, candidates: &[String]) -> String {
@@ -299,6 +320,12 @@ fn unattended_environment(dir: &Path, candidates: &[String], default: &str) -> O
 
 trait EnvironmentInteraction: CredentialInteraction {
     fn environment_name(&mut self, default: &str) -> Result<String>;
+    fn name_suggestion(&self, dir: &Path, default: &str) -> String {
+        crate::unique_env_name(dir, default)
+    }
+    fn name_available(&self, dir: &Path, name: &str) -> bool {
+        available_environment_name(dir, name)
+    }
 }
 
 fn select_environment_with(
@@ -355,11 +382,11 @@ fn new_environment(
     default: &str,
     ui: &mut impl EnvironmentInteraction,
 ) -> Result<String> {
-    let suggested = crate::unique_env_name(dir, default);
+    let suggested = ui.name_suggestion(dir, default);
     loop {
         let requested = ui.environment_name(&suggested)?;
         let name = crate::slug_env_name(&requested);
-        if available_environment_name(dir, &name) {
+        if ui.name_available(dir, &name) {
             return Ok(name);
         }
     }
@@ -381,9 +408,6 @@ fn invalid_selection() -> SafeselectError {
     SafeselectError::Other("Invalid import selection".into())
 }
 
-fn cancelled(_: inquire::InquireError) -> SafeselectError {
-    SafeselectError::Other("Import cancelled".into())
-}
 /// Keep short selections inline; avoid joining long answers to their question.
 pub fn selection_render_config(
     prompt: &str,
@@ -393,18 +417,6 @@ pub fn selection_render_config(
         answer_from_new_line: prompt.chars().count() + answer_length > 80,
         ..inquire::ui::RenderConfig::default()
     }
-}
-
-fn select(prompt: &str, options: Vec<&str>) -> Result<String> {
-    let render = selection_render_config(
-        prompt,
-        options.iter().map(|s| s.chars().count()).max().unwrap_or(0),
-    );
-    inquire::Select::new(prompt, options)
-        .with_render_config(render)
-        .prompt()
-        .map(str::to_string)
-        .map_err(cancelled)
 }
 
 pub enum Destination {
@@ -457,15 +469,6 @@ pub fn env_secret(variable: String) -> SecretConfig {
     }
 }
 
-fn prompt_variable(default: &str) -> Result<String> {
-    prompt_variable_with(default, |default| {
-        inquire::Text::new("Password environment variable:")
-            .with_default(default)
-            .prompt()
-            .map_err(cancelled)
-    })
-}
-
 fn prompt_variable_with(
     default: &str,
     mut read: impl FnMut(&str) -> Result<String>,
@@ -494,66 +497,17 @@ trait CredentialInteraction {
     fn password(&mut self) -> Result<String>;
 }
 
-struct TerminalInteraction;
-impl CredentialInteraction for TerminalInteraction {
-    fn select(&mut self, prompt: &str, options: Vec<&str>) -> Result<String> {
-        select(prompt, options)
-    }
-    fn confirm(&mut self, prompt: &str) -> Result<bool> {
-        inquire::Confirm::new(prompt)
-            .with_default(false)
-            .prompt()
-            .map_err(cancelled)
-    }
-    fn variable(&mut self, default: &str) -> Result<String> {
-        prompt_variable(default)
-    }
-    fn password(&mut self) -> Result<String> {
-        inquire::Password::new("Password (hidden):")
-            .without_confirmation()
-            .prompt()
-            .map_err(cancelled)
-    }
-}
-
-impl EnvironmentInteraction for TerminalInteraction {
-    fn environment_name(&mut self, default: &str) -> Result<String> {
-        inquire::Text::new("Environment name:")
-            .with_default(default)
-            .prompt()
-            .map_err(cancelled)
-    }
-}
-
 trait CredentialStorage {
+    fn deferred(&self) -> bool {
+        false
+    }
     fn is_macos(&self) -> bool;
     fn variable_present(&self, variable: &str) -> bool;
     fn keychain(&mut self, account: &str, value: &str) -> Result<()>;
     fn session(&mut self, variable: &str, value: &str) -> Result<()>;
 }
 
-struct SystemStorage;
-impl CredentialStorage for SystemStorage {
-    fn is_macos(&self) -> bool {
-        cfg!(target_os = "macos")
-    }
-    fn variable_present(&self, variable: &str) -> bool {
-        std::env::var_os(variable).is_some()
-    }
-    fn keychain(&mut self, account: &str, value: &str) -> Result<()> {
-        crate::compose::store_password_in_keychain(account, value)
-    }
-    fn session(&mut self, variable: &str, value: &str) -> Result<()> {
-        std::env::set_var(variable, value);
-        Ok(())
-    }
-}
-
 impl CredentialPrompt<'_> {
-    pub fn run(&self) -> Result<Option<SecretConfig>> {
-        self.run_with(&mut TerminalInteraction, &mut SystemStorage)
-    }
-
     fn run_with(
         &self,
         ui: &mut impl CredentialInteraction,
@@ -638,7 +592,9 @@ impl CredentialPrompt<'_> {
         };
         let value = self.literal_value(imported, ui)?;
         let secret = store_destination(value, destination, storage)?;
-        announce_storage(&secret);
+        if !storage.deferred() {
+            announce_storage(&secret);
+        }
         Ok(Some(secret))
     }
 
@@ -929,4 +885,88 @@ pub fn print_summary(
         source("Bastion", secret.as_ref())?;
     }
     Ok(())
+}
+
+struct DraftInteraction<'a> {
+    ui: &'a mut crate::import_wizard::Wizard,
+    reset: bool,
+}
+impl CredentialInteraction for DraftInteraction<'_> {
+    fn select(&mut self, prompt: &str, options: Vec<&str>) -> Result<String> {
+        self.ui
+            .select(prompt, options.into_iter().map(String::from).collect(), 0)
+    }
+    fn confirm(&mut self, prompt: &str) -> Result<bool> {
+        self.ui.confirm(prompt, false)
+    }
+    fn variable(&mut self, default: &str) -> Result<String> {
+        prompt_variable_with(default, |default| {
+            self.ui.text("Password environment variable:", default)
+        })
+    }
+    fn password(&mut self) -> Result<String> {
+        self.ui.password()
+    }
+}
+
+impl CredentialStorage for crate::import_batch::PendingSecrets {
+    fn deferred(&self) -> bool {
+        true
+    }
+    fn is_macos(&self) -> bool {
+        cfg!(target_os = "macos")
+    }
+    fn variable_present(&self, variable: &str) -> bool {
+        self.session.iter().any(|(name, _)| name == variable)
+            || std::env::var_os(variable).is_some()
+    }
+    fn keychain(&mut self, account: &str, value: &str) -> Result<()> {
+        self.keychain.push((account.into(), value.into()));
+        Ok(())
+    }
+    fn session(&mut self, variable: &str, value: &str) -> Result<()> {
+        self.session.push((variable.into(), value.into()));
+        Ok(())
+    }
+}
+
+impl CredentialPrompt<'_> {
+    pub fn run_draft(
+        &self,
+        ui: &mut crate::import_wizard::Wizard,
+        storage: &mut crate::import_batch::PendingSecrets,
+    ) -> Result<Option<SecretConfig>> {
+        ui.scoped(
+            &format!("credential:{}:{}", self.environment, self.ssh),
+            |ui| {
+                self.run_with(
+                    &mut DraftInteraction {
+                        ui,
+                        reset: storage.reset,
+                    },
+                    storage,
+                )
+            },
+        )
+    }
+}
+
+impl EnvironmentInteraction for DraftInteraction<'_> {
+    fn environment_name(&mut self, default: &str) -> Result<String> {
+        self.ui.text("Environment name:", default)
+    }
+    fn name_suggestion(&self, dir: &Path, default: &str) -> String {
+        if self.reset {
+            default.into()
+        } else {
+            crate::unique_env_name(dir, default)
+        }
+    }
+    fn name_available(&self, dir: &Path, name: &str) -> bool {
+        if self.reset {
+            !name.is_empty()
+        } else {
+            available_environment_name(dir, name)
+        }
+    }
 }

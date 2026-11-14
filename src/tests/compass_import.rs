@@ -191,15 +191,39 @@ fn unattended_duplicate_import_never_selects_an_overwrite() {
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("dev.toml"), "original").unwrap();
     assert_eq!(
-        select_environment(&root, &["dev".into()], "dev", true).unwrap(),
+        select_environment(
+            &root,
+            &["dev".into()],
+            "dev",
+            true,
+            false,
+            &mut crate::import_wizard::Wizard::default()
+        )
+        .unwrap(),
         None
     );
     assert_eq!(
-        select_environment(&root, &[], "dev", true).unwrap(),
+        select_environment(
+            &root,
+            &[],
+            "dev",
+            true,
+            false,
+            &mut crate::import_wizard::Wizard::default()
+        )
+        .unwrap(),
         Some("dev-2".into())
     );
     assert_eq!(
-        select_environment(&root, &[], "staging", true).unwrap(),
+        select_environment(
+            &root,
+            &[],
+            "staging",
+            true,
+            false,
+            &mut crate::import_wizard::Wizard::default()
+        )
+        .unwrap(),
         Some("staging".into())
     );
     assert_eq!(

@@ -2,6 +2,12 @@ use std::path::PathBuf;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SafeselectError {
+    #[error("Import cancelled")]
+    ImportCancelled,
+
+    #[error("Import cancelled")]
+    ImportBack,
+
     #[error("Config error: {0}")]
     Config(String),
 
