@@ -2871,7 +2871,7 @@ fn import_connections_at(cwd: &Path, connections: &[compose::ComposeConnection])
 
     if result.created > 0 {
         println!(
-            "\nImport complete. {} environment(s) added to .safeselect/.",
+            "\nImport Complete. {} environment(s) added to .safeselect/.",
             connections.len()
         );
         check_gitignore(cwd);
