@@ -9,6 +9,9 @@ Import a requested connection with `safeselect import-dbeaver <export.zip>`,
 Imports create project configuration; inspect redacted results before connecting.
 Do not invent private paths or connection values.
 
+In interactive CLI imports, Esc revisits earlier answers; Ctrl+C cancels.
+Configuration and credentials stay pending until final batch confirmation.
+
 CLI commands accepting one environment infer it only when unambiguous. `check`,
 `doctor`, `posture`, `reconnect` and `config validate` process all environments
 by default; restrict with `--environment` when appropriate. Checks can open SSH
