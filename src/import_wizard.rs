@@ -98,16 +98,7 @@ impl Wizard {
                 .cloned()
                 .ok_or_else(|| SafeselectError::Other("Import history changed".into()))?
         } else {
-            #[cfg(test)]
-            if let Some(script) = &mut self.script {
-                let (expected, answer) = script.pop_front().expect("unexpected import prompt");
-                assert!(key.contains(&expected), "expected {expected}, got {key}");
-                answer?
-            } else {
-                read(previous)?
-            }
-            #[cfg(not(test))]
-            read(previous)?
+            self.read_answer(&key, read)?
         };
         if self.cursor == self.history.len() {
             self.history.push((key, answer.clone()));
@@ -116,6 +107,21 @@ impl Wizard {
         }
         self.cursor += 1;
         Ok(answer)
+    }
+
+    fn read_answer(
+        &mut self,
+        key: &str,
+        read: impl FnOnce(Option<&Answer>) -> Result<Answer>,
+    ) -> Result<Answer> {
+        #[cfg(test)]
+        if let Some(script) = &mut self.script {
+            let (expected, answer) = script.pop_front().expect("unexpected import prompt");
+            assert!(key.contains(&expected), "expected {expected}, got {key}");
+            return answer;
+        }
+        let _ = key;
+        read(self.history.get(self.cursor).map(|(_, answer)| answer))
     }
 
     pub fn text(&mut self, prompt: &str, default: &str) -> Result<String> {

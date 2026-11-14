@@ -380,3 +380,64 @@ fn repeated_dbeaver_identity_is_skipped_in_unattended_batch() {
     .unwrap();
     assert_eq!(batch.names(), ["dev"]);
 }
+
+#[test]
+fn compose_commands_handle_missing_and_empty_sources_without_writes() {
+    let fixture = Fixture::new();
+    let missing = fixture.0.join("missing");
+    assert!(cmd_import_compose(Some(missing.clone()), false).is_err());
+    assert!(cmd_import_compose_unattended(Some(missing)).is_err());
+    cmd_import_compose(Some(fixture.0.clone()), false).unwrap();
+    cmd_import_compose(Some(fixture.0.clone()), true).unwrap();
+    assert!(!fixture.0.join(".safeselect").exists());
+}
+
+#[test]
+fn optional_import_checks_require_confirmation_and_a_successful_jdbc_driver_setup() {
+    use std::cell::Cell;
+    for jdbc in [false, true] {
+        for confirmed in [false, true] {
+            let driver_calls = Cell::new(0);
+            let verify_calls = Cell::new(0);
+            check_import_if_requested_with(
+                jdbc,
+                || Ok(confirmed),
+                || {
+                    driver_calls.set(driver_calls.get() + 1);
+                    Ok(())
+                },
+                || {
+                    verify_calls.set(verify_calls.get() + 1);
+                    Ok(())
+                },
+            )
+            .unwrap();
+            assert_eq!(driver_calls.get(), usize::from(jdbc && confirmed));
+            assert_eq!(verify_calls.get(), usize::from(confirmed));
+        }
+    }
+    fn failure<T>() -> Result<T> {
+        Err(SafeselectError::Other("synthetic failure".into()))
+    }
+    assert!(check_import_if_requested_with(
+        true,
+        failure,
+        || panic!("unexpected setup"),
+        || panic!("unexpected verification")
+    )
+    .is_err());
+    assert!(check_import_if_requested_with(
+        true,
+        || Ok(true),
+        failure,
+        || panic!("driver setup failed")
+    )
+    .is_err());
+    assert!(check_import_if_requested_with(
+        false,
+        || Ok(true),
+        || panic!("MongoDB needs no JDBC driver"),
+        failure
+    )
+    .is_err());
+}

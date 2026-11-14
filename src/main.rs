@@ -2383,15 +2383,19 @@ fn confirm_import_check() -> Result<bool> {
     }
 }
 
-fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
-    let root = std::env::current_dir()?;
+fn run_import_batch(
+    unattended: bool,
+    mut prepare: impl FnMut(&mut import_wizard::Wizard) -> Result<Option<import_batch::Batch>>,
+) -> Result<Option<import_batch::Batch>> {
     let mut ui = import_wizard::Wizard::default();
-    let batch = if non_interactive {
-        prepare_dbeaver(path, true, &root, &mut ui)?
+    if unattended {
+        prepare(&mut ui)
     } else {
-        ui.run(|ui| prepare_dbeaver(path, false, &root, ui))?
-            .flatten()
-    };
+        Ok(ui.run(prepare)?.flatten())
+    }
+}
+
+fn finish_import(batch: Option<import_batch::Batch>, unattended: bool, jdbc: bool) -> Result<()> {
     let Some(batch) = batch else {
         return Ok(());
     };
@@ -2399,13 +2403,54 @@ fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
     let imported = batch.commit()?;
     println!("Imported environments: {}", imported.join(", "));
     check_gitignore(&root);
-    if non_interactive {
+    if unattended {
         println!("Next: safeselect check --environment <name>");
-    } else if !imported.is_empty() && confirm_import_check()? {
-        setup_driver_if_missing()?;
-        verify_imported_environments(&root, &imported)?;
+        return Ok(());
+    }
+    check_import_if_requested(&root, &imported, jdbc)
+}
+
+fn check_import_if_requested(root: &Path, imported: &[String], jdbc: bool) -> Result<()> {
+    check_import_if_requested_with(jdbc, confirm_import_check, setup_driver_if_missing, || {
+        verify_imported_environments(root, imported)
+    })
+}
+
+fn check_import_if_requested_with(
+    jdbc: bool,
+    confirm: impl FnOnce() -> Result<bool>,
+    setup_driver: impl FnOnce() -> Result<()>,
+    verify: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    if confirm()? {
+        if jdbc {
+            setup_driver()?;
+        }
+        verify()?;
     }
     Ok(())
+}
+
+fn confirm_import_batch(
+    batch: import_batch::Batch,
+    unattended: bool,
+    ui: &mut import_wizard::Wizard,
+) -> Result<Option<import_batch::Batch>> {
+    if batch.environments.is_empty() {
+        return Ok(None);
+    }
+    if !unattended && !batch.confirm(ui)? {
+        return Err(SafeselectError::ImportCancelled);
+    }
+    Ok(Some(batch))
+}
+
+fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
+    let root = std::env::current_dir()?;
+    let batch = run_import_batch(non_interactive, |ui| {
+        prepare_dbeaver(path, non_interactive, &root, ui)
+    })?;
+    finish_import(batch, non_interactive, true)
 }
 
 fn prepare_dbeaver(
@@ -2607,13 +2652,7 @@ fn prepare_dbeaver(
         batch.environments.push((env_name.clone(), env_config));
     }
     batch.project = project_config;
-    if batch.environments.is_empty() {
-        return Ok(None);
-    }
-    if !non_interactive && !batch.confirm(ui)? {
-        return Err(SafeselectError::ImportCancelled);
-    }
-    Ok(Some(batch))
+    confirm_import_batch(batch, non_interactive, ui)
 }
 
 fn dbeaver_ssh_config(
@@ -2656,14 +2695,7 @@ fn cmd_import_compose(path: Option<PathBuf>, non_interactive: bool) -> Result<()
             "Compose scan path must be a directory".into(),
         ));
     }
-    let connections: Vec<_> = compose::scan_all(&scan_path)?
-        .into_iter()
-        .flat_map(|(label, connections)| {
-            connections
-                .into_iter()
-                .map(move |connection| (label.clone(), connection))
-        })
-        .collect();
+    let connections = scan_compose_connections(&scan_path)?;
     if connections.is_empty() {
         println!("No PostgreSQL services found in docker-compose files.");
         return Ok(());
@@ -2672,17 +2704,18 @@ fn cmd_import_compose(path: Option<PathBuf>, non_interactive: bool) -> Result<()
     let batch = ui
         .run(|ui| prepare_compose(&scan_path, &connections, ui))?
         .flatten();
-    let Some(batch) = batch else {
-        return Ok(());
-    };
-    let names = batch.commit()?;
-    println!("Imported environments: {}", names.join(", "));
-    check_gitignore(&scan_path);
-    if confirm_import_check()? {
-        setup_driver_if_missing()?;
-        verify_imported_environments(&scan_path, &names)?;
-    }
-    Ok(())
+    finish_import(batch, false, true)
+}
+
+fn scan_compose_connections(path: &Path) -> Result<Vec<(String, compose::ComposeConnection)>> {
+    Ok(compose::scan_all(path)?
+        .into_iter()
+        .flat_map(|(label, connections)| {
+            connections
+                .into_iter()
+                .map(move |connection| (label.clone(), connection))
+        })
+        .collect())
 }
 
 fn prepare_compose(
@@ -2710,79 +2743,92 @@ fn prepare_compose(
     }
     let project = project_display_name(root);
     for index in selected {
-        let connection = &connections[index].1;
-        ui.context(format!("compose:{index}"));
-        let name = loop {
-            let answer = ui.text(
-                &format!(
-                    "Environment name for '{}' ({}:{}):",
-                    connection.service, connection.host, connection.port
+        prepare_compose_connection(root, &connections[index].1, index, &project, &mut batch, ui)?;
+    }
+    confirm_import_batch(batch, false, ui)
+}
+
+fn prepare_compose_connection(
+    root: &Path,
+    connection: &compose::ComposeConnection,
+    index: usize,
+    project: &str,
+    batch: &mut import_batch::Batch,
+    ui: &mut import_wizard::Wizard,
+) -> Result<()> {
+    ui.context(format!("compose:{index}"));
+    let name = compose_environment_name(connection, batch, ui)?;
+    // Compose imports keep their existing never-overwrite policy.
+    if !batch.reset
+        && root
+            .join(".safeselect/environments")
+            .join(format!("{name}.toml"))
+            .exists()
+    {
+        println!("Skipping existing environment: {name}");
+        return Ok(());
+    }
+    ui.context(format!("compose:{index}:{name}"));
+    let existing_secret = connection
+        .password_var
+        .as_ref()
+        .map(|variable| compass_import::env_secret(variable.clone()));
+    let secret = compass_import::CredentialPrompt {
+        project,
+        environment: &name,
+        ssh: false,
+        imported: connection.password_literal.as_deref(),
+        existing: existing_secret.as_ref(),
+    }
+    .run_draft(ui, &mut batch.secrets)?;
+    batch.environments.push((
+        name,
+        config::EnvironmentConfig {
+            version: 1,
+            database: config::DatabaseConfig {
+                kind: backend::BackendKind::Jdbc,
+                vendor: Some("postgresql".into()),
+                driver: Some("postgresql".into()),
+                url: format!(
+                    "jdbc:postgresql://{}:{}/{}",
+                    connection.host, connection.port, connection.database
                 ),
-                &connection.env_name,
-            )?;
-            let name = slug_env_name(&answer);
-            if name.is_empty()
-                || batch
-                    .environments
-                    .iter()
-                    .any(|(existing, _)| *existing == name)
-            {
-                println!("Choose a non-empty, unused environment name.");
-                continue;
-            }
-            break name;
-        };
-        // Compose imports keep their existing never-overwrite policy.
-        if !batch.reset
-            && root
-                .join(".safeselect/environments")
-                .join(format!("{name}.toml"))
-                .exists()
+                username: connection.username.clone(),
+                secret,
+            },
+            tls: None,
+            ssh: None,
+            limits: Default::default(),
+        },
+    ));
+    Ok(())
+}
+
+fn compose_environment_name(
+    connection: &compose::ComposeConnection,
+    batch: &import_batch::Batch,
+    ui: &mut import_wizard::Wizard,
+) -> Result<String> {
+    loop {
+        let answer = ui.text(
+            &format!(
+                "Environment name for '{}' ({}:{}):",
+                connection.service, connection.host, connection.port
+            ),
+            &connection.env_name,
+        )?;
+        let name = slug_env_name(&answer);
+        if name.is_empty()
+            || batch
+                .environments
+                .iter()
+                .any(|(existing, _)| *existing == name)
         {
-            println!("Skipping existing environment: {name}");
+            println!("Choose a non-empty, unused environment name.");
             continue;
         }
-        ui.context(format!("compose:{index}:{name}"));
-        let existing_secret = connection
-            .password_var
-            .as_ref()
-            .map(|variable| compass_import::env_secret(variable.clone()));
-        let secret = compass_import::CredentialPrompt {
-            project: &project,
-            environment: &name,
-            ssh: false,
-            imported: connection.password_literal.as_deref(),
-            existing: existing_secret.as_ref(),
-        }
-        .run_draft(ui, &mut batch.secrets)?;
-        batch.environments.push((
-            name,
-            config::EnvironmentConfig {
-                version: 1,
-                database: config::DatabaseConfig {
-                    kind: backend::BackendKind::Jdbc,
-                    vendor: Some("postgresql".into()),
-                    driver: Some("postgresql".into()),
-                    url: format!(
-                        "jdbc:postgresql://{}:{}/{}",
-                        connection.host, connection.port, connection.database
-                    ),
-                    username: connection.username.clone(),
-                    secret,
-                },
-                tls: None,
-                ssh: None,
-                limits: Default::default(),
-            },
-        ));
+        return Ok(name);
     }
-    if batch.environments.is_empty() {
-        return Ok(None);
-    }
-    if !batch.confirm(ui)? {
-        return Err(SafeselectError::ImportCancelled);
-    }
-    Ok(Some(batch))
 }
 
 fn cmd_import_compose_unattended(path: Option<PathBuf>) -> Result<()> {
@@ -2796,12 +2842,7 @@ fn cmd_import_compose_unattended(path: Option<PathBuf>) -> Result<()> {
 
     check_version_and_maybe_reset(&scan_path)?;
 
-    let groups = compose::scan_all(&scan_path)?;
-
-    let all_connections: Vec<(String, compose::ComposeConnection)> = groups
-        .into_iter()
-        .flat_map(|(label, conns)| conns.into_iter().map(move |c| (label.clone(), c)))
-        .collect();
+    let all_connections = scan_compose_connections(&scan_path)?;
 
     if all_connections.is_empty() {
         println!("No PostgreSQL services found in docker-compose files.");
@@ -2813,50 +2854,27 @@ fn cmd_import_compose_unattended(path: Option<PathBuf>) -> Result<()> {
         .map(|(_, connection)| connection)
         .collect();
 
-    let dest_dir = &scan_path;
-    let project_name = project_display_name(dest_dir);
-
-    let result = compose::write_config_files(dest_dir, &to_import, &project_name)?;
-    update_generated_by(&dest_dir.join(".safeselect"))?;
-    let imported_names: Vec<String> = to_import.iter().map(|c| c.env_name.clone()).collect();
-    let guidance =
-        compose::build_import_guidance(dest_dir, &project_name, &result, &imported_names, true)?;
-
-    if result.created > 0 {
-        println!();
-        println!("── Import Complete ──────────────────────────────");
-        println!();
-        print_terminal_line(&format!("  ✓ {} environment(s) added", to_import.len()));
-        check_gitignore(dest_dir);
-    } else {
-        println!("  ◉ All environments already exist.");
-    }
-
-    println!();
-    println!("{}", guidance.text);
-
-    let env_names = guidance.imported_env_names;
-    setup_driver_if_missing()?;
-    setup_passwords_for_missing(dest_dir, &env_names)?;
-    verify_imported_environments(dest_dir, &env_names)?;
-
-    Ok(())
+    import_connections_at(&scan_path, &to_import)
 }
 
 fn import_selected_connections(connections: &[compose::ComposeConnection]) -> Result<()> {
     let cwd = std::env::current_dir()?;
-    let name = project_display_name(&cwd);
-    let result = compose::write_config_files(&cwd, connections, &name)?;
+    import_connections_at(&cwd, connections)
+}
+
+fn import_connections_at(cwd: &Path, connections: &[compose::ComposeConnection]) -> Result<()> {
+    let name = project_display_name(cwd);
+    let result = compose::write_config_files(cwd, connections, &name)?;
     update_generated_by(&cwd.join(".safeselect"))?;
     let imported_names: Vec<String> = connections.iter().map(|c| c.env_name.clone()).collect();
-    let guidance = compose::build_import_guidance(&cwd, &name, &result, &imported_names, true)?;
+    let guidance = compose::build_import_guidance(cwd, &name, &result, &imported_names, true)?;
 
     if result.created > 0 {
         println!(
             "\nImport complete. {} environment(s) added to .safeselect/.",
             connections.len()
         );
-        check_gitignore(&cwd);
+        check_gitignore(cwd);
     } else {
         println!("All environments already exist. Nothing to import.");
     }
@@ -2866,34 +2884,18 @@ fn import_selected_connections(connections: &[compose::ComposeConnection]) -> Re
 
     let env_names = guidance.imported_env_names;
     setup_driver_if_missing()?;
-    setup_passwords_for_missing(&cwd, &env_names)?;
-    verify_imported_environments(&cwd, &env_names)?;
+    setup_passwords_for_missing(cwd, &env_names)?;
+    verify_imported_environments(cwd, &env_names)?;
 
     Ok(())
 }
 
 fn cmd_import_compass(path: Option<PathBuf>, non_interactive: bool) -> Result<()> {
     let root = std::env::current_dir()?;
-    let mut ui = import_wizard::Wizard::default();
-    let batch = if non_interactive {
-        prepare_compass(path.clone(), true, &root, &mut ui)?
-    } else {
-        ui.run(|ui| prepare_compass(path.clone(), false, &root, ui))?
-            .flatten()
-    };
-    let Some(batch) = batch else {
-        return Ok(());
-    };
-    let root = batch.root.clone();
-    let imported = batch.commit()?;
-    println!("Imported environments: {}", imported.join(", "));
-    check_gitignore(&root);
-    if non_interactive {
-        println!("Next: safeselect check --environment <name>");
-    } else if !imported.is_empty() && confirm_import_check()? {
-        verify_imported_environments(&root, &imported)?;
-    }
-    Ok(())
+    let batch = run_import_batch(non_interactive, |ui| {
+        prepare_compass(path.clone(), non_interactive, &root, ui)
+    })?;
+    finish_import(batch, non_interactive, false)
 }
 
 fn prepare_compass(
@@ -3118,13 +3120,7 @@ fn prepare_compass(
         println!("Warning: {warning}");
     }
     batch.project = project_config;
-    if batch.environments.is_empty() {
-        return Ok(None);
-    }
-    if !non_interactive && !batch.confirm(ui)? {
-        return Err(SafeselectError::ImportCancelled);
-    }
-    Ok(Some(batch))
+    confirm_import_batch(batch, non_interactive, ui)
 }
 
 fn prompt_compass_ssh_config(
