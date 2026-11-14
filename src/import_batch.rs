@@ -66,11 +66,7 @@ impl Batch {
         let dir = self.root.join(".safeselect/environments");
         let mut suggestion = default.to_owned();
         let mut suffix = 2;
-        while self
-            .environments
-            .iter()
-            .any(|(name, _)| *name == suggestion)
-        {
+        while self.environment_name_taken(&dir, &suggestion) {
             suggestion = format!("{default}-{suffix}");
             suffix += 1;
         }
@@ -92,6 +88,11 @@ impl Batch {
             }
             return Ok(selected);
         }
+    }
+
+    fn environment_name_taken(&self, dir: &Path, name: &str) -> bool {
+        (!self.reset && dir.join(format!("{name}.toml")).exists())
+            || self.environments.iter().any(|(staged, _)| staged == name)
     }
 
     pub fn confirm(&self, ui: &mut Wizard) -> Result<bool> {

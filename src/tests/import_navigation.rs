@@ -441,3 +441,79 @@ fn optional_import_checks_require_confirmation_and_a_successful_jdbc_driver_setu
     )
     .is_err());
 }
+
+#[test]
+fn unattended_import_names_account_for_both_disk_and_staged_collisions() {
+    for compass in [false, true] {
+        let fixture = Fixture::new();
+        let dir = fixture.0.join(".safeselect/environments");
+        std::fs::create_dir_all(&dir).unwrap();
+        let original = config::EnvironmentConfig {
+            version: 1,
+            database: config::DatabaseConfig {
+                kind: backend::BackendKind::Document,
+                vendor: Some("mongodb".into()),
+                driver: None,
+                url: "mongodb://unrelated.example/app".into(),
+                username: String::new(),
+                secret: None,
+            },
+            tls: None,
+            ssh: None,
+            limits: Default::default(),
+        };
+        let original = toml::to_string_pretty(&original).unwrap();
+        std::fs::write(dir.join("dev.toml"), &original).unwrap();
+        let connections = if compass {
+            serde_json::json!({"connections": [
+                {"name": "dev", "connectionString": "mongodb://one.example/app"},
+                {"name": "dev", "connectionString": "mongodb://two.example/app"}
+            ]})
+        } else {
+            serde_json::json!({"connections": [
+                {"name": "dev", "driver": "postgres", "username": "reader", "configuration": {"url": "jdbc:postgresql://one.example:5432/app"}},
+                {"name": "dev", "driver": "postgres", "username": "reader", "configuration": {"url": "jdbc:postgresql://two.example:5432/app"}}
+            ]})
+        };
+        let path = fixture.0.join(if compass {
+            "collisions.json"
+        } else {
+            "collisions.zip"
+        });
+        if compass {
+            std::fs::write(&path, connections.to_string()).unwrap();
+        } else {
+            let mut archive = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+            archive
+                .start_file(
+                    "workspace/data-sources.json",
+                    zip::write::SimpleFileOptions::default(),
+                )
+                .unwrap();
+            archive
+                .write_all(connections.to_string().as_bytes())
+                .unwrap();
+            archive.finish().unwrap();
+        }
+        let mut ui = Wizard::default();
+        let batch = if compass {
+            prepare_compass(Some(path), true, &fixture.0, &mut ui)
+        } else {
+            prepare_dbeaver(path.to_str().unwrap(), true, &fixture.0, &mut ui)
+        }
+        .unwrap()
+        .unwrap();
+        assert_eq!(batch.names(), ["dev-2", "dev-3"]);
+        assert_eq!(
+            std::fs::read_to_string(dir.join("dev.toml")).unwrap(),
+            original
+        );
+        batch.commit().unwrap();
+        assert!(dir.join("dev-2.toml").is_file());
+        assert!(dir.join("dev-3.toml").is_file());
+        assert_eq!(
+            std::fs::read_to_string(dir.join("dev.toml")).unwrap(),
+            original
+        );
+    }
+}
