@@ -2652,16 +2652,25 @@ fn cmd_import_compose(path: Option<PathBuf>, non_interactive: bool) -> Result<()
     let project_name = project_display_name(dest_dir);
 
     if !non_interactive {
-        for conn in &mut to_import {
+        let mut index = 0;
+        while index < to_import.len() {
+            let conn = &mut to_import[index];
             let prompt = format!(
                 "Environment name for '{}' ({}:{}):",
                 conn.service, conn.host, conn.port
             );
-            let new_name = inquire::Text::new(&prompt)
+            let answer = inquire::Text::new(&prompt)
                 .with_default(&conn.env_name)
-                .prompt()
-                .map_err(|e| SafeselectError::Other(format!("Input cancelled: {e}")))?;
-            conn.env_name = new_name.trim().to_lowercase().replace(' ', "-");
+                .with_help_message("Esc: previous environment; Ctrl+C: cancel")
+                .prompt();
+            match answer {
+                Ok(new_name) => {
+                    conn.env_name = new_name.trim().to_lowercase().replace(' ', "-");
+                    index += 1;
+                }
+                Err(inquire::InquireError::OperationCanceled) if index > 0 => index -= 1,
+                Err(e) => return Err(SafeselectError::Other(format!("Input cancelled: {e}"))),
+            }
         }
     }
 
