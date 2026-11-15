@@ -517,3 +517,65 @@ fn unattended_import_names_account_for_both_disk_and_staged_collisions() {
         );
     }
 }
+
+#[test]
+fn dbeaver_map_connections_keep_their_identity_when_replaying_esc_navigation() {
+    let fixture = Fixture::new();
+    let path = fixture.0.join("map.zip");
+    let mut archive = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+    archive
+        .start_file(
+            "workspace/data-sources.json",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
+    archive.write_all(br#"{"connections":{
+        "connection-z":{"name":"second","driver":"postgres","username":"reader","configuration":{"url":"jdbc:postgresql://two.example:5432/app"}},
+        "connection-a":{"name":"first","driver":"postgres","username":"reader","configuration":{"url":"jdbc:postgresql://one.example:5432/app"}}
+    }}"#).unwrap();
+    archive.finish().unwrap();
+    let mut ui = Wizard::scripted(vec![
+        ("multi:", select(&[0, 1])),
+        ("Environment name:", text("first-edited")),
+        ("How do you want", back()),
+        ("Environment name:", text("first-edited")),
+        ("How do you want", select(&[2])),
+        ("Password environment variable:", text("FIRST_DB_PASSWORD")),
+        ("Environment name:", back()),
+        (
+            "Password environment variable:",
+            text("REVISED_DB_PASSWORD"),
+        ),
+        ("Environment name:", text("second-edited")),
+        ("How do you want", select(&[2])),
+        ("Password environment variable:", text("SECOND_DB_PASSWORD")),
+        ("Save this import batch?", yes()),
+    ]);
+    let batch = ui
+        .run(|ui| prepare_dbeaver(path.to_str().unwrap(), false, &fixture.0, ui))
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    ui.assert_finished();
+    assert_eq!(batch.names(), ["first-edited", "second-edited"]);
+    assert_eq!(
+        batch.environments[0].1.database.url,
+        "jdbc:postgresql://one.example:5432/app"
+    );
+    assert_eq!(
+        batch.environments[1].1.database.url,
+        "jdbc:postgresql://two.example:5432/app"
+    );
+    assert_eq!(
+        batch.environments[0]
+            .1
+            .database
+            .secret
+            .as_ref()
+            .unwrap()
+            .variable
+            .as_deref(),
+        Some("REVISED_DB_PASSWORD")
+    );
+    assert!(!fixture.0.join(".safeselect").exists());
+}

@@ -1,5 +1,5 @@
 use crate::error::Result;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::Read;
 use std::path::Path;
 
@@ -168,7 +168,7 @@ struct DBeaverConfig {
 #[serde(untagged)]
 enum ConnectionsField {
     List(Vec<DBeaverRawConnection>),
-    Map(HashMap<String, DBeaverRawConnection>),
+    Map(BTreeMap<String, DBeaverRawConnection>),
 }
 
 impl Default for ConnectionsField {

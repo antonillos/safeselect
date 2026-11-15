@@ -94,7 +94,7 @@ fn normalizes_postgres_driver_aliases() {
 #[test]
 fn converts_connection_lists_and_maps_to_vectors() {
     let list = ConnectionsField::List(vec![]).into_vec();
-    let map = ConnectionsField::Map(HashMap::new()).into_vec();
+    let map = ConnectionsField::Map(BTreeMap::new()).into_vec();
     assert!(list.is_empty());
     assert!(map.is_empty());
 }
@@ -268,4 +268,24 @@ fn legacy_tunnel_identity_checks_every_field_and_requires_both_tunnels() {
     conn.ssh_host = None;
     assert!(!same_legacy_tunnel(&conn, Some(&ssh)));
     assert!(same_legacy_tunnel(&conn, None));
+}
+
+#[test]
+fn map_connections_have_stable_export_id_order_across_parses() {
+    for field in ["connections", "data-sources"] {
+        let input = format!(
+            r#"{{"{field}":{{
+            "connection-z":{{"name":"same","host":"second.example","driver":"postgres"}},
+            "connection-a":{{"name":"same","host":"first.example","driver":"postgres"}}
+        }}}}"#
+        );
+        for _ in 0..32 {
+            let connections = parse_data_sources(&input).unwrap();
+            let hosts: Vec<_> = connections
+                .iter()
+                .map(|connection| connection.host.as_str())
+                .collect();
+            assert_eq!(hosts, ["first.example", "second.example"]);
+        }
+    }
 }
