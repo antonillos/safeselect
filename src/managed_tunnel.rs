@@ -303,7 +303,6 @@ fn read_failure(mut pipe: impl Read) -> &'static str {
 pub(crate) mod tests {
     use super::*;
     use std::net::TcpStream;
-    use std::os::unix::fs::PermissionsExt;
 
     pub(crate) struct Fixture(pub(crate) PathBuf);
 
@@ -312,8 +311,10 @@ pub(crate) mod tests {
             let directory = PathBuf::from("/tmp").join(format!("ss-test-{}", uuid::Uuid::new_v4()));
             std::fs::create_dir(&directory).unwrap();
             let program = directory.join("ssh");
-            std::fs::write(&program, include_str!("../tests/fixtures/managed_ssh.py")).unwrap();
-            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+            // Avoid ETXTBSY from transiently inherited writers to a new executable.
+            let source =
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/managed_ssh.py");
+            std::os::unix::fs::symlink(source, &program).unwrap();
             Self(directory)
         }
 

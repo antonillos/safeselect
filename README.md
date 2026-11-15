@@ -90,6 +90,8 @@ Choose the source you already use:
 
 Use your actual export or Compass directory, then follow the importer's driver
 and password setup steps. Keep secrets out of project files and chat.
+Interactive imports support **Esc** to go back and **Ctrl+C** to cancel;
+the batch is saved only after final confirmation.
 For a complete SSH-backed example, follow the [DBeaver → Codex walkthrough](docs/guides/dbeaver-codex.md).
 
 ### 3. Connect your agent

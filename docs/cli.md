@@ -83,3 +83,20 @@ MCP `connect` and `reconnect` report the recognized SSH failure category without
 including endpoint or credential details.
 When an existing database endpoint responds, `check` and `doctor` report its
 reuse as information while still verifying the backend connection.
+
+## Import navigation
+
+Interactive Compose, Compass and DBeaver imports keep the whole batch in memory
+until you confirm **Save this import batch?** (default: No). Press **Esc** to
+return to the previous question, including questions in an earlier connection.
+Esc at the first question cancels; **Ctrl+C** cancels from any question. Confirmed
+text and selections are restored when revisiting a question. Passwords remain
+hidden and must be entered again when revisiting their input. Changing a branch
+such as SSH authentication discards incompatible later answers.
+
+Canceling before saving leaves configuration, Keychain and session variables
+unchanged. A requested configuration reset is also deferred until confirmation.
+Saving spans files and credential storage and is not a single transaction; a save
+failure reports completed writes so the project can be inspected before retrying.
+After saving, Esc at the optional connectivity check exits without undoing the
+import. Non-interactive imports do not use the navigation prompts.

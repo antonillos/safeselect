@@ -10,6 +10,9 @@ Use SafeSelect MCP tools first, then supported CLI commands. Inspect current
 configuration before changing it; registration and configuration are writes.
 Read [setup recipes and effects](references/workflows.md) before making changes.
 
+Interactive CLI imports: Esc goes back (cancels at the first question); Ctrl+C
+cancels. The batch is saved only after final confirmation.
+
 1. Resolve the application repository and environment. Never guess among multiple
    environments. `config_validate` and redacted `config_show` diagnose config.
 2. If an external bastion, VPN, or tunnel is known unavailable, stop and ask the

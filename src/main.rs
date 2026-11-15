@@ -13,6 +13,8 @@ mod connection_diagnostics;
 mod dbeaver;
 mod diagnostics;
 mod error;
+mod import_batch;
+mod import_wizard;
 mod maintenance;
 mod managed_tunnel;
 mod mcp;
@@ -1257,6 +1259,14 @@ fn shared_ssh_keychain_accounts(
 }
 
 fn clear_project_config(repo_root: &Path, delete_dir: bool) -> Result<()> {
+    clear_project_config_confirmed(repo_root, delete_dir, false)
+}
+
+fn clear_project_config_confirmed(
+    repo_root: &Path,
+    delete_dir: bool,
+    confirmed: bool,
+) -> Result<()> {
     let safeselect_dir = repo_root.join(".safeselect");
     let env_dir = safeselect_dir.join("environments");
     let project_name = project_display_name(repo_root);
@@ -1273,10 +1283,14 @@ fn clear_project_config(repo_root: &Path, delete_dir: bool) -> Result<()> {
     } else {
         "This will remove all environments, shared SSH bastions, and related keychain entries. Continue?"
     };
-    let ans = inquire::Confirm::new(prompt)
-        .with_default(true)
-        .prompt()
-        .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?;
+    let ans = if confirmed {
+        true
+    } else {
+        inquire::Confirm::new(prompt)
+            .with_default(true)
+            .prompt()
+            .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?
+    };
 
     if !ans {
         println!("Cancelled.");
@@ -1934,16 +1948,19 @@ fn select_reusable_ssh_config(
     env_name: &str,
     conn: &dbeaver::DBeaverConnection,
     current_batch: &[(String, config::SshConfig)],
+    ui: &mut import_wizard::Wizard,
+    pending: &mut import_batch::PendingSecrets,
 ) -> Result<Option<config::SshConfig>> {
-    let reusable = collect_reusable_ssh_configs(repo_root, env_name, current_batch)?;
+    let reusable = if pending.reset {
+        current_batch.to_vec()
+    } else {
+        collect_reusable_ssh_configs(repo_root, env_name, current_batch)?
+    };
     if reusable.is_empty() {
         return Ok(None);
     }
 
-    let reuse = inquire::Confirm::new("Reuse an existing bastion configuration?")
-        .with_default(true)
-        .prompt()
-        .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?;
+    let reuse = ui.confirm("Reuse an existing bastion configuration?", true)?;
     if !reuse {
         return Ok(None);
     }
@@ -1958,9 +1975,11 @@ fn select_reusable_ssh_config(
         })
         .collect();
 
-    let selected = inquire::Select::new("  Reuse bastion:", options)
-        .prompt()
-        .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?;
+    let selected = ui.select(
+        "  Reuse bastion:",
+        options.into_iter().map(|value| value.to_string()).collect(),
+        0,
+    )?;
     let selected_index = reusable
         .iter()
         .position(|(name, ssh)| {
@@ -1983,14 +2002,24 @@ fn select_reusable_ssh_config(
     Ok(Some(ssh))
 }
 
+struct ImportTarget<'a> {
+    project: &'a str,
+    environment: &'a str,
+}
+
 fn prompt_ssh_config(
     conn: &dbeaver::DBeaverConnection,
-    project_name: &str,
-    env_name: &str,
+    target: ImportTarget<'_>,
     repo_root: &Path,
     current_batch: &[(String, config::SshConfig)],
     existing: Option<&config::SshConfig>,
+    ui: &mut import_wizard::Wizard,
+    pending: &mut import_batch::PendingSecrets,
 ) -> Result<config::SshConfig> {
+    let ImportTarget {
+        project: project_name,
+        environment: env_name,
+    } = target;
     let default_host = conn.ssh_host.as_deref().unwrap_or("");
     let default_user = conn.ssh_user.as_deref().unwrap_or("");
     let default_key = conn.ssh_key_file.as_deref().unwrap_or("");
@@ -2005,24 +2034,22 @@ fn prompt_ssh_config(
     }
 
     if let Some(existing) = existing {
-        if inquire::Confirm::new("Keep the existing SSH tunnel configuration and password source?")
-            .with_default(true)
-            .prompt()
-            .map_err(|_| SafeselectError::Other("Import cancelled".into()))?
-        {
+        if ui.confirm(
+            "Keep the existing SSH tunnel configuration and password source?",
+            true,
+        )? {
             return Ok(existing.clone());
         }
     }
 
-    if let Some(ssh) = select_reusable_ssh_config(repo_root, env_name, conn, current_batch)? {
+    if let Some(ssh) =
+        select_reusable_ssh_config(repo_root, env_name, conn, current_batch, ui, pending)?
+    {
         print_terminal_line("  ✓ Reusing bastion configuration");
         return Ok(ssh);
     }
 
-    let ans = inquire::Confirm::new("Configure SSH tunnel now?")
-        .with_default(true)
-        .prompt()
-        .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?;
+    let ans = ui.confirm("Configure SSH tunnel now?", true)?;
 
     if !ans {
         return Err(SafeselectError::Other(
@@ -2030,42 +2057,37 @@ fn prompt_ssh_config(
         ));
     }
 
-    let host = inquire::Text::new("  SSH bastion host:")
-        .with_default(default_host)
-        .prompt()
-        .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?
+    let host = ui
+        .text("  SSH bastion host:", default_host)?
         .trim()
         .to_string();
 
-    let port = inquire::Text::new("  SSH port:")
-        .with_default(&conn.ssh_port.map_or("22".into(), |p| p.to_string()))
-        .prompt()
-        .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?
+    let port = ui
+        .text(
+            "  SSH port:",
+            &conn.ssh_port.map_or("22".into(), |p| p.to_string()),
+        )?
         .trim()
         .parse::<u16>()
         .unwrap_or(22);
 
-    let user = inquire::Text::new("  SSH user:")
-        .with_default(default_user)
-        .prompt()
-        .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?
-        .trim()
-        .to_string();
+    let user = ui.text("  SSH user:", default_user)?.trim().to_string();
 
-    let (forward_host, forward_port) = prompt_dbeaver_forward_target(conn)?;
+    let (forward_host, forward_port) = prompt_dbeaver_forward_target(conn, ui)?;
 
-    let auth_method =
-        inquire::Select::new("  Authentication method:", vec!["Key file", "Password"])
-            .with_starting_cursor(if default_auth == "PASSWORD" { 1 } else { 0 })
-            .prompt()
-            .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?;
+    let auth_method = ui.select(
+        "  Authentication method:",
+        vec!["Key file", "Password"]
+            .into_iter()
+            .map(|value| value.to_string())
+            .collect(),
+        if default_auth == "PASSWORD" { 1 } else { 0 },
+    )?;
 
-    let (key_file, auth_type) = match auth_method {
+    let (key_file, auth_type) = match auth_method.as_str() {
         "Key file" => {
-            let kf = inquire::Text::new("  SSH key file path:")
-                .with_default(default_key)
-                .prompt()
-                .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?
+            let kf = ui
+                .text("  SSH key file path:", default_key)?
                 .trim()
                 .to_string();
             (
@@ -2085,7 +2107,7 @@ fn prompt_ssh_config(
             imported: None,
             existing: existing_secret.as_ref(),
         }
-        .run()?;
+        .run_draft(ui, pending)?;
         (
             secret.as_ref().and_then(|s| s.account.clone()),
             secret.as_ref().and_then(|s| s.variable.clone()),
@@ -2129,13 +2151,11 @@ fn dbeaver_forward_target_defaults(conn: &dbeaver::DBeaverConnection) -> (String
     }
 }
 
-fn prompt_dbeaver_forward_target(conn: &dbeaver::DBeaverConnection) -> Result<(String, u16)> {
-    prompt_dbeaver_forward_target_with(conn, |prompt, default| {
-        inquire::Text::new(prompt)
-            .with_default(default)
-            .prompt()
-            .map_err(|_| SafeselectError::Other("Import cancelled".into()))
-    })
+fn prompt_dbeaver_forward_target(
+    conn: &dbeaver::DBeaverConnection,
+    ui: &mut import_wizard::Wizard,
+) -> Result<(String, u16)> {
+    prompt_dbeaver_forward_target_with(conn, |prompt, default| ui.text(prompt, default))
 }
 
 fn prompt_dbeaver_forward_target_with(
@@ -2348,9 +2368,98 @@ fn environment_ssh_from_bastion(name: String, ssh: &config::SshConfig) -> config
     }
 }
 
+fn confirm_import_check() -> Result<bool> {
+    match inquire::Confirm::new("Check the imported connections now?")
+        .with_default(false)
+        .prompt()
+    {
+        Ok(answer) => Ok(answer),
+        Err(
+            inquire::InquireError::OperationCanceled | inquire::InquireError::OperationInterrupted,
+        ) => Ok(false),
+        Err(_) => Err(SafeselectError::Other(
+            "Post-import prompt failed; the import has already been saved".into(),
+        )),
+    }
+}
+
+fn run_import_batch(
+    unattended: bool,
+    mut prepare: impl FnMut(&mut import_wizard::Wizard) -> Result<Option<import_batch::Batch>>,
+) -> Result<Option<import_batch::Batch>> {
+    let mut ui = import_wizard::Wizard::default();
+    if unattended {
+        prepare(&mut ui)
+    } else {
+        Ok(ui.run(prepare)?.flatten())
+    }
+}
+
+fn finish_import(batch: Option<import_batch::Batch>, unattended: bool, jdbc: bool) -> Result<()> {
+    let Some(batch) = batch else {
+        return Ok(());
+    };
+    let root = batch.root.clone();
+    let imported = batch.commit()?;
+    println!("Imported environments: {}", imported.join(", "));
+    check_gitignore(&root);
+    if unattended {
+        println!("Next: safeselect check --environment <name>");
+        return Ok(());
+    }
+    check_import_if_requested(&root, &imported, jdbc)
+}
+
+fn check_import_if_requested(root: &Path, imported: &[String], jdbc: bool) -> Result<()> {
+    check_import_if_requested_with(jdbc, confirm_import_check, setup_driver_if_missing, || {
+        verify_imported_environments(root, imported)
+    })
+}
+
+fn check_import_if_requested_with(
+    jdbc: bool,
+    confirm: impl FnOnce() -> Result<bool>,
+    setup_driver: impl FnOnce() -> Result<()>,
+    verify: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    if confirm()? {
+        if jdbc {
+            setup_driver()?;
+        }
+        verify()?;
+    }
+    Ok(())
+}
+
+fn confirm_import_batch(
+    batch: import_batch::Batch,
+    unattended: bool,
+    ui: &mut import_wizard::Wizard,
+) -> Result<Option<import_batch::Batch>> {
+    if batch.environments.is_empty() {
+        return Ok(None);
+    }
+    if !unattended && !batch.confirm(ui)? {
+        return Err(SafeselectError::ImportCancelled);
+    }
+    Ok(Some(batch))
+}
+
 fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
-    let cwd = std::env::current_dir()?;
-    check_version_and_maybe_reset(&cwd)?;
+    let root = std::env::current_dir()?;
+    let batch = run_import_batch(non_interactive, |ui| {
+        prepare_dbeaver(path, non_interactive, &root, ui)
+    })?;
+    finish_import(batch, non_interactive, true)
+}
+
+fn prepare_dbeaver(
+    path: &str,
+    non_interactive: bool,
+    root: &Path,
+    ui: &mut import_wizard::Wizard,
+) -> Result<Option<import_batch::Batch>> {
+    let cwd = root.to_path_buf();
 
     let zip_path = Path::new(path);
     if !zip_path.exists() {
@@ -2361,9 +2470,11 @@ fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
 
     if connections.is_empty() {
         println!("No database connections found in the DBeaver export.");
-        return Ok(());
+        return Ok(None);
     }
 
+    let mut batch =
+        import_batch::Batch::load(&cwd, ui, non_interactive, Some("dbeaver-imports.toml"))?;
     // Step 1: select connections
     let selected_indices: Vec<usize> = if non_interactive {
         (0..connections.len()).collect()
@@ -2390,54 +2501,54 @@ fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
             })
             .collect();
 
-        let answer_length = options.iter().map(|option| option.1.chars().count()).sum();
         let prompt = "Select connections to import (Space to toggle, Enter to confirm):";
-        let selected = inquire::MultiSelect::new(prompt, options)
-            .with_page_size(20)
-            .with_render_config(compass_import::selection_render_config(
-                prompt,
-                answer_length,
-            ))
-            .prompt()
-            .map_err(|_| SafeselectError::Other("Import cancelled".into()))?;
+        let selected = ui.multi(
+            prompt,
+            options.iter().map(|option| option.1.clone()).collect(),
+        )?;
 
         if selected.is_empty() {
             println!("No connections selected. Nothing to import.");
-            return Ok(());
+            return Ok(None);
         }
 
-        selected.iter().map(|l| l.0).collect()
+        selected
     };
 
     let safeselect_dir = cwd.join(".safeselect");
     let env_dir = safeselect_dir.join("environments");
-    std::fs::create_dir_all(&env_dir)?;
-    update_generated_by(&safeselect_dir)?;
-    let mut project_config = load_project_config(&safeselect_dir)?;
+    let mut project_config = batch.project.clone();
     let project_name = project_display_name(&cwd);
-    let index_path = safeselect_dir.join("dbeaver-imports.toml");
-    let mut import_index = compass_import::ImportIndex::load_file(&index_path)?;
-    let mut imported = vec![];
+
     let mut reusable_ssh_configs = vec![];
     for idx in selected_indices {
         let conn = &connections[idx];
+        ui.context(format!("dbeaver:{idx}"));
         let default_env = slug_env_name(&conn.name);
         let default_env = if default_env.is_empty() {
             "postgresql".into()
         } else {
             default_env
         };
-        let candidates = dbeaver::candidates(&env_dir, &import_index, conn, &project_config);
-        let Some(env_name) = compass_import::select_environment(
-            &env_dir,
-            &candidates,
-            &default_env,
-            non_interactive,
-        )?
+        let mut candidates = if batch.reset {
+            vec![]
+        } else {
+            dbeaver::candidates(&env_dir, &batch.index, conn, &project_config)
+        };
+        candidates.extend(
+            batch
+                .index
+                .staged_candidates(&dbeaver::fingerprint(conn), &batch.environments),
+        );
+        candidates.sort();
+        candidates.dedup();
+        let Some(env_name) =
+            batch.choose_environment(&candidates, &default_env, non_interactive, ui)?
         else {
             continue;
         };
-        let existing = if env_dir.join(format!("{env_name}.toml")).exists() {
+        ui.context(format!("dbeaver:{idx}"));
+        let existing = if !batch.reset && env_dir.join(format!("{env_name}.toml")).exists() {
             let (_, mut existing) = load_ssh_environment_config(&cwd, &env_name)?;
             config::merge_project_ssh(&project_config, &mut existing)?;
             Some(existing)
@@ -2453,18 +2564,32 @@ fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
             } else {
                 Some(prompt_ssh_config(
                     conn,
-                    &project_name,
-                    &env_name,
+                    ImportTarget {
+                        project: &project_name,
+                        environment: &env_name,
+                    },
                     &cwd,
                     &reusable_ssh_configs,
                     existing.as_ref().and_then(|c| c.ssh.as_ref()),
+                    ui,
+                    &mut batch.secrets,
                 )?)
             }
         } else {
             existing.as_ref().and_then(|c| c.ssh.clone())
         };
         let ssh = if let Some(mut ssh) = ssh {
-            let used = collect_used_ssh_local_ports_except(&cwd, Some(&env_name));
+            let mut used = if batch.reset {
+                Default::default()
+            } else {
+                collect_used_ssh_local_ports_except(&cwd, Some(&env_name))
+            };
+            used.extend(
+                batch
+                    .environments
+                    .iter()
+                    .filter_map(|(_, env)| ssh_local_port_from_config(env)),
+            );
             ssh.local_port = Some(
                 ssh.local_port
                     .filter(|p| !used.contains(p))
@@ -2482,9 +2607,7 @@ fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
             None
         };
         let username = if conn.username.is_empty() && !non_interactive {
-            inquire::Text::new(&format!("Database username ({env_name}):"))
-                .prompt()
-                .map_err(|_| SafeselectError::Other("Import cancelled".into()))?
+            ui.text(&format!("Database username ({env_name}):"), "")?
                 .trim()
                 .to_string()
         } else {
@@ -2504,7 +2627,7 @@ fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
                 imported: conn.password.as_deref(),
                 existing: existing_secret,
             }
-            .run()?
+            .run_draft(ui, &mut batch.secrets)?
         };
         let env_config = config::EnvironmentConfig {
             version: 1,
@@ -2523,33 +2646,13 @@ fn cmd_import_dbeaver(path: &str, non_interactive: bool) -> Result<()> {
                 .map(|c| c.limits.clone())
                 .unwrap_or_default(),
         };
-        compass_import::print_summary(&project_config, &env_config)?;
-        let content = toml::to_string_pretty(&env_config)
-            .map_err(|e| SafeselectError::TomlSer(e.to_string()))?;
-        save_project_config(&safeselect_dir, &project_config)?;
-        compass_import::write_atomic(&env_dir.join(format!("{env_name}.toml")), &content)?;
-        import_index.record_key(dbeaver::fingerprint(conn), &env_name);
-        import_index.save_file(&index_path)?;
-        imported.push(env_name);
+        batch
+            .index
+            .record_key(dbeaver::fingerprint(conn), &env_name);
+        batch.environments.push((env_name.clone(), env_config));
     }
-    if imported.is_empty() {
-        println!("No environments imported. Existing environments were left unchanged.");
-    } else {
-        println!("Imported DBeaver environments: {}", imported.join(", "));
-        check_gitignore(&cwd);
-    }
-    if non_interactive {
-        println!("Next: safeselect check --environment <name>");
-    } else if !imported.is_empty()
-        && inquire::Confirm::new("Check the imported connections now?")
-            .with_default(false)
-            .prompt()
-            .map_err(|_| SafeselectError::Other("Import cancelled".into()))?
-    {
-        setup_driver_if_missing()?;
-        verify_imported_environments(&cwd, &imported)?;
-    }
-    Ok(())
+    batch.project = project_config;
+    confirm_import_batch(batch, non_interactive, ui)
 }
 
 fn dbeaver_ssh_config(
@@ -2583,6 +2686,152 @@ fn dbeaver_ssh_config(
 }
 
 fn cmd_import_compose(path: Option<PathBuf>, non_interactive: bool) -> Result<()> {
+    if non_interactive {
+        return cmd_import_compose_unattended(path);
+    }
+    let scan_path = path.unwrap_or(std::env::current_dir()?);
+    if !scan_path.is_dir() {
+        return Err(SafeselectError::Other(
+            "Compose scan path must be a directory".into(),
+        ));
+    }
+    let connections = scan_compose_connections(&scan_path)?;
+    if connections.is_empty() {
+        println!("No PostgreSQL services found in docker-compose files.");
+        return Ok(());
+    }
+    let mut ui = import_wizard::Wizard::default();
+    let batch = ui
+        .run(|ui| prepare_compose(&scan_path, &connections, ui))?
+        .flatten();
+    finish_import(batch, false, true)
+}
+
+fn scan_compose_connections(path: &Path) -> Result<Vec<(String, compose::ComposeConnection)>> {
+    Ok(compose::scan_all(path)?
+        .into_iter()
+        .flat_map(|(label, connections)| {
+            connections
+                .into_iter()
+                .map(move |connection| (label.clone(), connection))
+        })
+        .collect())
+}
+
+fn prepare_compose(
+    root: &Path,
+    connections: &[(String, compose::ComposeConnection)],
+    ui: &mut import_wizard::Wizard,
+) -> Result<Option<import_batch::Batch>> {
+    let mut batch = import_batch::Batch::load(root, ui, false, None)?;
+    let options = connections
+        .iter()
+        .map(|(label, connection)| {
+            format!(
+                "{label}: {} ({}:{})",
+                connection.service, connection.host, connection.port
+            )
+        })
+        .collect();
+    let selected = ui.multi(
+        "Select connections to import (Space to toggle, Enter to confirm):",
+        options,
+    )?;
+    if selected.is_empty() {
+        println!("No connections selected. Nothing to import.");
+        return Ok(None);
+    }
+    let project = project_display_name(root);
+    for index in selected {
+        prepare_compose_connection(root, &connections[index].1, index, &project, &mut batch, ui)?;
+    }
+    confirm_import_batch(batch, false, ui)
+}
+
+fn prepare_compose_connection(
+    root: &Path,
+    connection: &compose::ComposeConnection,
+    index: usize,
+    project: &str,
+    batch: &mut import_batch::Batch,
+    ui: &mut import_wizard::Wizard,
+) -> Result<()> {
+    ui.context(format!("compose:{index}"));
+    let name = compose_environment_name(connection, batch, ui)?;
+    // Compose imports keep their existing never-overwrite policy.
+    if !batch.reset
+        && root
+            .join(".safeselect/environments")
+            .join(format!("{name}.toml"))
+            .exists()
+    {
+        println!("Skipping existing environment: {name}");
+        return Ok(());
+    }
+    ui.context(format!("compose:{index}:{name}"));
+    let existing_secret = connection
+        .password_var
+        .as_ref()
+        .map(|variable| compass_import::env_secret(variable.clone()));
+    let secret = compass_import::CredentialPrompt {
+        project,
+        environment: &name,
+        ssh: false,
+        imported: connection.password_literal.as_deref(),
+        existing: existing_secret.as_ref(),
+    }
+    .run_draft(ui, &mut batch.secrets)?;
+    batch.environments.push((
+        name,
+        config::EnvironmentConfig {
+            version: 1,
+            database: config::DatabaseConfig {
+                kind: backend::BackendKind::Jdbc,
+                vendor: Some("postgresql".into()),
+                driver: Some("postgresql".into()),
+                url: format!(
+                    "jdbc:postgresql://{}:{}/{}",
+                    connection.host, connection.port, connection.database
+                ),
+                username: connection.username.clone(),
+                secret,
+            },
+            tls: None,
+            ssh: None,
+            limits: Default::default(),
+        },
+    ));
+    Ok(())
+}
+
+fn compose_environment_name(
+    connection: &compose::ComposeConnection,
+    batch: &import_batch::Batch,
+    ui: &mut import_wizard::Wizard,
+) -> Result<String> {
+    loop {
+        let answer = ui.text(
+            &format!(
+                "Environment name for '{}' ({}:{}):",
+                connection.service, connection.host, connection.port
+            ),
+            &connection.env_name,
+        )?;
+        let name = slug_env_name(&answer);
+        if name.is_empty()
+            || batch
+                .environments
+                .iter()
+                .any(|(existing, _)| *existing == name)
+        {
+            println!("Choose a non-empty, unused environment name.");
+            continue;
+        }
+        return Ok(name);
+    }
+}
+
+fn cmd_import_compose_unattended(path: Option<PathBuf>) -> Result<()> {
     let scan_path = path.unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
     if !scan_path.exists() {
         return Err(SafeselectError::Other(format!(
@@ -2593,128 +2842,39 @@ fn cmd_import_compose(path: Option<PathBuf>, non_interactive: bool) -> Result<()
 
     check_version_and_maybe_reset(&scan_path)?;
 
-    let groups = compose::scan_all(&scan_path)?;
-
-    let all_connections: Vec<(String, compose::ComposeConnection)> = groups
-        .into_iter()
-        .flat_map(|(label, conns)| conns.into_iter().map(move |c| (label.clone(), c)))
-        .collect();
+    let all_connections = scan_compose_connections(&scan_path)?;
 
     if all_connections.is_empty() {
         println!("No PostgreSQL services found in docker-compose files.");
         return Ok(());
     }
 
-    let mut to_import: Vec<compose::ComposeConnection> = if non_interactive {
-        all_connections.iter().map(|(_, c)| c).cloned().collect()
-    } else {
-        struct ConnLabel(usize, String);
-        impl std::fmt::Display for ConnLabel {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                write!(f, "{}", self.1)
-            }
-        }
+    let to_import: Vec<_> = all_connections
+        .into_iter()
+        .map(|(_, connection)| connection)
+        .collect();
 
-        let options: Vec<ConnLabel> = all_connections
-            .iter()
-            .enumerate()
-            .map(|(i, (label, conn))| {
-                ConnLabel(
-                    i,
-                    format!(
-                        "{:<20}  {}  {}:{:<5}  db={:<15}  user={}",
-                        label, conn.service, conn.host, conn.port, conn.database, conn.username,
-                    ),
-                )
-            })
-            .collect();
-
-        let selected = inquire::MultiSelect::new(
-            "Select connections to import (Space to toggle, Enter to confirm):",
-            options,
-        )
-        .with_page_size(20)
-        .prompt()
-        .map_err(|e| SafeselectError::Other(format!("Selection cancelled: {e}")))?;
-
-        if selected.is_empty() {
-            println!("No connections selected. Nothing to import.");
-            return Ok(());
-        }
-
-        selected
-            .iter()
-            .map(|label| all_connections[label.0].1.clone())
-            .collect()
-    };
-
-    let dest_dir = &scan_path;
-    let project_name = project_display_name(dest_dir);
-
-    if !non_interactive {
-        let mut index = 0;
-        while index < to_import.len() {
-            let conn = &mut to_import[index];
-            let prompt = format!(
-                "Environment name for '{}' ({}:{}):",
-                conn.service, conn.host, conn.port
-            );
-            let answer = inquire::Text::new(&prompt)
-                .with_default(&conn.env_name)
-                .with_help_message("Esc: previous environment; Ctrl+C: cancel")
-                .prompt();
-            match answer {
-                Ok(new_name) => {
-                    conn.env_name = new_name.trim().to_lowercase().replace(' ', "-");
-                    index += 1;
-                }
-                Err(inquire::InquireError::OperationCanceled) if index > 0 => index -= 1,
-                Err(e) => return Err(SafeselectError::Other(format!("Input cancelled: {e}"))),
-            }
-        }
-    }
-
-    let result = compose::write_config_files(dest_dir, &to_import, &project_name)?;
-    update_generated_by(&dest_dir.join(".safeselect"))?;
-    let imported_names: Vec<String> = to_import.iter().map(|c| c.env_name.clone()).collect();
-    let guidance =
-        compose::build_import_guidance(dest_dir, &project_name, &result, &imported_names, true)?;
-
-    if result.created > 0 {
-        println!();
-        println!("── Import Complete ──────────────────────────────");
-        println!();
-        print_terminal_line(&format!("  ✓ {} environment(s) added", to_import.len()));
-        check_gitignore(dest_dir);
-    } else {
-        println!("  ◉ All environments already exist.");
-    }
-
-    println!();
-    println!("{}", guidance.text);
-
-    let env_names = guidance.imported_env_names;
-    setup_driver_if_missing()?;
-    setup_passwords_for_missing(dest_dir, &env_names)?;
-    verify_imported_environments(dest_dir, &env_names)?;
-
-    Ok(())
+    import_connections_at(&scan_path, &to_import)
 }
 
 fn import_selected_connections(connections: &[compose::ComposeConnection]) -> Result<()> {
     let cwd = std::env::current_dir()?;
-    let name = project_display_name(&cwd);
-    let result = compose::write_config_files(&cwd, connections, &name)?;
+    import_connections_at(&cwd, connections)
+}
+
+fn import_connections_at(cwd: &Path, connections: &[compose::ComposeConnection]) -> Result<()> {
+    let name = project_display_name(cwd);
+    let result = compose::write_config_files(cwd, connections, &name)?;
     update_generated_by(&cwd.join(".safeselect"))?;
     let imported_names: Vec<String> = connections.iter().map(|c| c.env_name.clone()).collect();
-    let guidance = compose::build_import_guidance(&cwd, &name, &result, &imported_names, true)?;
+    let guidance = compose::build_import_guidance(cwd, &name, &result, &imported_names, true)?;
 
     if result.created > 0 {
         println!(
-            "\nImport complete. {} environment(s) added to .safeselect/.",
+            "\nImport Complete. {} environment(s) added to .safeselect/.",
             connections.len()
         );
-        check_gitignore(&cwd);
+        check_gitignore(cwd);
     } else {
         println!("All environments already exist. Nothing to import.");
     }
@@ -2724,15 +2884,27 @@ fn import_selected_connections(connections: &[compose::ComposeConnection]) -> Re
 
     let env_names = guidance.imported_env_names;
     setup_driver_if_missing()?;
-    setup_passwords_for_missing(&cwd, &env_names)?;
-    verify_imported_environments(&cwd, &env_names)?;
+    setup_passwords_for_missing(cwd, &env_names)?;
+    verify_imported_environments(cwd, &env_names)?;
 
     Ok(())
 }
 
 fn cmd_import_compass(path: Option<PathBuf>, non_interactive: bool) -> Result<()> {
-    let cwd = std::env::current_dir()?;
-    check_version_and_maybe_reset(&cwd)?;
+    let root = std::env::current_dir()?;
+    let batch = run_import_batch(non_interactive, |ui| {
+        prepare_compass(path.clone(), non_interactive, &root, ui)
+    })?;
+    finish_import(batch, non_interactive, false)
+}
+
+fn prepare_compass(
+    path: Option<PathBuf>,
+    non_interactive: bool,
+    root: &Path,
+    ui: &mut import_wizard::Wizard,
+) -> Result<Option<import_batch::Batch>> {
+    let cwd = root.to_path_buf();
 
     let import_path = path.unwrap_or_else(default_compass_path);
     if !import_path.exists() {
@@ -2748,9 +2920,11 @@ fn cmd_import_compass(path: Option<PathBuf>, non_interactive: bool) -> Result<()
             "No MongoDB Compass connections found in {}",
             import_path.display()
         );
-        return Ok(());
+        return Ok(None);
     }
 
+    let mut batch =
+        import_batch::Batch::load(&cwd, ui, non_interactive, Some("compass-imports.toml"))?;
     let selected_indices: Vec<usize> = if non_interactive {
         (0..connections.len()).collect()
     } else {
@@ -2771,23 +2945,18 @@ fn cmd_import_compass(path: Option<PathBuf>, non_interactive: bool) -> Result<()
                 )
             })
             .collect();
-        let answer_length = options.iter().map(|option| option.1.chars().count()).sum();
         let prompt =
             "Select MongoDB Compass connections to import (Space to toggle, Enter to confirm):";
-        let selected = inquire::MultiSelect::new(prompt, options)
-            .with_page_size(20)
-            .with_render_config(compass_import::selection_render_config(
-                prompt,
-                answer_length,
-            ))
-            .prompt()
-            .map_err(|e| SafeselectError::Other(format!("Selection cancelled: {e}")))?;
-        selected.iter().map(|l| l.0).collect()
+        let selected = ui.multi(
+            prompt,
+            options.iter().map(|option| option.1.clone()).collect(),
+        )?;
+        selected
     };
 
     if selected_indices.is_empty() {
         println!("No connections selected. Nothing to import.");
-        return Ok(());
+        return Ok(None);
     }
 
     // Validate every selected URL before prompting or persisting any credentials.
@@ -2797,34 +2966,40 @@ fn cmd_import_compass(path: Option<PathBuf>, non_interactive: bool) -> Result<()
 
     let safeselect_dir = cwd.join(".safeselect");
     let env_dir = safeselect_dir.join("environments");
-    std::fs::create_dir_all(&env_dir)?;
-    update_generated_by(&safeselect_dir)?;
-    let mut project_config = load_project_config(&safeselect_dir)?;
+    let mut project_config = batch.project.clone();
 
     let project_name = project_display_name(&cwd);
-    let mut import_index = compass_import::ImportIndex::load(&safeselect_dir)?;
-    let mut imported = vec![];
+
     let mut reusable_ssh_configs: Vec<(String, config::SshConfig)> = Vec::new();
     let mut warnings = vec![];
     for idx in selected_indices {
         let conn = &connections[idx];
+        ui.context(format!("compass:{idx}"));
         let default_env = slug_env_name(&conn.name);
         let default_env = if default_env.is_empty() {
             "mongodb".to_string()
         } else {
             default_env
         };
-        let candidates = import_index.candidates(&env_dir, conn, &default_env);
-        let Some(env_name) = compass_import::select_environment(
-            &env_dir,
-            &candidates,
-            &default_env,
-            non_interactive,
-        )?
+        let mut candidates = if batch.reset {
+            vec![]
+        } else {
+            batch.index.candidates(&env_dir, conn, &default_env)
+        };
+        candidates.extend(
+            batch
+                .index
+                .staged_candidates(&compass_import::fingerprint(conn), &batch.environments),
+        );
+        candidates.sort();
+        candidates.dedup();
+        let Some(env_name) =
+            batch.choose_environment(&candidates, &default_env, non_interactive, ui)?
         else {
             continue;
         };
-        let existing = if env_dir.join(format!("{env_name}.toml")).exists() {
+        ui.context(format!("compass:{idx}"));
+        let existing = if !batch.reset && env_dir.join(format!("{env_name}.toml")).exists() {
             let (_, mut existing) = load_ssh_environment_config(&cwd, &env_name)?;
             config::merge_project_ssh(&project_config, &mut existing)?;
             Some(existing)
@@ -2840,18 +3015,31 @@ fn cmd_import_compass(path: Option<PathBuf>, non_interactive: bool) -> Result<()
         } else if conn.ssh_host.is_some() {
             Some(prompt_compass_ssh_config(
                 conn,
-                &project_name,
-                &env_name,
+                ImportTarget {
+                    project: &project_name,
+                    environment: &env_name,
+                },
                 &cwd,
                 &reusable_ssh_configs,
                 existing.as_ref().and_then(|c| c.ssh.as_ref()),
+                ui,
+                &mut batch.secrets,
             )?)
         } else {
             None
         };
         let ssh = if let Some(mut ssh) = ssh {
-            let mut used_ssh_local_ports =
-                collect_used_ssh_local_ports_except(&cwd, Some(&env_name));
+            let mut used_ssh_local_ports = if batch.reset {
+                Default::default()
+            } else {
+                collect_used_ssh_local_ports_except(&cwd, Some(&env_name))
+            };
+            used_ssh_local_ports.extend(
+                batch
+                    .environments
+                    .iter()
+                    .filter_map(|(_, env)| ssh_local_port_from_config(env)),
+            );
             if non_interactive && ssh.auth_type.as_deref() == Some("PASSWORD") {
                 ssh.secret_variable = Some(compass_import::friendly_variable(
                     &project_name,
@@ -2906,7 +3094,7 @@ fn cmd_import_compass(path: Option<PathBuf>, non_interactive: bool) -> Result<()
                 imported: imported_password.as_deref(),
                 existing: existing_secret,
             }
-            .run()?
+            .run_draft(ui, &mut batch.secrets)?
         };
         let env_config = config::EnvironmentConfig {
             version: 1,
@@ -2925,46 +3113,29 @@ fn cmd_import_compass(path: Option<PathBuf>, non_interactive: bool) -> Result<()
                 .map(|c| c.limits.clone())
                 .unwrap_or_default(),
         };
-        compass_import::print_summary(&project_config, &env_config)?;
-        let env_toml = toml::to_string_pretty(&env_config)
-            .map_err(|e| SafeselectError::TomlSer(e.to_string()))?;
-        save_project_config(&safeselect_dir, &project_config)?;
-        compass_import::write_atomic(&env_dir.join(format!("{env_name}.toml")), &env_toml)?;
-        import_index.record(conn, &env_name);
-        import_index.save(&safeselect_dir)?;
-        imported.push(env_name);
-    }
-    save_project_config(&safeselect_dir, &project_config)?;
-
-    if imported.is_empty() {
-        println!("No environments imported. Existing environments were left unchanged.");
-    } else {
-        println!("Imported MongoDB environments: {}", imported.join(", "));
+        batch.index.record(conn, &env_name);
+        batch.environments.push((env_name.clone(), env_config));
     }
     for warning in warnings {
         println!("Warning: {warning}");
     }
-    if non_interactive {
-        println!("Next: safeselect check --environment <name>");
-    } else if !imported.is_empty()
-        && inquire::Confirm::new("Check the imported connections now?")
-            .with_default(false)
-            .prompt()
-            .map_err(|_| SafeselectError::Other("Import cancelled".into()))?
-    {
-        verify_imported_environments(&cwd, &imported)?;
-    }
-    Ok(())
+    batch.project = project_config;
+    confirm_import_batch(batch, non_interactive, ui)
 }
 
 fn prompt_compass_ssh_config(
     conn: &crate::compass::CompassConnection,
-    project_name: &str,
-    env_name: &str,
+    target: ImportTarget<'_>,
     repo_root: &Path,
     current_batch: &[(String, config::SshConfig)],
     existing: Option<&config::SshConfig>,
+    ui: &mut import_wizard::Wizard,
+    pending: &mut import_batch::PendingSecrets,
 ) -> Result<config::SshConfig> {
+    let ImportTarget {
+        project: project_name,
+        environment: env_name,
+    } = target;
     let placeholder_warning = compass_shared_tunnel_warning(conn);
     let default_host = conn.ssh_host.as_deref().unwrap_or("");
     let default_user = conn.ssh_user.as_deref().unwrap_or("");
@@ -2984,25 +3155,22 @@ fn prompt_compass_ssh_config(
     }
 
     if let Some(existing) = existing {
-        if inquire::Confirm::new("Keep the existing SSH tunnel configuration and password source?")
-            .with_default(true)
-            .prompt()
-            .map_err(|_| SafeselectError::Other("Import cancelled".into()))?
-        {
+        if ui.confirm(
+            "Keep the existing SSH tunnel configuration and password source?",
+            true,
+        )? {
             return Ok(existing.clone());
         }
     }
 
-    if let Some(ssh) = select_reusable_compass_ssh_config(repo_root, env_name, conn, current_batch)?
+    if let Some(ssh) =
+        select_reusable_compass_ssh_config(repo_root, env_name, conn, current_batch, ui, pending)?
     {
         print_terminal_line("  ✓ Reusing bastion configuration");
         return Ok(ssh);
     }
 
-    let ans = inquire::Confirm::new("Configure SSH tunnel now?")
-        .with_default(true)
-        .prompt()
-        .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?;
+    let ans = ui.confirm("Configure SSH tunnel now?", true)?;
 
     if !ans {
         return Err(SafeselectError::Other(
@@ -3012,24 +3180,23 @@ fn prompt_compass_ssh_config(
 
     if compass_uses_local_tunnel_endpoint(conn) {
         let use_existing =
-            inquire::Confirm::new("Use the existing local tunnel endpoint from Compass?")
-                .with_default(true)
-                .prompt()
-                .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?;
+            ui.confirm("Use the existing local tunnel endpoint from Compass?", true)?;
         if use_existing {
             let (forward_host, forward_port) =
                 compass_forward_target(conn).unwrap_or((String::new(), 27017));
-            let auth_method =
-                inquire::Select::new("  Authentication method:", vec!["Key file", "Password"])
-                    .with_starting_cursor(if default_auth == "PASSWORD" { 1 } else { 0 })
-                    .prompt()
-                    .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?;
-            let (key_file, auth_type, secret_account, secret_variable) = match auth_method {
+            let auth_method = ui.select(
+                "  Authentication method:",
+                vec!["Key file", "Password"]
+                    .into_iter()
+                    .map(|value| value.to_string())
+                    .collect(),
+                if default_auth == "PASSWORD" { 1 } else { 0 },
+            )?;
+            let (key_file, auth_type, secret_account, secret_variable) = match auth_method.as_str()
+            {
                 "Key file" => {
-                    let kf = inquire::Text::new("  SSH key file path:")
-                        .with_default(default_key)
-                        .prompt()
-                        .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?
+                    let kf = ui
+                        .text("  SSH key file path:", default_key)?
                         .trim()
                         .to_string();
                     (
@@ -3040,8 +3207,14 @@ fn prompt_compass_ssh_config(
                     )
                 }
                 _ => {
-                    let (account, variable) =
-                        prompt_compass_password_source(conn, project_name, env_name, existing)?;
+                    let (account, variable) = prompt_compass_password_source(
+                        conn,
+                        project_name,
+                        env_name,
+                        existing,
+                        ui,
+                        pending,
+                    )?;
                     (None, Some("PASSWORD".into()), account, variable)
                 }
             };
@@ -3073,56 +3246,50 @@ fn prompt_compass_ssh_config(
     } else {
         "  SSH bastion host:"
     };
-    let host = inquire::Text::new(host_prompt)
-        .with_default(default_host)
-        .prompt()
-        .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?
-        .trim()
-        .to_string();
+    let host = ui.text(host_prompt, default_host)?.trim().to_string();
 
-    let port = inquire::Text::new("  SSH port:")
-        .with_default(&conn.ssh_port.map_or("22".into(), |p| p.to_string()))
-        .prompt()
-        .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?
+    let port = ui
+        .text(
+            "  SSH port:",
+            &conn.ssh_port.map_or("22".into(), |p| p.to_string()),
+        )?
         .trim()
         .parse::<u16>()
         .unwrap_or(22);
 
-    let user = inquire::Text::new("  SSH user:")
-        .with_default(default_user)
-        .prompt()
-        .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?
-        .trim()
-        .to_string();
+    let user = ui.text("  SSH user:", default_user)?.trim().to_string();
 
     let (default_forward_host, default_forward_port) =
         compass_forward_target(conn).unwrap_or((String::new(), 27017));
-    let forward_host = inquire::Text::new("  Database target host through bastion:")
-        .with_default(&default_forward_host)
-        .prompt()
-        .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?
+    let forward_host = ui
+        .text(
+            "  Database target host through bastion:",
+            &default_forward_host,
+        )?
         .trim()
         .to_string();
-    let forward_port = inquire::Text::new("  Database target port through bastion:")
-        .with_default(&default_forward_port.to_string())
-        .prompt()
-        .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?
+    let forward_port = ui
+        .text(
+            "  Database target port through bastion:",
+            &default_forward_port.to_string(),
+        )?
         .trim()
         .parse::<u16>()
         .unwrap_or(default_forward_port);
 
-    let auth_method =
-        inquire::Select::new("  Authentication method:", vec!["Key file", "Password"])
-            .with_starting_cursor(if default_auth == "PASSWORD" { 1 } else { 0 })
-            .prompt()
-            .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?;
+    let auth_method = ui.select(
+        "  Authentication method:",
+        vec!["Key file", "Password"]
+            .into_iter()
+            .map(|value| value.to_string())
+            .collect(),
+        if default_auth == "PASSWORD" { 1 } else { 0 },
+    )?;
 
-    let (key_file, auth_type) = match auth_method {
+    let (key_file, auth_type) = match auth_method.as_str() {
         "Key file" => {
-            let kf = inquire::Text::new("  SSH key file path:")
-                .with_default(default_key)
-                .prompt()
-                .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?
+            let kf = ui
+                .text("  SSH key file path:", default_key)?
                 .trim()
                 .to_string();
             (
@@ -3134,7 +3301,7 @@ fn prompt_compass_ssh_config(
     };
 
     let (secret_account, secret_variable) = if auth_type.as_deref() == Some("PASSWORD") {
-        prompt_compass_password_source(conn, project_name, env_name, existing)?
+        prompt_compass_password_source(conn, project_name, env_name, existing, ui, pending)?
     } else {
         (None, None)
     };
@@ -3164,6 +3331,8 @@ fn prompt_compass_password_source(
     project: &str,
     environment: &str,
     existing: Option<&config::SshConfig>,
+    ui: &mut import_wizard::Wizard,
+    pending: &mut import_batch::PendingSecrets,
 ) -> Result<(Option<String>, Option<String>)> {
     let existing = existing.and_then(compass_import::ssh_secret);
     let secret = compass_import::CredentialPrompt {
@@ -3173,7 +3342,7 @@ fn prompt_compass_password_source(
         imported: conn.ssh_password.as_deref(),
         existing: existing.as_ref(),
     }
-    .run()?;
+    .run_draft(ui, pending)?;
     Ok(secret.map(|s| (s.account, s.variable)).unwrap_or_default())
 }
 
@@ -3182,16 +3351,19 @@ fn select_reusable_compass_ssh_config(
     env_name: &str,
     conn: &crate::compass::CompassConnection,
     current_batch: &[(String, config::SshConfig)],
+    ui: &mut import_wizard::Wizard,
+    pending: &mut import_batch::PendingSecrets,
 ) -> Result<Option<config::SshConfig>> {
-    let reusable = collect_reusable_ssh_configs(repo_root, env_name, current_batch)?;
+    let reusable = if pending.reset {
+        current_batch.to_vec()
+    } else {
+        collect_reusable_ssh_configs(repo_root, env_name, current_batch)?
+    };
     if reusable.is_empty() {
         return Ok(None);
     }
 
-    let reuse = inquire::Confirm::new("Reuse an existing bastion configuration?")
-        .with_default(true)
-        .prompt()
-        .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?;
+    let reuse = ui.confirm("Reuse an existing bastion configuration?", true)?;
     if !reuse {
         return Ok(None);
     }
@@ -3206,18 +3378,11 @@ fn select_reusable_compass_ssh_config(
         })
         .collect();
 
-    let answer_length = options
-        .iter()
-        .map(|option| option.chars().count())
-        .max()
-        .unwrap_or(0);
-    let selected = inquire::Select::new("  Reuse bastion:", options)
-        .with_render_config(compass_import::selection_render_config(
-            "  Reuse bastion:",
-            answer_length,
-        ))
-        .prompt()
-        .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?;
+    let selected = ui.select(
+        "  Reuse bastion:",
+        options.into_iter().map(|value| value.to_string()).collect(),
+        0,
+    )?;
     let selected_index = reusable
         .iter()
         .position(|(name, ssh)| {
@@ -3235,15 +3400,12 @@ fn select_reusable_compass_ssh_config(
         ssh.forward_host = Some(forward_host);
         ssh.forward_port = Some(forward_port);
     } else {
-        let forward_host = inquire::Text::new("  Database target host through bastion:")
-            .prompt()
-            .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?
+        let forward_host = ui
+            .text("  Database target host through bastion:", "")?
             .trim()
             .to_string();
-        let forward_port = inquire::Text::new("  Database target port through bastion:")
-            .with_default("27017")
-            .prompt()
-            .map_err(|e| SafeselectError::Other(format!("Cancelled: {e}")))?
+        let forward_port = ui
+            .text("  Database target port through bastion:", "27017")?
             .trim()
             .parse::<u16>()
             .unwrap_or(27017);
@@ -7765,3 +7927,7 @@ username = "usr_app"
         assert!(reusable_ssh_entry(&project, Path::new("missing.toml"), "dev").is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "tests/import_navigation.rs"]
+mod import_navigation_tests;

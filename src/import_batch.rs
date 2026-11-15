@@ -1,0 +1,194 @@
+//! Import changes stay in memory until the complete batch is confirmed.
+use crate::{
+    compass_import::ImportIndex,
+    config,
+    error::{Result, SafeselectError},
+    import_wizard::Wizard,
+};
+use std::path::{Path, PathBuf};
+
+#[derive(Default)]
+pub struct PendingSecrets {
+    pub reset: bool,
+    pub keychain: Vec<(String, String)>,
+    pub session: Vec<(String, String)>,
+}
+
+pub struct Batch {
+    pub root: PathBuf,
+    pub reset: bool,
+    pub project: config::ProjectConfig,
+    pub environments: Vec<(String, config::EnvironmentConfig)>,
+    pub secrets: PendingSecrets,
+    pub index: ImportIndex,
+    pub index_filename: Option<&'static str>,
+}
+
+impl Batch {
+    pub fn load(
+        root: &Path,
+        ui: &mut Wizard,
+        unattended: bool,
+        index_filename: Option<&'static str>,
+    ) -> Result<Self> {
+        let dir = root.join(".safeselect");
+        let mut project = crate::load_project_config(&dir)?;
+        let reset = reset_requested(&dir, &project, unattended, ui)?;
+        if reset {
+            project.ssh_bastions.clear();
+        }
+        let index = match index_filename {
+            Some(filename) if !reset => ImportIndex::load_file(&dir.join(filename))?,
+            _ => ImportIndex::default(),
+        };
+        project.generated_by = Some(env!("CARGO_PKG_VERSION").into());
+        Ok(Self {
+            root: root.into(),
+            reset,
+            project,
+            environments: vec![],
+            secrets: PendingSecrets {
+                reset,
+                ..Default::default()
+            },
+            index,
+            index_filename,
+        })
+    }
+
+    pub fn choose_environment(
+        &self,
+        candidates: &[String],
+        default: &str,
+        unattended: bool,
+        ui: &mut Wizard,
+    ) -> Result<Option<String>> {
+        let dir = self.root.join(".safeselect/environments");
+        let mut suggestion = default.to_owned();
+        let mut suffix = 2;
+        while self.environment_name_taken(&dir, &suggestion) {
+            suggestion = format!("{default}-{suffix}");
+            suffix += 1;
+        }
+        loop {
+            let selected = crate::compass_import::select_environment(
+                &dir,
+                candidates,
+                &suggestion,
+                unattended,
+                self.reset,
+                ui,
+            )?;
+            if selected
+                .as_ref()
+                .is_some_and(|selected| self.environments.iter().any(|(name, _)| name == selected))
+            {
+                println!("That environment is already selected in this import batch.");
+                continue;
+            }
+            return Ok(selected);
+        }
+    }
+
+    fn environment_name_taken(&self, dir: &Path, name: &str) -> bool {
+        (!self.reset && dir.join(format!("{name}.toml")).exists())
+            || self.environments.iter().any(|(staged, _)| staged == name)
+    }
+
+    pub fn confirm(&self, ui: &mut Wizard) -> Result<bool> {
+        if self.environments.is_empty() {
+            return Ok(false);
+        }
+        println!("\nImport batch: {}", self.names().join(", "));
+        if self.reset {
+            println!("Existing environments, shared SSH bastions and their related Keychain entries will be removed.");
+        }
+        for (name, environment) in &self.environments {
+            println!("\nEnvironment: {name}");
+            crate::compass_import::print_summary(&self.project, environment)?;
+        }
+        ui.context("save-batch");
+        ui.confirm("Save this import batch?", false)
+    }
+
+    pub fn names(&self) -> Vec<String> {
+        self.environments
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect()
+    }
+
+    pub fn commit(self) -> Result<Vec<String>> {
+        // Serialize and validate everything before the first external write.
+        let project = toml::to_string_pretty(&self.project)
+            .map_err(|e| SafeselectError::TomlSer(e.to_string()))?;
+        let files = self
+            .environments
+            .iter()
+            .map(|(name, env)| {
+                if name.is_empty() || !name.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-')
+                {
+                    return Err(SafeselectError::Config(
+                        "Invalid imported environment name".into(),
+                    ));
+                }
+                let content = toml::to_string_pretty(env)
+                    .map_err(|e| SafeselectError::TomlSer(e.to_string()))?;
+                Ok((name.clone(), content))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let names = self.names();
+        let mut saved_credentials = 0;
+        let mut saved_files = Vec::new();
+        let result = (|| -> Result<()> {
+            if self.reset {
+                crate::clear_project_config_confirmed(&self.root, false, true)?;
+            }
+            let dir = self.root.join(".safeselect");
+            std::fs::create_dir_all(dir.join("environments"))?;
+            for (account, value) in &self.secrets.keychain {
+                crate::compose::store_password_in_keychain(account, value)?;
+                saved_credentials += 1;
+            }
+            for (variable, value) in &self.secrets.session {
+                std::env::set_var(variable, value);
+                saved_credentials += 1;
+            }
+            crate::compass_import::write_atomic(&dir.join("project.toml"), &project)?;
+            saved_files.push("project.toml".into());
+            for (name, content) in files {
+                crate::compass_import::write_atomic(
+                    &dir.join("environments").join(format!("{name}.toml")),
+                    &content,
+                )?;
+                saved_files.push(format!("environments/{name}.toml"));
+            }
+            if let Some(filename) = self.index_filename {
+                self.index.save_file(&dir.join(filename))?;
+                saved_files.push(filename.into());
+            }
+            Ok(())
+        })();
+        result.map_err(|_| SafeselectError::Other(format!(
+            "Import save failed. Saved credentials: {saved_credentials}. Saved files: {}. Reset requested: {} (may have partially completed). Inspect the project before retrying.",
+            saved_files.join(", "), self.reset
+        )))?;
+        Ok(names)
+    }
+}
+
+fn reset_requested(
+    dir: &Path,
+    project: &config::ProjectConfig,
+    unattended: bool,
+    ui: &mut Wizard,
+) -> Result<bool> {
+    if unattended
+        || !dir.join("project.toml").exists()
+        || project.generated_by.as_deref() == Some(env!("CARGO_PKG_VERSION"))
+    {
+        return Ok(false);
+    }
+    println!("Existing configuration was generated by another version.");
+    ui.confirm("Reset environments and re-import?", true)
+}
