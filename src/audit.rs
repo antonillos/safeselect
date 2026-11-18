@@ -1,10 +1,10 @@
 use crate::config::AuditConfig;
 use crate::error::{Result, SafeselectError};
-use chrono::Utc;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::io::Write;
 use std::path::PathBuf;
+use time::{macros::format_description, OffsetDateTime};
 
 #[derive(Clone, Serialize)]
 pub struct AuditEntry {
@@ -59,7 +59,7 @@ impl AuditLog {
         let audit_dir = PathBuf::from(&dir).join(project).join(environment);
         std::fs::create_dir_all(&audit_dir)?;
 
-        let filename = format!("{}.jsonl", Utc::now().format("%Y%m%d-%H%M%S-%f"));
+        let filename = audit_filename(OffsetDateTime::now_utc());
         let path = audit_dir.join(&filename);
         let file = std::fs::File::create_new(&path).map_err(|e| {
             SafeselectError::Audit(format!("cannot create audit file {}: {e}", path.display()))
@@ -117,7 +117,7 @@ impl AuditLog {
     ) -> Result<()> {
         let query_hash = self.hash_sql(sql);
         let entry = AuditEntry {
-            timestamp: Utc::now().to_rfc3339(),
+            timestamp: audit_timestamp(OffsetDateTime::now_utc()),
             mcp_client: self.mcp_client.clone(),
             project: self.project.clone(),
             environment: self.environment.clone(),
@@ -157,7 +157,7 @@ impl AuditLog {
     fn rotate(&mut self) -> Result<()> {
         self.writer.flush()?;
         let dir = self.current_path.parent().unwrap().to_path_buf();
-        let filename = format!("{}.jsonl", Utc::now().format("%Y%m%d-%H%M%S-%f"));
+        let filename = audit_filename(OffsetDateTime::now_utc());
         let path = dir.join(&filename);
         let file = std::fs::File::create_new(&path)
             .map_err(|e| SafeselectError::Audit(format!("cannot rotate audit file: {e}")))?;
@@ -206,9 +206,51 @@ fn expand_tilde(path: &str) -> String {
     path.to_string()
 }
 
+fn audit_filename(now: OffsetDateTime) -> String {
+    now.format(format_description!(
+        "[year][month][day]-[hour][minute][second]-[subsecond digits:9].jsonl"
+    ))
+    .expect("audit filename format only requires date and time")
+}
+
+fn audit_timestamp(now: OffsetDateTime) -> String {
+    let seconds = now
+        .format(format_description!(
+            "[year]-[month]-[day]T[hour]:[minute]:[second]"
+        ))
+        .expect("audit timestamp format only requires date and time");
+    let nanos = now.nanosecond();
+    if nanos == 0 {
+        format!("{seconds}+00:00")
+    } else if nanos.is_multiple_of(1_000_000) {
+        format!("{seconds}.{:03}+00:00", now.millisecond())
+    } else if nanos.is_multiple_of(1_000) {
+        format!("{seconds}.{:06}+00:00", now.microsecond())
+    } else {
+        format!("{seconds}.{nanos:09}+00:00")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn audit_time_preserves_utc_formats() {
+        let now = time::macros::datetime!(2026-01-02 03:04:05 UTC);
+        assert_eq!(audit_filename(now), "20260102-030405-000000000.jsonl");
+        for (nanos, expected) in [
+            (0, "2026-01-02T03:04:05+00:00"),
+            (120_000_000, "2026-01-02T03:04:05.120+00:00"),
+            (123_450_000, "2026-01-02T03:04:05.123450+00:00"),
+            (123_456_780, "2026-01-02T03:04:05.123456780+00:00"),
+        ] {
+            assert_eq!(
+                audit_timestamp(now.replace_nanosecond(nanos).unwrap()),
+                expected
+            );
+        }
+    }
 
     fn config(directory: &std::path::Path) -> AuditConfig {
         AuditConfig {

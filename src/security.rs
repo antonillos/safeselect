@@ -1079,7 +1079,7 @@ fn table_relation_parts(table: &Table) -> Vec<String> {
     [table.schema_name.as_ref(), table.table_name.as_ref()]
         .into_iter()
         .flatten()
-        .cloned()
+        .map(canonical_ident)
         .collect()
 }
 
