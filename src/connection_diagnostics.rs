@@ -19,6 +19,13 @@ pub struct ConnectionFailure {
 }
 
 impl ConnectionFailure {
+    pub(crate) fn is_connectivity_failure(&self) -> bool {
+        matches!(
+            self.category,
+            ConnectionCategory::Network | ConnectionCategory::Timeout
+        )
+    }
+
     pub fn from_startup_ack(ack: &str) -> Option<Self> {
         #[derive(Deserialize)]
         struct StartupFailure {

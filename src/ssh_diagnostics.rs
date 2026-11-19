@@ -75,6 +75,19 @@ pub fn recognized_failure_message(error: &str) -> Option<&'static str> {
     .find(|message| error.contains(message))
 }
 
+pub(crate) fn is_tunnel_unavailable(message: &str) -> bool {
+    message == "SSH tunnel is not ready for query execution"
+        || (message.starts_with("SSH tunnel setup failed: ")
+            && (message.ends_with(" unreachable and no active database tunnel")
+                || [
+                    category_message("network"),
+                    category_message("timeout"),
+                    TUNNEL_ENDPOINT_TIMEOUT_MESSAGE,
+                ]
+                .iter()
+                .any(|detail| message.ends_with(detail))))
+}
+
 fn stderr_category(detail: &str) -> &'static str {
     for (category, patterns) in [
         (
