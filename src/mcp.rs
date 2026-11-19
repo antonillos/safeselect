@@ -503,15 +503,6 @@ impl McpServer {
         self.client_name = client_name.clone();
         self.audit.set_mcp_client(&client_name);
 
-        // Pre-start the sidecar so it's ready before the first query
-        tracing::info!("Pre-starting sidecar during initialize (client: {client_name})");
-        if let Err(e) = self
-            .ensure_ssh_ready_for_query()
-            .and_then(|_| self.ensure_sidecar())
-        {
-            tracing::warn!("Sidecar pre-start failed during initialize: {e}");
-        }
-
         let notice = crate::updates::automatic_notice();
         let resp = JsonRpcResponse {
             jsonrpc: "2.0",
@@ -4242,6 +4233,28 @@ impl McpServer {
 
         match self.ensure_sidecar() {
             Ok(_) => {}
+            Err(error)
+                if match &error {
+                    SafeselectError::ConnectionStart(failure) => failure.is_connectivity_failure(),
+                    SafeselectError::Other(message) => {
+                        crate::ssh_diagnostics::is_tunnel_unavailable(message)
+                    }
+                    _ => false,
+                } =>
+            {
+                lines.push(diagnostics::line(
+                    DiagnosticStatus::Warn,
+                    DiagnosticCode::ConnectionUnavailable,
+                    "Waiting for connectivity. Check the database endpoint, VPN, or SSH tunnel.",
+                ));
+                let resp = trusted_tool_response(
+                    id,
+                    "waiting_for_connection",
+                    lines.join("\n"),
+                    "Ask the user to restore connectivity. Run check once after they confirm it is restored.",
+                );
+                return self.write_response(&resp);
+            }
             Err(_) => {
                 lines.push(diagnostics::line(
                     DiagnosticStatus::Fail,

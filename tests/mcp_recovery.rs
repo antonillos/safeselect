@@ -20,11 +20,14 @@ counter = pathlib.Path(__file__).with_name('starts')
 starts = int(counter.read_text()) + 1 if counter.exists() else 1
 counter.write_text(str(starts))
 sys.stdin.readline()  # password handshake (empty for this synthetic backend)
+if counter.with_name('backend-unavailable').exists():
+    print(json.dumps({'type': 'connection_error', 'category': 'network'}), flush=True)
+    sys.exit(1)
 print('ready', flush=True)
 for line in sys.stdin:
     request = json.loads(line)
     method = request['method']
-    if method == 'verify_document_connection' and starts == 1:
+    if method == 'verify_document_connection' and starts == 2:
         sys.stdout.write('{"id":' + str(request['id']) + ',"ok":')
         sys.stdout.flush()
         sys.stdin.readline()  # deliberately stall in a partial JSON-line
@@ -72,6 +75,7 @@ impl Session {
             .env("JAVA_HOME", root.join("jdk"))
             .env("XDG_CONFIG_HOME", root.join("config"))
             .env("XDG_DATA_HOME", root.join("data"))
+            .env("SAFESELECT_NO_UPDATE_CHECK", "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -140,6 +144,8 @@ impl Drop for Session {
 fn stalled_check_can_reconnect_and_check_again_in_the_same_mcp_session() {
     let mut session = Session::start();
     let mcp_pid = session.child.id();
+    let unavailable = session.root.join("jdk/bin/backend-unavailable");
+    std::fs::write(&unavailable, "").unwrap();
     let initialized = session.send(
         1,
         "initialize",
@@ -149,8 +155,25 @@ fn stalled_check_can_reconnect_and_check_again_in_the_same_mcp_session() {
     );
     assert!(initialized.get("result").is_some(), "{initialized}");
 
+    let tools = session.send(2, "tools/list", serde_json::json!({}));
+    assert!(tools["result"]["tools"].is_array(), "{tools}");
+    assert!(!session.root.join("jdk/bin/starts").exists());
+    let waiting = session.tool(3, "check");
+    assert_ne!(waiting["result"]["isError"], true, "{waiting}");
+    assert_eq!(
+        waiting["result"]["structuredContent"]["status"],
+        "waiting_for_connection"
+    );
+    assert!(
+        waiting
+            .to_string()
+            .contains("SAFESELECT_CONNECTION_UNAVAILABLE"),
+        "{waiting}"
+    );
+    std::fs::remove_file(unavailable).unwrap();
+
     let start = Instant::now();
-    let failed = session.tool(2, "check");
+    let failed = session.tool(4, "check");
     assert!(
         failed.get("error").is_some() || failed["result"]["isError"] == true,
         "{failed}"
@@ -164,16 +187,16 @@ fn stalled_check_can_reconnect_and_check_again_in_the_same_mcp_session() {
     assert!(start.elapsed() < Duration::from_secs(12));
 
     // A failed backend check must not close or block the stdio MCP transport.
-    let tools = session.send(3, "tools/list", serde_json::json!({}));
+    let tools = session.send(5, "tools/list", serde_json::json!({}));
     assert!(tools["result"]["tools"].is_array(), "{tools}");
-    let reconnected = session.tool(4, "reconnect");
+    let reconnected = session.tool(6, "reconnect");
     assert!(reconnected.get("error").is_none(), "{reconnected}");
     assert_ne!(reconnected["result"]["isError"], true, "{reconnected}");
     assert!(
         reconnected.to_string().contains("Reconnected and verified"),
         "{reconnected}"
     );
-    let checked = session.tool(5, "check");
+    let checked = session.tool(7, "check");
     assert!(
         checked.to_string().contains("SAFESELECT_ALL_CHECKS_PASSED"),
         "{checked}"
@@ -182,6 +205,6 @@ fn stalled_check_can_reconnect_and_check_again_in_the_same_mcp_session() {
     assert!(session.child.try_wait().unwrap().is_none());
     assert_eq!(
         std::fs::read_to_string(session.root.join("jdk/bin/starts")).unwrap(),
-        "2"
+        "3"
     );
 }
